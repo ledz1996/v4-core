@@ -1,6 +1,6 @@
-"""Pick the work for the next cycle and print the workflow args as JSON.
+"""Pick the work for the next cycle, write cycles/NNN/plan.json, and print the compact workflow args as JSON.
 
-Usage: plan.py <YYYY-MM-DD> [--max-units N]
+Usage: plan.py <YYYY-MM-DD> [--max-units N | --all] [--angles 0,1,2] [--readings N]
 The queue never runs dry: cells start at depth 0, every cycle adds leads, verified cells
 go stale after STALE cycles, and the angle and focus lens rotate so a revisit asks new questions.
 """
@@ -8,18 +8,20 @@ import json, os, sys
 R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STALE = 6
 ANGLES = [
-    "Assume an unprivileged attacker who can deploy any token, hook and contract on this network and wants pool funds.",
-    "Assume the issuer or admin of a token that pools hold uses every control the chain gives them (freeze, blocklist, seize, pause, upgrade, policy change).",
-    "Assume the sequencer, block builder or validator set is hostile: ordering, censorship, forced inclusion, reorgs, privileged transaction types.",
-    "Assume a scheduled or proposed network upgrade ships in the next six months. What changes for the PoolManager and for funds already inside it?",
-    "Assume a hook author who uses features only this network has (precompiles, system contracts, non-EVM contracts, account delegation).",
-    "Follow the money across the boundary: bridges, canonical token contracts, gas-token wrappers, system addresses. Where can a balance the PoolManager relies on change without a transfer the PoolManager sees?",
-    "Read the client or node source for this network's execution layer where the docs are vague. Check transient storage clearing, value transfers and precompile dispatch in code.",
-    "Look at the transaction types this network adds (batches, sponsored or fee-token transactions, deposits, system calls) and walk each through unlock, sync, settle and take.",
+    "Sweep. List every precompile, predeploy, system contract, face of the native asset, wrapped native token, bridge, staking and fee contract on this network. For each one, run eth_call with \"from\" set to the PoolManager address for the call shapes P1, P2, P3 and P5 in ASSUMPTIONS.md (empty calldata with zero value, transfer(address,uint256) with zero and nonzero amount, balanceOf(PoolManager), and each IHooks selector), and record what comes back. Follow up on every target that does not revert.",
+    "Opcode differential. For each opcode and call pattern the PoolManager relies on (TSTORE and TLOAD including rollback on revert and clearing at transaction end, CALL with value, CALLVALUE, SELFBALANCE, STATICCALL, RETURNDATASIZE and RETURNDATACOPY, MCOPY, PUSH0, gas forwarding, calls to addresses without code, precompile dispatch), read this network's execution client source and find where it departs from Ethereum's behaviour.",
+    "Faces. Find every way one balance at the PoolManager can be reached under two currency ids or in two units on this network (native asset with an ERC-20 face, wrapped native predeploys, bridged and canonical versions sharing storage, tokens with more than one entry point), and walk sync, settle, take, mint and burn across the two faces in every order.",
+    "Known weaknesses. Collect security advisories, audit reports, bug bounty write-ups, incident post-mortems and open issues for this network's execution client, precompiles and system contracts from the last two years, including behaviour the network calls by design. For each, decide whether an ordinary account could use it against funds in the PoolManager.",
+    "Transaction types. For every transaction type and execution context this network adds (batches, sponsored or fee-token transactions, deposits, retryables, system calls, account abstraction, delegated accounts), work out what msg.sender, msg.value and transient storage look like inside the PoolManager and walk unlock, sync, settle and take through each.",
+    "Upcoming forks. Assume every network upgrade scheduled or proposed for the next six months ships. What changes for the PoolManager and for funds already inside it, and what could an ordinary account do the day after?",
+    "Pooled assets. Read the PoolManager's largest token balances on this network from chain. For each token, check transfer and balanceOf for behaviour any holder can trigger: rebasing, fees, callbacks, share accounting, special recipients, special amounts.",
+    "Exits. Can an ordinary account make another user's swap or liquidity removal impossible to include or always revert on this network (gas caps, storage pricing, per-transaction limits, tick crossing cost, special recipients)?",
 ]
 def main():
     date = sys.argv[1]
     max_units = int(sys.argv[sys.argv.index("--max-units") + 1]) if "--max-units" in sys.argv else 4
+    if "--all" in sys.argv: max_units = 99
+    forced = [int(x) for x in sys.argv[sys.argv.index("--angles") + 1].split(",")] if "--angles" in sys.argv else None
     L = json.load(open(f"{R}/state/ledger.json")); F = json.load(open(f"{R}/state/findings.json"))["findings"]
     cycle = L["cycle"] + 1
     lenses = sorted(L["lenses"])
@@ -44,17 +46,27 @@ def main():
     chosen = baseline if baseline else units[:max_units]
     for i, u in enumerate(chosen):
         if u["mode"] == "baseline":
-            u["lenses"] = lenses; u["angle"] = ANGLES[0]
+            u["lenses"] = lenses; u["angles"] = [ANGLES[0]]
         else:
-            k = (cycle + i) % len(lenses)
-            u["lenses"] = [lenses[k], lenses[(k + 3) % len(lenses)]]
-            u["angle"] = ANGLES[(cycle + 3 * i) % len(ANGLES)]
+            u["lenses"] = ["L1", "L2", "L3", "L4"]
+            u["angles"] = [ANGLES[k] for k in (forced or [(cycle + 3 * i) % len(ANGLES), (cycle + 3 * i + 4) % len(ANGLES)])]
         u.pop("score")
-    # the source itself is re-read every cycle: two readers in cycle 1, then one reader rotating through the file groups
-    groups = [
-        ("accounting", "src/PoolManager.sol, src/ProtocolFees.sol, src/types/Currency.sol, src/libraries/CurrencyReserves.sol, src/libraries/CurrencyDelta.sol, src/libraries/NonzeroDeltaCount.sol, src/libraries/Lock.sol, src/libraries/Hooks.sol, src/ERC6909.sol, src/ERC6909Claims.sol, src/Extsload.sol, src/Exttload.sol, src/NoDelegateCall.sol, src/libraries/CustomRevert.sol, src/libraries/ParseBytes.sol, src/types/BalanceDelta.sol, src/types/BeforeSwapDelta.sol, and the lib/ contracts they import"),
-        ("math", "src/libraries/Pool.sol, src/libraries/Position.sol, src/libraries/SwapMath.sol, src/libraries/SqrtPriceMath.sol, src/libraries/TickMath.sol, src/libraries/TickBitmap.sol, src/libraries/FullMath.sol, src/libraries/SafeCast.sol, src/libraries/LiquidityMath.sol, src/libraries/UnsafeMath.sol, src/libraries/BitMath.sol, src/libraries/LPFeeLibrary.sol, src/libraries/ProtocolFeeLibrary.sol, src/types/Slot0.sol, src/types/PoolKey.sol, src/types/PoolId.sol, src/libraries/StateLibrary.sol, src/libraries/TransientStateLibrary.sol"),
+    # the source itself is re-read every cycle, two readings at a time, each from a different direction
+    READINGS = [
+        ("files-accounting", "Read line by line: src/PoolManager.sol, src/ProtocolFees.sol, src/types/Currency.sol, src/libraries/CurrencyReserves.sol, CurrencyDelta.sol, NonzeroDeltaCount.sol, Lock.sol, Hooks.sol, src/ERC6909.sol, src/ERC6909Claims.sol, src/Extsload.sol, src/Exttload.sol, src/NoDelegateCall.sol, src/libraries/CustomRevert.sol, ParseBytes.sol, src/types/BalanceDelta.sol, BeforeSwapDelta.sol, and lib/solmate/src/auth/Owned.sol."),
+        ("files-math", "Read line by line: src/libraries/Pool.sol, Position.sol, SwapMath.sol, SqrtPriceMath.sol, TickMath.sol, TickBitmap.sol, FullMath.sol, SafeCast.sol, LiquidityMath.sol, UnsafeMath.sol, BitMath.sol, LPFeeLibrary.sol, ProtocolFeeLibrary.sol, src/types/Slot0.sol, PoolKey.sol, PoolId.sol, src/libraries/StateLibrary.sol, TransientStateLibrary.sol."),
+        ("flow-swap", "Trace one swap from PoolManager.swap to the last delta written: beforeSwap and its returned delta and fee override, Pool.swap step by step (fee split between protocol and LPs, rounding of every amount, tick crossing, liquidity net, price limit), afterSwap and its returned delta, and the two _accountDelta calls. Do it for exact input and exact output, both directions, with and without a hook, with dynamic fee, and at the extremes of tick, price, liquidity and amount. At each step ask who gains if the number is off by one unit, one sign or one cast."),
+        ("flow-liquidity", "Trace modifyLiquidity and donate from entry to the last delta written: tick updates, bitmap flips, fee growth inside, Position.update, fees owed, the caller delta and the hook delta from afterAddLiquidity and afterRemoveLiquidity, salt handling, and tick clearing. Cover add, remove, zero delta, full range, single tick spacing, ranges above, below and around the current tick, and repeated adds and removes by different owners on shared ticks. At each step ask whether one owner can withdraw another owner's principal or fees, or leave a tick or position that can no longer be updated."),
+        ("invariants-settlement", "Write down the invariants of flash accounting and custody as the code implies them (for example: for every currency the PoolManager balance is at least pool reserves plus ERC-6909 supply plus accrued protocol fees; deltas sum to zero when unlock returns; a credit exists only after a matching balance increase or msg.value). Then try to break each with sequences of unlock, sync, settle, settleFor, take, clear, mint, burn, the ERC-6909 transfer functions, initialize, swap, modifyLiquidity and donate, issued by one or two ordinary accounts, including re-entry through unlockCallback, hooks, token callbacks and native transfer recipients, and including the same account acting through settleFor and operators."),
+        ("invariants-bits", "Check every place where the code packs, masks, shifts or casts: Slot0 packing, BalanceDelta and BeforeSwapDelta packing and unpacking, fee and protocol fee fields, hook flag bits and the flag validity rules, tick bitmap word and bit positions, ERC-6909 id to currency conversion, transient slot constants and the hash used for delta slots, assembly memory use and cleanup, and every unchecked block. Recompute constants with python3. For each, ask whether a dirty upper bit, an overlap or a wrong width lets an ordinary account change a value it should not control."),
     ]
-    code = [{"id": f"core-code-{g[0]}", "files": g[1]} for g in (groups if cycle == 1 else [groups[cycle % len(groups)]])]
-    print(json.dumps({"cycle": cycle, "date": date, "dir": f"research/network-risk/cycles/{cycle:03d}", "units": chosen, "code": code}, indent=1))
+    n_read = int(sys.argv[sys.argv.index("--readings") + 1]) if "--readings" in sys.argv else 2
+    picks = [READINGS[(2 * (cycle - 1) + j) % len(READINGS)] for j in range(n_read)]
+    code = [{"id": f"core-code-{k}", "task": t} for k, t in picks]
+    plan = {"cycle": cycle, "date": date, "dir": f"research/network-risk/cycles/{cycle:03d}", "units": chosen, "code": code}
+    # the full plan (with the long angle and task texts) goes to disk for the agents; the workflow gets a compact copy
+    os.makedirs(f"{R}/cycles/{cycle:03d}", exist_ok=True)
+    json.dump(plan, open(f"{R}/cycles/{cycle:03d}/plan.json", "w"), indent=1)
+    compact = dict(plan, units=[{k: u[k] for k in ("id", "title", "chainIds", "lenses", "leadIds", "recheckIds")} for u in chosen], code=[{"id": c["id"]} for c in code])
+    print(json.dumps(compact))
 main()

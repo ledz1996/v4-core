@@ -26,6 +26,8 @@ def main():
             L["leads"].append({"id": f"L-{next_l:03d}", "cycle": cycle, "origin": origin, "chainIds": l["chainIds"], "lens": l["lens"],
                                "question": q, "why": l["why"], "priority": l["priority"], "status": "open"})
             next_l += 1; stats["leads"] += 1
+    # cycles/NNN/actors.json may classify findings written before the actor field existed: {"<unit>:<findingIndex>": "<actor>"}
+    actors = load(f"{cdir}/actors.json") if os.path.exists(f"{cdir}/actors.json") else {}
     units_done = []
     for rp in sorted(glob.glob(f"{cdir}/*.research.json")):
         res = load(rp); unit = res["unit"]; units_done.append(unit)
@@ -36,6 +38,7 @@ def main():
             status = v["verdict"] if v else "unverified"
             stats[status] += 1
             entry = {k: f[k] for k in ("title", "chainIds", "lens", "assumptions", "effect", "difference", "mechanism", "impact", "preconditions", "mitigations", "coreRefs", "sources", "evidence")}
+            entry["actor"] = actors.get(f"{unit}:{i}", f.get("actor", "unclassified"))
             entry["severity"] = v["severity"] if v else f["severity"]
             entry["proposedSeverity"] = f["severity"]
             entry["status"] = status
@@ -76,7 +79,7 @@ def main():
         if l["status"] == "open" and len(l.get("attempts", [])) >= 3: l["status"] = "parked"
     L["cycle"] = cycle
     L["history"].append(dict(stats, cycle=cycle, date=date, units=units_done))
-    F.sort(key=lambda f: (f["status"] == "refuted", ORDER[f["severity"]], f["id"]))
+    F.sort(key=lambda f: (f["status"] == "refuted", f.get("actor") != "unprivileged", ORDER[f["severity"]], f["id"]))
     dump(f"{R}/state/ledger.json", L); dump(f"{R}/state/findings.json", FS); dump(f"{R}/state/cleared.json", CL)
     print(json.dumps(stats))
     os.system(f"{sys.executable} {R}/tools/status.py")

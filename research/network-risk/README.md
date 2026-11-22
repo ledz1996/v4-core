@@ -1,6 +1,8 @@
 # Network risk review for the PoolManager
 
-This directory holds a standing review of one question: on which of the 21 networks where Uniswap v4 is officially deployed could funds held by this repository's PoolManager be frozen or siphoned, and why.
+This directory holds a standing review of one question: on which of the 21 networks where Uniswap v4 is officially deployed could an ordinary account freeze or siphon funds that other users hold in this repository's PoolManager, and why.
+
+The attacker has no role: no owner or fee controller keys, no token admin keys, no sequencer or validator power, no governance vote. The victims are ordinary liquidity providers, swappers and holders of ERC-6909 claims. Hazards that need a privileged party are recorded with an `actor` label and kept out of the main findings.
 
 The review runs in cycles. Each cycle reads the state left by the one before it, does a bounded amount of new work, and writes the state back. Nothing depends on a single long session, so the loop can run for as long as someone keeps starting cycles.
 
@@ -23,8 +25,9 @@ The review runs in cycles. Each cycle reads the state left by the one before it,
 
 ## One cycle
 
-1. Plan. `python3 research/network-risk/tools/plan.py <date>` prints the work for the next cycle as JSON. Save it as `cycles/NNN/plan.json`.
-2. Run. Start the workflow `workflow/cycle.js` with that JSON as `args`. It runs one research agent per chosen network family, one or two agents that re-read the source itself, an independent verifier behind each of them, and a critic at the end. Agents write their output into `cycles/NNN/` and validate it with `tools/validate.py`.
+0. Once per fresh checkout: `git submodule update --init --depth 1 lib/solmate`, so the readers can see `Owned.sol`.
+1. Plan. `python3 research/network-risk/tools/plan.py <date>` writes `cycles/NNN/plan.json` and prints a compact JSON object. Options: `--all` takes every network family instead of the top four, `--angles 0,1,2,3` forces specific work items, `--readings N` sets how many code readings run.
+2. Run. Start the workflow `workflow/cycle.js` with the printed JSON as `args`. It runs one research agent per chosen network family, one or two agents that re-read the source itself, an independent verifier behind each of them, and a critic at the end. Agents write their output into `cycles/NNN/` and validate it with `tools/validate.py`.
 3. Merge. `python3 research/network-risk/tools/merge.py research/network-risk/cycles/NNN <date>` folds the cycle into `state/` and regenerates `STATUS.md`.
 4. Report. Update `REPORT.md` for every finding that is new or changed status. Follow `style/humanizer-SKILL.md`.
 5. Commit and push `research/network-risk/`.
@@ -47,9 +50,9 @@ Every research agent, verifier and critic writes leads: concrete open questions 
 
 Findings marked plausible or unverified pull their network family back into the plan until someone confirms or refutes them. Confirmed findings are re-checked after six cycles, because networks upgrade.
 
-Revisits rotate through two lenses and one of eight angles (hostile token issuer, hostile sequencer, upcoming network upgrade, hook author using chain-only features, client source reading, new transaction types, and so on). The same network gets different questions each time.
+Revisits rotate through eight work items: a sweep of the chain's special addresses with the PoolManager as caller, an opcode comparison against the node's source, the faces of the native asset, known weaknesses of the network, added transaction types, upcoming forks, the assets pools hold, and ways to block other users' exits. The same network gets different questions each time.
 
-Separately, one source-reading unit runs every cycle and alternates between the accounting files and the math files.
+Separately, two readings of the source run every cycle and rotate through six directions: two file-by-file passes, a swap trace, a liquidity trace, an attempt to break the custody invariants, and a check of every mask, shift and cast.
 
 ## Rules the agents work under
 

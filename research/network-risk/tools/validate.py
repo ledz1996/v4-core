@@ -2,6 +2,7 @@
 import json, os, sys
 R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SEV = {"critical", "high", "medium", "low", "info"}
+ACTORS = {"unprivileged", "pool-creator", "issuer", "operator", "governance"}
 LENS = {"L1", "L2", "L3", "L4", "L5", "L6"}
 errs = []
 def need(o, k, t, where, allow_empty=False):
@@ -47,6 +48,7 @@ def main():
         for i, f in enumerate(need(d, "findings", list, "root", True) or []):
             w = f"findings[{i}]"; need(f, "ref", str, w); need(f, "title", str, w); chain_ids(f, w, known); enum(f, "lens", LENS, w)
             need(f, "assumptions", list, w, True); enum(f, "effect", {"siphon", "freeze", "both", "degrade"}, w); enum(f, "severity", SEV, w)
+            if "actor" in f or "/cycles/001/" not in os.path.abspath(path): enum(f, "actor", ACTORS, w)
             for k in ("difference", "mechanism", "impact", "preconditions", "mitigations"): need(f, k, str, w)
             need(f, "coreRefs", list, w); sources(f, w); enum(f, "evidence", {"primary", "secondary", "inferred"}, w)
         for i, c in enumerate(need(d, "cleared", list, "root", True) or []):

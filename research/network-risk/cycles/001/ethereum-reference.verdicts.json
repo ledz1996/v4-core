@@ -1,0 +1,155 @@
+{
+ "unit": "ethereum-reference",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "I downloaded the verified sources of the three token contracts from Sourcify and read the cited lines. FiatTokenV2_2 at 0x43506849d7c04f9138d1a2050bbf3a0c054402dd is the address stored in the USDC proxy's implementation slot 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3, which I read with eth_getStorageAt. Its transfer carries whenNotPaused, notBlacklisted(msg.sender) and notBlacklisted(to) at FiatTokenV1.sol lines 285 to 291, transferFrom adds notBlacklisted(from) at lines 257 to 268, and blacklist is onlyBlacklister at Blacklistable.sol line 71. TetherToken has addBlackList and destroyBlackFunds as onlyOwner at lines 277 to 290, and destroyBlackFunds sets balances of the listed user to 0. Its transfer requires that msg.sender is unlisted at lines 336 to 337 and transferFrom checks only _from at line 347, so a listed address can still receive. PaxosTokenV2 at 0x8c35caa5fd5bdc64b6b11344ad57594a3676256a is the address in the PYUSD proxy's implementation slot. Its _transfer reverts with AddressFrozen when from or to is frozen at lines 444 to 445, and freeze and wipeFrozenAddress require ASSET_PROTECTION_ROLE at lines 278 to 294, with wipeFrozenAddress setting balances[addr] to 0. On chain at block 26470956 the PoolManager held 30,394,358 USDC, 79,798,549 USDT and 63,112,992 PYUSD. USDC.isBlacklisted, USDT.isBlackListed and PYUSD.isFrozen all returned false for the PoolManager. USDC.blacklister() returned 0x0a06be16275b95a7d2567fbdae118b36c7da78f9 and USDT.getOwner() returned 0xc6cde7c39eb2f0f0095f41570af89efc2c1ea828. I found no primary source that contradicts the finding. I did not check which accounts hold ASSET_PROTECTION_ROLE on PYUSD.",
+   "codeCheck": "take debits the caller's delta and then calls currency.transfer (src/PoolManager.sol:291-297). The ERC-20 branch reverts with a wrapped ERC20TransferFailed when the token call fails or returns anything other than empty data or a 32 byte 1 (src/types/Currency.sol:64-86). collectProtocolFees uses the same transfer (src/ProtocolFees.sol:56). A search of src outside src/test finds currency.transfer only at those two places, so no other exit exists for a token balance. _settle credits the balance increase since the last sync (src/PoolManager.sol:349-364), so a token that refuses transfers to the PoolManager cannot be paid in. mint debits the delta and mints an ERC-6909 claim with no token call (src/PoolManager.sol:322-329), so removing liquidity into claims stays possible, as the finding says. I found no guard in core that changes any of this. test/PoolManager.t.sol:947 and test/types/Currency.t.sol cover the wrapped revert for a failing transfer. No test models a token that blocks the PoolManager address.",
+   "corrections": "The balances moved slightly since the researcher's block: 30,394,358 USDC, 79,798,549 USDT and 63,112,992 PYUSD at block 26470956. The finding lists only the blocklist roles. All three tokens also gate transfer on a global pause (FiatTokenV1.sol line 288, TetherToken.sol line 336, PaxosTokenV2.sol line 139), and USDC and PYUSD sit behind upgradeable proxies, so the pauser and the upgrade admin of each token are further single actors who can stop every pool in that currency. Severity stays high because the freeze or wipe needs the token issuer to act.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x43506849d7c04f9138d1a2050bbf3a0c054402dd?fields=sources,compilation,abi",
+     "supports": "FiatTokenV2_2 source: notBlacklisted and whenNotPaused on transfer and transferFrom, blacklist restricted to the blacklister"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0xdAC17F958D2ee523a2206206994597C13D831ec7?fields=sources,compilation,abi",
+     "supports": "TetherToken source: addBlackList and destroyBlackFunds are onlyOwner, transfer blocks a listed sender only, destroyBlackFunds zeroes the balance"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x8c35caa5fd5bdc64b6b11344ad57594a3676256a?fields=sources,compilation,abi",
+     "supports": "PaxosTokenV2 source: _transfer reverts for a frozen sender or recipient, freeze and wipeFrozenAddress need ASSET_PROTECTION_ROLE"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call and eth_getStorageAt at block 26470956: token balances of the PoolManager, blocklist status false on all three, USDC blacklister, USDT owner, implementation slots of the USDC and PYUSD proxies"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "The Lido integration guide says stETH balances are recalculated when the oracle reports, normally daily, that a rebase can be negative after slashing or penalties, that transfers can move 1 to 2 wei less than requested, and that Maker, UniSwap and SushiSwap are not designed for rebasable tokens so holders there may not receive their daily rewards. The same guide says daily rebases had never been negative at the time of writing. The accounting oracle page says submitReportData reverts with SenderNotAllowed unless the caller holds SUBMIT_DATA_ROLE or is a consensus member, and that this call triggers the rebase. On chain at block 26470974 stETH.balanceOf(PoolManager) was 80.468369861 and sharesOf was 64.380487063, which is 1.2498875596 stETH per share. The researcher recorded 80.453883612 and 64.372946869 at block 26470380, which is 1.2498089263 per share. The rate rose by 0.0063 percent between the two readings. That matches one daily report at about 2.3 percent a year and added about 0.005 stETH to the PoolManager's balance on the earlier shares with no transfer. The public RPC refused archive calls, so I could not read the earlier block myself. The earlier figures are the researcher's.",
+   "codeCheck": "balanceOfSelf is called only in sync (src/PoolManager.sol:285) and in _settle (src/PoolManager.sol:359). currency.transfer is called only in take (src/PoolManager.sol:295) and collectProtocolFees (src/ProtocolFees.sol:56). take debits the caller's delta by the full amount, and collection is bounded by protocolFeesAccrued with a checked subtraction (src/ProtocolFees.sol:54-55). A balance increase that has no sync before it and no settle after it therefore reaches no delta and cannot be paid out. A caller who runs sync, then the rebase, then settle in one transaction is credited the whole increase on the PoolManager's balance (src/PoolManager.sol:358-364), and sync needs no unlock (src/PoolManager.sol:279). For stETH only an oracle member or a SUBMIT_DATA_ROLE holder can place the rebase inside such a transaction. After a negative rebase the balance is below the sum of deltas that pools and claims can produce, and the last take reverts in Currency.transfer (src/types/Currency.sol:82-86). I checked the rounding argument from the share formula: a transfer moves floor(amount * totalShares / totalPooledEther) shares, so the sender's balance falls by at most the amount that take debited. I did not test it on chain. No test in test/ models a rebasing token.",
+   "corrections": "I raise the severity from low to medium. Low is for hazards with no direct loss path. Here the staking yield on stETH held by the PoolManager is stranded for good, the increase is visible on chain, and the loss is limited to stETH pools and claims, which is the medium definition. The effect is closer to a permanent freeze of the yield than to degrade. The principal shortfall case needs a negative report, which the Lido guide says had not happened when it was written. The same sync, trigger, settle sequence applies to any token whose balance at the PoolManager a third party can raise inside one transaction, which is recorded as a lead.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/lidofinance/docs/main/docs/guides/lido-tokens-integration-guide.md",
+     "supports": "stETH rebases on the oracle report, can rebase negatively but had not done so, transfers can fall 1 to 2 wei short, Uniswap is named as not designed for rebasable tokens"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/lidofinance/docs/main/docs/contracts/accounting-oracle.md",
+     "supports": "submitReportData is limited to SUBMIT_DATA_ROLE holders and consensus members and triggers the token rebase"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call at block 26470974: stETH.balanceOf(PoolManager) = 80468369861117616799 wei, sharesOf = 64380487062762704250 wei, getPooledEthByShares(1e18) = 1249887559605929876 wei, wstETH.balanceOf = 2290.78"
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "EIP-7702 says the authority's code is set to 0xef0100 || address, that an authorization naming the zero address clears the account's code, that an account whose code is a delegation indicator may originate transactions, and that the EIP breaks the invariant that tx.origin == msg.sender implies the topmost frame. EIP-7600 lists EIP-7702 in Pectra with mainnet activation timestamp 1746612311. EIP-6780 limits SELFDESTRUCT to sending the balance unless it runs in the creating transaction. On chain, block 26470977 contains type 0x4 transactions with authorization lists, for example 0x41f0ca4b5cb886c68b0409568d2c596f3e6db2219db7847d3f5f7596eb64725f, and eth_config reports fork id 0x07c9462e active since 1767747671, so set code transactions are live on mainnet. I did not read the code of a delegated account on chain, and I did not scan for pools whose hook is such an account.",
+   "codeCheck": "initialize accepts a hook on its flag bits alone (src/PoolManager.sol:126, src/libraries/Hooks.sol:109-127) and never reads code. callHook treats a successful call with fewer than 32 bytes of return data as InvalidHookResponse (src/libraries/Hooks.sol:134, 152-154), which is what a call to an address without code produces. beforeModifyLiquidity calls the hook for liquidityDelta <= 0 when the before remove flag is set (src/libraries/Hooks.sol:203-205) and afterModifyLiquidity does so for the after remove flag (src/libraries/Hooks.sol:233-243), so every removal by anyone other than the hook address reverts while the code is absent. The hook address itself is skipped (src/libraries/Hooks.sol:171-175, 217). With a returns delta flag the value returned by the hook is credited to the hook and subtracted from the caller (src/libraries/Hooks.sol:242, 298-313; src/PoolManager.sol:181-183, 221-226). Core places no bound on that value and gives a liquidity provider no path around the hook. I found no guard the finding missed. test/libraries/Hooks.t.sol covers InvalidHookResponse for short return data. No test covers hook code that changes after pool creation.",
+   "corrections": "I raise the severity from low to medium. The finding describes a direct loss and freeze path for funds in pools that use such a hook, which is the medium definition, and it matches the rating of the general hook finding in the core-code-accounting unit, of which this is one variant. The statement that inspecting the code no longer shows the risk is too strong. A delegated account has 23 bytes of code starting with 0xef0100 and an undelegated one has none, and either result is a visible warning for a hook address. The freeze also covers swaps and donations when the matching before or after flags are set, since those calls go through the same callHook.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md",
+     "supports": "delegation indicator 0xef0100 || address, clearing by delegating to the zero address, delegated accounts may originate transactions, tx.origin invariants broken"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7600.md",
+     "supports": "EIP-7702 is part of Pectra, mainnet activation timestamp 1746612311"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-6780.md",
+     "supports": "SELFDESTRUCT keeps contract code unless called in the creating transaction"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_getBlockByNumber for block 26470977 shows type 0x4 transactions with authorization lists; eth_config shows fork id 0x07c9462e with activation time 1767747671"
+    }
+   ]
+  },
+  {
+   "findingIndex": 3,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "The Sourcify record for 0x89a5d5bf00a27d55c02951e49078a5c5771051db is an exact match named V4FeeAdapter. In src/feeAdapters/V4FeeAdapter.sol, triggerFeeUpdate at lines 72 to 74 and collect at lines 87 to 94 have no access modifier. collect calls POOL_MANAGER.collectProtocolFees(TOKEN_JAR, p.currency, p.amount), and the fee value passed to setProtocolFee comes from the pool override or the policy at lines 61 to 67 and 133 to 143. On chain at block 26470974 PoolManager.protocolFeeController() returned that adapter, the adapter's POOL_MANAGER() returned the PoolManager, TOKEN_JAR() returned 0xf38521f130fccf29db1961597bc5d2b60f995f85, owner() and feeSetter() returned the timelock and policy() returned 0x1cd822b70a0591420f65e94b9b3a0d0b0fb3a314. The TokenJar source has an empty receive function and a release function limited to the releaser, which is 0x0d5cd355e2abeb8fb1552f56c965b867346d6721 on chain. ERC-4337 says transient storage persists across UserOperations in one bundle and must be cleaned up manually when it guards access. I read only the adapter and jar files in the Sourcify bundles.",
+   "codeCheck": "sync has no modifier (src/PoolManager.sol:279-288), and the repository's tests call it while locked (test/Sync.t.sol:36-41, test/PoolManager.t.sol:1001-1023). collectProtocolFees checks the caller and then reverts when the currency is an ERC-20 equal to the synced currency (src/ProtocolFees.sol:48-52). It does not read the lock. _isUnlocked is declared at src/ProtocolFees.sol:60 and implemented at src/PoolManager.sol:391-394, and a search of src finds no caller. The comment at src/interfaces/IProtocolFees.sol:40 says the call reverts if the contract is unlocked. The code and the tests at test/PoolManager.t.sol:1001-1038 behave otherwise. I traced the fund paths myself. The synced check does not depend on the lock, so collection of a synced ERC-20 always reverts and the balance cannot fall between a sync and its settle through this call. Collection of another currency during an unlock lowers the balance by at most protocolFeesAccrued (checked subtraction at src/ProtocolFees.sol:55) and changes no delta. Fees accrue in _swap before the swapper pays (src/PoolManager.sol:238), and the swapper's negative delta must be cleared before unlock returns (src/PoolManager.sol:112) or the whole transaction reverts, collection included. Native settlement credits msg.value only (src/PoolManager.sol:353-354). A collection with the PoolManager as recipient leaves an ERC-20 balance unchanged and reverts for native currency, because src has no receive or fallback function. A sync left by an earlier caller gives a later settler credit only for a real balance increase since that sync, and a native payment then reverts with NonzeroNativeValue (src/PoolManager.sol:356), which test/PoolManager.t.sol:987-988 covers. I found no path that raises a settle credit or pays out more than accrued fees. This agrees with the researcher and answers the researcher's first lead from a second reading.",
+   "corrections": "The code facts hold on every network. Only the permissionless controller is specific to mainnet. The repository's own tests expect the present behaviour, so the disagreement is between the code and two texts: the comment at src/interfaces/IProtocolFees.sol:40 and assumption A12. The synced check as written rejects collection in more situations than a check tied to the lock would, so the difference removes no protection.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x89a5d5bf00a27d55c02951e49078a5c5771051db?fields=sources,compilation,abi",
+     "supports": "V4FeeAdapter source: collect and triggerFeeUpdate are callable by anyone, recipient fixed to TOKEN_JAR, fee value taken from override or policy"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0xf38521f130fccf29db1961597bc5d2b60f995f85?fields=sources,compilation,abi",
+     "supports": "TokenJar source: empty receive function, release limited to the releaser"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call at block 26470974: protocolFeeController, adapter POOL_MANAGER, TOKEN_JAR, owner, feeSetter and policy, jar releaser and owner"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/ERCs/master/ERCS/erc-4337.md",
+     "supports": "transient storage persists across UserOperations in one bundle"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-1153.md",
+     "supports": "transient storage is discarded at the end of the transaction and a reverting frame undoes its transient writes"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Whether ERC-4337 bundles or EIP-7702 batches, which run several users' operations in one transaction, can leak an unlock flag, a delta or a stale sync from one operation into another and move funds.",
+   "agrees": true,
+   "note": "unlock sets the flag, runs the callback, reverts unless NonzeroDeltaCount is zero and then clears the flag (src/PoolManager.sol:104-114). A revert rolls back the transient writes of the frame under EIP-1153. The count rises only when a delta leaves zero and falls only when it returns to zero (src/PoolManager.sol:368-378), and it is shared by all accounts, so no delta of any account outlives an unlock. Only the synced currency and reserves survive. A later settle is credited reservesNow minus reservesBefore with checked arithmetic (src/PoolManager.sol:358-360), so a stale sync yields credit only for tokens that really arrived and that no one else has been credited for, since each payer's own sync, transfer and settle run with no call to another party in between unless the token itself calls out. The remaining effects are reverts for the later caller."
+  },
+  {
+   "check": "Whether the permissionless collect and triggerFeeUpdate functions of the mainnet fee controller let an outsider take pool funds or raise fees beyond the cap.",
+   "agrees": true,
+   "note": "I read the adapter source. collect always passes TOKEN_JAR as recipient and triggerFeeUpdate passes a value from the override or the policy. collectProtocolFees subtracts from protocolFeesAccrued with checked arithmetic before the transfer (src/ProtocolFees.sol:54-56). Accrual happens only in _swap from the input the swapper owes (src/PoolManager.sol:238), and the per step protocol share never exceeds the step fee because the swap fee is at least the protocol fee (src/libraries/Pool.sol:385-398, src/libraries/ProtocolFeeLibrary.sol:38-46). setProtocolFee rejects any direction above 1,000 pips (src/ProtocolFees.sol:37, src/libraries/ProtocolFeeLibrary.sol:25-32). Pool.swap reads slot0 once and makes no external call before writing it back (src/libraries/Pool.sol:283-439). A hook can call triggerFeeUpdate before the pool reads slot0, which changes only which policy value applies to that swap. I did not read the policy contract at 0x1cd822b70a0591420f65e94b9b3a0d0b0fb3a314."
+  },
+  {
+   "check": "Whether msg.value can be counted twice in native settlement through batching inside the PoolManager.",
+   "agrees": true,
+   "note": "settle and settleFor are the only payable functions in src outside src/test, and each calls _settle once (src/PoolManager.sol:300-307). _settle credits msg.value once when no ERC-20 is synced and reverts with NonzeroNativeValue otherwise (src/PoolManager.sol:353-356). A search of src finds no delegatecall, no multicall and no loop around _settle, and hooks and callbacks are reached with CALL and zero value (src/libraries/Hooks.sol:134, src/PoolManager.sol:110), so one payment cannot be seen by two settle frames. An account that delegates to this code through EIP-7702 runs with its own storage and balance and does not touch the PoolManager's."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "question": "Which tokens held by the mainnet PoolManager have a function that any account can call to raise balanceOf(PoolManager) without a transfer from the caller, such as a public rebase, a reward claim on behalf of a holder or a distributor push, and how much value does each call move?",
+   "why": "sync needs no unlock and _settle credits any balance increase since the last sync to the settler (src/PoolManager.sol:279-288, 349-364). A caller who places such a call between sync and settle is credited value that belongs to no delta. The researcher checked stETH, where only oracle members can do this, and AMPL, where the PoolManager holds dust.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "question": "Who holds the pauser and proxy admin roles of USDC, the pause and upgrade roles of PYUSD and the owner role of USDT that controls pause, and are any of these separate from the blocklist roles already recorded?",
+   "why": "transfer in all three tokens reverts while the token is paused, and USDC and PYUSD are upgradeable. Each of these roles can stop take and collectProtocolFees for every pool in that currency in the same way as a blocklist entry (src/PoolManager.sol:291-297, src/ProtocolFees.sol:56).",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L5",
+   "question": "Does computeFee of the policy contract 0x1cd822b70a0591420f65e94b9b3a0d0b0fb3a314 read state that a swapper or a hook can change inside one transaction, so that a call to triggerFeeUpdate before a swap lowers the protocol fee for that swap?",
+   "why": "triggerFeeUpdate on the mainnet adapter is open to anyone and setProtocolFee does not check the lock (src/ProtocolFees.sol:35-41). The effect would be limited to protocol fee revenue, since the value stays under the 1,000 pip cap.",
+   "priority": "low"
+  }
+ ]
+}

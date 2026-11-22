@@ -1,0 +1,197 @@
+{
+ "unit": "stablecoin-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "I fetched the TIP-20 specification, the T12 upgrade page, the TIP-403 specification and the upgrade schedule. They say what the finding says. burnAt(from, amount) requires BURN_AT_ROLE and an unpaused token, ignores transfer policy authorization, debits from and reduces total supply. burnBlocked requires the source to fail the sender policy. Both reject FeeManager, StablecoinDEX, TIP20ChannelReserve, ReceivePolicyGuard, the token's own address and Zone Portal addresses with ProtectedAddress. T12 went live on mainnet on 13 October 2026. I read the client source on the main branch. burn_at calls check_not_paused, check_role, check_burn_address and then moves the balance to the zero address. The PROTECTED list holds only the four system addresses, and check_burn_address adds the token itself and the Zone Portal prefix. The PoolManager address matches none of them. On chain between blocks 50,274,136 and 50,275,429: pathUSD (0x20c0000000000000000000000000000000000000) and OUSD (0x20c0000000000000000000006a37da5c996874be) both return transferPolicyId 2. policyData(2) returns type 1 and admin 0x251d2711ebeb0a09fdb8992f5506f3d949175246. isAuthorized(2, PoolManager) returns true. balanceOf(PoolManager) was 403,954.29 OUSD and 19,644.52 pathUSD. I then ran three read-only simulations with eth_simulateV1 against live state. In the first, 0x79c6631fa15cda38777fb9dd7a6348baee794a4e grants itself BURN_AT_ROLE and calls burnAt(PoolManager, 1). Both calls succeed on OUSD and on pathUSD, and balanceOf(PoolManager) falls by one unit. In the second, the same account grants itself PAUSE_ROLE and calls pause, after which transfer from the PoolManager reverts with ContractPaused on both tokens. In the third, 0x251d2711...5246 calls modifyPolicyBlacklist(2, PoolManager, true), after which isAuthorized(2, PoolManager) returns false, transfers from the PoolManager revert with PolicyForbids on both tokens, and a transfer to the PoolManager reverts with PolicyForbids. No transaction was sent.",
+   "codeCheck": "sync stores balanceOf(PoolManager) in transient storage and nothing in persistent storage (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32). take debits the caller's delta and calls transfer with no comparison against any recorded reserve (src/PoolManager.sol:291-297). A failed token call reverts the take with ERC20TransferFailed (src/types/Currency.sol:64-86). No function in src/ observes a balance that fell outside take or collectProtocolFees, so a burn leaves pool state and ERC-6909 balances above the tokens held and the last withdrawers meet InsufficientBalance. After a blacklist entry or a pause, take reverts at src/types/Currency.sol:82-86, a payer cannot move tokens to the PoolManager so _settle credits zero (src/PoolManager.sol:358-364), and collectProtocolFees reverts at src/ProtocolFees.sol:56. A burn between sync and settle in one transaction makes the checked subtraction at src/PoolManager.sol:360 revert. I found no guard the finding missed. The tests do not cover this case. A search of test/ and src/test/ finds no token mock with an issuer burn, a blacklist or a pause.",
+   "corrections": "The finding could not list role holders. I read every RoleMembershipUpdated log on both tokens from block 0 to block 50,274,300 in 100,000 block windows. There are 16 events, and none grants BURN_AT_ROLE, BURN_BLOCKED_ROLE, PAUSE_ROLE or UNPAUSE_ROLE. hasRole returns false for those roles on every account that appears in the logs. So nobody holds a burn or pause role on OUSD today. pathUSD had one admin set at genesis without an event, so I cannot exclude a genesis holder there. The roles are one transaction away. 0x79c6631f...4a4e holds DEFAULT_ADMIN_ROLE on both tokens, getRoleAdmin returns DEFAULT_ADMIN_ROLE for all of them, and the simulation shows it can grant itself a role and use it. That account and the policy 2 admin both carry 23 bytes of code, the EIP-7702 designator 0xef0100 followed by 0x000000fb7702036ff9f76044a501ac1aa74cbab16b. They are signer-controlled accounts and I did not find out how many signers control them. Step 4 says every pool operation stops. The transfers stop. Swaps and liquidity changes that settle with ERC-6909 mint and burn (src/PoolManager.sol:322-336) still run, so holders can trade a frozen token for another token inside the PoolManager while other reserves last. The severity stays high under the scale: a token issuer or policy admin must act, and the whole balance of the token is in reach.",
+   "sources": [
+    {
+     "url": "https://tempo.com/developers/docs/protocol/tip20/spec.md",
+     "supports": "burnAt, burnBlocked, the ProtectedAddress list, pause behaviour and the role list"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/protocol/upgrades/t12.md",
+     "supports": "burnAt was added in T12, live on mainnet since 13 October 2026 at 14:00 UTC"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/protocol/tip403/spec.md",
+     "supports": "blacklist policies, the policy admin's power to add addresses, policies shared across tokens"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/precompiles/src/tip20/mod.rs",
+     "supports": "burn_at, burn_blocked, check_burn_address and the PROTECTED constant, which does not include the PoolManager"
+    },
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "eth_call for transferPolicyId, policyData(2), isAuthorized, balanceOf, hasRole and getRoleAdmin; eth_getLogs for RoleMembershipUpdated from block 0 to 50,274,300; eth_getCode of the two admin accounts; eth_simulateV1 of grantRole plus burnAt, grantRole plus pause, and modifyPolicyBlacklist"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "The Arc EVM differences page states that a value transfer to or from a blocklisted address reverts, that native and ERC-20 USDC share one balance, and warns against pools that pair the two faces. The client source agrees. check_blocklist_and_create_log in evm.rs reads the blocklist slot for sender and recipient before every value-bearing frame and reverts with 'Blocked address'. The Native Coin Authority precompile accepts mint, burn and transfer(from, to, amount) only from 0x3600000000000000000000000000000000000000 and checks the same blocklist. The blocklist is a mapping at slot 2 of 0x1800000000000000000000000000000000000001. On chain between blocks 32,570,234 and 32,571,390: the PoolManager native balance was 2442207942270503294917244 wei and USDC.balanceOf(PoolManager) was 2442207942270, which is the native balance divided by 10^12 and rounded down. blacklister() is 0x2a2b7ff330f15f9a8c52af5fec27d775f5138467, pauser() is 0x51fa31e029abf0ce307bca9ee6bf48aed6345212, the proxy admin slot holds 0x9005e53e3ee2f27999f15e7a52c58f804fc716e0 and the implementation slot holds 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6. The blacklister, the pauser, the proxy admin and the token owner all have no code. isBlacklisted(PoolManager) and isBlocklisted(PoolManager) return false. I simulated a blocklist entry with eth_call and a state override that sets the PoolManager's slot in 0x1800...0001 to 1. Under the override USDC.isBlacklisted(PoolManager) returns true, which shows the token and the EVM read the same slot. A native send from the PoolManager fails with 'Blocked address'. USDC.transfer from the PoolManager and to the PoolManager both fail with 'Blocked address'. A call to collect on the fee adapter, which runs PoolManager.collectProtocolFees, reverts for address(0) with a wrapped NativeTransferFailed and for 0x3600 with a wrapped ERC20TransferFailed, each carrying 'Blocked address'. The same calls succeed without the override. I did not read the token implementation, so the seizure by upgrade in step 6 rests on the precompile access rule alone.",
+   "codeCheck": "take pays native value with call(gas(), to, amount, 0, 0, 0, 0) and reverts with NativeTransferFailed when the call fails (src/types/Currency.sol:45-53). For 0x3600 it calls transfer and reverts with ERC20TransferFailed (src/types/Currency.sol:55-86). Both are reached from src/PoolManager.sol:291-297 and from src/ProtocolFees.sol:56. settle and settleFor are the only payable entry points (src/PoolManager.sol:300-307) and the contract has no receive or fallback function, so a blocked value transfer to the PoolManager leaves no way to pay in native USDC, and a blocked ERC-20 transfer leaves _settle with a zero difference (src/PoolManager.sol:358-360). The simulation against the deployed contract returned the two error types that these lines produce. No guard in src/ can route around a transfer that the chain or the token rejects. The tests model a native asset with an ERC-20 face (src/test/NativeERC20.sol, test/Sync.t.sol:255-298) and do not model a blocklist.",
+   "corrections": "Step 5 says every pool with either face of USDC is frozen. Transfers across the PoolManager boundary are frozen. Swaps and liquidity changes that settle in ERC-6909 claims (src/PoolManager.sol:322-336) still run, so holders can swap USDC claims for EURC or other tokens inside the PoolManager while those reserves last. The USDC itself stays locked. The EURC balance was 20,721.78 and the cirBTC balance 1.14532076 at my block. Their blacklisters are 0x24584e31ada775628f72dfea5829122cf65a5c01 and 0xf9c8a748b5192c4b10c446785f2b707b98c9ea79. The severity stays high: only Circle roles can act, and about 2.44 million USDC is in reach.",
+   "sources": [
+    {
+     "url": "https://docs.arc.io/arc/references/evm-differences.md",
+     "supports": "blocklist enforced at runtime on value transfers and SELFDESTRUCT, two interfaces over one balance, warning against pairing the two faces"
+    },
+    {
+     "url": "https://docs.arc.io/arc/concepts/stablecoin-native-model.md",
+     "supports": "native and ERC-20 USDC share one balance and balanceOf truncates the last 12 decimal places"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs",
+     "supports": "check_blocklist_and_create_log reverts value transfers when sender or recipient is blocklisted"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_authority.rs",
+     "supports": "mint, burn and transfer(from, to, amount) accept only the USDC token address as caller"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/execution-config/src/native_coin_control.rs",
+     "supports": "blocklist slot derivation, mapping slot 2 of the Native Coin Control address"
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "eth_getBalance, eth_call and eth_getStorageAt for balances, roles and proxy slots; eth_getCode of the role accounts; eth_call with a state override that marks the PoolManager as blocklisted"
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "The receive policies page states that a blocked inbound TIP-20 transfer still succeeds, that delivery goes to ReceivePolicyGuard at 0xB10C000000000000000000000000000000000000, and that with recovery authority address(0) only the transfer originator may claim. The TIP-20 specification says a receiver policy rejection must not revert the transfer. In the client source, transfer returns Ok(true) when validate_transfer reports a blocked inbound, validate_inbound_or_block moves the amount from the originator to the guard, and for transfer the originator is msg.sender. claim in the guard reverts with unauthorized_claimer unless msg.sender equals the recovery authority resolved from the receipt. I tested it on chain. I read the ReceivePolicyUpdated logs of the registry over the last 30,000,000 blocks and found 19 events. Two accounts, 0xec0eca588024e2d0091e74bd9034ff581111ea7f and 0x5bfa9123fa9dc6448d24ebbdb59e98f237de70c3, have sender policy 0, which rejects every sender. validateReceivePolicy(OUSD, PoolManager, account) returns 2 for both. An eth_simulateV1 of OUSD.transfer(account, 1) from the PoolManager address returns true and emits Transfer from the PoolManager to the guard and TransferBlocked from the guard. Afterwards the guard's balance is up by 1, the recipient's balance is unchanged and the PoolManager's balance is down by 1. The guard's functions are claim(address,bytes) with selector 0xbb1757cf, balanceOf(bytes) and burnBlockedReceipt(bytes). eth_call from the PoolManager address to the guard with transfer(address,uint256) and balanceOf(address) reverts with an unknown selector error.",
+   "codeCheck": "take debits the caller's delta and calls transfer(to, amount) (src/PoolManager.sol:291-297). The success test accepts a 32 byte return value of 1 (src/types/Currency.sol:64-74), which is what the TIP-20 returns for a redirected transfer, so take completes. Nothing in take reads the recipient's balance. The debit and the balance drop are equal, so PoolManager accounting stays whole and the loss falls on the party that named the recipient. The PoolManager makes outbound calls with four kinds of selector only: transfer(address,uint256) at src/types/Currency.sol:60-73, balanceOf(address) at src/types/Currency.sol:94, unlockCallback(bytes) to its caller at src/PoolManager.sol:110, and hook selectors to addresses with flag bits (src/libraries/Hooks.sol:131-134). The guard address has no flag bits and none of these selectors is claim, so a receipt whose originator is the PoolManager cannot be claimed. The tests have no token that returns true without crediting the recipient.",
+   "corrections": "The mechanism holds as written. Two points on reach. First, both accounts that reject all senders today name themselves as recovery authority, so they could claim a redirected amount. Three accounts have chosen address(0) as recovery authority, and all three currently allow every sender and every token. I found no account that is in the permanent loss configuration today. Second, a router that takes to itself and then forwards becomes the originator, and a router has no claim function either. The Universal Router and PositionManager on Tempo were not read. The severity stays medium. No third party can trigger the loss, pool reserves are not in reach, and the amount is limited to takes sent to accounts that set such a policy.",
+   "sources": [
+    {
+     "url": "https://tempo.com/developers/docs/protocol/tip403/receive-policies.md",
+     "supports": "a blocked inbound transfer succeeds and is redirected to ReceivePolicyGuard; recovery authority table; claim rules"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/protocol/tip20/spec.md",
+     "supports": "a receiver policy rejection must not revert the transfer and the recipient receives no credit"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/precompiles/src/tip20/mod.rs",
+     "supports": "transfer returns Ok(true) for a blocked inbound; validate_inbound_or_block moves funds to the guard with the transfer's msg.sender as originator"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/precompiles/src/receive_policy_guard/mod.rs",
+     "supports": "claim reverts unless msg.sender equals the recovery authority of the receipt"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/contracts/src/precompiles/receive_policy_guard.rs",
+     "supports": "the guard ABI: balanceOf(bytes), claim(address,bytes), burnBlockedReceipt(bytes)"
+    },
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "eth_getLogs for ReceivePolicyUpdated; eth_call for receivePolicy and validateReceivePolicy; eth_simulateV1 of OUSD.transfer from the PoolManager to two accounts that reject all senders, with balances read before and after"
+    }
+   ]
+  },
+  {
+   "findingIndex": 3,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "On Tempo owner() returns 0xcfb43dc56b55be9611ded8384201cecf06a9811b and on Arc 0xbca30b5429935205037069cf5b8a165f55d05a75. Both return 'Uniswap Wormhole Message Receiver' from NAME(), 0xf5f4496219f31cdcba6130b5402873624585615a from messageSender() and 172,800 from MESSAGE_TIME_OUT_SECONDS(). nextMinimumSequence() is 0 on Tempo and 5 on Arc. The bytecode of each receiver contains the core contract address the finding names. protocolFeeController() is the zero address on Tempo and 0x2f2bd3f43880b9644211f16d861b0672aab23782 on Arc. The Wormhole core contracts are proxies of 680 bytes. chainId() returns 68 on Tempo and 71 on Arc, and the Wormhole source assigns 68 to Tempo and 71 to Arc. getCurrentGuardianSetIndex() returns 7 on both, and the 19 addresses in each set are identical to the set at index 7 of the Ethereum core contract 0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B, which I read on Ethereum. The Wormhole documentation states that a message needs 13 of 19 guardian signatures. The Wormhole contract address page lists 0xbebdb6C8ddC678FfA9f8748f85C815C556Dd8ac6 for Tempo. Its mainnet table has no Arc row and lists 0xC8aD24fC6063c41cB5C12a8e3851AafC3b3CF027 under another chain name, so for Arc the official status of the core address rests on the matching chain id and guardian set that I read on chain. On Arc, collect on the fee adapter succeeds in eth_call from an arbitrary address for address(0) and for 0x3600, and TOKEN_JAR() returns 0xfd39ac616e630e9db03efb2c9a4fe63edb949233. Accrued protocol fees were about 43.85 USDC for address(0) and 68.60 USDC for 0x3600.",
+   "codeCheck": "setProtocolFeeController is the only function behind onlyOwner (src/ProtocolFees.sol:29-32). The controller can call setProtocolFee, which rejects any value above 1000 pips per direction (src/ProtocolFees.sol:35-41, src/libraries/ProtocolFeeLibrary.sol:25-32), and collectProtocolFees, which subtracts the amount from protocolFeesAccrued with checked arithmetic before the transfer (src/ProtocolFees.sol:54-56). The swap loop adds to the protocol's share at most the protocol fee rate times the input of each step, or the whole step fee when the LP fee is zero (src/libraries/Pool.sol:385-398). A search of src/ finds no other use of the owner or the controller. Neither can reach pool reserves or ERC-6909 balances. lib/solmate is empty in this checkout, so the Owned base contract that defines onlyOwner and any ownership transfer function could not be read. The receiver contracts were identified from their getters and bytecode strings and their source was not read.",
+   "corrections": "The receiver bytecode on both chains also contains the strings 'Message not for this chain' and 'Message not for this dest', and the payload format string names a messageReceiver address and a receiverChainId. A message addressed to the Arc receiver should therefore fail on the Tempo receiver even though Tempo's sequence counter is still 0. I did not read the receiver source, so this is a reading of strings in bytecode. The core contracts are upgradeable proxies under Wormhole guardian governance, which adds a second way for the same 13 guardians to change what the receiver accepts. The severity stays low. A guardian quorum is a privileged actor, and what it can reach is accrued protocol fees and at most 0.1 percent of future swap input per direction.",
+   "sources": [
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "eth_call for owner(), NAME(), messageSender(), nextMinimumSequence(), MESSAGE_TIME_OUT_SECONDS(), protocolFeeController(), and chainId(), getCurrentGuardianSetIndex(), getGuardianSet(7) on the core contract; eth_getCode of the receiver"
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "the same calls on Arc, plus TOKEN_JAR(), feeSetter(), protocolFeesAccrued and an eth_call of collect from an arbitrary address"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "getCurrentGuardianSetIndex() and getGuardianSet(7) on the Ethereum core contract, identical to the sets on Tempo and Arc"
+    },
+    {
+     "url": "https://wormhole.com/docs/protocol/infrastructure/guardians/",
+     "supports": "19 guardians and a 13 of 19 signature quorum"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/wormhole-foundation/wormhole/main/sdk/vaa/structs.go",
+     "supports": "Wormhole chain id 68 is Tempo and 71 is Arc"
+    },
+    {
+     "url": "https://wormhole.com/docs/reference/contract-addresses/",
+     "supports": "the mainnet core contract address for Tempo; the mainnet table has no Arc row"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Can one payment be credited twice through the two faces of USDC (address(0) by msg.value and 0x3600 by balance difference)?",
+   "agrees": true,
+   "note": "I traced every order of calls. A native credit arises only in _settle when the synced currency slot is zero (src/PoolManager.sol:353-354). A 0x3600 credit needs that slot to hold 0x3600, and in that state any msg.value reverts (src/PoolManager.sol:356). The currency slot and the reserves slot are written together (src/libraries/CurrencyReserves.sol:27-32), and sync of address(0) clears only the currency slot, so a stale reserve can never be paired with a later sync. settle and settleFor are the only payable functions (src/PoolManager.sol:300-307) and there is no receive or fallback. take to the PoolManager itself reverts for native value and moves nothing for 0x3600. test/Sync.t.sol:255-274 covers the ordered case with a native ERC-20 mock. One sentence of the result is too strong. Every inflow is credited once at whole unit granularity. Below one unit of 0.000001 USDC a native deposit can also push the 6 decimal balance over a boundary, which is the case the next cleared item bounds. Both faces are in use on Arc today: protocolFeesAccrued is nonzero for address(0) and for 0x3600, and the PoolManager native balance has a remainder of 503294917244 wei."
+  },
+  {
+   "check": "Can the 12 digit truncation of USDC.balanceOf be used to take funds? Native value can be forced into the PoolManager with SELFDESTRUCT while 0x3600 is synced.",
+   "agrees": true,
+   "note": "The bound holds. paid is floor(after / 10^12) minus floor(before / 10^12) (src/PoolManager.sol:358-360), so the credit exceeds what was paid in by less than one unit per sync and settle pair. The pair can be repeated in one transaction: a caller can first raise the remainder with a native settle that is credited in full, then tip it over the boundary with 1 wei, and gain close to 10^12 wei per round at the expense of native claims. Each round needs several calls. The Arc documentation gives a minimum base fee of 20 gwei, so 10^12 wei pays for 50 gas and one warm call alone costs 100. The round always costs more than it returns. The cleared item misses one case. The same page says the base fee is paid to the block beneficiary. A validator that includes its own transactions gets the fee back, so the cost argument does not bind it. The amount is still below 10^12 wei per round, a fraction of a cent per full block. I recorded this as a low priority lead."
+  },
+  {
+   "check": "collect on the Arc fee adapter is callable by anyone, and collectProtocolFees has no lock check. Can a fee withdrawal in the middle of an unlock profit the caller, given that a native fee transfer changes USDC.balanceOf while 0x3600 is synced?",
+   "agrees": true,
+   "note": "collectProtocolFees checks the caller and the synced currency and never calls _isUnlocked (src/ProtocolFees.sol:44-57; _isUnlocked is declared at line 60 and unused in that file). The guard at lines 49-52 exempts address(0), so a native collection can run while 0x3600 is synced. That transfer only lowers the PoolManager balance, which lowers the settler's credit or makes src/PoolManager.sol:360 revert. No path raises the balance: a native send to the PoolManager has no receiving function and the adapter pays a fixed jar. On chain, eth_call of collect from 0x000000000000000000000000000000000000dEaD succeeds for both currencies, TOKEN_JAR() is 0xfd39ac616e630e9db03efb2c9a4fe63edb949233 and POOL_MANAGER() is the PoolManager. A hook could use this to make a victim's settle fall short, which is griefing with no gain."
+  },
+  {
+   "check": "Type 0x76 batches share transient storage across calls. Can an unlock flag, a delta or a stale sync leak to another party (A1)?",
+   "agrees": true,
+   "note": "execute_batch in handler.rs on the main branch takes one checkpoint, runs every call with the same caller and origin, and rolls all of them back when one fails. Only the sender's own calls share transient state. unlock sets and clears its flag inside one call and requires a zero delta count before it returns (src/PoolManager.sol:104-114), so no flag or delta survives into the next call of the batch. A sync left by one call is visible to the next, as it would be for one contract making both calls on Ethereum, and it can only misdirect the sender's own payment. Like the researcher, I did not confirm which interpreter the mainnet release runs or where it clears transient storage at the end of a transaction. eth_call of settle with value 1 on Tempo returns 'value transfer not allowed', which matches the cleared item on the missing native asset."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "question": "Who controls 0x79c6631fa15cda38777fb9dd7a6348baee794a4e (DEFAULT_ADMIN_ROLE on OUSD and pathUSD) and 0x251d2711ebeb0a09fdb8992f5506f3d949175246 (admin of TIP-403 policy 2)? Both carry the EIP-7702 designator for 0x000000fb7702036ff9f76044a501ac1aa74cbab16b. What does that delegate allow, how many signers or scoped credentials can act for each account, and did pathUSD get any burn or pause role holder at genesis without an event?",
+   "why": "A read-only simulation shows the first account can grant itself BURN_AT_ROLE and burn the PoolManager balance of either token in two calls, and the second can freeze both tokens at the PoolManager in one call. The log scan found no current holder of a burn or pause role, so these two accounts are the whole distance between about 424,000 USD of pooled stablecoins and a burn or freeze.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "question": "Do the Universal Router and PositionManager deployed on Tempo take TIP-20 tokens to themselves and forward them, or take straight to the user's recipient, and does either call validateReceivePolicy first?",
+   "why": "A redirected transfer records its sender as originator. If a router forwards the tokens, the router is the originator, and a receipt with recovery authority address(0) can then be claimed by nobody. That would move the receive policy loss from direct PoolManager users to every user of the periphery.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "When the USDC pauser pauses the token on Arc, do native value transfers keep working while the ERC-20 face reverts?",
+   "why": "The EVM differences page lists only the blocklist as a runtime rule on native transfers. If a pause stops 0x3600 and leaves address(0) open, claims in 0x3600 are frozen while claims in address(0) still exit from the same balance, and a pool that pairs the two faces becomes the only way out for 0x3600 holders. An eth_call with a state override on the paused flag can answer it.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "Does an Arc validator that includes its own transactions recover the whole base fee, and how many sync and settle rounds on 0x3600 fit in one 30M gas block?",
+   "why": "The sub-unit rounding of USDC.balanceOf lets a caller gain just under 10^12 wei of native claims per round. The clearance rests on gas cost, and the base fee is paid to the block beneficiary. The answer bounds what a validator could move per block, which I estimate at a fraction of a cent.",
+   "priority": "low"
+  }
+ ]
+}

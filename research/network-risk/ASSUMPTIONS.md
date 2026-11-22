@@ -2,6 +2,10 @@
 
 Every item is something the code in `src/` relies on the network to provide. A network that breaks one of them is a candidate for frozen or siphoned pool funds. Line numbers refer to this repository. Read the code as it is here; do not compare it with any other copy of v4-core.
 
+## Threat model
+
+The attacker is an ordinary account with no special role: it can deploy contracts, tokens and hooks, create pools, and send any transaction the network accepts from the public. The victims are ordinary users of pools: liquidity providers, swappers and holders of ERC-6909 claims. Actions that need the PoolManager owner, the protocol fee controller, a token issuer's admin keys, a sequencer, a validator set or chain governance are out of scope and are recorded only for reference.
+
 The build targets `evm_version = cancun`, solc 0.8.26, `via_ir`, `optimizer_runs = 44444444`, `bytecode_hash = none` (`foundry.toml`). The contract deployed on the 21 networks is 24,009 bytes (24,050 on Unichain), against the 24,576 byte EIP-170 limit.
 
 ## A1. Transient storage lives for exactly one transaction
@@ -50,7 +54,7 @@ The bytecode uses `PUSH0`, `MCOPY`, `TLOAD`, `TSTORE`, `SELFBALANCE`, `RETURNDAT
 
 ## A12. The owner and the protocol fee controller are who Uniswap governance says they are
 
-`ProtocolFees.sol:29-57`: the owner sets the controller; the controller sets protocol fees (capped at 0.1% per direction) and withdraws accrued fees to any recipient. `collectProtocolFees` reverts while the manager is unlocked and the currency is synced (`ProtocolFees.sol:44-56`). On several chains the owner is `0x2BAD8182C09F50c8318d769245beA52C32Be46CD`, the L1-to-L2 alias of the Ethereum timelock `0x1a9C8182C09F50C8318d769245beA52c32BE35BC`, an address with no code that can only act through the chain's cross-domain message path. Who can produce a call from that address is a property of the chain.
+`ProtocolFees.sol:29-57`: the owner sets the controller; the controller sets protocol fees (capped at 0.1% per direction) and withdraws accrued fees to any recipient. `collectProtocolFees` reverts when the currency is an ERC-20 that is currently synced, whatever the lock state (`ProtocolFees.sol:44-56`); `_isUnlocked` is declared but never called. On several chains the owner is `0x2BAD8182C09F50c8318d769245beA52C32Be46CD`, the L1-to-L2 alias of the Ethereum timelock `0x1a9C8182C09F50C8318d769245beA52c32BE35BC`, an address with no code that can only act through the chain's cross-domain message path. Who can produce a call from that address is a property of the chain.
 
 ## A13. The same address on another chain is the same contract
 
@@ -59,3 +63,16 @@ Four networks share PoolManager address `0x360e68fa…fb32` and two share `0x836
 ## A14. Blocks do not get rewritten after funds leave
 
 Settlement is atomic inside a transaction, so core is indifferent to ordering. Reorg depth, sequencer equivocation and preconfirmation schemes matter where pool funds meet bridges and fast withdrawals.
+
+## What an ordinary caller can make the PoolManager do
+
+These are the levers an unprivileged account has. For each network the question is what the chain's special addresses (precompiles, predeploys, system contracts, faces of the native asset, wrapped native, bridges, staking and fee contracts) do when the PoolManager is the `msg.sender` of these calls, and whether any combination moves value that belongs to pools without an equal debit to the caller.
+
+- P1, native take. `take(address(0), to, amount)` makes the PoolManager execute `CALL(to, value = amount, empty calldata)` with all gas (`PoolManager.sol:291-297`, `Currency.sol:44-52`). The caller is debited `amount` of currency `address(0)`. With `amount = 0` nothing is owed and the PoolManager still calls `to` with empty calldata.
+- P2, token take. `take(X, to, amount)` makes the PoolManager call `X.transfer(to, amount)` for any address `X` the caller names (`Currency.sol:53-80`). The call counts as successful when it does not revert and returns nothing or a 32 byte `true`. The caller is debited `amount` of currency id `X`. With `amount = 0` nothing is owed. `amount` is capped at `type(int128).max` by the cast at `PoolManager.sol:294`.
+- P3, sync. `sync(X)` makes the PoolManager staticcall `X.balanceOf(PoolManager)` for any `X` and stores the result in transient storage. It needs no unlock and no permission (`PoolManager.sol:279-288`).
+- P4, settle. `settle` and `settleFor` credit `msg.value` when no currency is synced, or the rise in `X.balanceOf(PoolManager)` since `sync(X)` (`PoolManager.sol:349-364`).
+- P5, hook calls. `initialize` accepts any address as the hook when its low 14 bits form a valid flag combination (`Hooks.sol:109-124`). The PoolManager then calls that address with the `IHooks` selectors and caller-supplied arguments, including arbitrary `hookData`, and accepts the call when the return data is at least 32 bytes and starts with the same selector (`Hooks.sol:131-160`). `swap`, `modifyLiquidity` and `donate` do the same for their hooks.
+- P6, claims. `mint` and `burn` move ERC-6909 claims whose id is `uint160(currency)` for any address (`PoolManager.sol:322-336`).
+- P7, callback. `unlock` calls `unlockCallback` on the caller itself (`PoolManager.sol:104-114`).
+- P8, reads. `extsload` and `exttload` return any slot.

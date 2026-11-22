@@ -18,6 +18,7 @@ Agents write these files into `research/network-risk/cycles/<NNN>/` and run `pyt
      "lens": "L3",
      "assumptions": ["A2", "A6"],
      "effect": "siphon|freeze|both|degrade",
+     "actor": "unprivileged|pool-creator|issuer|operator|governance",
      "severity": "critical|high|medium|low|info",
      "difference": "what this network does that Ethereum does not",
      "mechanism": "how that difference meets the PoolManager code, step by step, no exploit code",
@@ -74,6 +75,16 @@ Every `(chainId, lens)` pair assigned to the unit needs one `profiles` entry. Ev
   "leads": [{"chainIds": [137], "lens": "L3", "question": "...", "why": "...", "priority": "high"}]
 }
 ```
+
+## Actor
+
+`actor` names the least privileged party that can trigger the hazard. Only `unprivileged` is in scope for the review's goal. The others are recorded for reference.
+
+- unprivileged: any account. It may deploy contracts and send public transactions, and the victims did nothing unusual (they used a pool that has no attacker-made hook or token).
+- pool-creator: the attacker must be the author of a hook or token that the victims chose to use.
+- issuer: needs admin keys of a token that pools hold.
+- operator: needs a sequencer, block builder, validator or bridge committee.
+- governance: needs the PoolManager owner, the fee controller or chain governance.
 
 ## Severity
 

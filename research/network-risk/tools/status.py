@@ -6,10 +6,13 @@ N = {n["chainId"]: n for n in json.load(open(f"{R}/state/networks.json"))["netwo
 lenses = sorted(L["lenses"])
 out = ["# Network risk ledger", "", f"Cycle {L['cycle']}. {len(N)} networks, {len(F)} findings on record, "
        f"{sum(1 for l in L['leads'] if l['status']=='open')} open leads.", ""]
-out += ["## Findings", "", "| ID | Severity | Status | Effect | Networks | Title |", "|---|---|---|---|---|---|"]
+inscope = [f for f in F if f.get("actor") == "unprivileged" and f["status"] != "refuted"]
+out += [f"In scope (an ordinary account can trigger it): {len(inscope)} findings, "
+        f"{sum(1 for f in inscope if f['severity'] in ('critical','high'))} of them critical or high.", ""]
+out += ["## Findings", "", "| ID | Actor | Severity | Status | Effect | Networks | Title |", "|---|---|---|---|---|---|---|"]
 for f in F:
     nets = ", ".join(N[c]["name"] for c in f["chainIds"]) if len(f["chainIds"]) < len(N) else "all 21"
-    out.append(f"| {f['id']} | {f['severity']} | {f['status']} | {f['effect']} | {nets} | {f['title']} |")
+    out.append(f"| {f['id']} | {f.get('actor','unclassified')} | {f['severity']} | {f['status']} | {f['effect']} | {nets} | {f['title']} |")
 out += ["", "## Coverage", "", "Each cell is depth/last cycle. Depth 0 is untouched, 1 surveyed, 2 surveyed and independently checked, 3 revisited.", "",
         "| Network | Chain ID | " + " | ".join(lenses) + " |", "|---|---|" + "---|" * len(lenses)]
 for uid, u in L["units"].items():
