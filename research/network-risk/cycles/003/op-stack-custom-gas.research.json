@@ -1,0 +1,550 @@
+{
+ "unit": "op-stack-custom-gas",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 42220,
+   "lens": "L1",
+   "summary": "No new opcode or call difference was found. I read the transfer precompile source again for its balance check.",
+   "deltas": [
+    {
+     "delta": "The transfer precompile moves value with the journal transfer function and returns a halt when that function reports an error, so it cannot move more than the source account holds. From Jovian on it no longer resets the cold status of the two accounts.",
+     "source": "https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/precompiles/transfer.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 42220,
+   "lens": "L2",
+   "summary": "The fee currency debit and credit are steps of the transaction handler. The debit runs before the main call and its transient storage is cleared. The credit runs after the main call has returned and clears transient storage when it ends. No contract can start either step from inside a call.",
+   "deltas": [
+    {
+     "delta": "debit_gas_fees uses the system call path that does not commit (erc20.rs line 95). The handler wraps it in a journal checkpoint and, after the checkpoint is committed, calls transient_storage.clear() (handler.rs lines 695 to 698). The main call therefore starts with an empty transient map.",
+     "source": "https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/handler.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "credit_gas_fees uses the committing system call path (erc20.rs line 134). call_inner clears transient storage after that call (core_contracts.rs lines 241 to 248). The credit sees the transient values the main call left and nothing after it can read them.",
+     "source": "https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/contracts/core_contracts.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "For a transaction that pays gas in a fee currency the handler rejects the transaction when its value exceeds the sender's native balance (handler.rs lines 805 to 815). A deposit's mint is added to the sender balance before that check (line 773). The value itself moves in the call frame as on Ethereum.",
+     "source": "https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/handler.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 42220,
+   "lens": "L3",
+   "summary": "By value the PoolManager's largest holdings are wBRL, wARS and G$, followed by small amounts of USDC, USDT and CELO. G$ is frozen for the PoolManager address by the token owner since 11 September 2026. Every other pooled token that was probed moves one to one in both directions.",
+   "deltas": [
+    {
+     "delta": "Blockscout lists 50 ERC-20 balances for the PoolManager on its first page. Read from chain at block 83,475,210: 3,193,624.74 wBRL (83.7 percent of the 3,816,971.75 supply), 226,945,961.04 wARS (59.0 percent of supply), 550,022,104.46 G$ (13.7 percent of supply), 4,958.43 USDC, 4,648.08 USDT, 6,167.15 CELO, 11,689,244.47 COPm, 6,312.58 KESm and 54.12 USDm.",
+     "source": "https://celo.blockscout.com/api/v2/addresses/0x288dc841A52FCA2707c6947B3A777c5E56cd87BC/tokens?type=ERC-20",
+     "relevance": "high"
+    },
+    {
+     "delta": "wBRL (0xD76f5Faf6888e24D9F04Bf92a0c8B921FE4390e0) and wARS (0x0DC4F92879B7670e5f4e4e6e3c801D229129D90D) are ERC-1967 proxies of the verified contract LatamStable. It is an OpenZeppelin upgradeable ERC-20 with a pauser role, a minter role, a compliance role that can switch on a blocklist checked for sender and recipient, and an upgrader role for UUPS upgrades. enforceBlocklist(), isBlocked(PoolManager) and paused() all return false on both tokens.",
+     "source": "https://celo.blockscout.com/api/v2/smart-contracts/0xfbab5dcb1647787ec8402a6509add256fa6c7f9d",
+     "relevance": "high"
+    },
+    {
+     "delta": "G$ (0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A) is a proxy of the verified contract SuperGoodDollar at 0xb4419A3Df33b9aa6fbE452Df8816389E599C29eF. The contract has a mapping isBlocked for accounts that can neither send nor receive G$, an owner function setBlocked and an owner function adminBurn(account, amount). isBlocked(PoolManager) returns true at block 83,475,285.",
+     "source": "https://celo.blockscout.com/api/v2/smart-contracts/0xb4419a3df33b9aa6fbe452df8816389e599c29ef",
+     "relevance": "high"
+    },
+    {
+     "delta": "G$ charges a transfer fee through a formula contract (0x1151867dA39003695eEd28fAfa871079C91884C9). getFees returns a fee of zero for amounts of 10^18 and 10^24 and for transfers that name the PoolManager as sender or recipient. When the formula returns a fee with senderPays true, the sender's balance falls by amount plus fee. defaultOperators() returns an empty list.",
+     "source": "https://forno.celo.org eth_call getFees(uint256), getFees(uint256,address,address), formula(), defaultOperators() on 0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A, block 83475285",
+     "relevance": "low"
+    },
+    {
+     "delta": "USDm (0x765DE816845861e75A25fCA122bb6898B8B1282a) runs the Mento StableTokenV3 implementation 0x815795c30d0758a297b08cd4e0643620c974c318. An operator can move tokens out of any account with sendToPool and a burner can burn from any account with burn(address,uint256). The token has emitted no OperatorUpdated event and three BurnerUpdated events, for the contracts 0x777a8255ca72412f0d706dc03c9d1987306b4cad, 0xa0fb8b16ce6af3634ff9f3f4f40e49e1c1ae4f0b and 0xa4096343485a44c0f8d05ae6da311c18d63e38bc. COPm and KESm still run the older implementation 0x434563b0604be100f04b7ae485bcafe3c9d8850e, which has neither function.",
+     "source": "https://raw.githubusercontent.com/mento-protocol/mento-core/develop/contracts/tokens/StableTokenV3.sol",
+     "relevance": "low"
+    },
+    {
+     "delta": "The 20 Uniswap v4 pools that GeckoTerminal lists for Celo all have the zero address as hook according to PositionManager.poolKeys. The two largest are USDC/wBRL with a 0.1 percent fee (531,360 USD of reserves) and wARS/USDC with a 0.3 percent fee (130,960 USD).",
+     "source": "https://api.geckoterminal.com/api/v2/networks/celo/dexes/uniswap-v4-celo/pools?page=1",
+     "relevance": "low"
+    },
+    {
+     "delta": "mCELO (0x7D00cd74FF385c955EA3d79e47BF06bD7386387D) is an Aave version 2 style interest bearing token whose balance grows with an index. The PoolManager holds 0.0118 of it, and the second page of the Blockscout list shows Aave version 3 interest bearing tokens as well (12.19 aCelcEUR, 0.10 aCelcUSD, 0.08 aCelUSDC, 0.05 aCelUSDT). The list has 91 tokens in total. Growth between transactions is credited to nobody, because a credit is the balance rise between sync and settle inside one transaction.",
+     "source": "https://forno.celo.org eth_getCode and eth_call on the implementation 0xf44e15badbc9a2c5d71a569d6dfb584a8cc97a2a (scaledBalanceOf, getReserveNormalizedIncome selectors present)",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 42220,
+   "lens": "L4",
+   "summary": "G$ depends on the Superfluid host, a protocol contract that computes balances from agreements. A flaw in that host let an attacker stream 2.8 billion unbacked G$ in September 2026, and the token owner answered with the block on the PoolManager. Calls from the PoolManager address to the wrapped native predeploy and the EntryPoints were measured and book value one to one.",
+   "deltas": [
+    {
+     "delta": "G$ reports getHost() 0xA4Ff07cF81C02CFD356184879D953970cA957585. balanceOf is the real time balance that the host's agreements produce, floored at zero. The token source states that a blocked account can still be credited through agreements, and that for a blocked account it rejects agreement writes that open or raise an outflow or lower the account balance.",
+     "source": "https://celo.blockscout.com/api/v2/smart-contracts/0xb4419a3df33b9aa6fbe452df8816389e599c29ef",
+     "relevance": "high"
+    },
+    {
+     "delta": "Superfluid's report on the incident of 3 September 2026 says an operator registered Super Apps on Celo without permission checks, that a terminate callback returning about 900 KB of data made stream closure and liquidation exceed the 30,000,000 block gas limit, that 2,801,252,167 unbacked G$ resulted, and that the host was upgraded on 4 September with a cap on callback return data and with Super App whitelisting switched back on.",
+     "source": "https://forum.superfluid.org/t/security-council-preliminary-disclosure-of-a-security-incident-that-impacted-g-liquidity-on-celo-network/1743",
+     "relevance": "high"
+    },
+    {
+     "delta": "GoodDollar's post-mortem of 20 October 2026 says transfers from G$ liquidity pools were blocked, that all pools were unblocked on 28 September except the Celo Uniswap v4 pool, which holds 550 million G$, and that the pool stays blocked until the position holder contacts Good Labs or moves the position to the Good Labs Safe 0x4e31993d9F13F940828bf9eC2f643A7E55B21e8C.",
+     "source": "https://discourse.gooddollar.org/t/gooddollar-incident-post-mortem-september-4-attack/9164",
+     "relevance": "high"
+    },
+    {
+     "delta": "Measured with the PoolManager as caller: a value call of 10^15 wei with empty calldata raises balanceOf(PoolManager) on the wrapped native predeploy 0x4200000000000000000000000000000000000006 and on the three EntryPoints by exactly 10^15. A zero value call raises nothing. transfer on the predeploy moves 10^15 of the wrapped token and releases no native value. transfer on each EntryPoint reverts. L2ToL1MessagePasser and the SequencerFeeVault keep the value and have no balanceOf.",
+     "source": "eth_call on https://forno.celo.org with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 196,
+   "lens": "L1",
+   "summary": "Nothing new at the opcode level in this cycle.",
+   "deltas": []
+  },
+  {
+   "chainId": 196,
+   "lens": "L2",
+   "summary": "I read the fee and balance step of the X Layer handler again for value handling. A gasless transaction needs a sender balance that covers its value, and a deposit adds its mint before execution. No path gives a call frame value that the sender does not hold.",
+   "deltas": [
+    {
+     "delta": "In validate_against_state_and_deduct_caller a gasless transaction is rejected when the sender balance is below the transaction value, and the balance is then written back unchanged (handler.rs lines 178 to 188). For a deposit the mint is added to the sender balance and the value is left to the call frame (lines 113 to 143). The branch that raises the balance to the value runs only when the node has the balance check disabled, which is a simulation setting.",
+     "source": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/op-revm/src/handler.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 196,
+   "lens": "L3",
+   "summary": "The PoolManager holds about 5.97 million USDT0 and 4.67 million USDe, most of it in one pool without a hook. Smaller holdings are USDG, two USDC contracts, tokenized stocks with a multiplier, and several tokens that exist only to trade. All 18 probed tokens move one to one in both directions.",
+   "deltas": [
+    {
+     "delta": "Read from chain at block 76,607,152: 5,967,852.89 USDT0, 4,674,270.19 USDe, 459,142.00 USDG, 86,332.12 USDC (0xb6ceceab302e2e4948951ee7843fc24e92933061), 11,348.12 USDC (0x74b7F16337b8972027F6196A17a631aC6dE26d22), 310,382.11 FAB, 6,425.52 BEM (40 percent of supply), 73.30 Wrapped OKB, 94.08 BMNRx, 1.01 xETH and 300.21 native OKB.",
+     "source": "https://rpc.xlayer.tech eth_call balanceOf(PoolManager) per token and eth_getBalance, block 76607152; token list from https://api.geckoterminal.com/api/v2/networks/x-layer/dexes/uniswap-v4-x-layer/pools",
+     "relevance": "high"
+    },
+    {
+     "delta": "The USDe/USDT0 pool (id 0xd88c9b8204a68c4e9dbe87358fdddf9eb370fb79ebbf2786de05cee7ed671ffb) has fee 9, tick spacing 1 and the zero address as hook. GeckoTerminal reports 9.91 million USD of reserves for it. The next largest pool is USDG/USDT0 with a dynamic fee and the hook 0x630e9cac0fff557bd3a01daa111ed253c771bcc0 (879,325 USD).",
+     "source": "https://rpc.xlayer.tech eth_call poolKeys(bytes25) on PositionManager 0xcf1eafc6928dc385a342e7c6491d371d2871458b; https://api.geckoterminal.com/api/v2/networks/x-layer/dexes/uniswap-v4-x-layer/pools?page=1&sort=h24_tx_count_desc",
+     "relevance": "high"
+    },
+    {
+     "delta": "USDe (0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34) is a LayerZero OFT without proxy. Its code has no blocklist and no pause function. The owner 0xa179d46706d78a8bb24bd36bfb6472d4a0e15569 sets peers and the rate limiter. USDT0 has addToBlockedList and destroyBlockedFunds. USDG has freeze, wipeFrozenAddress and pause in a facet at 0x6a7935003ff120840394b13389635fdcb2f14ac0. Both USDC contracts have a blacklister and a pause. None of these flags is set for the PoolManager.",
+     "source": "https://rpc.xlayer.tech eth_getCode selector scan and eth_call isBlocked, isFrozen, isBlacklisted, paused, getFacet(bytes4), 2026-11-22; selector names from https://api.openchain.xyz/signature-database/v1/lookup",
+     "relevance": "high"
+    },
+    {
+     "delta": "BMNRx (0xaeb681b69e5094e04d11bcef51a71358a374c3ed) and ANTx (0x909369940f22dc1c143ac78753a33f41597138b1) keep balances as shares times a multiplier. The implementation 0x65c40d624af3b18c109fbf87b7deff34cdc5f19b has updateMultiplierValue, feePerPeriod, a sanctions list, a pauser and a burner. multiplier() and getCurrentMultiplier() return 1.0, feePerPeriod() returns 0 and sharesOf(PoolManager) equals balanceOf(PoolManager). The wrapped versions (wSPCXx, wAAPLx, wSPYx) are ERC-4626 vaults over such tokens.",
+     "source": "https://rpc.xlayer.tech eth_call multiplier(), getCurrentMultiplier(), feePerPeriod(), periodLength(), sharesOf(address), multiplierUpdater() on both tokens",
+     "relevance": "low"
+    },
+    {
+     "delta": "BEM (0x60e62efa9405d6873c5deabd4e6cc91c25363952) is an OFT with feeBps() 50 and a fee recipient. A simulated transfer of 100,000,000 units from the PoolManager address lowers the sender by that amount, raises the recipient by the same amount and leaves the fee recipient unchanged, so the fee does not apply to plain transfers.",
+     "source": "eth_call on https://rpc.xlayer.tech with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "The token named Wrapped Global Dollar, wUSDG (0x0ff7a742b035504118a9d435c8264619a8428e1c), is an upgradeable vault with totalAssets() 0, entry and exit fees of 5,000 basis points, and owner functions ownerMint, ownerBurn, setBlacklisted and execute. Its supply is exactly 100,000,000 and the PoolManager holds 4,849,148 of it against about 1,100 USD of pool reserves. It is unrelated to the value of USDG.",
+     "source": "https://rpc.xlayer.tech eth_call totalAssets(), entryFeeBps(), exitFeeBps(), asset(), owner() and eth_getCode selector scan of the implementation 0x5ef12753395375b0acbd9c75c52d43cddc1cfbc8",
+     "relevance": "low"
+    },
+    {
+     "delta": "USDG answers globalTransferSettings() with the values 1771954688 and 86400 followed by zeros. Its code carries the error names RateOverflow, SharesOverflow and BalanceOverflow. I found no public function for a rate or for shares, and I did not establish what the transfer settings limit.",
+     "source": "https://rpc.xlayer.tech eth_call globalTransferSettings() on 0x4ae46a509f6b1d9056937ba4500cb143933d2dc8",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 196,
+   "lens": "L4",
+   "summary": "The wrapped native contracts and the EntryPoints book value from the PoolManager one to one. The PoolManager holds the whole supply of several permissioned wrapper tokens whose transfer function unwraps to an allow-listed recipient. The risk control filter is off by default in the client source, and the newer source adds rules on call frames.",
+   "deltas": [
+    {
+     "delta": "Measured with the PoolManager as caller: a value call of 10^15 wei with empty calldata raises balanceOf(PoolManager) by exactly 10^15 on Wrapped OKB 0xe538905cf8410324e03A5A23C1c177a474D59b2b, on the predeploy 0x4200000000000000000000000000000000000006 and on the three EntryPoints. transfer on the two wrappers moves the same amount of wrapped token and releases no native value. transfer on the EntryPoints reverts. LiquidityController and NativeAssetLiquidity reject the value call, balanceOf and transfer.",
+     "source": "eth_call on https://rpc.xlayer.tech with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "v4MSTR (0xe1218f57c5fe7d11088ac4682781906f3c4b0bff), v4CRCL (0xd4f64a67b2c1295bd6c25b3a306b2a049e392397) and similar tokens named 'Uniswap v4 ... Securitize' expose POOL_MANAGER(), PERMISSIONED_TOKEN(), wrapToPoolManager(uint256), allowedWrappers(address), allowedHooks(address) and allowListChecker(). The PoolManager holds their whole supply (11,909,995 units of v4MSTR at the time of the probe) and the wrapper contract holds the same amount of the underlying token 0xf83d29ca0f926cef42597ac57e807ad452ce5b43. A transfer from the PoolManager to an address that is not on the allow list reverts. wrapToPoolManager from an arbitrary caller reverts with selector 0x87d4de58.",
+     "source": "https://rpc.xlayer.tech eth_getCode selector scan, eth_call POOL_MANAGER(), PERMISSIONED_TOKEN(), totalSupply(), balanceOf, wrapToPoolManager(1); selector names from https://api.openchain.xyz/signature-database/v1/lookup",
+     "relevance": "low"
+    },
+    {
+     "delta": "A simulated transfer of 1,000 units of v4MSTR from the PoolManager address to the wrapper's own address succeeds. The PoolManager's wrapper balance and the wrapper supply fall by 1,000 and the underlying balance of the wrapper stays the same, so the wrapper is left with 1,000 underlying units that no wrapper token backs.",
+     "source": "eth_call on https://rpc.xlayer.tech with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "FilterConfig::default() in crates/rcs-filter/src/config.rs at tag v0.0.7.3 sets enabled to false and requires a service URL when enabled. On the main branch the same file adds a limit max_callstack_observations_per_tx and comments that describe a callstack section in the rule format, so rules there can match call frames in addition to events and native transfers. A transaction that exceeds an observation limit fails closed.",
+     "source": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/rcs-filter/src/config.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "The deposit blacklist 0x59055c0ef0be92018b33f877a3eB816355791727 has had code since block 66,955,423 (3 August 2026). I read the logs of the contract with eth_getLogs in windows of 100 blocks for blocks 66,955,423 to 67,242,822 (2026-08-06 10:24 UTC) and blocks 75,407,023 (2026-11-08 22:14 UTC) to 76,607,000 (2026-11-22 19:33 UTC), which is 15 percent of the range since its creation. The second range starts before the date by which operators had to run the release that contains the deposit blacklist rule (10 November 2026). The public endpoints limit the request rate, so blocks 67,242,823 to 75,407,022 were not read. The creation block 66,955,423 (3 August 2026) holds four logs: Upgraded, OwnershipTransferred to 0x6EE7bDA7aF04F61ccf93aB4b8Db2289aBe76C6aa, Initialized and AdminChanged. The ranges that were read hold no other log.",
+     "source": "https://rpc.xlayer.tech eth_getCode binary search and eth_getLogs for 0x59055c0ef0be92018b33f877a3eB816355791727, 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "The 110 Uniswap v4 pools in the GeckoTerminal listing use seven hook addresses. None of the seven, including the implementation 0x424e2f8d89eeab51af10669d149fbd4beb090000 behind the proxy hook 0x630e9cac0fff557bd3a01daa111ed253c771bcc0, contains the selector of modifyLiquidity (0x5a6bcfda) or of unlock (0x48c89491).",
+     "source": "https://rpc.xlayer.tech eth_call poolKeys(bytes25) on the PositionManager and eth_getCode of each hook, 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "The GoodDollar owner has blocked the PoolManager address on Celo, so 550 million G$ held for pools cannot leave",
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A6",
+    "A4",
+    "A2"
+   ],
+   "effect": "freeze",
+   "actor": "issuer",
+   "severity": "high",
+   "difference": "G$ on Celo is a Superfluid Super Token with an owner controlled list of accounts that can neither send nor receive it, and with an owner function that burns from any account. After the Superfluid incident of September 2026 the owner put the Uniswap v4 PoolManager on that list and has not removed it. Ethereum's PoolManager holds no token in this state.",
+   "mechanism": "1. On 11 September 2026 at 13:48:08 UTC (Celo block 77,233,730, transaction 0x22cd34a5f179dfa342fd3659d029e4d40469ca8fa02abd032145f162b0b8dd4d, sent by 0x6823a04a6fd4148167567d5ef6dcca1f34db0494 to the contract 0xa2521e8f5a990903fdd8afa6570c52526e7e0d5e) the token emitted BlockedUpdated with value true for eleven addresses, one of which is the PoolManager 0x288dc841A52FCA2707c6947B3A777c5E56cd87BC. setBlocked is restricted to the owner role. isBlocked(PoolManager) returned true at block 83,475,285 on 22 November 2026. 2. Every ERC-20, ERC-677 and ERC-777 movement of G$ runs _processFees, which reverts with SUPER_GOODDOLLAR_BLOCKED (0xe7d0c09e) when the sender or the recipient is blocked. An eth_call of transfer from the PoolManager reverts with that selector for amounts 1 and 0. A transfer of 1 unit from the owner account to the PoolManager reverts the same way, and the same transfer to another address returns true. 3. take debits the caller and then calls transfer on the currency (src/PoolManager.sol:291-297). A failed transfer makes take revert (src/types/Currency.sol:64-86). Every take of G$ therefore reverts, including a take of zero. The PoolManager's 550,022,104.456 G$ stay where they are. 4. A position owner who removes liquidity from a G$ pool receives a positive G$ delta. The owner can take the other currency. For the G$ side the remaining choices are mint, which turns the delta into an ERC-6909 claim (src/PoolManager.sol:322-329), and clear, which gives it up (src/PoolManager.sol:310-319). A swap that buys G$ ends the same way. 5. A payment of G$ into the PoolManager by transfer reverts as well, so a seller needs a G$ claim to burn (src/PoolManager.sol:332-336). The token source says a blocked account can still be credited through Superfluid agreements. Such a credit would raise balanceOf(PoolManager), and sync followed by settle would credit it to the settler (src/PoolManager.sol:279-288, 349-364). I did not simulate that path. 6. The owner can also call adminBurn(account, amount), which skips allowance, hooks, pause and the block list. A burn of the PoolManager's balance would leave pool liquidity and G$ claims without tokens behind them. Superfluid's report says 544 million G$ was burned elsewhere during the recovery.",
+   "impact": "550,022,104 G$, which is 13.7 percent of the G$ supply and about 60,000 USD at the price Blockscout shows (0.00010924 USD). GoodDollar names one position holder with two wallets as the depositor. Because all pools share one address, the block also covers every other G$ pool in this PoolManager, every G$ claim and any protocol fee accrued in G$. The paired currencies of those pools can still be withdrawn.",
+   "preconditions": "None remain. The block is in force. It ends when an account with the G$ owner role calls setBlocked with false for the PoolManager. owner() returns 0x495d133b938596c9984d462f007b676bdc57ecec. GoodDollar states it will do so once the position holder contacts Good Labs or moves the position to the Good Labs Safe.",
+   "mitigations": "The deployer cannot lift the block. Interfaces should stop routing through G$ pools on Celo and should show G$ positions as withdrawable only as claims. Liquidity providers can remove liquidity, take the paired currency and mint the G$ side as a claim. Integrations should not value G$ claims or G$ pool liquidity at the market price while the block and the admin burn function exist. New deployments should treat any token with a per address block list as able to freeze every pool of that token at once.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:64-86",
+    "src/PoolManager.sol:310-336",
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364"
+   ],
+   "sources": [
+    {
+     "url": "https://forno.celo.org eth_call isBlocked(address) on 0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A with the PoolManager address, block 83475285",
+     "supports": "isBlocked(PoolManager) returns true"
+    },
+    {
+     "url": "https://forno.celo.org eth_call transfer(address,uint256) on 0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A from the PoolManager and from the owner account, block 83475323",
+     "supports": "transfers from and to the PoolManager revert with 0xe7d0c09e, and a transfer between two other accounts returns true"
+    },
+    {
+     "url": "https://celo.blockscout.com/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A&topic0=0x148a86796e0fc2ba3270f94c00ce0af947ccc7a4db4269c66c9dd1eb883e90a5",
+     "supports": "one BlockedUpdated event for the PoolManager, at block 77,233,730 with value true, and no later event that unblocks it"
+    },
+    {
+     "url": "https://celo.blockscout.com/api/v2/smart-contracts/0xb4419a3df33b9aa6fbe452df8816389e599c29ef",
+     "supports": "verified source of SuperGoodDollar with isBlocked, setBlocked, adminBurn, _processFees and the agreement guards"
+    },
+    {
+     "url": "https://discourse.gooddollar.org/t/gooddollar-incident-post-mortem-september-4-attack/9164",
+     "supports": "the Celo Uniswap v4 pool holds 550 million G$ and remains blocked, and the condition GoodDollar sets for unblocking"
+    },
+    {
+     "url": "https://forum.superfluid.org/t/security-council-preliminary-disclosure-of-a-security-incident-that-impacted-g-liquidity-on-celo-network/1743",
+     "supports": "cause of the incident, the unbacked amount and the burn of 544 million G$"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Issuers of the tokens that make up most pool value on Celo and X Layer can pause, block, burn or upgrade the PoolManager's balance",
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A6",
+    "A2",
+    "A4"
+   ],
+   "effect": "both",
+   "actor": "issuer",
+   "severity": "high",
+   "difference": "The pooled value on these two networks sits in issuer controlled tokens that are small or new: wBRL and wARS on Celo, and USDT0, USDG, two USDC contracts and tokenized stocks on X Layer. On Celo the PoolManager holds 83.7 percent of all wBRL and 59.0 percent of all wARS. Each of these tokens has roles that act on a single holder address.",
+   "mechanism": "1. All pools keep a currency in one balance at the PoolManager address, and that balance leaves only through transfer inside take (src/PoolManager.sol:291-297, src/types/Currency.sol:64-86). A role that stops transfers for that one address stops every pool of the token. 2. wBRL and wARS are proxies of LatamStable. Its compliance role can switch the blocklist on and block the PoolManager, after which _update reverts for it as sender and as recipient. Its pauser role stops all transfers. Its upgrader role can replace the implementation through UUPS and with it the balance logic. The blocklist is switched off today and neither token is paused. 3. On X Layer USDT0 has addToBlockedList and destroyBlockedFunds, USDG has freeze and wipeFrozenAddress, both USDC contracts have a blacklister and a pause, and xETH has a deny list and a pause. A wipe or a destroy sets the PoolManager balance to zero while pool accounting and ERC-6909 claims still count the tokens. 4. BMNRx and ANTx report balanceOf as shares times a multiplier that a multiplier updater role sets, and a fee per period can lower the multiplier over time. A lower multiplier lowers balanceOf(PoolManager) without a take, which leaves pools with less than their accounting says (assumption A2). A higher multiplier adds tokens that no settle credits. The multiplier is 1.0 and the fee is 0 today. 5. On Celo the owner of USDm, which is Celo Governance, can name operators and burners that move or burn the balance of any account. 6. core has no function that reacts to any of these actions. Liquidity providers who exit first after a partial loss take the remaining tokens, and later exits revert when the balance runs out.",
+   "impact": "On Celo about 522,000 USD of wBRL and 129,000 USD of wARS at the prices Blockscout shows, plus the USDC paired with them. On X Layer about 5.97 million USDT0, 459,000 USDG and 97,700 USDC, plus the 4.67 million USDe that trade against USDT0 in the largest pool. USDe itself has no block or pause function in its code. A freeze stops withdrawals of the affected token for every pool. A wipe, burn or lower multiplier is a loss shared by all liquidity providers and claim holders of that token.",
+   "preconditions": "An action by a role holder of the token: compliance, pauser or upgrader for wBRL and wARS, the owner of USDT0 (0x4dff9b5b0143e642a3f63a5bcf2d1c328e600bf8), the asset protection role of USDG, the blacklister or pauser of each USDC contract, the multiplier updater or owner of the stock tokens, and the owner of USDm, which is Celo Governance (0xD533Ca259b330c7A88f74E000a3FaEa2d63B7972). No such flag is set for the PoolManager on either chain at blocks 83,476,610 (Celo) and 76,608,329 (X Layer).",
+   "mitigations": "Liquidity providers should size positions in these tokens with the issuer roles in mind, and pool interfaces should show them. Monitoring should watch the PoolManager address in each token's block, freeze and pause state and the stock token multiplier. Pools in rebasing stock tokens should use the wrapped ERC-4626 versions, which keep a fixed balance. The deployer cannot remove any of these roles.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:64-96",
+    "src/PoolManager.sol:349-364"
+   ],
+   "sources": [
+    {
+     "url": "https://celo.blockscout.com/api/v2/smart-contracts/0xfbab5dcb1647787ec8402a6509add256fa6c7f9d",
+     "supports": "verified source of LatamStable with the pauser, minter, compliance and upgrader roles and the blocklist check in _update"
+    },
+    {
+     "url": "https://forno.celo.org eth_call totalSupply(), balanceOf(PoolManager), enforceBlocklist(), isBlocked(address), paused() on wBRL and wARS, block 83475210",
+     "supports": "PoolManager share of supply and the current flag values"
+    },
+    {
+     "url": "https://rpc.xlayer.tech eth_getCode selector scan of USDT0, USDG, USDC, xETH, BMNRx and USDe implementations and eth_call isBlocked, isFrozen, isBlacklisted, paused, denyList, multiplier, feePerPeriod, block 76608329",
+     "supports": "which control functions each token has and that none is set for the PoolManager"
+    },
+    {
+     "url": "https://api.openchain.xyz/signature-database/v1/lookup",
+     "supports": "function names for the selectors found in the token bytecode"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/mento-protocol/mento-core/develop/contracts/tokens/StableTokenV3.sol",
+     "supports": "sendToPool for operators and burn(address,uint256) for burners in the USDm implementation"
+    },
+    {
+     "url": "https://celo.blockscout.com/api/v2/addresses/0x288dc841A52FCA2707c6947B3A777c5E56cd87BC/tokens?type=ERC-20",
+     "supports": "token list and prices used for the Celo amounts"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "F-024",
+   "title": "X Layer block builder can exclude PoolManager transactions through a rule driven risk control filter, which leaves L1 deposits as the exit",
+   "chainIds": [
+    196
+   ],
+   "lens": "L6",
+   "assumptions": [
+    "A6",
+    "A9"
+   ],
+   "effect": "freeze",
+   "actor": "operator",
+   "severity": "low",
+   "difference": "Ethereum has no protocol component that screens transactions by content. The X Layer execution client contains a risk control filter in the block builder. It evaluates every pool transaction after simulation against rules supplied by an external service, using the transaction's logs, call frames and native transfers. A second component drops transactions that emit bridge events for a configured token.",
+   "mechanism": "1. All funds of all pools sit at one address and leave only through take (src/PoolManager.sol:291-297), which runs inside unlock (src/PoolManager.sol:104-114). An exit is a transaction that the sequencer must include. 2. A rule that matches PoolManager events, calls into the PoolManager or transfers of a pooled token gives a deny verdict. The builder then marks the transaction invalid and removes it from the pool, so it is never included. An audit verdict holds the transaction until the external service approves it. 3. New in this cycle, read on the main branch: the builder also denies a transaction when its capture exceeds an observation limit (10,000 native transfers, 10,000 event bindings or 10,000 call frame observations), when the observed frame stack is unbalanced, and when no rule snapshot was pinned for the block although screening is enabled. With the filter enabled, every pool transaction screened in a block without a pinned rule snapshot is denied and removed from the pool. 4. Deposits are outside the filter. The builder source states that a deposit is consensus mandated and that the rule result for it is reported and never acted on. A user can call the same contracts through OptimismPortal.depositTransaction on Ethereum from the same EOA. Contract accounts arrive with an aliased sender, so a position held by an L2 contract needs an EOA that the contract accepts as caller. Finding F-046 records a separate rule that can void a deposit whose source hash is on the deposit blacklist. 5. FilterConfig::default() sets enabled to false, the filter needs a service URL to start, and the setting is read once at node start. The crate header names a requirement 'OKONE Mainnet RSC'. Whether the mainnet sequencer starts with the filter enabled cannot be read from chain. The public endpoint reports the build reth/v2.3.0-f60420a with xlayer/v0.0.7 and refuses rpc_modules, and I found no operator statement about the mainnet setting.",
+   "impact": "While a matching rule is active, liquidity providers and swappers cannot move funds through sequencer submitted transactions in the affected pools, or in all pools if the rule targets the PoolManager address. No funds are lost. Exit through an L1 deposit costs Ethereum gas and depends on the sequencer following derivation.",
+   "preconditions": "The sequencer operator must run with the filter enabled and the risk control service must deliver a rule that matches PoolManager activity, or leave a block without a pinned rule snapshot. Whether the mainnet sequencer has the filter or the bridge interceptor enabled, and which rules are loaded, is still unconfirmed after this cycle. The filter entered the code in release v0.0.7, and operators had to upgrade to v0.0.7.3 by 10 November 2026.",
+   "mitigations": "Liquidity providers who hold positions through contracts should keep an EOA controlled path so that an L1 deposit can reach the position. Integrators can prepare the L1 deposit route to the PositionManager in advance. The deployer can ask OKX to state whether the filter runs on mainnet and which contracts and tokens its rules may match.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:104-114"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/rcs-filter/src/lib.rs",
+     "supports": "the crate screens every transaction in the block builder, deny transactions are excluded, audit transactions are packaged after approval, and the header names the requirement OKONE Mainnet RSC"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/builder/src/flashblocks/context.rs",
+     "supports": "on Screen::Deny the builder marks the transaction invalid and removes it from the pool, capture failures and a missing rule snapshot fail closed to deny, and a deposit is consensus mandated and only reported"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/intercept/src/lib.rs",
+     "supports": "the bridge interceptor blocks transactions with a BridgeEvent from the configured contract, for all tokens or for one"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3/crates/rcs-filter/src/config.rs",
+     "supports": "at the mainnet release tag the filter is off by default, needs a service URL, reads its settings once at start and has per transaction observation limits"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/rcs-filter/src/config.rs",
+     "supports": "the main branch adds a call frame observation limit and describes a callstack section of the rule format"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3/bin/node/src/args.rs",
+     "supports": "the flags xlayer.intercept.enabled, xlayer.intercept.bridge-contract and xlayer.intercept.target-token"
+    },
+    {
+     "url": "https://github.com/okx/xlayer-reth/releases",
+     "supports": "v0.0.7 introduced the filter and the interceptor and was marked testnet only, v0.0.7.3 requires a mainnet upgrade by 10 November 2026, and the notes of v0.0.7.3 and v0.0.7.3-rc.1 do not mention the filter"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com eth_call paused() and depositTransaction(address,uint256,uint64,bool,bytes) with zero value on 0x64057ad1DdAc804d0D26A7275b193D9DACa19993 from an EOA, 2026-11-22",
+     "supports": "the X Layer OptimismPortal is not paused and accepts a zero value deposit to the PoolManager address in simulation"
+    },
+    {
+     "url": "https://specs.optimism.io/protocol/deposits.html",
+     "supports": "a deposit from a contract carries the sender address plus 0x1111000000000000000000000000000000001111 and a deposit from an EOA keeps its address"
+    },
+    {
+     "url": "https://rpc.xlayer.tech web3_clientVersion and rpc_modules, 2026-11-22",
+     "supports": "the endpoint reports reth/v2.3.0-f60420a with xlayer/v0.0.7 and refuses rpc_modules"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "check": "Pooled assets on Celo: do transfer and balanceOf of the tokens the PoolManager holds behave in a way a holder can use (fee on transfer, rebase on transfer, callbacks, special recipients, zero amounts). Tokens probed: wBRL, wARS, USDC, USDT, CELO, UBE, USDm, COPm, KESm, EURm, BRLm, cGHS, PERKOS, stCELO, mCELO, USDGLO, bridged WETH and EURA.",
+   "result": "No. For each token I simulated a transfer of one thousandth of the PoolManager's balance from the PoolManager address to a second address, a transfer of the same amount back, a transfer to itself and a transfer of zero. In every case the sender fell and the recipient rose by exactly the amount, and the transfer to itself and the zero transfer left the balance unchanged. Transfers to address(0) revert on all of them. USDC, USDT and UBE also refuse their own address as recipient. A take therefore removes exactly what the caller is debited (src/PoolManager.sol:294-295) and a settle credits exactly what arrived (src/PoolManager.sol:358-360). G$ is the exception and is reported as a finding.",
+   "source": "eth_call on https://forno.celo.org with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L3",
+   "check": "Pooled assets on X Layer: the same probe for USDT0, USDe, USDG, both USDC contracts, FAB, BEM, xETH, xSOL, XDOG, NIUMA, BSTN, lllp, Wrapped OKB, wUSDG, wSPCXx, BMNRx and ANTx.",
+   "result": "No. All 18 tokens moved exactly the requested amount in both directions, and the transfer to itself and the zero transfer changed nothing. BEM has a fee of 50 basis points that applies to cross chain sends and leaves plain transfers whole. XDOG and NIUMA are launch tokens with a built in bonding curve that report complete() true and isLiquidityPool(PoolManager) false, and they transfer like plain tokens. BMNRx and ANTx have a multiplier of 1.0, so shares and balances are equal and no rounding arises.",
+   "source": "eth_call on https://rpc.xlayer.tech with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "check": "Faces on Celo, repeated with measured state: the CELO token and the native balance as two currency ids over one balance, walked through sync, settle, take, mint and burn.",
+   "result": "No gain in any order. A simulated CELO token transfer of 10^15 from the PoolManager address lowered its native balance by 10^15 and raised both the token balance and the native balance of the recipient by 10^15, so the two ids read one balance one to one. A value call to the token address reverts. A native credit needs the synced currency slot to be zero and a token credit needs it to hold the token (src/PoolManager.sol:353-361). settle with value reverts while a token is synced (src/PoolManager.sol:356), sync(token) reads the balance again each time (src/PoolManager.sol:285-286), and a balance that fell between sync and settle makes the subtraction at line 360 revert. The repository test test_settle_failsWithNativeERC20IfNotSyncedInOrder (test/Sync.t.sol:255-276) expects NonzeroNativeValue for sync of a native faced token followed by a native settle, and the source produces it. mint and burn only move claims under the id the caller names (src/PoolManager.sol:322-336).",
+   "source": "eth_call on https://forno.celo.org with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22; src/PoolManager.sol:279-297, 322-364; test/Sync.t.sol:255-276"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L4",
+   "check": "G$ as a Superfluid Super Token: can an ordinary account lower balanceOf(PoolManager), open an outflow from the PoolManager, or raise the balance for the length of one sync and settle window and lower it again.",
+   "result": "No path found in the token source. A flow or distribution out of an account needs a call through the host by that account or by an operator the account approved, and the PoolManager makes no such call (its only calls to a currency are transfer and balanceOf, src/types/Currency.sol:60-96). defaultOperators() is empty. For a blocked account the token rejects agreement writes that raise a deposit, raise a buffer or lower the account balance. Inflows from streams accrue with block time and are constant inside one transaction. A distribution claimed for the PoolManager is paid by its publisher and stays with the PoolManager. This rests on the verified token source and on-chain views. I did not read the Superfluid agreement contracts on Celo and did not run an agreement call in simulation, so the statement that only the account or its approved operator can open an outflow is unconfirmed here.",
+   "source": "https://celo.blockscout.com/api/v2/smart-contracts/0xb4419a3df33b9aa6fbe452df8816389e599c29ef (SuperGoodDollar.sol, SuperGoodDollarFlows.sol, SuperToken.sol); https://forno.celo.org eth_call defaultOperators(), realtimeBalanceOfNow(PoolManager)"
+  },
+  {
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L4",
+   "check": "Lead L-166 on both chains: an address whose balanceOf(PoolManager) rises on a plain value transfer or a zero amount call from the PoolManager and whose transfer releases native value or a pooled token at a rate other than one to one.",
+   "result": "None. With the PoolManager as caller, a value call of 10^15 wei raised the ledger by exactly 10^15 on the wrapped native predeploy of both chains, on Wrapped OKB and on the EntryPoints v0.6, v0.7 and v0.8. A zero value call raised nothing anywhere. transfer on the wrappers moved 10^15 of the wrapped token to the recipient and released no native value. transfer on the EntryPoints reverts. The fee vaults and the Celo message passer keep the value and have no balanceOf. L1BlockNumber answers transfer with the L1 block number, which the success check rejects (src/types/Currency.sol:68). LiquidityController and NativeAssetLiquidity on X Layer reject all three calls. stCELO and mCELO reject value calls and transfer one to one. A caller who syncs a wrapper, takes native value to it and settles holds a wrapper credit equal to the native debit (src/PoolManager.sol:291-297, 349-364).",
+   "source": "eth_call on https://forno.celo.org with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22; the same on https://rpc.xlayer.tech"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L2",
+   "check": "Leads L-153 and L-202 for Celo: does the fee currency debit or credit, or any other client feature, run code inside a call in progress under a transient storage map separate from the caller's while keeping its transfers and storage writes.",
+   "result": "No. The debit and the credit are steps of the transaction handler and run before the first frame of the main call and after its last frame has returned. A contract cannot start them. The debit starts from the empty map of a new transaction and the handler clears its transient writes before the main call (handler.rs lines 695 to 698). The credit runs on the same journal as the main call and clears transient storage when it ends (core_contracts.rs lines 241 to 248). The fee currency must be registered in FeeCurrencyDirectory, which Governance owns, so the code that runs is not chosen by the caller. The other system calls of the client read exchange rates through call_read_only, which reverts everything it did. unlock is one call frame (src/PoolManager.sol:104-114), so neither step can separate a take from its debit.",
+   "source": "https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/handler.rs; https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/contracts/core_contracts.rs; https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/contracts/erc20.rs"
+  },
+  {
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L3",
+   "check": "Lead L-203 on both chains: can a call frame carry value that the caller's balance did not lose in the same journal (fee currency transactions and deposits with mint on Celo, gasless transactions and deposits on X Layer, the transfer precompile).",
+   "result": "No. On Celo a fee currency transaction is rejected when its value exceeds the sender's native balance, a deposit's mint is added to the sender before execution, and the value then moves in the call frame (handler.rs lines 773 and 805 to 815). The transfer precompile uses the journal transfer and halts on an error, and it accepts only the CELO token as caller (transfer.rs lines 52 to 57 and 91 to 125). On X Layer a gasless transaction is rejected when the sender balance is below the value and the balance is otherwise left as it is, and a deposit adds its mint first (handler.rs lines 113 to 143 and 178 to 188). The one branch that raises a balance to the value runs only with the balance check disabled, which block production does not use. A native credit in core is msg.value (src/PoolManager.sol:352-354), and on both chains that value has left the caller's balance.",
+   "source": "https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/handler.rs; https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/precompiles/transfer.rs; https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/op-revm/src/handler.rs"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L4",
+   "check": "Permissioned wrapper tokens on X Layer (v4MSTR, v4CRCL and the like), whose whole supply sits in the PoolManager: can an ordinary account mint them to the PoolManager without paying, or take them or their underlying token out.",
+   "result": "No. wrapToPoolManager(1) from an arbitrary address reverts with selector 0x87d4de58, and depositForVerification(1) reverts in the token pull. A transfer from the PoolManager to an address that is not allow-listed reverts, so a take to such an address reverts (src/types/Currency.sol:82-86). A take that names the wrapper itself as recipient burns the caller's own wrapper credit and leaves the underlying in the wrapper, which costs the caller the amount it is debited (src/PoolManager.sol:294). The underlying token sits in the wrapper contract and the PoolManager holds none of it, so the two ids do not share a balance. Whether a user of an allowed wrapper can later mint against underlying left behind this way is listed as a lead.",
+   "source": "https://rpc.xlayer.tech eth_call wrapToPoolManager(uint256), depositForVerification(uint256), PERMISSIONED_TOKEN(), balanceOf; eth_call on https://rpc.xlayer.tech with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L3",
+   "check": "Faces on X Layer, repeated with measured state: tokens that answer under two addresses or share a balance with the native asset (two USDC contracts, Wrapped OKB and the wrapped native predeploy, permissioned wrappers and their underlying tokens).",
+   "result": "None found. The two USDC contracts have separate supplies (128,381,476 and 765,788) and separate PoolManager balances. Wrapped OKB and the predeploy each keep their own ledger and their own native balance, and a value call from the PoolManager to one does not change balanceOf on the other. The permissioned wrappers hold their underlying token themselves. No contract at the swept addresses reports the PoolManager's native OKB balance as a token balance.",
+   "source": "https://rpc.xlayer.tech eth_call totalSupply(), balanceOf(PoolManager); eth_call on https://rpc.xlayer.tech with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22"
+  },
+  {
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L1",
+   "check": "Lead L-145 on both chains: hooks or vaults that keep a position at a boundary tick and add liquidity inside a swap hook or a withdrawal path.",
+   "result": "None in the pools that could be listed. The 20 Celo pools in the GeckoTerminal listing have no hook. The 110 X Layer pools in the listing use seven hook addresses, and none of the seven contains the selector of modifyLiquidity or of unlock in its code, so none adds liquidity itself. For the proxy hook 0x630e9cac0fff557bd3a01daa111ed253c771bcc0 the implementation was scanned. The listing is a sample. Pools that GeckoTerminal does not list and vaults that hold positions through the PositionManager were not searched.",
+   "source": "https://api.geckoterminal.com/api/v2/networks/x-layer/dexes/uniswap-v4-x-layer/pools and the same path for celo; eth_call poolKeys(bytes25) on the PositionManager of each chain; eth_getCode of each hook"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "question": "While the PoolManager is on the G$ block list, does a Superfluid distribution or stream to it raise balanceOf(PoolManager) so that sync and settle credit the payer, and does GoodDollar plan to use adminBurn on the PoolManager's 550,022,104 G$?",
+   "why": "A credit through agreements would let G$ be sold into the frozen pools while liquidity providers cannot withdraw G$. A burn would leave G$ pool liquidity and G$ claims without backing. The first part needs a simulation with an unlock caller, which this unit did not build.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L4",
+   "question": "Which contracts are allowedWrappers of the permissioned wrapper tokens on X Layer, and can a user of one of them call wrapToPoolManager for an amount that is covered by underlying tokens already sitting in the wrapper instead of tokens the user paid?",
+   "why": "A take that names the wrapper as recipient burns wrapper tokens and leaves the underlying in the wrapper. If an allowed router mints against that surplus for the next user, the wrapper supply in the PoolManager can be refilled without payment. The pools are small today (2,000 to 4,000 USD each).",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L3",
+   "question": "What do the values returned by globalTransferSettings() on USDG (1771954688, 86400, 0, 0) limit, and can the issuer use them to cap transfers out of one address per day?",
+   "why": "A transfer cap on the PoolManager address would make takes of USDG revert once the cap is used, which blocks withdrawals from the 879,000 USD USDG/USDT0 pool without a freeze entry.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-153",
+   "outcome": "cleared",
+   "answer": "For Celo only. The fee currency debit and credit are handler steps around the main call and no contract can start them from inside a call. The debit starts with an empty transient map and its transient writes are cleared before the main call (celo-kona handler.rs lines 695 to 698). The credit runs after the main frame has returned, on the same journal, and clears transient storage at its end (core_contracts.rs lines 241 to 248). Neither shape named in the lead exists. Details are in the cleared list."
+  },
+  {
+   "leadId": "L-202",
+   "outcome": "cleared",
+   "answer": "For Celo only. The only features that run code outside the main call are the fee currency debit and credit and the read only rate lookups. They run code of contracts that Governance registered, they cannot be started by a contract, the debit's transient map is discarded before the main call, and the credit shares the main map after unlock has returned and locked (src/PoolManager.sol:112-113). No inner run can pay tokens in and settle, and no take can lose its debit."
+  },
+  {
+   "leadId": "L-203",
+   "outcome": "cleared",
+   "answer": "For Celo and X Layer only. Source lines read in this cycle: Celo rejects a fee currency transaction whose value exceeds the native balance and adds a deposit mint before execution (handler.rs lines 773, 805 to 815). X Layer rejects a gasless transaction whose sender balance is below the value and adds a deposit mint before execution (op-revm handler.rs lines 113 to 143, 178 to 188). Value moves in the call frame in every case. The Celo transfer precompile accepts only the CELO token as caller and fails when the source balance is too low."
+  },
+  {
+   "leadId": "L-166",
+   "outcome": "cleared",
+   "answer": "For Celo and X Layer only. Measured with the PoolManager as caller through a state override: the wrapped native predeploys, Wrapped OKB and the three EntryPoints raise balanceOf(PoolManager) by exactly the value sent, and nothing on a zero value call. The wrappers transfer one to one and release no native value, and the EntryPoints have no transfer. No address with a different rate or unit was found among the value accepting addresses of the earlier sweep."
+  },
+  {
+   "leadId": "L-187",
+   "outcome": "inconclusive",
+   "answer": "Operator only hazard. I read the logs of the contract with eth_getLogs in windows of 100 blocks for blocks 66,955,423 to 67,242,822 (2026-08-06 10:24 UTC) and blocks 75,407,023 (2026-11-08 22:14 UTC) to 76,607,000 (2026-11-22 19:33 UTC), which is 15 percent of the range since its creation. The second range starts before the date by which operators had to run the release that contains the deposit blacklist rule (10 November 2026). The public endpoints limit the request rate, so blocks 67,242,823 to 75,407,022 were not read. The creation block 66,955,423 (3 August 2026) holds four logs: Upgraded, OwnershipTransferred to 0x6EE7bDA7aF04F61ccf93aB4b8Db2289aBe76C6aa, Initialized and AdminChanged. The ranges that were read hold no other log. The OKLink page https://www.oklink.com/x-layer/address/0x59055c0ef0be92018b33f877a3eB816355791727 shows no transaction records for the contract. The owner of the contract and of its proxy admin is still 0x6EE7bDA7aF04F61ccf93aB4b8Db2289aBe76C6aa. Which commit of the okx/optimism submodule the mainnet sequencer runs could not be read: the endpoint reports reth/v2.3.0-f60420a with xlayer/v0.0.7 and the submodule commit is not visible through raw file access."
+  },
+  {
+   "leadId": "L-145",
+   "outcome": "cleared",
+   "answer": "For Celo and X Layer only, and for the pools GeckoTerminal lists. Celo: 20 pools, none with a hook. X Layer: 110 pools with seven hook addresses, none of which contains the modifyLiquidity or unlock selector. No hook there adds liquidity in a swap or withdrawal path. Vaults that hold positions through the PositionManager were not searched."
+  },
+  {
+   "leadId": "L-151",
+   "outcome": "inconclusive",
+   "answer": "Not answered. The lead needs the optimized Yul from solc 0.8.26, and this environment has neither solc nor forge and the rules forbid installing them."
+  }
+ ]
+}
