@@ -1,0 +1,804 @@
+{
+ "unit": "stablecoin-l1",
+ "profiles": [
+  {
+   "chainId": 4217,
+   "lens": "L1",
+   "summary": "Tempo targets the Osaka EVM on a Reth-based client. Every opcode the PoolManager uses exists. The chain has no native asset, so BALANCE and SELFBALANCE return 0 and CALLVALUE returns 0, and state creation is priced far above Ethereum.",
+   "deltas": [
+    {
+     "delta": "BALANCE and SELFBALANCE always return 0 and CALLVALUE always returns 0. The eth_getBalance RPC method returns a fixed placeholder (0x9612084f...9b2) for every address, including the PoolManager.",
+     "source": "https://tempo.com/developers/docs/quickstart/evm-compatibility.md and eth_getBalance(0x33620f62c5b9b2086dd6b62f4a297a9f30347029) via https://rpc.mainnet.tempo.xyz at block 50,260,093",
+     "relevance": "low"
+    },
+    {
+     "delta": "A new storage slot costs 250,000 gas (20,000 on Ethereum), account creation costs 250,000 gas, code deposit costs 1,000 gas per byte, and the transaction gas cap is 30M (16,777,216 on Ethereum).",
+     "source": "https://tempo.com/developers/docs/quickstart/evm-compatibility.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "TIP-1060 storage credits, live since T7, replace the SSTORE clearing refund with a per-account credit, split the 250,000 gas creation cost into 5,000 gas plus a 245,000 gas creditable part, and remove the EIP-3529 refund cap.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/main/tips/tip-1060.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "TIP-20 tokens are precompiles. pathUSD and OUSD report one byte of code (0xef). An address under the TIP-20 prefix that no token occupies has no code, and a call to it reverts with Uninitialized, where a call to a codeless address on Ethereum succeeds with empty return data.",
+     "source": "eth_getCode and eth_call via https://rpc.mainnet.tempo.xyz at block 50,260,093",
+     "relevance": "low"
+    },
+    {
+     "delta": "EIP-7702 is supported. T14, scheduled for mainnet on 8 December 2026, adds configurable accounts whose address carries a reserved one-byte 0xef marker that the client executes natively.",
+     "source": "https://tempo.com/developers/docs/guide/node/network-upgrades.md and https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/evm/src/instructions.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "The client main branch executes with the evm2 interpreter and links a JIT crate. Release v1.18.4 of 16 November 2026 is described only as a fix for EVM execution. I could not confirm which interpreter the mainnet release runs or what the fix changed.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/main/Cargo.toml and https://tempo.com/developers/docs/changelog.md",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4217,
+   "lens": "L2",
+   "summary": "A Tempo transaction of type 0x76 carries a batch of calls that run atomically with the sender as msg.sender of each call, so transient storage set in one call is visible in the next call of the same batch. Fees are taken from the fee payer's TIP-20 balance before execution and the unused part is returned after execution, outside normal EVM execution. A TIP-20 transfer can succeed while crediting a guard contract instead of the recipient.",
+   "deltas": [
+    {
+     "delta": "Type 0x76 transactions hold a list of calls. The client runs them in one loop under one state checkpoint with the sender as caller and rolls all of them back if one fails. Nothing in the loop clears transient storage between calls.",
+     "source": "https://tempo.com/developers/docs/protocol/transactions/spec-tempo-transaction.md and https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/evm/src/handler.rs (execute_batch)",
+     "relevance": "low"
+    },
+    {
+     "delta": "Value transfers do not exist. The client rejects any batch call with nonzero value, and eth_call with value 1 to PoolManager.settle() returns the error 'value transfer not allowed'.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/evm/src/handler.rs and eth_call via https://rpc.mainnet.tempo.xyz",
+     "relevance": "low"
+    },
+    {
+     "delta": "Before each transaction the protocol deducts gas_limit times gas_price from the fee payer's balance of the fee token. After execution it credits the unused part back. The fee payer is the sender or a sponsor that signed the transaction.",
+     "source": "https://tempo.xyz/developers/docs/protocol/fees/spec-fee.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "Since T6 a TIP-20 transfer or mint whose recipient has a receive policy that rejects the sender or the token does not revert. The amount is credited to ReceivePolicyGuard at 0xB10C000000000000000000000000000000000000 and the call returns true.",
+     "source": "https://tempo.com/developers/docs/protocol/tip403/receive-policies.md",
+     "relevance": "high"
+    },
+    {
+     "delta": "Virtual addresses of the form masterId, ten 0xfd bytes, userTag forward TIP-20 credits to a registered master wallet. The virtual address itself never holds a balance.",
+     "source": "https://tempo.com/developers/docs/protocol/tip20/virtual-addresses.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "Tempo adds 2D nonces, expiring nonces, fee sponsorship and scoped signing credentials at the protocol level. None of them changes msg.sender for a called contract.",
+     "source": "https://tempo.com/developers/docs/protocol/transactions/spec-tempo-transaction.md",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4217,
+   "lens": "L3",
+   "summary": "Tempo has no gas token. Fees are paid in USD-denominated TIP-20 tokens with 6 decimals. Every TIP-20 carries issuer roles for pausing, for changing the transfer policy and for burning balances held by other accounts, and the PoolManager is not on the list of addresses protected from those burns. Non-payment transactions share a 30M gas budget per block.",
+   "deltas": [
+    {
+     "delta": "There is no native asset. networks.json records the native symbol as USD with 18 decimals, which is the unit of the gas price (attodollars), and no account can hold or send it.",
+     "source": "https://tempo.xyz/developers/docs/protocol/fees/spec-fee.md and https://tempo.com/developers/docs/quickstart/evm-compatibility.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "burnAt(from, amount), added in T12 and live on mainnet since 13 October 2026, lets a BURN_AT_ROLE holder burn any balance that is not on a short protected list, with no transfer policy check. burnBlocked does the same for accounts that fail the sender policy. pause halts all transfers of the token.",
+     "source": "https://tempo.com/developers/docs/protocol/tip20/spec.md and https://tempo.com/developers/docs/protocol/upgrades/t12.md",
+     "relevance": "high"
+    },
+    {
+     "delta": "pathUSD and OUSD both use TIP-403 policy 2. policyData(2) returns type 1 (BLACKLIST) and admin 0x251d2711ebeb0a09fdb8992f5506f3d949175246. isAuthorized(2, PoolManager) is true today. One admin decision on policy 2 affects both tokens.",
+     "source": "eth_call transferPolicyId(), policyData(2), isAuthorized(2, 0x33620f62c5b9b2086dd6b62f4a297a9f30347029) via https://rpc.mainnet.tempo.xyz at block 50,260,093",
+     "relevance": "high"
+    },
+    {
+     "delta": "At block 50,261,382 the PoolManager held about 406,197 OUSD and 19,727 pathUSD.",
+     "source": "eth_call balanceOf(0x33620f62c5b9b2086dd6b62f4a297a9f30347029) via https://rpc.mainnet.tempo.xyz",
+     "relevance": "high"
+    },
+    {
+     "delta": "TIP-20 rewards, which changed how balances earned distributions, were deprecated in T7 and fully removed in T8.",
+     "source": "https://tempo.com/developers/docs/guide/node/network-upgrades.md",
+     "relevance": "none"
+    },
+    {
+     "delta": "The block gas limit is 500M, the general (non-payment) gas limit is 30M per block and the transaction gas cap is 30M. Swaps and liquidity changes are non-payment transactions. The base fee read on chain was 600,000,000 attodollars per gas, so filling the general budget of one block costs about 0.018 USD at the base fee.",
+     "source": "https://tempo.com/developers/docs/protocol/tips/tip-1010.md, https://tempo.com/developers/docs/protocol/blockspace/payment-lane-specification.md and eth_getBlockByNumber via https://rpc.mainnet.tempo.xyz (mainBlockGeneralGasLimit 30,000,000, baseFeePerGas 600,000,000)",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4217,
+   "lens": "L4",
+   "summary": "Tempo ships about twenty system precompiles at fixed addresses and one precompile per TIP-20 token. Calls from the PoolManager address with the ERC-20 transfer selector or any hook selector revert on all of them except real TIP-20 tokens. The StorageCredits precompile answers balanceOf(address) with a storage credit count, and ReceivePolicyGuard holds funds that receive policies redirected.",
+   "deltas": [
+    {
+     "delta": "System precompiles: TIP20Factory 0x20fc.., FeeManager 0xfeec.., StablecoinDEX 0xdec0.., TIP403Registry 0x403c.., NonceManager 0x4e4f4e4345.., AccountKeychain 0xaaaaaaaa.., ValidatorConfig 0xcccccccc..00 and ..01, AddressRegistry 0xfdc0.., SignatureVerifier 0x5165.., ReceivePolicyGuard 0xb10c.., StorageCredits 0x1060.., CurrentCommittee 0xc077e.., TIP20ChannelReserve 0x4d5050.., ZoneFactory, ZonePortal implementation, ZoneVerifier and ZoneMessenger under 0x5a...",
+     "source": "https://tempo.com/developers/docs/quickstart/predeployed-contracts.md and https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/contracts/src/precompiles/mod.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "StorageCredits.balanceOf(PoolManager) returns 15. The value rises by one each time the PoolManager clears one of its own storage slots. The precompile has no transfer(address,uint256) function.",
+     "source": "eth_call via https://rpc.mainnet.tempo.xyz and https://raw.githubusercontent.com/tempoxyz/tempo/main/tips/tip-1060.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "ReceivePolicyGuard records a receipt for each redirected transfer. Only the recovery authority captured in the receipt can call claim. With recovery authority address(0) that is the originator, meaning the from address of the transfer.",
+     "source": "https://tempo.com/developers/docs/protocol/tip403/spec.md and https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/precompiles/src/receive_policy_guard/mod.rs",
+     "relevance": "high"
+    },
+    {
+     "delta": "StablecoinDEX and the Fee AMM can pull TIP-20 tokens from their direct caller without an allowance. FeeManager.distributeFees(validator, token) is public and pays accumulated fees to the validator's fee recipient.",
+     "source": "https://tempo.com/developers/docs/protocol/tip20/spec.md and https://tempo.xyz/developers/docs/protocol/fees/spec-fee.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "Zone Portals under the prefix 0x5ad0 hold the TIP-20 backing of private Zones, and ZoneMessenger can call a Tempo contract in a withdrawal callback.",
+     "source": "https://tempo.com/developers/docs/quickstart/predeployed-contracts.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "The ConfigurableAccount address 0xaacc000000000000000000000000000000000000 has no code before T14. A transfer call to it from the PoolManager address returns success with empty data today, and its behaviour changes on 8 December 2026.",
+     "source": "eth_call via https://rpc.mainnet.tempo.xyz and https://tempo.com/developers/docs/guide/node/network-upgrades.md",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4217,
+   "lens": "L5",
+   "summary": "networks.json records 24,009 bytes of code at the PoolManager and the same masked hash as the Ethereum deployment. The owner is a contract that names itself Uniswap Wormhole Message Receiver, and the protocol fee controller is the zero address. I did not compare the deployed bytecode with a build of this repository, because the review owner forbids comparing this code with any other copy.",
+   "deltas": [
+    {
+     "delta": "owner() returns 0xcfb43dc56b55be9611ded8384201cecf06a9811b. Its NAME() getter returns 'Uniswap Wormhole Message Receiver', its code contains the revert strings 'Invalid Emitter Address!', 'Invalid Emitter Chain' and 'Invalid Sequence number', its message sender is 0xf5f4496219f31cdcba6130b5402873624585615a on Wormhole chain 2, and its message timeout is 172,800 seconds.",
+     "source": "eth_call and eth_getCode via https://rpc.mainnet.tempo.xyz at block 50,260,093",
+     "relevance": "high"
+    },
+    {
+     "delta": "The receiver points at a Wormhole core contract at 0xbebdb6c8ddc678ffa9f8748f85c815c556dd8ac6 whose chainId() is 68, guardian set index is 7 and guardian set holds 19 addresses. nextMinimumSequence is 0, so no governance message has been executed on Tempo.",
+     "source": "eth_call via https://rpc.mainnet.tempo.xyz",
+     "relevance": "low"
+    },
+    {
+     "delta": "protocolFeeController() returns the zero address. Nobody can set a protocol fee or collect protocol fees until the owner sets a controller.",
+     "source": "eth_call via https://rpc.mainnet.tempo.xyz",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4217,
+   "lens": "L6",
+   "summary": "Tempo uses Simplex BFT with a permissioned validator set and deterministic finality, with blocks about every 0.5 to 0.6 seconds. Protocol upgrades arrive about once a month and regularly change precompile behaviour: T12 on 13 October 2026, T13 on 3 November 2026, T14 scheduled for 8 December 2026.",
+   "deltas": [
+    {
+     "delta": "A finalized block cannot be reverted. The validator set is permissioned, and the proposer is chosen by a VRF.",
+     "source": "https://tempo.com/developers/docs/protocol/blockspace/consensus.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "Network upgrades T1 to T13 activated on mainnet between February and November 2026. T12 added burnAt, T6 added receive policies, T7 added storage credits.",
+     "source": "https://tempo.com/developers/docs/guide/node/network-upgrades.md",
+     "relevance": "high"
+    },
+    {
+     "delta": "T14 is scheduled for mainnet on 8 December 2026 and adds configurable accounts, new fee recipient rules for blocks and cheaper batch calls. T15 has no date.",
+     "source": "https://tempo.com/developers/docs/protocol/upgrades/t14.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "Validators can include their own transactions in a reserved shared gas section of each block, 50M gas in the mainnet parameter proposal. The three mainnet headers I read carried sharedGasLimit 0.",
+     "source": "https://tempo.com/developers/docs/protocol/tips/tip-1010.md and eth_getBlockByNumber via https://rpc.mainnet.tempo.xyz",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L1",
+   "summary": "Arc targets the Osaka EVM on a Reth client with revm. The opcodes the PoolManager uses behave as on Ethereum. The differences are PREVRANDAO returning 0, no blob transactions, no beacon roots contract, and extra rules that make value-bearing CALL and SELFDESTRUCT revert in cases that succeed on Ethereum.",
+   "deltas": [
+    {
+     "delta": "PREVRANDAO returns 0, BLOBHASH returns 0, BLOBBASEFEE returns 1, type 3 transactions are rejected and the EIP-4788 beacon roots contract is absent.",
+     "source": "https://docs.arc.io/arc/references/evm-differences.md",
+     "relevance": "none"
+    },
+    {
+     "delta": "A value-bearing CALL or SELFDESTRUCT reverts when the sender or recipient is on the USDC blocklist, when the recipient is the zero address, or when the recipient self-destructed earlier in the transaction.",
+     "source": "https://docs.arc.io/arc/references/evm-differences.md",
+     "relevance": "high"
+    },
+    {
+     "delta": "SELFDESTRUCT follows EIP-6780 and moves the contract's native USDC to the beneficiary. It reverts when the beneficiary is the contract itself with a balance.",
+     "source": "https://docs.arc.io/arc/references/evm-differences.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "EIP-7702 and CREATE2 behave as on Ethereum. Native value movements emit an EIP-7708 Transfer log from 0xfffffffffffffffffffffffffffffffffffffffe.",
+     "source": "https://docs.arc.io/arc/references/evm-differences.md and https://docs.arc.io/arc/references/usdc-system-events.md",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L2",
+   "summary": "Arc keeps Ethereum's account model and per-transaction transient storage. Two things act on state outside ordinary calls: the Native Coin Authority precompile, which mints, burns and moves native USDC for the USDC token contract, and the CallFrom precompile, which lets two predeployed contracts make calls with the transaction's signing EOA as msg.sender.",
+   "deltas": [
+    {
+     "delta": "Native USDC balances change through the Native Coin Authority precompile (mint, burn, transfer(from,to,amount)) when the ERC-20 face is used. Only the USDC token address 0x3600000000000000000000000000000000000000 may call it.",
+     "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_authority.rs and https://docs.arc.io/arc/concepts/execution-layer.md",
+     "relevance": "high"
+    },
+    {
+     "delta": "Multicall3From and Memo route subcalls through CallFrom, so an EOA can make several calls as itself inside one transaction, with shared transient storage. The EVM rejects a substituted sender unless it equals tx.origin.",
+     "source": "https://docs.arc.io/arc/concepts/batched-transactions.md and https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "Gas is charged to the transaction sender in native USDC and the base fee is paid to the block beneficiary instead of being burned.",
+     "source": "https://docs.arc.io/arc/references/evm-differences.md",
+     "relevance": "none"
+    },
+    {
+     "delta": "ERC-4337 bundlers and paymasters are offered by third parties. Protocol-level sponsorship and multi-stablecoin gas payment are listed as planned.",
+     "source": "https://docs.arc.io/arc/tools/account-abstraction.md and https://docs.arc.io/arc/concepts/execution-layer.md",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L3",
+   "summary": "The gas asset is USDC with 18 decimals as native value. The same balance is exposed as an ERC-20 with 6 decimals at 0x3600000000000000000000000000000000000000, so address(0) and 0x3600 are two currencies over one balance at the PoolManager. Circle's blocklist is enforced on native transfers. EURC and cirBTC are FiatToken contracts with their own blacklisters.",
+   "deltas": [
+    {
+     "delta": "Native USDC (18 decimals, msg.value, address.balance) and ERC-20 USDC (6 decimals, balanceOf, transfer) share one balance. balanceOf truncates the last 12 digits. At block 32,554,675 the PoolManager native balance was 2438862073023970996181983 wei and USDC.balanceOf(PoolManager) was 2438862073023.",
+     "source": "https://docs.arc.io/arc/concepts/stablecoin-native-model.md and eth_getBalance, eth_call via https://rpc.mainnet.arc.io",
+     "relevance": "high"
+    },
+    {
+     "delta": "Arc's own guidance says a pool that pairs native USDC with the ERC-20 face pairs an asset with itself, and that contracts must never mix msg.value with USDC.balanceOf.",
+     "source": "https://docs.arc.io/integrate/defi/amm-and-pools.md and https://docs.arc.io/arc/references/evm-differences.md",
+     "relevance": "high"
+    },
+    {
+     "delta": "The USDC blocklist is enforced at runtime on native value transfers to or from a listed address. USDC is an upgradeable proxy with blacklister 0x2a2b7ff330f15f9a8c52af5fec27d775f5138467, pauser 0x51fa31e029abf0ce307bca9ee6bf48aed6345212 and proxy admin 0x9005e53e3ee2f27999f15e7a52c58f804fc716e0.",
+     "source": "https://docs.arc.io/arc/references/evm-differences.md and eth_call, eth_getStorageAt via https://rpc.mainnet.arc.io",
+     "relevance": "high"
+    },
+    {
+     "delta": "EURC (0xbEf5f6d5...21c1) and cirBTC (0x171A4217...bAA0) expose blacklister and pauser roles. USYC is restricted to allowlisted holders. The PoolManager held about 20,570 EURC, 1.14 cirBTC and 5.57 bridged WETH.",
+     "source": "https://docs.arc.io/arc/references/contract-addresses.md and eth_call via https://rpc.mainnet.arc.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "The block gas limit is 30M (60M on Ethereum per networks.json), the minimum base fee is 20 gwei and the maximum is 20,000 gwei. eth_gasPrice returned 25 gwei.",
+     "source": "https://docs.arc.io/arc/references/gas-and-fees.md and eth_gasPrice, eth_getBlockByNumber via https://rpc.mainnet.arc.io",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L4",
+   "summary": "Arc has five custom precompiles at 0x1800000000000000000000000000000000000000 to ..0004 and two predeployed helper contracts, Memo and Multicall3From. The native coin precompiles accept calls only from the USDC token contract, and CallFrom accepts calls only from Memo and Multicall3From. Calls from the PoolManager address with the ERC-20 transfer selector, balanceOf or any hook selector revert on all of them.",
+   "deltas": [
+    {
+     "delta": "Native Coin Authority (0x1800..00) offers mint(to,amount), burn(from,amount) and transfer(from,to,amount) over native balances, restricted to caller 0x3600..., the USDC token. Native Coin Control (0x1800..01) stores the blocklist with the same caller restriction.",
+     "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_authority.rs and https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_control.rs",
+     "relevance": "high"
+    },
+    {
+     "delta": "CallFrom (0x1800..03) executes callFrom(sender, target, data) with msg.sender set to sender. Its allowed callers are Memo and Multicall3From, and the EVM reverts with 'sender spoofing requires tx.origin as sender' unless the sender is the calling contract or tx.origin. CallFrom does not forward value.",
+     "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/call_from.rs and https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "Memo at 0x5294E9927c3306DcBaDb03fe70b92e01cCede505 and Multicall3From at 0x522fAf9A91c41c443c66765030741e4AaCe147D0 must be called directly by an EOA.",
+     "source": "https://docs.arc.io/arc/concepts/transaction-memos.md and https://docs.arc.io/arc/concepts/batched-transactions.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "System Accounting (0x1800..02) holds the fee ring buffer and PQ Signature Verify (0x1800..04) checks SLH-DSA signatures. Neither moves balances.",
+     "source": "https://docs.arc.io/arc/concepts/execution-layer.md",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L5",
+   "summary": "networks.json records 24,009 bytes of code at the PoolManager and the same masked hash as the Ethereum deployment. The owner is a Uniswap Wormhole Message Receiver that has executed five messages. The protocol fee controller is a fee adapter whose collect function anyone can call and which pays a fixed token jar. I did not compare the deployed bytecode with a build of this repository, because the review owner forbids comparing this code with any other copy.",
+   "deltas": [
+    {
+     "delta": "owner() returns 0xbca30b5429935205037069cf5b8a165f55d05a75, whose NAME() getter returns 'Uniswap Wormhole Message Receiver'. Its message sender is 0xf5f4496219f31cdcba6130b5402873624585615a on Wormhole chain 2, nextMinimumSequence is 5, and it points at a Wormhole core contract at 0xc8ad24fc6063c41cb5c12a8e3851aafc3b3cf027 with chainId 71 and a 19 address guardian set at index 7.",
+     "source": "eth_call and eth_getCode via https://rpc.mainnet.arc.io at block 32,554,675",
+     "relevance": "high"
+    },
+    {
+     "delta": "protocolFeeController() returns 0x2f2bd3f43880b9644211f16d861b0672aab23782. Its selectors match collect((address,uint256)[]), triggerFeeUpdate, setPoolOverride, feeSetter(), POOL_MANAGER() and TOKEN_JAR(). TOKEN_JAR() is 0xfd39ac616e630e9db03efb2c9a4fe63edb949233 and feeSetter() is the owner contract.",
+     "source": "eth_getCode and eth_call via https://rpc.mainnet.arc.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_call of collect([(address(0),1)]) and collect([(0x3600...,1)]) from 0x000000000000000000000000000000000000dEaD succeeds, so any account can trigger PoolManager.collectProtocolFees for any currency at any time. protocolFeesAccrued was about 43.39 USDC for address(0), 67.88 USDC for 0x3600 and 3.29 EURC.",
+     "source": "eth_call via https://rpc.mainnet.arc.io at block 32,554,675",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L6",
+   "summary": "Arc runs Malachite, a Tendermint BFT implementation, with a Proof-of-Authority validator set of regulated institutions and finality in under one second. There are no reorganisations. Hard forks are named Zero3 to Zero8, and the roadmap lists a privacy sector and protocol-level stablecoin services.",
+   "deltas": [
+    {
+     "delta": "A committed block is final. More than two thirds of the permissioned validators must pre-commit, so a validator majority can censor or order transactions and cannot rewrite history without breaking the BFT assumption.",
+     "source": "https://docs.arc.io/arc/concepts/consensus-layer.md and https://docs.arc.io/arc/concepts/deterministic-finality.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "Block timestamps come from the proposer's clock at one second granularity and several blocks can share a timestamp. The PoolManager does not read block.timestamp.",
+     "source": "https://docs.arc.io/arc/references/evm-differences.md",
+     "relevance": "none"
+    },
+    {
+     "delta": "The client defines hard forks Zero3 to Zero8. Zero7 introduced Multicall3From and Memo, Zero8 changed how rejected delegatecalls to precompiles are charged.",
+     "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/execution-config/src/hardforks.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "Arc Privacy Sector and Stablecoin Services (cross-currency settlement, paymaster-sponsored transactions, gas payment in several stablecoins) are planned and not live.",
+     "source": "https://docs.arc.io/arc/concepts/execution-layer.md",
+     "relevance": "low"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "TIP-20 issuer roles can burn, freeze or pause the PoolManager balance of a Tempo stablecoin",
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A4",
+    "A6"
+   ],
+   "effect": "both",
+   "severity": "high",
+   "difference": "On Tempo every stablecoin is a TIP-20 precompile with issuer roles built into the protocol. burnAt(from, amount), live on mainnet since T12 on 13 October 2026, lets a BURN_AT_ROLE holder burn any balance with no transfer policy check, unless the holder is on a protected list. burnBlocked lets a BURN_BLOCKED_ROLE holder burn the balance of an address that fails the sender policy. The protected list is FeeManager, StablecoinDEX, TIP20ChannelReserve, ReceivePolicyGuard, the token's own address and Zone Portal addresses. The PoolManager is not on it. pause stops every transfer of the token. The admin of a TIP-403 policy can block an address for every token bound to that policy, and pathUSD and OUSD are both bound to policy 2, a blacklist administered by 0x251d2711ebeb0a09fdb8992f5506f3d949175246. Ethereum has no protocol-level burn of another account's ERC-20 balance. Each token there has whatever controls its own contract code contains.",
+   "mechanism": "1. All pools, ERC-6909 claims and protocol fees for a token sit in one TIP-20 balance at the PoolManager address. 2. A BURN_AT_ROLE holder calls burnAt(PoolManager, x). The TIP-20 precompile debits the PoolManager and reduces total supply. No PoolManager function runs. 3. The PoolManager tracks no per-currency reserve in storage. sync reads balanceOf (src/PoolManager.sol:279-288) and take pays out with transfer (src/PoolManager.sol:291-297, src/types/Currency.sol:60-75), so the claims recorded in pool state and ERC-6909 balances now exceed the tokens held. Withdrawals succeed until the balance runs out, then transfer reverts with InsufficientBalance and the remaining LPs and claim holders cannot exit. 4. The freeze variant: the policy admin adds the PoolManager to blacklist policy 2, or a PAUSE_ROLE holder pauses the token. Every take and every inbound payment for that token then reverts with PolicyForbids or ContractPaused, and settle cannot complete because the payment transfer fails. Once the PoolManager fails the sender policy, a BURN_BLOCKED_ROLE holder can also burn its balance. 5. If a burn lands between sync and settle inside one transaction, the checked subtraction at src/PoolManager.sol:360 reverts that transaction and nothing else changes.",
+   "impact": "At block 50,261,382 the PoolManager held about 406,197 OUSD and 19,727 pathUSD. A burn destroys part of the shared balance and the shortfall falls on whoever withdraws last, across every pool that uses the token. A blacklist entry or a pause freezes the full balance of that token, and policy 2 covers pathUSD and OUSD at once.",
+   "preconditions": "A holder of BURN_AT_ROLE, BURN_BLOCKED_ROLE or PAUSE_ROLE on the token, the token admin, or the admin of the TIP-403 policy must act. An unprivileged attacker has these roles only on tokens they created through the TIP-20 factory, which harms only pools that chose to hold that token. I could not list the current holders of BURN_AT_ROLE and BURN_BLOCKED_ROLE on OUSD and pathUSD, because the public RPC limits log queries to 100,000 blocks. I confirmed that both role constants exist on both tokens, that both tokens use policy 2, and that the PoolManager is authorized under policy 2 today.",
+   "mitigations": "LPs should treat every TIP-20 as an asset its issuer can burn or freeze at the PoolManager address, and check role holders and the policy admin before providing liquidity. The deployer can ask Tempo to add the PoolManager to the protected address list for burnAt and burnBlocked, and can ask issuers to confirm in writing that the PoolManager will not be blacklisted. Interfaces can warn when a pool token has a BURN_AT_ROLE holder.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:349-364",
+    "src/types/Currency.sol:60-75",
+    "src/types/Currency.sol:90-96"
+   ],
+   "sources": [
+    {
+     "url": "https://tempo.com/developers/docs/protocol/tip20/spec.md",
+     "supports": "burnAt and burnBlocked semantics, the protected address list, pause behaviour and the role list"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/protocol/upgrades/t12.md",
+     "supports": "burnAt was added in T12, active on mainnet since 13 October 2026"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/protocol/tip403/spec.md",
+     "supports": "policy types, policy admin powers and the shared registry at 0x403c000000000000000000000000000000000000"
+    },
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "eth_call at block 50,260,093: pathUSD and OUSD transferPolicyId() = 2, policyData(2) = (BLACKLIST, 0x251d2711ebeb0a09fdb8992f5506f3d949175246), isAuthorized(2, PoolManager) = true, BURN_AT_ROLE() and BURN_BLOCKED_ROLE() return constants on both tokens, balanceOf(PoolManager) for both tokens"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Circle's blocklist covers native USDC on Arc, so one entry for the PoolManager freezes native and ERC-20 USDC pools together",
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A3",
+    "A6"
+   ],
+   "effect": "freeze",
+   "severity": "high",
+   "difference": "On Ethereum nobody can block a transfer of the native asset. On Arc the native asset is USDC, and the EVM checks Circle's blocklist on every value-bearing CALL and SELFDESTRUCT, for sender and recipient. The ERC-20 face at 0x3600000000000000000000000000000000000000 is an upgradeable proxy (admin 0x9005e53e3ee2f27999f15e7a52c58f804fc716e0, implementation 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6). That address is the only caller allowed to use the Native Coin Authority precompile, whose transfer(from, to, amount), mint and burn act on the native balance of any account, and the Native Coin Control precompile that stores the blocklist.",
+   "mechanism": "1. The PoolManager holds one native balance that backs both address(0) pools and 0x3600 pools. 2. The USDC blacklister (0x2a2b7ff330f15f9a8c52af5fec27d775f5138467) blacklists the PoolManager address, and the token contract writes the entry through Native Coin Control. 3. take of address(0) runs call(gas(), to, amount, 0, 0, 0, 0) at src/types/Currency.sol:48, and the EVM reverts the value transfer because the sender is listed. take of 0x3600 calls transfer at src/types/Currency.sol:60-75, which also reverts. 4. settle with msg.value (src/PoolManager.sol:300-307, 352-354) fails because a value transfer to a listed address reverts, and ERC-20 payments to the PoolManager revert as well. 5. Every pool with either face of USDC is frozen. ERC-6909 claims still move inside the PoolManager and cannot be redeemed. collectProtocolFees (src/ProtocolFees.sol:44-57) reverts for both USDC currencies. 6. Separately, the proxy admin can install an implementation that calls Native Coin Authority transfer with the PoolManager as from. No PoolManager code runs in that path, so the code cannot refuse it.",
+   "impact": "At block 32,554,675 the PoolManager held 2,438,862 USDC as native balance. A blocklist entry freezes all of it. The EURC and cirBTC blacklisters can freeze about 20,570 EURC and 1.14 cirBTC in the same way through those tokens' own lists. An implementation upgrade could move the native balance out.",
+   "preconditions": "The USDC blacklister must list the PoolManager for the freeze, and the USDC proxy admin must upgrade the token for a seizure. All of these are Circle roles. An unprivileged attacker cannot reach this path. NativeCoinControl.isBlocklisted(PoolManager) and USDC.isBlacklisted(PoolManager) both return false today. I read the precompile access rules in the arc-node main branch and did not read the verified source of the token implementation at 0xc6ad664a...3ca6.",
+   "mitigations": "LPs on Arc should assume that Circle can freeze every USDC-denominated position in the PoolManager at once, including positions held as native value. The deployer can seek a written statement from Circle on how the PoolManager address is treated. Nothing in the PoolManager can be changed to route around a blocklist entry, so position size is the only control LPs have.",
+   "coreRefs": [
+    "src/types/Currency.sol:40-88",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:300-307",
+    "src/PoolManager.sol:349-364",
+    "src/ProtocolFees.sol:44-57"
+   ],
+   "sources": [
+    {
+     "url": "https://docs.arc.io/arc/references/evm-differences.md",
+     "supports": "value transfer rules: a transfer to or from a blocklisted address reverts at runtime, including SELFDESTRUCT"
+    },
+    {
+     "url": "https://docs.arc.io/arc/concepts/stablecoin-native-model.md",
+     "supports": "native and ERC-20 USDC share one balance, ERC-20 face at 0x3600000000000000000000000000000000000000"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_authority.rs",
+     "supports": "mint, burn and transfer(from,to,amount) on native balances are restricted to the USDC token address as caller"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_control.rs",
+     "supports": "blocklist, unBlocklist and isBlocklisted, with writes restricted to the USDC token address"
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "eth_getBalance, eth_call and eth_getStorageAt at block 32,554,675: PoolManager native balance and USDC.balanceOf, blacklister(), pauser(), proxy admin and implementation slots, isBlacklisted(PoolManager) = 0, NativeCoinControl.isBlocklisted(PoolManager) = 0, EURC and cirBTC balances and blacklisters"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "A take to a recipient whose receive policy rejects the PoolManager succeeds and strands the funds in ReceivePolicyGuard",
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "assumptions": [
+    "A4"
+   ],
+   "effect": "freeze",
+   "severity": "medium",
+   "difference": "Since T6 any Tempo account can set a receive policy in the TIP-403 registry: a sender list, a token filter and a recovery authority. When a TIP-20 transfer fails the recipient's receive policy, the transfer does not revert. The token credits ReceivePolicyGuard at 0xB10C000000000000000000000000000000000000, records a receipt and returns true. Only the recovery authority captured in the receipt can claim the amount. With recovery authority address(0) the claimer is the originator, which is the from address of the transfer. An ERC-20 transfer on Ethereum either credits the recipient or reverts.",
+   "mechanism": "1. A user or a router calls take(currency, to, amount) (src/PoolManager.sol:291-297). The caller's delta is debited and the PoolManager calls transfer(to, amount) on the TIP-20 (src/types/Currency.sol:60-75). 2. The recipient to has a receive policy that rejects the PoolManager as sender, or filters out the token. The TIP-20 precompile moves the amount from the PoolManager to ReceivePolicyGuard with the PoolManager as originator and returns true. 3. The return value is 32 bytes of 1, so the success test at src/types/Currency.sol:64-74 passes and take completes. The recipient's balance is unchanged. 4. If the recipient's recovery authority is its own address or a third party, that party can claim. If it is address(0), only the originator can claim. The originator is the PoolManager, which has no function that calls the guard, so the receipt can never be claimed. 5. PoolManager accounting stays consistent, because the delta was debited and the balance fell by the same amount. The loss is the withdrawing party's.",
+   "impact": "The amount of each affected take is lost for good when the recipient's recovery authority is address(0), and delayed until a claim otherwise. This hits LP withdrawals and swap outputs sent to accounts that restrict senders, for example custodial deposit accounts with a sender whitelist. Pool reserves and other users are not affected.",
+   "preconditions": "The recipient must have set a receive policy that rejects the PoolManager address or the token, and must have chosen address(0) as recovery authority for the loss to be permanent. The party that names the recipient in take must not check the policy first. An attacker cannot set a policy for someone else. receivePolicy(PoolManager) is unset on chain, and the PoolManager cannot set one, so payments into the PoolManager are not redirected.",
+   "mitigations": "Routers and interfaces on Tempo should call validateReceivePolicy(token, PoolManager, recipient) before a take and refuse or warn when it would block. Account owners who use sender whitelists should add the PoolManager address or set themselves as recovery authority. The deployer can document that withdrawals originate from the PoolManager address.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:60-75"
+   ],
+   "sources": [
+    {
+     "url": "https://tempo.com/developers/docs/protocol/tip403/receive-policies.md",
+     "supports": "a blocked inbound transfer still succeeds, delivery goes to ReceivePolicyGuard, recovery authority table"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/protocol/tip403/spec.md",
+     "supports": "setReceivePolicy is set by the account itself, address(0) gives recovery control to the original sender, claim(to, receipt) is called by the captured authority"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/precompiles/src/tip20/mod.rs",
+     "supports": "transfer returns Ok(true) when validate_transfer reports a blocked inbound, and validate_inbound_or_block moves funds to the guard with originator set to the transfer's msg.sender"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/precompiles/src/receive_policy_guard/mod.rs",
+     "supports": "claim reverts with unauthorized_claimer unless msg_sender equals the recovery authority, which is the receipt originator in originator mode"
+    },
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "eth_call receivePolicy(PoolManager) on 0x403c000000000000000000000000000000000000 returns all zeros at block 50,260,093"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "PoolManager ownership on Tempo and Arc is exercised through Wormhole guardian signatures",
+   "chainIds": [
+    4217,
+    5042
+   ],
+   "lens": "L5",
+   "assumptions": [
+    "A12"
+   ],
+   "effect": "siphon",
+   "severity": "low",
+   "difference": "On both chains owner() is a contract that names itself Uniswap Wormhole Message Receiver. It executes calls carried in Wormhole messages from sender 0xf5f4496219f31cdcba6130b5402873624585615a on Wormhole chain 2. A Wormhole message is valid when 13 of 19 guardians sign it. Who can act as owner therefore depends on the guardian set and on the Wormhole core contract deployed on each chain (0xbebdb6c8ddc678ffa9f8748f85c815c556dd8ac6 on Tempo, 0xc8ad24fc6063c41cb5c12a8e3851aafc3b3cf027 on Arc), in addition to Uniswap governance on Ethereum.",
+   "mechanism": "1. A guardian quorum signs a forged payload, or a flaw in the receiver or in the chain's Wormhole core contract makes the receiver accept a message. 2. The receiver, as owner, calls setProtocolFeeController (src/ProtocolFees.sol:29-32). 3. The new controller sets the protocol fee on any pool up to 1000 pips per direction (src/ProtocolFees.sol:35-41, src/libraries/ProtocolFeeLibrary.sol:8 and 25-32) and withdraws accrued protocol fees to any recipient (src/ProtocolFees.sol:44-57). 4. In the code I read the owner and the controller have no other power. They cannot take pool reserves or ERC-6909 claims.",
+   "impact": "Accrued protocol fees and up to 0.1 percent of future swap input per direction. On Arc the accrued amounts at block 32,554,675 were about 43.39 USDC for address(0), 67.88 USDC for 0x3600 and 3.29 EURC. On Tempo the controller is the zero address today, so nothing is collectable until the owner sets one.",
+   "preconditions": "13 of 19 Wormhole guardian signatures over a payload the receiver accepts, or a flaw in the receiver or core contract. I identified the receiver from its NAME() getter, its revert strings and its immutables, and did not read its source. lib/solmate is an empty directory in this checkout, so I could not read the Owned base contract that defines onlyOwner and ownership transfer.",
+   "mitigations": "The deployer should record the receiver, the Wormhole core address and the guardian set index for each chain in the deployment notes and re-check them when the guardian set rotates. Loss is bounded by the protocol fee cap in the code, so no change to the PoolManager is needed.",
+   "coreRefs": [
+    "src/ProtocolFees.sol:29-57",
+    "src/libraries/ProtocolFeeLibrary.sol:8",
+    "src/libraries/ProtocolFeeLibrary.sol:25-32"
+   ],
+   "sources": [
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "eth_call at block 50,260,093: PoolManager.owner() = 0xcfb43dc5...811b, NAME() = 'Uniswap Wormhole Message Receiver', messageSender, nextMinimumSequence = 0, Wormhole core chainId() = 68, getCurrentGuardianSetIndex() = 7, 19 guardian addresses, protocolFeeController() = 0"
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "eth_call at block 32,554,675: PoolManager.owner() = 0xbca30b54...5a75, NAME() = 'Uniswap Wormhole Message Receiver', nextMinimumSequence = 5, Wormhole core chainId() = 71, getCurrentGuardianSetIndex() = 7, 19 guardian addresses, protocolFeesAccrued values"
+    },
+    {
+     "url": "https://wormhole.com/docs/protocol/infrastructure/guardians/",
+     "supports": "the guardian network has 19 guardians and a message needs a 13 of 19 multisignature"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "Can one payment be credited twice through the two faces of USDC (address(0) by msg.value and 0x3600 by balance difference)?",
+   "result": "No. A native credit needs settle with msg.value while the synced currency slot is zero (src/PoolManager.sol:353-354). An ERC-20 credit needs the slot to hold 0x3600 from before the payment, and in that state settle reverts on any msg.value (src/PoolManager.sol:356). The reserves slot is written only together with the currency slot (src/libraries/CurrencyReserves.sol:27-32), so a stale reserve cannot be paired with a fresh sync. settle and settleFor are the only payable functions and the contract has no receive or fallback. Every inflow is credited to exactly one currency and every take debits the currency it pays from, so the two faces stay jointly solvent.",
+   "source": "src/PoolManager.sol:279-288, src/PoolManager.sol:349-364, src/libraries/CurrencyReserves.sol:21-32; https://docs.arc.io/arc/concepts/stablecoin-native-model.md"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "Can the 12 digit truncation of USDC.balanceOf be used to take funds? Native value can be forced into the PoolManager with SELFDESTRUCT while 0x3600 is synced.",
+   "result": "The over-credit is bounded by one ERC-20 unit, 10^12 wei or 0.000001 USDC, per sync and settle pair, because paid is floor(after/10^12) minus floor(before/10^12). The minimum base fee is 20 gwei, so even 30,000 gas costs 6 x 10^14 wei, 600 times the largest possible gain. The dust taken comes from native-denominated claims and can leave them short by less than 0.000001 USDC per event. The PoolManager native balance had a remainder of 970996181983 wei at block 32,554,675, so such dust exists.",
+   "source": "src/PoolManager.sol:358-360; https://docs.arc.io/arc/concepts/stablecoin-native-model.md; https://docs.arc.io/arc/references/gas-and-fees.md; eth_getBalance via https://rpc.mainnet.arc.io"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L5",
+   "check": "collect on the Arc fee adapter is callable by anyone, and collectProtocolFees has no lock check. Can a fee withdrawal in the middle of an unlock profit the caller, given that a native fee transfer changes USDC.balanceOf while 0x3600 is synced?",
+   "result": "No profit path found. The guard at src/ProtocolFees.sol:49-52 blocks only the case where the collected currency is nonzero and equals the synced currency, so a native collection can run while 0x3600 is synced. That transfer lowers the PoolManager balance, which reduces the settler's own credit or makes src/PoolManager.sol:360 revert. The recipient is the fixed TOKEN_JAR, a native send to the PoolManager itself would revert for lack of a receive function, and protocolFeesAccrued is reduced with checked arithmetic at src/ProtocolFees.sol:55.",
+   "source": "src/ProtocolFees.sol:44-57; eth_call of collect from 0x000000000000000000000000000000000000dEaD via https://rpc.mainnet.arc.io"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L4",
+   "check": "Can CallFrom, Memo or Multicall3From make the PoolManager see a msg.sender that did not authorise the call?",
+   "result": "No. CallFrom accepts calls only from Memo and Multicall3From, and the EVM reverts unless the substituted sender is the calling helper or tx.origin. The only identity that can be preserved is the EOA that signed the transaction, which could call the PoolManager directly. unlock from a codeless EOA reverts when the empty callback return is decoded (src/PoolManager.sol:110). eth_call from the PoolManager address to CallFrom returns 'unauthorized caller'.",
+   "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/call_from.rs; https://docs.arc.io/arc/concepts/transaction-memos.md"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L4",
+   "check": "Does any Arc precompile or system contract act as a third face of USDC, or do anything when the PoolManager calls it with transfer(address,uint256), balanceOf(address) or a hook selector? take lets any caller make the PoolManager call transfer on an arbitrary address (src/PoolManager.sol:291-297) and initialize lets any address with flag bits be called as a hook.",
+   "result": "No. eth_call from the PoolManager address with transfer, balanceOf and all ten IHooks selectors reverts on 0x1800..00 to ..04, Memo and Multicall3From ('Invalid selector', 'unauthorized caller' or a bare revert). Native Coin Authority exposes transfer(address,address,uint256), a different selector, and accepts only the USDC token as caller. A hook call must also return its own selector or the PoolManager reverts (src/libraries/Hooks.sol:137 and 151-153). The system log emitter 0xffff...fffe has no code, so it behaves like any codeless address.",
+   "source": "eth_call via https://rpc.mainnet.arc.io at block 32,554,675; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_authority.rs"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L1",
+   "check": "Do Arc's opcode differences (PREVRANDAO 0, blob opcodes, absent beacon roots, non-increasing timestamps) reach the PoolManager?",
+   "result": "No. A search of src/ finds no use of block fields, tx.origin, gasleft, code size checks, SELFDESTRUCT or delegatecall in the non-test contracts. Core has no dependence on block time or randomness.",
+   "source": "src/PoolManager.sol, src/ProtocolFees.sol, src/types/Currency.sol, src/libraries/*.sol (grep); https://docs.arc.io/arc/references/evm-differences.md"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L1",
+   "check": "Arc reverts value transfers to the zero address, to self-destructed accounts and to blocklisted recipients. Can a third party use these rules to block someone else's withdrawal?",
+   "result": "No. The recipient of take is chosen by the caller (src/PoolManager.sol:291) and the recipient of collectProtocolFees by the controller (src/ProtocolFees.sol:44). Core never pushes native value to an address a third party controls. A caller who names a bad recipient reverts only their own transaction.",
+   "source": "src/PoolManager.sol:291-297, src/ProtocolFees.sol:44-57; https://docs.arc.io/arc/references/evm-differences.md"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L2",
+   "check": "Does Multicall3From change the lifetime of transient storage or let a stale sync reach another user?",
+   "result": "No. The subcalls run inside one ordinary transaction from one signing EOA, so transient storage is shared only among that sender's own calls and is discarded at the end of the transaction as on Ethereum.",
+   "source": "https://docs.arc.io/arc/concepts/batched-transactions.md; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/call_from.rs"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L6",
+   "check": "Can a reorganisation undo a settlement after funds left the PoolManager (A14)?",
+   "result": "No. Arc finalises each block with more than two thirds of a permissioned validator set and documents no reorganisation risk.",
+   "source": "https://docs.arc.io/arc/concepts/deterministic-finality.md"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "check": "Tempo has no native asset. Can address(0) pools, settle with value, or native take create or move value?",
+   "result": "No. CALLVALUE is always 0 and the client rejects transactions with value, so the native branch of settle always credits 0 (src/PoolManager.sol:353-354, 364 and 369). No positive address(0) delta can come from a payment. The native branch of take needs a value transfer from an account whose balance is 0. sync and settle never read the native balance (src/PoolManager.sol:281-283). address(0) pools can be created and are inert.",
+   "source": "https://tempo.com/developers/docs/quickstart/evm-compatibility.md; https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/evm/src/handler.rs; eth_call with value via https://rpc.mainnet.tempo.xyz returns 'value transfer not allowed'"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "Does any Tempo precompile respond when the PoolManager calls it with transfer(address,uint256), balanceOf(address) or a hook selector?",
+   "result": "Only real TIP-20 tokens accept transfer. eth_call from the PoolManager address reverts with UnknownFunctionSelector on TIP20Factory, FeeManager, StablecoinDEX, TIP403Registry, ReceivePolicyGuard, SignatureVerifier, AddressRegistry, TIP20ChannelReserve, NonceManager, AccountKeychain, both ValidatorConfig contracts, CurrentCommittee, StorageCredits, ZoneFactory and ZoneVerifier, and with a bare revert on the ZonePortal implementation and ZoneMessenger. All ten IHooks selectors revert on pathUSD, OUSD and the nine precompiles I tested. A hook call must return its own selector (src/libraries/Hooks.sol:137 and 151-153).",
+   "source": "eth_call via https://rpc.mainnet.tempo.xyz at block 50,260,093; https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/contracts/src/precompiles/mod.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "StorageCredits.balanceOf(PoolManager) returns a number that rises when the PoolManager clears storage. Can sync and settle on currency 0x1060000000000000000000000000000000000000 turn that into funds?",
+   "result": "No. sync and settle can create a positive delta in a currency whose address is the precompile, because the credit count rises between the two reads when slots are cleared. That delta can only be cleared or minted as an ERC-6909 claim for the same id. take reverts because the precompile has no transfer function, and no real asset is accounted under that address. It would matter only to someone who provided real tokens to a pool against that address.",
+   "source": "eth_call via https://rpc.mainnet.tempo.xyz (balanceOf returns 15, transfer reverts with UnknownFunctionSelector); https://raw.githubusercontent.com/tempoxyz/tempo/main/tips/tip-1060.md; src/PoolManager.sol:279-288 and 349-364"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "A call to a codeless address succeeds and take would move nothing (A4). Does the TIP-20 address space make this worse, since token addresses are deterministic and can be named before the token exists?",
+   "result": "No. An address under the TIP-20 prefix with no token reverts with Uninitialized for both transfer and balanceOf, which is stricter than Ethereum. Token creation reverts if the address is occupied and tokens cannot be removed, so code at a token address does not change after creation.",
+   "source": "eth_call to 0x20c00000000000000000000000000000deadbeef via https://rpc.mainnet.tempo.xyz; https://tempo.com/developers/docs/protocol/tip20/spec.md"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Type 0x76 batches share transient storage across calls. Can an unlock flag, a delta or a stale sync leak to another party (A1)?",
+   "result": "No. Every call in a batch has the same sender as caller and the batch is one transaction with one rollback checkpoint, so only the sender's own calls share state. unlock sets and clears its flag inside one call (src/PoolManager.sol:104-114). The storage credits specification states that transient state resets every transaction under EIP-1153 semantics. I confirmed the batch loop in the client source and did not read the interpreter code that clears transient storage at the end of a transaction.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/evm/src/handler.rs (execute_batch); https://raw.githubusercontent.com/tempoxyz/tempo/main/tips/tip-1060.md"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Fee pre-collection, fee refunds, public fee distribution and guard claims move TIP-20 balances outside ordinary transfers. Can any of them change the PoolManager balance with funds that belong to someone else (A2)?",
+   "result": "No path found. The fee payer is the sender or a sponsor that signed, and the PoolManager cannot sign. The refund returns to the fee payer. distributeFees pays a validator's registered recipient, and a guard claim pays a destination chosen by the receipt's recovery authority, so both move the actor's own funds. Outflows from the PoolManager need an allowance or a permit signature it cannot produce, or an issuer role (see the issuer finding). TIP-20 rewards were removed in T8.",
+   "source": "https://tempo.xyz/developers/docs/protocol/fees/spec-fee.md; https://tempo.com/developers/docs/protocol/tip20/spec.md; https://tempo.com/developers/docs/guide/node/network-upgrades.md"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "Can a receive policy or a virtual address redirect payments that users send to the PoolManager, so that settle credits nothing?",
+   "result": "No. A receive policy is set by the account itself and receivePolicy(PoolManager) is unset. The PoolManager has no code path that calls the registry. A virtual address needs ten 0xfd bytes in the middle of the address, which the PoolManager address does not have.",
+   "source": "eth_call receivePolicy(0x33620f62c5b9b2086dd6b62f4a297a9f30347029) via https://rpc.mainnet.tempo.xyz; https://tempo.com/developers/docs/protocol/tip403/spec.md; https://tempo.com/developers/docs/protocol/tip20/virtual-addresses.md"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "check": "Do 250,000 gas per new slot, the 30M transaction cap and the 30M general gas budget per block make swaps or liquidity removal impossible to include (A9)?",
+   "result": "No freeze found. Removing liquidity touches two ticks and one position and clears slots. A swap pays up to two fresh slots per tick crossed for the first time (src/libraries/Pool.sol:602-611), about 500,000 gas, so roughly 55 first-time crossings fit in one transaction, and a larger move can be split with sqrtPriceLimitX96 (src/libraries/Pool.sol:344). Filling the general budget costs an attacker about 0.018 USD per block at the base fee, which raises the tip others must pay and does not stop them. I did not measure gas on chain.",
+   "source": "https://tempo.com/developers/docs/quickstart/evm-compatibility.md; https://tempo.com/developers/docs/protocol/tips/tip-1010.md; https://tempo.com/developers/docs/protocol/blockspace/payment-lane-specification.md; src/libraries/Pool.sol:344 and 602-611"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L6",
+   "check": "Can a reorganisation undo a settlement after funds left the PoolManager (A14)?",
+   "result": "No. Simplex BFT gives deterministic finality and a finalized block cannot be reverted.",
+   "source": "https://tempo.com/developers/docs/protocol/blockspace/consensus.md"
+  },
+  {
+   "chainIds": [
+    4217,
+    5042
+   ],
+   "lens": "L1",
+   "check": "Can code at a hook address change after pool creation in a way Ethereum does not allow (A7)?",
+   "result": "No new way found. Both chains target Osaka with EIP-6780 SELFDESTRUCT and EIP-7702, the same as Ethereum. A hook at a delegated EOA can change behaviour by re-delegating, which is equally possible on Ethereum and is a trust decision for LPs of that pool. Tempo's T14 configurable accounts apply to accounts without contract code.",
+   "source": "https://docs.arc.io/arc/references/evm-differences.md; https://tempo.com/developers/docs/quickstart/evm-compatibility.md; https://tempo.com/developers/docs/protocol/upgrades/t14.md"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "question": "Which addresses hold BURN_AT_ROLE, BURN_BLOCKED_ROLE, PAUSE_ROLE and DEFAULT_ADMIN_ROLE on OUSD and pathUSD, and what kind of account is the policy 2 admin 0x251d2711ebeb0a09fdb8992f5506f3d949175246?",
+   "why": "It decides how many signers stand between the PoolManager's 426,000 USD of TIP-20 balances and a burn or freeze. An explorer or an archive RPC without the 100,000 block log limit can answer it from RoleMembershipUpdated events.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "What does the verified source of the USDC implementation at 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6 do in transfer, transferFrom, mint, burn and any rescue function, and can any role other than the proxy admin move or burn the native balance of an arbitrary account?",
+   "why": "The token contract is the only caller of Native Coin Authority, which can move any native balance. A function that reaches it with a caller-chosen from address would turn the issuer freeze finding into a seizure path that needs no upgrade.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "How do the PositionManager and Universal Router deployed on Arc handle address(0) and 0x3600 together, for example sweeping native value after an ERC-20 USDC operation, or wrapping and unwrapping steps?",
+   "why": "Core credits each inflow once, but periphery contracts that read both msg.value and USDC.balanceOf of themselves can double count the shared balance. Funds in transit through those contracts could then be taken by the next caller.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "question": "After T14 activates on 8 December 2026, what do the ConfigurableAccount precompile at 0xaacc000000000000000000000000000000000000 and accounts with the 0xef marker return for transfer(address,uint256), balanceOf(address) and the hook selectors when called by the PoolManager?",
+   "why": "The address is codeless today and becomes a native shim at T14. Each new precompile is a new target for the arbitrary transfer call in take and for hook calls, so the on-chain selector test from this cycle should be repeated after each upgrade.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "question": "Which interpreter does the mainnet release run (revm or evm2 with JIT), where does it clear transient storage between transactions and around block system calls, and what did the EVM execution fix in v1.18.4 change?",
+   "why": "The PoolManager keeps its lock, deltas and synced reserves in transient storage. A young interpreter with a recent execution fix is the place where TSTORE, TLOAD or MCOPY could differ from Ethereum.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4217,
+    5042
+   ],
+   "lens": "L5",
+   "question": "What is the verified source of the Uniswap Wormhole Message Receiver at 0xcfb43dc56b55be9611ded8384201cecf06a9811b (Tempo) and 0xbca30b5429935205037069cf5b8a165f55d05a75 (Arc), and are the Wormhole core contracts they point at the official deployments with the current guardian set?",
+   "why": "The receiver is the owner of the PoolManager. A receiver bound to an unofficial or outdated core contract would lower the bar for setting a protocol fee controller.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "question": "What do a liquidity removal and a swap across 50 never-crossed ticks cost in gas on Tempo with storage credits in Refund mode, and how are non-payment transactions ordered when the 30M general budget is full?",
+   "why": "This cycle estimated gas from the specification. If credits or the reservoir model change what counts against the 30M cap, large swaps or exits could need more splitting than estimated, or a cheap spam campaign could delay exits for longer than a tip auction suggests.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L6",
+   "question": "When Stablecoin Services ship, will gas payment in EURC or other ERC-20 tokens debit and refund token balances outside normal execution, and can the payer be a contract?",
+   "why": "A protocol-level fee debit or refund in a pooled ERC-20 is the kind of balance change that sync and settle would credit to whoever is settling.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "Does the EIP-7825 transaction gas cap of 16,777,216 apply on Arc, given the 30M block gas limit and the Osaka baseline?",
+   "why": "It sets the largest swap that fits in one transaction. I read the block gas limit on chain and did not confirm the per-transaction cap.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": []
+}

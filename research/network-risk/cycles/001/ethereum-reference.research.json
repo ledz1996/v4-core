@@ -1,0 +1,588 @@
+{
+ "unit": "ethereum-reference",
+ "profiles": [
+  {
+   "chainId": 1,
+   "lens": "L1",
+   "summary": "Mainnet runs Osaka with the BPO2 blob parameters, so every opcode the cancun build uses exists at the gas cost the code was written for. Since the Dencun upgrade that the build targets, the chain added EIP-7702 delegated code for EOAs, a 16,777,216 gas cap per transaction, the CLZ opcode and the P256VERIFY precompile. Only EIP-7702 touches an assumption the code makes, because it lets code at a fixed address change.",
+   "deltas": [
+    {
+     "delta": "EIP-7702 (part of Pectra, mainnet activation timestamp 1746612311 per EIP-7600) lets an EOA set its code to a delegation indicator 0xef0100 || address, change the target later, or clear it. The EIP states that it breaks the invariant that msg.sender == tx.origin means the caller has no code.",
+     "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7600.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "EIP-6780 (part of Dencun, mainnet activation timestamp 1710338135 per EIP-7569) limits SELFDESTRUCT to sending the balance unless the contract was created in the same transaction, so ordinary contract code can no longer be deleted and redeployed at one address across transactions.",
+     "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-6780.md; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7569.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "EIP-7825 (Osaka, mainnet 2025-12-03 per EIP-7607) rejects any transaction with a gas limit above 16,777,216, independent of the 60,000,000 block gas limit.",
+     "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7825.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "Osaka added the CLZ opcode (0x1e) and the P256VERIFY precompile at 0x100. An eth_call that runs CLZ on the value 1 returned 255, which confirms Osaka rules are live on the queried node.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22); https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7607.md",
+     "relevance": "none"
+    },
+    {
+     "delta": "The EIP-170 code size limit is still 24,576 bytes. The PoolManager at 0x000000000004444c5dc75cB358380D2e3dE08A90 has 24,009 bytes of code, so 567 bytes of headroom remain for the CTF build.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (eth_getCode)",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 1,
+   "lens": "L2",
+   "summary": "Transient storage on mainnet is discarded at the end of each transaction and rolled back on revert, as the code assumes. ERC-4337 bundles and EIP-7702 batches put many users' operations inside one transaction, so they share the PoolManager's transient slots. No system operation executes code at the PoolManager or changes token balances outside transactions; beacon withdrawals only add ETH.",
+   "deltas": [
+    {
+     "delta": "EIP-1153 specifies that all transient storage is discarded at the end of the transaction and that a reverting frame undoes its transient writes. This matches assumption A1.",
+     "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-1153.md",
+     "relevance": "none"
+    },
+    {
+     "delta": "ERC-4337 bundles many UserOperations into a single handleOps transaction. The ERC warns that transient storage persists across UserOperations in a bundle and must be cleaned up manually when it guards access.",
+     "source": "https://raw.githubusercontent.com/ethereum/ERCs/master/ERCS/erc-4337.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "EIP-4895 withdrawals increase the ETH balance of a recipient unconditionally and without EVM execution. The PoolManager can receive ETH this way, and through SELFDESTRUCT, without a settle call.",
+     "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-4895.md",
+     "relevance": "none"
+    },
+    {
+     "delta": "The mainnet node reports five system contracts (beacon roots, history storage, deposit, withdrawal requests, consolidation requests). They are called by the system address at block boundaries and none of them calls the PoolManager.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (eth_config, eth_getCode)",
+     "relevance": "none"
+    },
+    {
+     "delta": "Mainnet has no address aliasing. The owner of the existing PoolManager is the timelock contract at its own address, and msg.sender is always the literal caller.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (owner())",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 1,
+   "lens": "L3",
+   "summary": "ETH is the only gas asset, has 18 decimals and has no ERC-20 face; WETH is a separate contract with its own balance. The existing PoolManager holds large balances of three issuer-controlled stablecoins (79.95M USDT, 63.05M PYUSD, 30.40M USDC) whose issuers can block or zero the balance of a single address, and 80.45 rebasing stETH. The block gas limit is 60,000,000 and one transaction is capped at 16,777,216 gas.",
+   "deltas": [
+    {
+     "delta": "The PoolManager holds 54,377.2 ETH and 576.35 WETH. The two balances are independent, so the native asset has no second face on mainnet.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (eth_getBalance, WETH.balanceOf)",
+     "relevance": "none"
+    },
+    {
+     "delta": "USDC transfer and transferFrom require that sender, recipient and caller are not blacklisted; the blacklister role (0x0a06be16275b95a7d2567fbdae118b36c7da78f9) can add any address. The PoolManager holds 30,404,253 USDC and is not blacklisted.",
+     "source": "https://sourcify.dev/server/v2/contract/1/0x43506849d7c04f9138d1a2050bbf3a0c054402dd?fields=sources,compilation; on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22)",
+     "relevance": "high"
+    },
+    {
+     "delta": "USDT lets its owner blacklist an address, which blocks transfers sent by it, and call destroyBlackFunds, which sets the balance of a blacklisted address to zero. The PoolManager holds 79,953,224 USDT and is not blacklisted.",
+     "source": "https://sourcify.dev/server/v2/contract/1/0xdAC17F958D2ee523a2206206994597C13D831ec7?fields=sources,compilation; on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22)",
+     "relevance": "high"
+    },
+    {
+     "delta": "PYUSD lets the ASSET_PROTECTION_ROLE freeze an address, which blocks transfers to and from it, and call wipeFrozenAddress, which sets its balance to zero. The PoolManager holds 63,053,277 PYUSD and is not frozen.",
+     "source": "https://sourcify.dev/server/v2/contract/1/0x8c35caa5fd5bdc64b6b11344ad57594a3676256a?fields=sources,compilation; on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22)",
+     "relevance": "high"
+    },
+    {
+     "delta": "stETH balances change on each daily oracle report without a transfer, upward on rewards and downward on penalties. The PoolManager holds 80.4539 stETH (64.3729 shares).",
+     "source": "https://raw.githubusercontent.com/lidofinance/docs/main/docs/guides/lido-tokens-integration-guide.md; on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22)",
+     "relevance": "low"
+    },
+    {
+     "delta": "USDT has a transfer fee switch (currently 0, hard limit below 20 basis points and below 50 USDT per transfer) and a deprecate function that makes the current address forward transfer and balanceOf to a new contract.",
+     "source": "https://sourcify.dev/server/v2/contract/1/0xdAC17F958D2ee523a2206206994597C13D831ec7?fields=sources,compilation; on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (basisPointsRate, maximumFee, deprecated all zero)",
+     "relevance": "low"
+    },
+    {
+     "delta": "The latest block has gasLimit 60,000,000. Gas is paid only in ETH, so holding a borrowed token for part of a transaction buys no gas.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (eth_getBlockByNumber latest, block 26470359)",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 1,
+   "lens": "L4",
+   "summary": "Mainnet has 18 precompiles and five system contracts. None of them can move ETH or tokens out of another account, change code at another address, or read state that the PoolManager treats as private. The only protocol-level balance change that can reach the PoolManager is an unconditional ETH credit.",
+   "deltas": [
+    {
+     "delta": "System contracts on mainnet: beacon roots 0x000F3df6...Beac02 (97 bytes), history storage 0x0000F908...2935 (83 bytes), withdrawal requests 0x00000961...7002 (504 bytes), consolidation requests 0x0000BBdD...7251 (414 bytes), deposit contract 0x00000000219ab5...05Fa (6,358 bytes).",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (eth_config, eth_getCode)",
+     "relevance": "none"
+    },
+    {
+     "delta": "Precompiles 0x01 to 0x11 and P256VERIFY at 0x100 are stateless functions of their input. eth_getCode at 0x100 returns empty code.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (eth_config precompiles, eth_getCode)",
+     "relevance": "none"
+    },
+    {
+     "delta": "Withdrawals and SELFDESTRUCT can raise the ETH balance of any address, including the PoolManager, with no call into it.",
+     "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-4895.md",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 1,
+   "lens": "L5",
+   "summary": "The existing mainnet PoolManager has 24,009 bytes of code, is owned by the Uniswap timelock, and uses a V4FeeAdapter contract as protocol fee controller. The adapter exposes fee collection and fee updates to any caller, with the recipient fixed to a TokenJar contract. I did not compare the deployed bytecode with this repository because the review owner forbids comparing this code with any other copy, and lib/solmate is empty in this checkout, so Owned.sol could not be read.",
+   "deltas": [
+    {
+     "delta": "owner() returns 0x1a9C8182C09F50C8318d769245beA52c32BE35BC (6,856 bytes of code). Its admin() is 0x408ed6354d4973f66138c91495f2f2fcbd8724c3 and its delay() is 172,800 seconds.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (eth_call owner, admin, delay)",
+     "relevance": "none"
+    },
+    {
+     "delta": "protocolFeeController() returns 0x89A5D5bF00a27D55c02951E49078a5C5771051dB, verified on Sourcify as V4FeeAdapter (exact match, verified 2026-08-26). Its collect(CollectParams[]) and triggerFeeUpdate(PoolKey) functions have no access check and call PoolManager.collectProtocolFees(TOKEN_JAR, currency, amount) and PoolManager.setProtocolFee(poolKey, fee).",
+     "source": "https://sourcify.dev/server/v2/contract/1/0x89a5d5bf00a27d55c02951e49078a5c5771051db?fields=sources,abi,compilation",
+     "relevance": "low"
+    },
+    {
+     "delta": "The adapter's owner and feeSetter are the timelock, its policy is 0x1cd822b70a0591420f65e94b9b3a0d0b0fb3a314, and TOKEN_JAR is 0xf38521f130fccf29db1961597bc5d2b60f995f85, whose release function is restricted to a releaser address.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (eth_call TOKEN_JAR, owner, feeSetter, policy); https://sourcify.dev/server/v2/contract/1/0xf38521f130fccf29db1961597bc5d2b60f995f85?fields=sources,compilation",
+     "relevance": "none"
+    },
+    {
+     "delta": "The CTF build is a new deployment. Its owner and fee controller on mainnet are whatever the deployer passes and sets, so the governance facts above describe the existing deployment only.",
+     "source": "src/PoolManager.sol:101; src/ProtocolFees.sol:26-32",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 1,
+   "lens": "L6",
+   "summary": "Whoever builds a block can order, delay or bundle transactions but cannot split one transaction, so atomic settlement in the PoolManager is unaffected. The current fork is BPO2 (activated 2026-01-07) and the queried node reports no scheduled next fork. Glamsterdam is live on Sepolia since 2026-10-06 with no mainnet date; its scheduled EIPs raise storage write and account write gas and add opcodes, and none of the ones I read changes transient storage.",
+   "deltas": [
+    {
+     "delta": "eth_config reports current fork id 0x07c9462e with activation time 1767747671 and next equal to null. The latest header has requestsHash and no block access list field.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (eth_config, eth_getBlockByNumber)",
+     "relevance": "none"
+    },
+    {
+     "delta": "Glamsterdam is scheduled to include EIP-8038 (storage write surcharge 2,800 to 10,000 gas, cold account access 2,600 to 3,000, value transfer write 6,700 to 9,000), EIP-8037 (state creation gas in a separate reservoir that is forwarded to child calls in full), EIP-7954 (code size limit 64 KiB), EIP-8024 (SWAPN, DUPN, EXCHANGE) and EIP-7708 (logs for ETH transfers). Sepolia activated on 2026-10-06; the mainnet row is empty.",
+     "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7773.md; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-8038.md; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-8037.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "Glamsterdam also schedules EIP-7732, enshrined proposer-builder separation, which changes who assembles the execution payload. Core has no dependence on block number, time, coinbase or ordering, so this does not reach the PoolManager.",
+     "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7773.md; src/ (no use of block or tx globals outside src/test)",
+     "relevance": "none"
+    },
+    {
+     "delta": "I did not fetch a source on mainnet finality time or observed reorg depth in this cycle. Settlement in core is atomic within one transaction, so neither changes a core code path.",
+     "source": "src/PoolManager.sol:104-114",
+     "relevance": "none"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "One issuer blocklist entry on the PoolManager address freezes or wipes a stablecoin for every pool",
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A6",
+    "A2"
+   ],
+   "effect": "both",
+   "severity": "high",
+   "difference": "This is a property of assets on mainnet, and mainnet protocol rules are the reference. USDC, USDT and PYUSD each let one issuer role block a single address. USDC blocks transfers from and to a blacklisted address. USDT blocks transfers sent by a blacklisted address and lets the owner call destroyBlackFunds, which sets that address's balance to zero. PYUSD blocks transfers from and to a frozen address and lets the asset protection role call wipeFrozenAddress, which sets the balance to zero.",
+   "mechanism": "All pools, all ERC-6909 claims and all accrued protocol fees for a currency sit in one token balance at the PoolManager address. take calls currency.transfer and reverts with ERC20TransferFailed when the token call fails (src/PoolManager.sol:291-297, src/types/Currency.sol:60-86), so once the address is blocked nobody can withdraw that token from any pool. collectProtocolFees fails the same way (src/ProtocolFees.sol:56). For USDC and PYUSD a transfer into the PoolManager also fails, so settle can no longer be funded in that token (src/PoolManager.sol:349-364). For USDT the blocked address can still receive, so users can keep paying USDT in while nothing can leave. If the issuer then zeroes the balance, the pools keep their accounting but the tokens behind it are gone, which is the undercollateralised state described in A2. LPs can still remove liquidity, take the other currency of the pair, and convert the blocked currency's delta into ERC-6909 claims with mint, which does no token transfer (src/PoolManager.sol:322-329). The claims stay unredeemable while the block lasts.",
+   "impact": "At block 26470360 the existing PoolManager holds 79,953,224 USDT, 63,053,277 PYUSD and 30,404,253 USDC. One blocklist transaction per token freezes that token for every LP, every claim holder and the protocol fee balance at once. A wipe by Tether or Paxos turns the freeze into a loss of the full balance. The other currency of each affected pool stays withdrawable.",
+   "preconditions": "The issuer role must act: the USDC blacklister (0x0a06be16275b95a7d2567fbdae118b36c7da78f9), the USDT owner (0xc6cde7c39eb2f0f0095f41570af89efc2c1ea828) or a PYUSD ASSET_PROTECTION_ROLE holder. The PoolManager is not blocked on any of the three today. I found no way for an unprivileged party to cause the block directly. I did not research what legal or policy triggers each issuer applies to contract addresses.",
+   "mitigations": "The deployer cannot remove this from a singleton. Interfaces and LPs can treat issuer-controlled tokens as carrying whole-protocol exposure instead of per-pool exposure. Monitoring isBlacklisted, isBlackListed and isFrozen for the PoolManager address gives early warning. Routers can fall back to ERC-6909 claims for settlement when token transfers to the PoolManager fail.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:60-86",
+    "src/PoolManager.sol:349-364",
+    "src/PoolManager.sol:322-329",
+    "src/ProtocolFees.sol:44-57"
+   ],
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x43506849d7c04f9138d1a2050bbf3a0c054402dd?fields=sources,compilation",
+     "supports": "FiatTokenV2_2 implementation behind the USDC proxy: transfer and transferFrom carry notBlacklisted modifiers for caller, sender and recipient (FiatTokenV1.sol lines 257 to 290), and blacklist is restricted to the blacklister (Blacklistable.sol line 71)"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0xdAC17F958D2ee523a2206206994597C13D831ec7?fields=sources,compilation",
+     "supports": "TetherToken: addBlackList and destroyBlackFunds are onlyOwner (lines 277 to 293), transfer requires the sender not to be blacklisted (lines 336 to 337), destroyBlackFunds sets balances[user] to 0"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x8c35caa5fd5bdc64b6b11344ad57594a3676256a?fields=sources,compilation",
+     "supports": "PaxosTokenV2: _transfer reverts with AddressFrozen if from or to is frozen (lines 444 to 445), freeze and wipeFrozenAddress are restricted to ASSET_PROTECTION_ROLE (lines 278 to 292), wipeFrozenAddress sets balances[addr] to 0"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call at block 26470360: balanceOf(PoolManager) for USDC, USDT and PYUSD; USDC.isBlacklisted, USDT.isBlackListed and PYUSD.isFrozen all return false for the PoolManager; USDC.blacklister and USDT.getOwner; implementation slots of the USDC and PYUSD proxies"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting",
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2"
+   ],
+   "effect": "degrade",
+   "severity": "low",
+   "difference": "stETH balances are recalculated on each Lido oracle report, normally daily, with no transfer. The change is positive on staking rewards and can be negative after slashing or penalties. Lido's integration guide lists Uniswap among applications that are not designed for rebasing tokens and recommends wstETH.",
+   "mechanism": "Pool accounting never reads token balances. Balances are read only in sync and in _settle, and the only credit from a balance is the increase between a sync and the settle that follows in the same transaction (src/PoolManager.sol:279-288, 349-364). A positive rebase raises balanceOf(PoolManager) with no sync and settle around it, so the increase belongs to no pool, no position and no claim. The only outflows are take and collectProtocolFees (src/PoolManager.sol:291-297, src/ProtocolFees.sol:44-57), and both debit an accounted amount, so the surplus cannot be paid out to LPs. Someone who can run sync, the rebase and settle inside one transaction would be credited the whole rebase on the PoolManager's balance. For stETH the rebase happens inside submitReportData, which only an oracle committee member or a SUBMIT_DATA_ROLE holder can call. A negative rebase lowers the balance below the sum of pool and claim accounting, and the last withdrawals of stETH revert in Currency.transfer. Transfer rounding is safe for the PoolManager: a take debits the full amount while stETH moves at most that amount, and settle credits what arrived.",
+   "impact": "The PoolManager holds 80.4539 stETH at block 26470360. LPs in stETH pools earn no staking yield on it; the yield accumulates as an unclaimable surplus. After a negative rebase the shortfall falls on whoever withdraws stETH last. wstETH (2,295 held) is not affected because its balances do not rebase.",
+   "preconditions": "A pool must use stETH or another elastic supply token as a currency. The loss case needs a negative Lido report. Capturing the positive rebase needs an oracle committee member acting through a contract or an EIP-7702 delegated account. I derived the rounding argument from the share formula in the Lido guide and did not test it on chain. I did not compute how much of the 80.4539 stETH is surplus.",
+   "mitigations": "Use wstETH in pools. Interfaces can warn on pools whose currency is stETH or another rebasing token. A hook cannot fix this because the surplus is not reachable through any delta.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364",
+    "src/PoolManager.sol:291-297",
+    "src/ProtocolFees.sol:44-57"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/lidofinance/docs/main/docs/guides/lido-tokens-integration-guide.md",
+     "supports": "stETH rebases daily on the oracle report, rebases can be negative, transfers can move 1 to 2 wei less than requested, and Uniswap is named as not designed for rebasing tokens"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/lidofinance/docs/main/docs/contracts/accounting-oracle.md",
+     "supports": "submitReportData reverts with SenderNotAllowed unless the caller holds SUBMIT_DATA_ROLE or is a consensus member, and the rebase is applied within that transaction"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call at blocks 26470360 and 26470380: stETH.balanceOf(PoolManager) = 80453883612211151739 and sharesOf = 64372946869317648418; wstETH.balanceOf = 2295.05; AMPL.balanceOf = 16 base units"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ampleforth/ampleforth-contracts/master/contracts/Orchestrator.sol",
+     "supports": "Ampleforth Orchestrator.rebase() in the project repository requires msg.sender == tx.origin, a check that EIP-7702 delegated accounts can satisfy while running code; I did not confirm that the deployed orchestrator matches this file, and the PoolManager holds only dust AMPL"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "EIP-7702 lets the code behind a hook address be replaced or removed after a pool is created",
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A7"
+   ],
+   "effect": "both",
+   "severity": "low",
+   "difference": "Since Pectra (EIP-7702) an EOA can point its code at any contract through a delegation indicator, repoint it in a later transaction, or clear it. Since Dencun (EIP-6780) an ordinary contract cannot delete its code after the creation transaction. On mainnet today a delegated EOA is therefore the one kind of account whose code can change or vanish at a fixed address without a proxy pattern in its bytecode.",
+   "mechanism": "initialize accepts a hook address on its low 14 bits alone and never looks at code (src/PoolManager.sol:126, src/libraries/Hooks.sol:109-127). An EOA whose address ends in chosen flag bits is cheap to find because only 14 bits must match. While the EOA delegates to honest hook code the pool behaves normally. If the account holder clears the delegation, a call to the hook succeeds with empty return data, and callHook reverts with InvalidHookResponse because the result is shorter than 32 bytes (src/libraries/Hooks.sol:131-155). With the before or after remove liquidity flag set, every liquidity removal by anyone other than the hook address then reverts (src/PoolManager.sol:156, 178; src/libraries/Hooks.sol:195-206, 232-243), so LPs cannot withdraw until the holder delegates again. If the holder repoints the delegation to hostile code and the address carries a returns-delta flag, the new code can assign itself part of each withdrawal or swap, because the hook delta is credited to the hook and subtracted from the caller (src/libraries/Hooks.sol:233-243, 298-313; src/PoolManager.sol:181-183, 224-226). The hook address is skipped when it is itself the caller (src/libraries/Hooks.sol:171-175, 217, 253, 293), and a delegated EOA can originate transactions. The holder can therefore delegate to code that answers the unlock callback for its own calls and returns invalid data to hook calls made for everyone else.",
+   "impact": "Funds of LPs and swappers in pools that use such a hook. Other pools are not affected because pool math never reads another pool's state. The same outcome is already possible with an upgradeable proxy hook; the change is that inspecting the code at the hook address at one point in time no longer shows it.",
+   "preconditions": "The attacker creates the pool with a delegated EOA as hook and LPs deposit into it. I did not scan mainnet for existing pools whose hook is a delegated account.",
+   "mitigations": "Interfaces, routers and LPs can read the code at the hook address and reject hooks whose code is the 23 byte delegation indicator starting with 0xef0100, or that have no code. The deployer could add a code check in initialize, but the same account could delegate afterwards, so the check belongs in periphery and off-chain listing.",
+   "coreRefs": [
+    "src/PoolManager.sol:126",
+    "src/libraries/Hooks.sol:109-127",
+    "src/libraries/Hooks.sol:131-155",
+    "src/libraries/Hooks.sol:171-175",
+    "src/libraries/Hooks.sol:195-245",
+    "src/PoolManager.sol:156-183"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md",
+     "supports": "an authority's code is set to 0xef0100 || address, can be changed by a later authorization and cleared by delegating to the zero address; delegated accounts may originate transactions; msg.sender == tx.origin no longer implies an account without code"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-6780.md",
+     "supports": "SELFDESTRUCT no longer deletes code except in the transaction that created the contract"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7600.md",
+     "supports": "EIP-7702 is included in Pectra, with mainnet activation timestamp 1746612311"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_config at block 26470380 reports fork id 0x07c9462e with activation time 1767747671, which EIP-7607 lists as BPO2, a fork later than Pectra"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "sync runs while the manager is locked and fee collection ignores the lock, and the mainnet fee controller lets anyone trigger collection",
+   "chainIds": [
+    1
+   ],
+   "lens": "L5",
+   "assumptions": [
+    "A1",
+    "A12"
+   ],
+   "effect": "degrade",
+   "severity": "info",
+   "difference": "On mainnet the protocol fee controller is a V4FeeAdapter contract whose collect and triggerFeeUpdate functions have no access check. Any account can therefore make the PoolManager execute collectProtocolFees and setProtocolFee at a moment it chooses, including inside its own unlock callback. Mainnet also lets several users' operations share one transaction through ERC-4337 bundles and EIP-7702 batches.",
+   "mechanism": "sync has no onlyWhenUnlocked modifier (src/PoolManager.sol:279-288), so anyone can set the synced currency and reserves at any point of a transaction, and the value stays until a settle or another sync in that transaction. collectProtocolFees checks the caller and then reverts only if the currency is an ERC-20 equal to the synced currency (src/ProtocolFees.sol:48-52). It never calls _isUnlocked, which is declared at src/ProtocolFees.sol:60 and implemented at src/PoolManager.sol:391-394 with no caller. ASSUMPTIONS.md A12 describes the guard as depending on the unlocked state; the code does not. I walked the fund-moving paths for a gain and found none. Collection of the synced ERC-20 is blocked regardless of lock state, so the balance cannot fall between a sync and its settle through this path. Native settlement uses msg.value and no balance (src/PoolManager.sol:353-354). Collection is bounded by protocolFeesAccrued with checked subtraction (src/ProtocolFees.sol:54-55) and the adapter fixes the recipient. A sync left behind by an earlier operation in a bundle is overwritten by the next sync and cleared by the next ERC-20 settle (src/PoolManager.sol:361). What remains is that a stale sync makes a later native settle with value revert with NonzeroNativeValue if its caller did not sync first (src/PoolManager.sol:356), and makes collection of that currency revert for the rest of the transaction.",
+   "impact": "No loss or lasting freeze found. Within one transaction, a party that runs earlier can make a later native settle or a fee collection revert.",
+   "preconditions": "For the revert cases the two parties must share a transaction, for example an ERC-4337 bundle, and the later party must settle native currency without calling sync first. This is my own reading of the code and has not been checked by a second reviewer.",
+   "mitigations": "Integrators should call sync immediately before every settle, including native, as the comment at src/PoolManager.sol:348 says. The deployer can decide whether sync should require the unlocked state and whether collectProtocolFees should check it, and can correct the A12 text either way.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/ProtocolFees.sol:44-57",
+    "src/ProtocolFees.sol:60",
+    "src/PoolManager.sol:391-394",
+    "src/PoolManager.sol:349-364"
+   ],
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x89a5d5bf00a27d55c02951e49078a5c5771051db?fields=sources,abi,compilation",
+     "supports": "V4FeeAdapter source (exact match): collect(CollectParams[]) and triggerFeeUpdate(PoolKey) have no access modifier and call POOL_MANAGER.collectProtocolFees(TOKEN_JAR, currency, amount) and POOL_MANAGER.setProtocolFee(poolKey, fee)"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call at block 26470380: PoolManager.protocolFeeController() = 0x89a5d5bf00a27d55c02951e49078a5c5771051db; adapter TOKEN_JAR() = 0xf38521f130fccf29db1961597bc5d2b60f995f85; adapter owner() and feeSetter() = timelock"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0xf38521f130fccf29db1961597bc5d2b60f995f85?fields=sources,compilation",
+     "supports": "TokenJar has an empty receive function and a release function restricted to the releaser, so native fee collection does not hand control to an arbitrary party"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/ERCs/master/ERCS/erc-4337.md",
+     "supports": "a bundle is one transaction and transient storage persists across the UserOperations in it"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L2",
+   "check": "Whether ERC-4337 bundles or EIP-7702 batches, which run several users' operations in one transaction, can leak an unlock flag, a delta or a stale sync from one operation into another and move funds.",
+   "result": "unlock clears the flag before returning and reverts unless every delta is zero, so the flag and the deltas never outlive the unlock that created them. Only the synced currency and reserves can survive. A later operation's own sync overwrites them and any ERC-20 settle resets the currency, and a credit is only ever the balance increase since the most recent sync, so a stale sync cannot capture another user's payment. The remaining effects are reverts, recorded in the info finding.",
+   "source": "src/PoolManager.sol:104-114, 279-288, 349-364; https://raw.githubusercontent.com/ethereum/ERCs/master/ERCS/erc-4337.md"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Whether the native asset has a second, ERC-20 face on mainnet, and whether an attacker-deployed token that mirrors ETH or another token's balance can be credited for funds it did not pay.",
+   "result": "ETH has no enshrined ERC-20 form; the PoolManager's ETH balance (54,377.2) and WETH balance (576.35) are independent. A mirror token only earns a delta in its own currency id, because _settle credits the synced currency. msg.value is rejected while an ERC-20 is synced, so an ETH payment cannot be read as a balance increase of a mirror token.",
+   "source": "src/PoolManager.sol:349-364; on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22)"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Whether ETH forced into the PoolManager by SELFDESTRUCT, a beacon withdrawal or a fee recipient setting can be claimed or can break accounting.",
+   "result": "Native credit is msg.value only and the contract balance is never read for native settlement. Forced ETH becomes an unclaimable surplus. No receive or fallback function appears in the contracts read under src; settle and settleFor are the only payable functions.",
+   "source": "src/PoolManager.sol:279-283, 353-354; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-4895.md; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-6780.md"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Whether a token reachable at two addresses, such as USDT after deprecate() forwards the old address to a new contract, lets one payment be credited twice or lets one currency id drain the other's backing.",
+   "result": "There is one sync slot. Each credit equals a real balance increase observed between one sync and the next settle with no other sync in between, and each take or fee collection sends at most the amount it debits. Summed over both currency ids, credits minus debits equals the real balance change, so the shared balance always covers both sets of claims. Collection of the alias while the other address is synced can only lower the settler's credit or revert.",
+   "source": "src/PoolManager.sol:279-297, 349-364; src/libraries/CurrencyReserves.sol:21-32; https://sourcify.dev/server/v2/contract/1/0xdAC17F958D2ee523a2206206994597C13D831ec7?fields=sources,compilation"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Whether the USDT transfer fee switch, if turned on, makes the PoolManager pay out more than it debits or credit more than it receives.",
+   "result": "take debits the full amount and USDT removes exactly that amount from the sender, with the fee taken from what the recipient gets. settle credits the measured balance increase. The PoolManager stays whole; payers must send more to cover the fee.",
+   "source": "src/PoolManager.sol:291-297, 358-360; https://sourcify.dev/server/v2/contract/1/0xdAC17F958D2ee523a2206206994597C13D831ec7?fields=sources,compilation (lines 122 to 135, 425 to 434)"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Whether the 16,777,216 gas cap per transaction (EIP-7825) or the 60,000,000 block gas limit can make liquidity removal or a necessary swap impossible to include.",
+   "result": "modifyLiquidity touches two ticks, one position and the bitmap, so its cost is constant. Pool.swap stops at sqrtPriceLimitX96, so any swap can be split across transactions. By my estimate from EIP-2929 costs and the repository gas snapshots, one transaction still crosses several hundred initialized ticks or about 3,000 empty bitmap words. Crossing the full empty range of a pool with tick spacing 1 (6,932 words) no longer fits in one transaction but can be done in steps by anyone. I did not measure these numbers on chain.",
+   "source": "src/libraries/Pool.sol:146-238, 344-437; snapshots/TickBitmapTest.json; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7825.md"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L4",
+   "check": "Whether a precompile or system contract address used as a pool currency can produce a settle credit or a silent transfer.",
+   "result": "I sent the balanceOf and transfer calldata that the PoolManager would send, from the PoolManager address, to all 18 precompiles and the five system contracts with eth_call at block 26470418. SHA256, RIPEMD160 and identity return the same constant for balanceOf on every call, so paid is zero, and their transfer return value is not 1, so take reverts. ECRECOVER and P256VERIFY return empty data: balanceOf fails decoding and transfer succeeds while moving nothing, which costs only the caller. The other precompiles fail and the system contracts revert on both calls. No delta can be created without paying.",
+   "source": "src/types/Currency.sol:60-75, 90-96; src/PoolManager.sol:358-360; on-chain eth_call via https://ethereum-rpc.publicnode.com at block 26470418"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L4",
+   "check": "Whether any mainnet system contract or protocol operation can move ETH or tokens out of the PoolManager or change its code.",
+   "result": "The five system contracts only record roots, hashes and validator requests, and withdrawals only add ETH. Nothing at protocol level debits an arbitrary account or rewrites contract code.",
+   "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (eth_config, eth_getCode); https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-4895.md"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "check": "Whether every opcode the cancun build needs exists on mainnet at the expected cost, and whether core depends on block or transaction globals that later forks changed.",
+   "result": "Mainnet is past Dencun (CLZ from Osaka executes), so PUSH0, MCOPY, TLOAD and TSTORE are available. The Pectra and Fusaka EIP lists contain no repricing of an opcode that core uses. A search of src outside src/test finds no use of tx.origin, block fields, blockhash, selfdestruct, create or delegatecall.",
+   "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26470360 (2026-11-22) (eth_call running CLZ); https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7569.md; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7600.md; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7607.md; src/ (search)"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "check": "Whether an EOA that delegates to the PoolManager's code through EIP-7702 can reach the real PoolManager's funds or pass as it.",
+   "result": "Delegated code runs with the EOA's own storage and balance. initialize, modifyLiquidity, swap and donate revert there because address(this) differs from the immutable original. The other functions act only on the EOA's own state and tokens. The real contract's storage and balances are untouched.",
+   "source": "src/NoDelegateCall.sol:14-26; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "check": "Whether a currency or hook contract can lose its code on mainnet, and what take, sync and hook calls do at an address with no code.",
+   "result": "After EIP-6780 a contract keeps its code unless it self-destructs in its creation transaction, so only EIP-7702 accounts can lose code later. A take of a codeless currency debits the caller and moves nothing, which harms only the caller. balanceOf on a codeless address returns no data and the Solidity decoder is expected to revert, so sync fails and no credit arises; I did not execute this. A codeless hook makes hook calls revert, covered in the EIP-7702 finding.",
+   "source": "src/types/Currency.sol:60-75, 94; src/libraries/Hooks.sol:152-154; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-6780.md"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "check": "Whether the math and bit libraries are numerically self-consistent as written: TickMath constants and both directions, BitMath lookup tables, FullMath.mulDiv, LiquidityMath.addDelta, SwapMath.getSqrtPriceTarget, BalanceDelta packing, tickSpacingToMaxLiquidityPerTick, and the four transient slot constants.",
+   "result": "A Python model of the code as written matched exact integer arithmetic on 300,000 random mulDiv cases, all bit positions and 200,000 random words for BitMath, about 70,000 ticks and 60,000 prices for TickMath including both ends of the range, and 100,000 cases each for the helpers. The TickMath multipliers equal 2^128 divided by sqrt(1.0001)^(2^i) to within one unit. The slot constants equal keccak256 of their names minus one. This is a self-consistency check and uses no other copy of the code.",
+   "source": "src/libraries/TickMath.sol:57-237; src/libraries/BitMath.sol:12-48; src/libraries/FullMath.sol:14-116; src/libraries/Lock.sol:8; src/libraries/CurrencyReserves.sol:11-13; src/libraries/NonzeroDeltaCount.sol:9-10"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L5",
+   "check": "Whether the permissionless collect and triggerFeeUpdate functions of the mainnet fee controller let an outsider take pool funds or raise fees beyond the cap.",
+   "result": "collectProtocolFees subtracts from protocolFeesAccrued with checked arithmetic, so it cannot pay more than accrued fees, and accrual only happens in _swap from amounts the swapper owes. The adapter fixes the recipient to the TokenJar. setProtocolFee rejects any direction above 1,000 pips, and the fee value comes from the adapter's override or policy, not from the caller. Pool.swap makes no external call between reading and writing slot0, so a fee update cannot interleave with a swap.",
+   "source": "src/ProtocolFees.sol:35-57, 66-70; src/libraries/ProtocolFeeLibrary.sol:25-32; src/PoolManager.sol:230-253; src/libraries/Pool.sol:283-439; https://sourcify.dev/server/v2/contract/1/0x89a5d5bf00a27d55c02951e49078a5c5771051db?fields=sources,abi,compilation"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Whether free borrowing of every pooled token inside one transaction (A5) gives an attacker something of value on mainnet that existing free flash loans do not.",
+   "result": "Mainnet has no protocol feature that reads a token balance for gas payment, staking or voting within a transaction; gas is paid in ETH only. take creates a negative delta that must be zero before unlock returns, so the tokens come back in the same transaction.",
+   "source": "src/PoolManager.sol:104-114, 291-297"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L2",
+   "check": "Whether msg.value can be counted twice in native settlement through batching inside the PoolManager.",
+   "result": "The PoolManager has no multicall and performs no delegatecall, so each settle call sees its own msg.value once. settle and settleFor are the only payable functions.",
+   "source": "src/PoolManager.sol:300-307, 349-364"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L6",
+   "check": "Whether the Glamsterdam changes scheduled so far alter how the existing bytecode executes: new opcodes, code size, ETH transfer logs and the state gas reservoir.",
+   "result": "EIP-8024 keeps jump destination analysis unchanged and states that contracts which never execute the new opcode bytes are unaffected. EIP-7954 only raises size limits. EIP-7708 adds a log to value transfers. EIP-8037 forwards the state gas reservoir to child calls in full and leaves the 63/64 rule on ordinary gas; core forwards all gas to hooks and to native recipients and reverts as a whole if a callee burns it. EIP-8038 raises costs only, which is tracked as a lead.",
+   "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-8024.md; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7954.md; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7708.md; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-8037.md; src/libraries/Hooks.sol:134; src/types/Currency.sol:48"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L6",
+   "check": "Whether block ordering power, reorgs or finality delay on mainnet can split a settlement or let funds leave before payment is final.",
+   "result": "Every delta must net to zero before unlock returns, inside one transaction, and a transaction is included or dropped as a whole. Core holds no cross-chain or delayed obligations. I did not fetch a source on finality time or reorg depth; the conclusion rests on the code alone.",
+   "source": "src/PoolManager.sol:104-114"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L5",
+   "question": "Does a second, independent reading of PoolManager.sync, _settle and ProtocolFees.collectProtocolFees agree that a sync outside an unlock, or a fee collection inside an unlock triggered through a permissionless controller, can never change the amount credited in _settle or pay out more than protocolFeesAccrued?",
+   "why": "The lock is not checked on either path and ASSUMPTIONS.md A12 says it is. I found only same-transaction reverts, but this is the place where the code and its stated assumptions disagree.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L5",
+   "question": "Who will be the owner and the protocol fee controller of the CTF build on mainnet, and will the controller expose collectProtocolFees or setProtocolFee to arbitrary callers as the current V4FeeAdapter does?",
+   "why": "All governance facts in this cycle describe the existing deployment. A different owner or a controller with an arbitrary recipient would change who can reach accrued fees.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "question": "Among pools initialized on the mainnet PoolManager, how many use a hook address whose code is an EIP-7702 delegation indicator or is empty, and how much liquidity do they hold?",
+   "why": "This turns the EIP-7702 hook finding from a possibility into a measured exposure. It needs a scan of Initialize events and eth_getCode on each hook.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L6",
+   "question": "When Glamsterdam gets a mainnet date, how much gas does one initialized tick crossing in Pool.swap cost under EIP-8038 and EIP-8037, and how many crossings fit under the 16,777,216 gas cap?",
+   "why": "The storage write surcharge rises from 2,800 to 10,000 gas and each crossing writes two fee growth slots. The answer sets how finely large swaps must be split and whether any periphery flow that cannot split would stall.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L5",
+   "question": "What does lib/solmate/src/auth/Owned.sol at the pinned submodule commit do on ownership transfer, once the submodule is checked out?",
+   "why": "lib/ is empty in this checkout, so the code behind onlyOwner and transferOwnership was not read. A one-step transfer to a wrong address would permanently fix the protocol fee controller.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "question": "Which other tokens among the largest balances of the mainnet PoolManager have issuer freeze, seize, pause, upgrade or rebase functions, and what is the combined value exposed?",
+   "why": "This cycle checked USDC, USDT, PYUSD, stETH, wstETH, WETH, DAI, WBTC and AMPL only. A full list sizes the issuer finding.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "question": "How much of the stETH balance of the mainnet PoolManager is surplus above the sum of pool reserves, ERC-6909 claims and accrued protocol fees for stETH?",
+   "why": "It measures the yield already stranded by rebases and confirms the rounding argument in the stETH finding.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": []
+}

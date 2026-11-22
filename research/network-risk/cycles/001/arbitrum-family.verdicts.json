@@ -1,0 +1,209 @@
+{
+ "unit": "arbitrum-family",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "I fetched the Robinhood Chain page on differences from Ethereum. It says that sequencer-level screening excludes any transaction associated with a sanctioned address. I fetched the Arbitrum compliance filtering page. It describes sequencer simulation against a restricted address list, rule examples for the origin, for CALL, CREATE, CREATE2 and SELFDESTRUCT targets and for token transfers, and a precompile where an authorised account registers the hash of a delayed inbox transaction so that the state transition fails it on inclusion and consumes its gas. I read arbos/tx_processor.go at Nitro v3.11.3. RevertedTxHook reads FilteredTransactions().IsFilteredFree(txHash), raises the sender nonce, sets the remaining gas to zero and returns an error. The caller in core/state_transition.go of the Offchain Labs go-ethereum fork (master branch) skips evm.Call when that error is set. StartTxHook sends a filtered deposit to the filtered funds recipient. I read precompiles/ArbFilteredTransactionsManager.go at v3.11.3. AddFilteredTransaction checks only that the caller is in the filterer set. On chain at Robinhood Chain block 120,625,526 on 2026-11-22: getAllTransactionFilterers() returns one address, 0xebdc18a1f5c42fc25552ea233facf4054df224b7, which has no code and nonce 6,237. getTransactionFilteringFrom() returns 1782295200, which is 2026-06-24 10:00 UTC. getFilteredFundsRecipient() returns 0xbbbd433db8700d8927faaaaf482e007e293ed568. A scan of all logs of address 0x74 from block 0 to the head returns 6,234 FilteredTransactionAdded events, the first on 2026-06-30 and the last on 2026-11-20, and no FilteredTransactionDeleted event. The filter is in regular use. The PoolManager held 21,372 ETH, 16.84M USDG, 1,314 WETH and 3,134 ANT. The ethbeat page says that users can be censored when the operator registers their transaction hash in the precompile, even when the transaction is force-included through the delayed inbox. Not confirmed: which rules Robinhood configured at its sequencer, and that the running client v3.13.0-rc.9 carries the same hook code as the v3.11.3 tag I read. The on-chain events are consistent with the tagged code.",
+   "codeCheck": "take is the only user path that transfers a currency out of the PoolManager, and it requires an open unlock (src/PoolManager.sol:291-297, src/PoolManager.sol:96-99). The only other transfer is collectProtocolFees, which accepts the fee controller alone (src/ProtocolFees.sol:44-57). Liquidity removal and claim burning only create a positive delta for msg.sender (src/PoolManager.sol:145-184, src/PoolManager.sol:332-336), and unlock reverts unless every delta is cleared (src/PoolManager.sol:104-114). Positions are stored under msg.sender (src/PoolManager.sol:161) and a burn of claims needs the holder, an operator or an allowance (src/ERC6909Claims.sol:13-22). A holder therefore needs at least one successful transaction of its own before any other account can exit for it. The code has no exit that works without a successful child chain transaction. No guard in src/ can help, because a filtered transaction never reaches the EVM call. Hook calls forward all gas and revert the action when the call fails (src/libraries/Hooks.sol:131-137). This matters only for the sequencer rule on CALL targets. No test in test/ models a chain that fails a transaction before execution.",
+   "corrections": "The severity stays high because the freeze needs the filterer account, the list provider or the chain owner. The profile quotes a dashboard figure of about 1,351 filtered hashes. The chain shows 6,234 add events from the one filterer account. The claims about a take to a restricted recipient and about hooks or tokens that touch a restricted address depend on the configured rule set, which is still unknown. The finding cites the precompile source at the v3.11.0 tag. I read that file at v3.11.3. A filtered deposit or retryable is redirected to 0xbbbd433db8700d8927faaaaf482e007e293ed568. That redirect moves bridged funds of the filtered sender and does not touch PoolManager balances.",
+   "sources": [
+    {
+     "url": "https://docs.robinhood.com/chain/differences-from-ethereum/",
+     "supports": "Sequencer-level screening excludes any transaction associated with a sanctioned address."
+    },
+    {
+     "url": "https://docs.arbitrum.io/launch-arbitrum-chain/chain-config/sequencer/compliance-filtering",
+     "supports": "Rule examples, the restricted address list as salted hashes, and the precompile that fails delayed inbox transactions by hash."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/tx_processor.go",
+     "supports": "RevertedTxHook skips execution, raises the nonce and consumes all gas for a hash in the on-chain filter. StartTxHook redirects filtered deposits and retryables."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/precompiles/ArbFilteredTransactionsManager.go",
+     "supports": "A registered filterer can add or delete any transaction hash with no other check."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/state_transition.go",
+     "supports": "The EVM call is skipped when RevertedTxHook returns an error."
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com eth_call ArbOwnerPublic 0x6b getAllTransactionFilterers(), getTransactionFilteringFrom(), getFilteredFundsRecipient(); eth_getCode and eth_getTransactionCount of the filterer; eth_getLogs on 0x74 from block 0 to head; eth_getBalance and balanceOf of the PoolManager; queried 2026-11-22",
+     "supports": "One filterer with nonce 6,237, filtering enabled from 2026-06-24, 6,234 FilteredTransactionAdded events and no deletions, PoolManager balances as stated."
+    },
+    {
+     "url": "https://ethbeat.org/layer2s/projects/robinhood",
+     "supports": "Independent statement that the operator can fail a force-included transaction by registering its hash."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "On chain at Robinhood Chain on 2026-11-22: the ANT token 0xbbB6c29bCc3a1028A2B54310DF73F4F7A3bcB373 has its beacon slot set to 0xe10b6f6b275de231345c20d14ab812db62151b00, ACCESS_CONTROLLED_REGISTRY() returns the same address, and the beacon's implementation() is 0xb35490d6f9163de4f80d88dc75c3516eb64c5ae2. isBlocked(PoolManager) is false, paused() is false and uiMultiplier() is 1e18. The PoolManager holds 3,134.38 ANT and 16,843,603 USDG. Every stock token selector the finding lists is present in the beacon or logic bytecode. The finding left the transfer check and the role holders open. I closed both. Sourcify serves verified source for the logic (src/Stock.sol:Stock) and for the registry (src/AccessControlsRegistry.sol). Stock.transfer carries onlyNotPaused, onlyNotBlocked(to) and onlyNotBlocked(msg.sender). transferFrom also checks from. paused() is true when either the token flag or the registry flag is set. adminBurn(from, amount) needs ADMIN_BURNER_ROLE only and has no pause or block check. balanceOf is the plain OpenZeppelin balance. In the registry, pause needs PAUSER_ROLE, blockAccounts needs BLOCKER_ROLE, and upgradeTo needs BEACON_UPGRADER_ROLE with a code length check and no delay. From the registry's RoleGranted logs and hasRole calls, the current holders are: DEFAULT_ADMIN_ROLE 0xd6f8378f8e440c65f8382f5f2728c78dfd55b66d, BEACON_UPGRADER_ROLE 0xcd8c6182e7c6ca3b5156d6a90a67719d7e2be094, ADMIN_BURNER_ROLE 0x957b6de6525c63349f7619743ef1e0ad93cd74d4, BLOCKER_ROLE 0x913ca87347391218e5de2c17c5a0aeba8b0b28fd, PAUSER_ROLE 0xe7bcb188254bc6ebbff63014dfed4cd4a024f22a and TOKEN_PAUSER_ROLE 0xfccf56b674113d9c4eb0f9b3370930ced9e6ab23. None of these addresses has code, so no on-chain timelock or multisig stands between the role and the action. The registry has emitted 247 Blocked events and was paused once, on 2026-06-30 from 17:01 to 17:02 UTC. USDG 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168 has implementation 0x68184c449e1a8f34fa18d289737129fd27b66f8f, verified on Sourcify as contracts/stablecoins/USDG.sol. transfer has whenNotPaused and _transfer reverts when from or to is frozen. decreaseSupplyFromAddress needs a supply controller that SupplyControl.canBurnFromAddress accepts and reverts for a frozen address. The selectors freeze, unfreeze, wipeFrozenAddress and pause are routed to a facet at 0x58cab81e3d8468a0e90df8cbfacb34535e1de942. Upgrades need DEFAULT_ADMIN_ROLE. isFrozen(PoolManager) and paused() are false. The Robinhood documentation confirms the issuer, the 18 decimals, the fixed balanceOf under the multiplier, and names Uniswap pools as a trading venue for stock tokens. Not confirmed: who operates the role accounts, the source of the USDG facet, and the excerpt of the final terms PDF, which I did not fetch.",
+   "codeCheck": "Currency.transfer sends transfer(to, amount) to the token and reverts with a wrapped ERC20TransferFailed when the call fails (src/types/Currency.sol:54-87). take and collectProtocolFees are the two callers (src/PoolManager.sol:291-297, src/ProtocolFees.sol:54-56). With the PoolManager blocked or the token paused, msg.sender of that call is the PoolManager and Stock.transfer reverts, so both functions revert for the token. A payment into the PoolManager is a token transfer with the PoolManager as recipient, which the same checks stop. sync still works because balanceOf has no check (src/PoolManager.sol:279-288, src/types/Currency.sol:90-96). mint moves no tokens (src/PoolManager.sol:322-329), so an LP can remove liquidity and hold the blocked side as a claim. A later burn of the claim still needs take to reach the tokens (src/PoolManager.sol:332-336). A burn by the issuer lowers balanceOf(PoolManager) with no delta. The only place the code compares balances is the checked subtraction in _settle (src/PoolManager.sol:358-360), which would revert one settle if the burn fell between sync and settle of the same transaction. At any other time nothing reconciles the balance with pool accounting, and takes succeed until the balance runs out. I found no guard the finding missed. test/types/Currency.t.sol and test/PoolManager.t.sol:947 cover a token whose transfer reverts. No test covers a token that lowers the PoolManager balance on its own.",
+   "corrections": "The transfer check is now confirmed from verified source and it also covers the recipient, so a take of a stock token to a blocked recipient reverts for that caller only. The role holders are single accounts with no code, which the finding did not establish. For USDG the direct burn path is narrower than stated: decreaseSupplyFromAddress works on another address only for a supply controller flagged to burn from any address, and it rejects frozen addresses. The seizure path for a frozen address is wipeFrozenAddress in the facet, whose source I did not read. USDG is a claimable rewards token. Its balanceOf excludes unclaimed rewards and a claim moves tokens from a claim source to a destination set per payout group, so the PoolManager balance does not grow with time. I did not check whether the PoolManager is registered in a payout group. Balances moved slightly since the finding was written: 3,134.38 ANT and 16.84M USDG.",
+   "sources": [
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com eth_getStorageAt, eth_getCode, eth_call and eth_getLogs on 0xbbB6c29bCc3a1028A2B54310DF73F4F7A3bcB373, 0xe10b6f6b275de231345c20d14ab812db62151b00, 0xb35490d6f9163de4f80d88dc75c3516eb64c5ae2 and 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168; queried 2026-11-22",
+     "supports": "Beacon and registry are one contract, selectors present, block and pause flags false for the PoolManager, role holders and their empty code, 247 Blocked events, one pause on 2026-06-30, balances."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/4663/0xb35490d6f9163de4f80d88dc75c3516eb64c5ae2?fields=sources,compilation",
+     "supports": "Verified Stock.sol: transfer checks pause, recipient and caller against the registry. adminBurn has no such check."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/4663/0xe10b6f6b275de231345c20d14ab812db62151b00?fields=sources,compilation",
+     "supports": "Verified AccessControlsRegistry.sol: pause, blockAccounts and upgradeTo are role gated with no delay."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/4663/0x68184c449e1a8f34fa18d289737129fd27b66f8f?fields=sources,compilation",
+     "supports": "Verified USDG logic: pause and freeze checks on transfer, supply control on burns, facet routing, balanceOf without unclaimed rewards."
+    },
+    {
+     "url": "https://docs.robinhood.com/chain/building-with-stock-tokens/",
+     "supports": "Stock tokens are 18 decimal ERC-20s, balanceOf stays fixed under the multiplier, and Uniswap pools are named as a venue."
+    },
+    {
+     "url": "https://docs.robinhood.com/chain/stock-tokens/",
+     "supports": "Stock Tokens are debt securities issued by Robinhood Assets (Jersey) Limited, which also acts as tokenizer."
+    },
+    {
+     "url": "https://docs.robinhood.com/chain/contracts/",
+     "supports": "Canonical WETH and USDG addresses."
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "I read arbos/programs/programs.go at Nitro v3.11.3. CallProgram calls getActiveProgram, which returns ProgramNeedsUpgrade when the program version differs from the Stylus version and ProgramExpired when the age exceeds ExpiryDays. ProgramKeepalive needs an active program that is at least KeepaliveDays old. I read arbos/arbosState/arbosstate.go and arbos/programs/params.go. The ArbOS 59 step calls UpgradeToVersion(3), which sets the Stylus version from 2 to 3. I read precompiles/ArbWasm.go. ActivateProgram burns the stored activation gas first. CodehashKeepalive does not. On chain at Arbitrum One block 526,514,058 on 2026-11-22: stylusVersion() is 3, expiryDays() is 365, keepaliveDays() is 31 and activationGas() is 2^64-1. A simulated activateProgram with 30,000,000 gas reverts. I tested the effect directly. ProgramActivated logs of ArbWasm around block 496,578,581, the first block at or after the ArbOS 61 activation time, show version 2 before it and version 3 after it. The program 0x2e5d89a229cbd17efb0a731d26232f88c3746aa9, activated at version 2 in block 495,363,914 and not reactivated, now fails every eth_call with the error ProgramNeedsUpgrade(2, 3). The program 0xaff2f129d2bcba4649a54fb516be0cc78288898d was reactivated at version 3 in block 496,871,745 and answers calls. The finding did not establish when activation was closed. The Security Council report gives the date: on 2026-10-02 the council called ArbOwner.setWasmActivationGas(2^64 - 1) on Arbitrum One and Nova. ArbOS 61 activated on 2026-08-20 at 17:00 UTC, so programs had 43 days to move to version 3. The pause notice, the ArbOS 61 release notes, the Stylus introduction and the forum proposal say what the finding reports. The last post of the forum thread, by the authors on 2026-11-18, says they will integrate feedback before taking the proposal further, and the first post says protocol-level activation controls and the ability to deactivate a Stylus contract are planned for a later ArbOS proposal. I also measured exposure. The PoolManager on Arbitrum One emitted 28,689 Initialize events from block 290,000,000 to block 526,516,712, with 923 distinct hook addresses and 9,417 distinct currency addresses. None of them has code that starts with the Stylus prefix 0xeff0. No pool therefore has a Stylus program as its direct hook or currency today. This check reads the code at the hook or token address only. It does not see an EVM contract that forwards to a Stylus program.",
+   "codeCheck": "callHook makes a plain call with all gas and reverts with HookCallFailed when the call fails. A call that succeeds with fewer than 32 bytes also reverts with InvalidHookResponse (src/libraries/Hooks.sol:131-155). For a negative or zero liquidityDelta, beforeModifyLiquidity calls the hook when the address has the before remove liquidity flag, and afterModifyLiquidity does so for the after remove liquidity flag (src/libraries/Hooks.sol:195-206, src/libraries/Hooks.sol:209-245). Both run inside modifyLiquidity (src/PoolManager.sol:156, src/PoolManager.sol:178). The only bypass is noSelfCall, which skips the hook when the hook itself is the caller (src/libraries/Hooks.sol:171-175, src/libraries/Hooks.sol:217). A program that cannot run cannot be the caller. Permissions come from the address bits (src/libraries/Hooks.sol:337-339) and the hook address is part of the pool identifier, so an LP cannot route around it. For a token, balanceOfSelf is a high-level call that reverts when the call fails (src/types/Currency.sol:90-96), and transfer reverts with ERC20TransferFailed (src/types/Currency.sol:54-87). sync, the ERC-20 branch of _settle and take all revert for that currency (src/PoolManager.sol:279-297, src/PoolManager.sol:358-360). Claims in that currency can still be minted, burned and transferred. test/PoolManager.t.sol and test/DynamicFees.t.sol cover a hook that reverts or returns a bad response. No test covers a hook or token whose code stops answering after pool creation.",
+   "corrections": "The mechanism and the chain facts hold. The scope needs two changes. First, no pool on Arbitrum One has a Stylus program as its direct hook or currency today, so no funds are frozen through the direct path at present. Indirect use through an EVM proxy or an EVM hook that calls a Stylus program was not checked. Second, the date the finding could not establish is 2026-10-02, 43 days after the version change. The same mechanism reaches Robinhood Chain. Its ArbWasm precompile emitted 26 ProgramActivated events between 2026-07-25 and 2026-10-02, all at version 3, and activation gas there is also 2^64-1. Those programs expire from 2027-07-25 unless someone pays keepalive, and a Stylus version change would stop them at once. On Robinhood Chain the PoolManager emitted 1,169,661 Initialize events up to block 120.6M. 411,764 of them name a hook, across 32,935 distinct hook addresses and 745,518 distinct currency addresses. None of the 26 activated program addresses is a hook or a currency of any pool. I read the code of the 1,500 most used hook addresses, which cover 377,624 of the hooked pools, and none starts with 0xeff0. I did not read the code of the remaining hooks or of the currencies, so a contract that shares its code hash with an activated program is not excluded there. The severity stays medium because the freeze is limited to pools that depend on a Stylus program and needs either a missed keepalive or a governance upgrade.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/programs/programs.go",
+     "supports": "getActiveProgram rejects a program at another Stylus version or past expiry. Keepalive needs an active program of minimum age."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/arbosState/arbosstate.go",
+     "supports": "The ArbOS 59 upgrade step calls UpgradeToVersion(3)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/programs/params.go",
+     "supports": "UpgradeToVersion(3) sets the Stylus version to 3 and requires version 2 before it."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/precompiles/ArbWasm.go",
+     "supports": "ActivateProgram burns the activation gas before activation. CodehashKeepalive does not."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_call ArbWasm 0x71 stylusVersion(), expiryDays(), keepaliveDays(), activationGas(), activateProgram(address), programVersion(address); eth_getLogs ProgramActivated on 0x71; eth_call name() on 0x2e5d89a229cbd17efb0a731d26232f88c3746aa9; queried 2026-11-22",
+     "supports": "Stylus version 3, activation gas 2^64-1, activation reverts, and a version 2 program fails with ProgramNeedsUpgrade(2, 3)."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_getLogs Initialize on PoolManager 0x360e68faccca8ca495c1b759fd9eee466db9fb32 from block 290,000,000; eth_getCode of 923 hooks and 9,417 currencies; queried 2026-11-22",
+     "supports": "No hook or currency of any pool has Stylus-prefixed code."
+    },
+    {
+     "url": "https://forum.arbitrum.foundation/t/security-council-emergency-action-2-10-2026/31530",
+     "supports": "The Security Council raised the activation gas to 2^64 - 1 on Arbitrum One and Nova on 2026-10-02."
+    },
+    {
+     "url": "https://docs.arbitrum.io/notices/stylus-activation-pause-notice",
+     "supports": "New activations and reactivation of expired programs are paused. Active programs run until expiry and can be renewed with keepalive."
+    },
+    {
+     "url": "https://docs.arbitrum.io/run-a-node/arbos-releases/arbos61",
+     "supports": "ArbOS 61 activated on Arbitrum One on 2026-08-20 at 17:00 UTC and removed WASM multi-value support."
+    },
+    {
+     "url": "https://docs.arbitrum.io/stylus/gentle-introduction",
+     "supports": "Stylus contracts must be reactivated once per 365 days or after any Stylus upgrade, and otherwise become uncallable."
+    },
+    {
+     "url": "https://forum.arbitrum.foundation/t/constitutional-aip-stylus-activation-contract/31605",
+     "supports": "The proposal of 2026-10-23 to reopen activation through an Arbitrum Foundation signature, the pause date of 2026-10-02, the planned deactivation ability, and the authors' update of 2026-11-18."
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com eth_getLogs on ArbWasm 0x71 from block 0 to head; queried 2026-11-22",
+     "supports": "26 ProgramActivated events on Robinhood Chain between 2026-07-25 and 2026-10-02, all at version 3."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "A1: whether an unlock flag, a currency delta or a synced currency can survive from one transaction into another through Nitro's extra transaction types (deposits, internal transactions, retryable submission, auto-redeems, manual redeems).",
+   "agrees": true,
+   "note": "I read core/state_transition.go and core/state/statedb.go of the Offchain Labs go-ethereum fork on master and arbos/block_processor.go at Nitro v3.11.3. execute() runs StartTxHook first and returns at once when the hook ends the transaction, so deposit, internal and submit-retryable transactions run no contract code. Every other transaction reaches StateDB.Prepare, which replaces the transient storage map, before RevertedTxHook and before evm.Call. Scheduled redeems are appended to a queue and processed as the next transactions, each through the same path. The transient slots in src/libraries/Lock.sol:10-27, src/libraries/CurrencyDelta.sol:28-41, src/libraries/CurrencyReserves.sol:15-38 and src/libraries/NonzeroDeltaCount.sol:12-34 are therefore empty at the start of every transaction that runs code. The caveat in the cleared item stands: the fork was read on master and the pinned commit of v3.13.0-rc.9 was not."
+  },
+  {
+   "check": "Permissionless collect on the fee controller contracts 0x6b3c04567cc62fc5d6ab8d50f1bc1dee161eb2cc and 0x6d0009504d129cf5002dba61d9ae8575aa79314c, including a call made inside an unlock.",
+   "agrees": true,
+   "note": "On Arbitrum One an eth_call of collect((address,uint256)[]) from an arbitrary sender succeeds, a direct collectProtocolFees from that sender reverts with InvalidCaller (selector 0x48f5c3ed), and setProtocolFeeController reverts with UNAUTHORIZED. The controller reports TOKEN_JAR 0x95e337c5b155385945d407f5396387d0c2a3a263 and owner and feeSetter equal to the alias. On Robinhood Chain the same three calls give the same results, with TOKEN_JAR 0x2ac03e14cfe755426daaee0a4994184ce81482f8. That closes the simulation the cleared item left open. In src/ProtocolFees.sol:44-57 the amount comes off protocolFeesAccrued with a checked subtraction and a synced ERC-20 is refused. Accrual happens in _swap from the fee part of the input amount (src/PoolManager.sol:238, src/libraries/Pool.sol:385-398), so a collection inside an unlock pays out only what the swapper must still settle before unlock returns (src/PoolManager.sol:112). The function never reads the lock: _isUnlocked is declared at src/ProtocolFees.sol:60 and has no caller. The tests at test/PoolManager.t.sol:1001-1037 expect ProtocolFeeCurrencySynced in both the locked and the unlocked state, so code and tests agree and the wording of A12 in ASSUMPTIONS.md is looser than the code. I found no gain from collecting inside an unlock."
+  },
+  {
+   "check": "A3 and A4: whether any ArbOS precompile can serve as an ERC-20 face of the native asset or as a currency whose transfer succeeds without moving anything.",
+   "agrees": true,
+   "note": "I repeated the calls from the PoolManager address on Arbitrum One and Elysium for 0x64 to 0x75, 0xc8, 0xc9 and 0xff. I ran the same calls on Robinhood Chain with the same results. Every address that holds the precompile marker code reverts on balanceOf and on transfer. One detail in the cleared text is wrong: 0x6a holds no code on these chains, so both calls return success with empty data there. That makes 0x6a an ordinary empty address. sync decodes a 32 byte return value (src/types/Currency.sol:94) and reverts on empty data, so no balance can be credited in that currency, and a take would succeed while moving nothing and leave the taker with a debt it cannot settle (src/PoolManager.sol:291-297, src/PoolManager.sol:112). The conclusion of the cleared item holds."
+  },
+  {
+   "check": "A7 and A4: Stylus programs as hooks or tokens on Robinhood Chain and Elysium.",
+   "agrees": false,
+   "note": "The item left open whether any program was activated before activation gas was raised. On Elysium the ArbWasm precompile has emitted no log, so the item holds there. On Robinhood Chain it emitted 26 ProgramActivated events between 2026-07-25 and 2026-10-02, all at Stylus version 3. Those programs answer calls today, cannot be reactivated by an unprivileged caller, and stop answering after 365 days without keepalive or after a Stylus version change. The Arbitrum One Stylus finding therefore applies to chain 4663 as a future hazard. On Robinhood Chain the PoolManager emitted 1,169,661 Initialize events up to block 120.6M. 411,764 of them name a hook, across 32,935 distinct hook addresses and 745,518 distinct currency addresses. None of the 26 activated program addresses is a hook or a currency of any pool. I read the code of the 1,500 most used hook addresses, which cover 377,624 of the hooked pools, and none starts with 0xeff0. I did not read the code of the remaining hooks or of the currencies, so a contract that shares its code hash with an activated program is not excluded there."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "question": "Which hooks or tokens used by v4 pools are EVM contracts that forward to a Stylus program, for example a proxy whose implementation has code starting with 0xeff0 or a Solidity hook that calls a Stylus library?",
+   "why": "My scan read only the code at the hook and currency addresses and found no Stylus program on Arbitrum One. An indirect dependency fails the same way when the program expires or needs a newer Stylus version, and activation is closed on both chains.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "question": "Who operates the stock token role accounts 0xcd8c6182e7c6ca3b5156d6a90a67719d7e2be094 (beacon upgrader), 0x957b6de6525c63349f7619743ef1e0ad93cd74d4 (admin burner), 0x913ca87347391218e5de2c17c5a0aeba8b0b28fd (blocker) and 0xe7bcb188254bc6ebbff63014dfed4cd4a024f22a (pauser), and is any of the 247 blocked accounts a contract that pools or routers pay out to?",
+   "why": "Each account has no code, so one signature can upgrade every stock token, burn the PoolManager balance, block the PoolManager or pause all transfers with no delay. A blocked recipient makes a take of a stock token revert for that caller.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "question": "In the USDG facet 0x58cab81e3d8468a0e90df8cbfacb34535e1de942, what do wipeFrozenAddress and the claim functions do, is the PoolManager registered in a payout group, and can any payout group name the PoolManager as claim destination?",
+   "why": "USDG is a claimable rewards token. A claim credits the destination from the claim source without a call by the destination. A credit to the PoolManager between sync and settle of one transaction would be booked to whoever settles (src/PoolManager.sol:358-364). I read the main logic and found the destination is set by a Paxos role, and I did not read the facet.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L1",
+   "question": "Do any contracts on Robinhood Chain share a code hash with the 26 activated Stylus programs, and what does ArbWasm.programTimeLeft return for each?",
+   "why": "A new contract with the code of an activated program is callable without a new activation, so Stylus hooks or tokens can still appear on this chain. All of them stop answering together when the activation expires from 2027-07-25 or when the Stylus version changes.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L1",
+   "question": "What liquidity sits in the Arbitrum One pool whose hook 0xa853180523bd16fa6a9c449ab050e108da642488 is an EIP-7702 delegated account, and who holds that account?",
+   "why": "The holder can change or clear the delegation at any time, which changes the hook code after pool creation (A7). The address has the before swap, before swap returns delta, after add liquidity and before initialize flags and no remove liquidity flag, so swaps and additions depend on the holder and removals do not. Six other hook addresses and 13 currency addresses used by pools on this chain hold no code. None of those hooks has a remove liquidity flag.",
+   "priority": "low"
+  }
+ ]
+}

@@ -1,0 +1,234 @@
+{
+ "unit": "op-stack-custom-gas",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "I fetched the celo-kona precompile source. The transfer precompile sits at 0xff minus 2, which is 0xfd. It halts unless the caller equals the chain's CELO token address, then reads from, to and value from a 96 byte input and calls the internal transfer between those two accounts. Nothing ties from to the account that called the token. The former op-geth client does the same in celo_contracts.go: IsCallerCeloToken, then a transfer between the decoded from and to. The Celo token duality page says the precompile changes balances in the state database and can only be called by the CELO token. On chain at Celo block 83,451,124: _getOwner() on 0x471EcE3750Da237f93B8E339c536989b8978a438 returns 0xD533Ca259b330c7A88f74E000a3FaEa2d63B7972, and the registry at 0x000000000000000000000000000000000000ce10 returns that address for Governance and the token address for GoldToken and CeloToken. _getImplementation() returns 0xFeA1B35f1D5f2A58532a70e7A32e6F2D3Bc4F7B1 and getVersionNumber() returns 1, 2, 0, 0. eth_getBalance of the PoolManager and CELO.balanceOf(PoolManager) both return 6166941836241617055206 wei. An eth_call of _setImplementation from Governance returns and the same call from 0xA1 reverts with 'sender was not owner'. An eth_call to 0xfd with input (PoolManager, 0xA1, 1) succeeds when the caller is the token address and fails with a precompile error when the caller is 0x01. The GoldToken source on the monorepo master branch passes msg.sender in transfer and an allowance checked from in transferFrom. That source reports version 1.3.0.0 and the deployed implementation reports 1.2.0.0, so I could not match the deployed code line by line. Governance.stageDurations() returns 86,400, 604,800 and 259,200 seconds. Proposals.sol on master declares the struct fields in the order approval, referendum, execution, which settles the reading the researcher left open. hotfixExecutionTimeWindow() returns 86,400. In Governance.sol approveHotfix accepts the approver or the Security Council, prepareHotfix requires both approvals, and executeHotfix requires both and an unexpired time limit. No referendum is involved. approver() is a contract whose required() returns 3 and whose getOwners() returns 14 addresses. securityCouncil() is 0x51a3a77bAF58FEf0309452ceacB09221E556F223, which has no code on Celo and equals the Ethereum Safe 0x4092A77bAF58fef0309452cEaCb09221e556E112 plus the alias offset. That Safe has threshold 2 and two owners, each a Safe with threshold 6 and 8 owners.",
+   "codeCheck": "balanceOfSelf returns address(this).balance for address(0) and token.balanceOf(address(this)) for any other currency (src/types/Currency.sol:90-96). On Celo both expressions read the same number, so pools on address(0) and pools on the CELO token share one balance. take debits the caller's delta and then calls transfer (src/PoolManager.sol:291-297). The native branch is a call with value that reverts with NativeTransferFailed when it fails (src/types/Currency.sol:45-53), so after an outside debit takes succeed until the balance runs out and later ones revert. The token branch calls transfer(address,uint256) on the currency and reverts with ERC20TransferFailed on failure (src/types/Currency.sol:55-86), so an implementation whose transfer reverts blocks every take of the token currency. sync on the token calls balanceOf (src/PoolManager.sol:279-288). I looked for a guard and found none. The contract has no receive or fallback function and the only payable functions are settle and settleFor (src/PoolManager.sol:300 and 305). Nothing in src/ compares the balance with pool accounting outside the sync and settle pair. The delta count check at the end of unlock (src/PoolManager.sol:112) covers one transaction and cannot see a debit made by another contract. I also looked for an unprivileged route to the same debit. The PoolManager calls only transfer and balanceOf on a currency, so it never grants a token allowance and transferFrom cannot debit it. The token address cannot be used as a hook: its low 14 bits are 0x2438, which sets the before swap returns delta flag without the before swap flag, and isValidHookAddress rejects that (src/libraries/Hooks.sol:111). test/Sync.t.sol:255-276 covers a settle with value while a NativeERC20 is synced. No test models a third party debit of the manager's native balance or a change of token implementation.",
+   "corrections": "1. The impact is wider than stated for pools that list the CELO token as a currency. A replaced implementation could report a larger balanceOf between sync and settle. _settle credits the difference to the caller (src/PoolManager.sol:349-364), and the caller can swap that credit for the paired currency in every pool that lists the CELO token and take it out. The statement that other tokens are not reachable holds for the precompile debit alone. Pools on address(0) are exposed to the precompile debit alone. 2. The hotfix path needs 3 of 14 approver signers and the Security Council. The Security Council address is the alias of the Ethereum Safe that also owns Celo's ProxyAdmin on both layers, so one signer set sits in the predeploy upgrade path and in the CELO token hotfix path. 3. If transfer reverts, an LP in a CELO token pool can still turn a positive delta into ERC-6909 claims with mint (src/PoolManager.sol:322-329), which makes no token call. The claim stays inside the PoolManager, so this is bookkeeping and gives no exit. 4. The balance was 6,166.94 CELO at my read against 6,167.7 in the finding. 5. Severity stays high because the actor is chain governance. The exposure today is small and is shared by every CELO holder.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/precompiles/transfer.rs",
+     "supports": "Caller must be the CELO token. from, to and value come from the input and the transfer is applied between them."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/op-geth/HEAD/core/vm/celo_contracts.go",
+     "supports": "Same rule in the former client, at address 0xfd."
+    },
+    {
+     "url": "https://docs.celo.org/operate/specification/token-duality.md",
+     "supports": "The precompile changes balances directly and can only be called by the CELO token."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/celo-monorepo/master/packages/protocol/contracts/common/GoldToken.sol",
+     "supports": "transfer passes msg.sender and transferFrom passes an allowance checked from address to the precompile. Version 1.3.0.0 on master."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/celo-monorepo/master/packages/protocol/contracts/governance/Governance.sol",
+     "supports": "approveHotfix, prepareHotfix and executeHotfix need the approver and the Security Council and no referendum."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/celo-monorepo/master/packages/protocol/contracts/governance/Proposals.sol",
+     "supports": "StageDurations fields are approval, referendum, execution."
+    },
+    {
+     "url": "https://docs.celo.org/learn/protocol/governance/smart-contracts-upgrades.md",
+     "supports": "Core contracts owned by Governance are proxied, and the hotfix needs the approver multisig and the Security Council multisig."
+    },
+    {
+     "url": "https://forno.celo.org eth_call _getOwner(), _getImplementation(), getVersionNumber(), balanceOf(PoolManager), _setImplementation(address) from two senders on 0x471EcE3750Da237f93B8E339c536989b8978a438; getAddressForString on 0x000000000000000000000000000000000000ce10; eth_getBalance of 0x288dc841A52FCA2707c6947B3A777c5E56cd87BC; eth_call to 0x00000000000000000000000000000000000000fd from two senders",
+     "supports": "Owner is Governance, native and token balance are equal, the implementation setter is owner only, and the precompile accepts the token as caller with the PoolManager as from."
+    },
+    {
+     "url": "https://forno.celo.org eth_call stageDurations(), hotfixExecutionTimeWindow(), approver(), securityCouncil() on 0xD533Ca259b330c7A88f74E000a3FaEa2d63B7972; required(), getOwners() on 0x41822d8a191fcfb1cfca5f7048818acd8ee933d3",
+     "supports": "Stage durations, hotfix window, a 3 of 14 approver and the Security Council address."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com eth_call getThreshold(), getOwners() on 0x4092A77bAF58fef0309452cEaCb09221e556E112 and on its two owners",
+     "supports": "The unaliased Security Council is a 2 of 2 Safe of two 6 of 8 Safes."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "plausible",
+   "severity": "low",
+   "factCheck": "I fetched the four cited source files from okx/xlayer-reth. The rcs-filter crate root describes rule driven screening of every transaction in the block builder: deny transactions are excluded, audit transactions are sent to an external service and packaged once approved. In crates/builder/src/flashblocks/context.rs the candidate loop calls the bridge interceptor on the simulated logs and then the filter. On Screen::Deny and Screen::Drop it marks the transaction invalid and removes it from the transaction pool. On Screen::AuditPending it marks it invalid for this block and keeps it. Capture failures such as an exceeded observation budget also map to deny. The sequencer transaction loop states that a deposit is consensus mandated and that the identification result goes to a metric and a log only. The intercept crate blocks transactions whose logs carry a BridgeEvent from the configured bridge contract, for all tokens or for one. The node arguments define the three xlayer.intercept flags. The releases page shows v0.0.7 of 27 August with both features in its change list and a note that the release is for testnet only. v0.0.7.3 of 30 October requires a coordinated mainnet upgrade by 10 November 2026. Its change list leaves the filter out. The directories crates/rcs-filter and crates/intercept exist at the tags v0.0.7, v0.0.7.3 and v0.0.7.3-rc.1 and are absent at v0.0.6.1. FilterConfig defaults to enabled false at v0.0.7.3. The exit path holds on chain. OptimismPortal 0x64057ad1DdAc804d0D26A7275b193D9DACa19993 points to a SystemConfig whose l2ChainId() is 196, paused() is false, and an eth_call of depositTransaction with zero value from an account without code returns. The OP deposit specification says the content of a deposited transaction comes from the portal event, that an EOA sender keeps its address and that a contract sender is aliased. The X Layer documentation calls the sequencer trusted. The unconfirmed link is activation. I found no public statement, flag listing or evidence of withheld transactions that shows the mainnet sequencer runs with the filter or the interceptor enabled, or that any rule matches the PoolManager or a pooled token.",
+   "codeCheck": "Pool reserves leave through take (src/PoolManager.sol:291-297), which requires the unlocked state set inside unlock (src/PoolManager.sol:104-114). Accrued protocol fees also leave through collectProtocolFees, which only the controller can call (src/ProtocolFees.sol:44-56). The contract has no path that bypasses transaction inclusion, so a builder that drops matching transactions stops these calls for as long as the rule applies. The code has no dependence on time or block number, so a delayed exit loses nothing through the code itself. Positions are stored under msg.sender (src/PoolManager.sol:161), so an exit through an L1 deposit must arrive from the same L2 address that owns the position. An EOA keeps its address in a deposit. A position held through a contract needs a caller that the contract accepts and that can be reproduced from L1. No test in test/ concerns transaction inclusion.",
+   "corrections": "1. Severity lowered from medium to low. The filter is off by default, activation on mainnet is not shown, and EOAs keep an exit through an L1 deposit. A trusted sequencer can also leave transactions out without this component, so the filter changes how selective exclusion is run and adds little to who can do it. The same treatment was given to the Soneium restriction list in this cycle. If activation with a rule that matches the PoolManager is shown, medium applies. 2. The statement that funds leave only through take omits collectProtocolFees. 3. With the filter enabled, a transaction can be denied without any rule: an exceeded observation budget and any capture inconsistency fail closed. The native transfer budget defaults to 10,000 per transaction.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/rcs-filter/src/lib.rs",
+     "supports": "Rule driven screening in the block builder with deny, audit and allow outcomes."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/builder/src/flashblocks/context.rs",
+     "supports": "Deny and drop remove the transaction from the pool, audit pending holds it, capture failures deny, deposits are only reported."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/intercept/src/lib.rs",
+     "supports": "Bridge interceptor blocks on BridgeEvent logs from the configured contract."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/bin/node/src/args.rs",
+     "supports": "The xlayer.intercept flags."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3/crates/rcs-filter/src/config.rs",
+     "supports": "The filter crate is present at the mainnet release tag and FilterConfig defaults to enabled false."
+    },
+    {
+     "url": "https://github.com/okx/xlayer-reth/releases",
+     "supports": "v0.0.7 lists both features and is marked testnet only. v0.0.7.3 requires a mainnet upgrade by 10 November 2026."
+    },
+    {
+     "url": "https://specs.optimism.io/protocol/deposits.html",
+     "supports": "Deposit content comes from the portal event, EOA senders keep their address, contract senders are aliased."
+    },
+    {
+     "url": "https://web3.okx.com/onchainos/dev-docs/xlayer/developer/build-on-xlayer/about-xlayer",
+     "supports": "The sequencer is trusted."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com eth_call paused(), systemConfig(), depositTransaction(address,uint256,uint64,bool,bytes) on 0x64057ad1DdAc804d0D26A7275b193D9DACa19993; l2ChainId(), isCustomGasToken() on 0x5065809af286321a05fbf85713b5d5de7c8f0433",
+     "supports": "The portal belongs to chain 196, is not paused and accepts a zero value deposit in simulation."
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "On chain between Celo blocks 83,451,124 and 83,451,639: 0x4200000000000000000000000000000000000006 has 2,846 bytes of code and returns name 'Wrapped Ether', symbol 'WETH', 18 decimals and version 1.1.0-beta.3. totalSupply() and the contract's native balance are both 143112547216520198 wei. An eth_call of deposit() with 1 CELO of value returns. The L1Block predeploy returns false for isCustomGasToken() and 'Ether' and 'ETH' for the gas paying token name and symbol. 0xD221812de1BD094f35587EE8E174B07B6167D9Af returns name 'Wrapped Ether (Celo native bridge)', remoteToken 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2 and bridge 0x4200000000000000000000000000000000000010. Its supply is 756.36 and the PoolManager holds 0.0066 of it. The PoolManager holds none of the predeploy token. The Celo native bridge page says native ETH bridging is not supported and WETH is bridged as a standard ERC-20. I also checked the Uniswap periphery on Celo. PositionManager.WETH9() returns the CELO token 0x471EcE3750Da237f93B8E339c536989b8978a438. The runtime code of the PositionManager and of the first Universal Router contains the CELO token address. None of the PositionManager, the three routers or the PositionDescriptor contains the predeploy address or the bridged WETH address.",
+   "codeCheck": "initialize checks tick spacing, currency order and the hook address and reads nothing from the currencies (src/PoolManager.sol:117-142). Balances come from balanceOf alone (src/types/Currency.sol:90-96). Core therefore treats the predeploy as an ordinary ERC-20 and accounts for it correctly. The predeploy holds its own native balance, and balanceOf(PoolManager) on it returns 0 while the PoolManager holds 6,166 CELO, so it is a separate token and does not act as a second face of the manager's native balance under A3. The loss path sits outside the code: someone must value the token as ETH when setting a pool price or a route. No test applies.",
+   "corrections": "1. Severity lowered from medium to low. No path in the PoolManager mishandles the token. A loss needs an LP or an integration to price a CELO backed token as ETH. The PoolManager holds none of it, its whole supply is 0.143 CELO, and the deployed Uniswap periphery on Celo does not reference it. 2. The finding does not say which wrapped native address the periphery uses. PositionManager reports the CELO token itself as WETH9, which is a different question and is listed as a lead.",
+   "sources": [
+    {
+     "url": "https://forno.celo.org eth_call name(), symbol(), decimals(), version(), totalSupply(), balanceOf(PoolManager), deposit() with value on 0x4200000000000000000000000000000000000006; eth_getBalance and eth_getCode of the same address",
+     "supports": "The predeploy is labelled Wrapped Ether and WETH, wraps native CELO one for one, and the PoolManager holds none."
+    },
+    {
+     "url": "https://forno.celo.org eth_call isCustomGasToken(), gasPayingTokenName(), gasPayingTokenSymbol() on 0x4200000000000000000000000000000000000015",
+     "supports": "L1Block reports false, Ether and ETH."
+    },
+    {
+     "url": "https://forno.celo.org eth_call name(), remoteToken(), bridge(), totalSupply(), balanceOf(PoolManager) on 0xD221812de1BD094f35587EE8E174B07B6167D9Af",
+     "supports": "The bridged WETH is a separate token backed by Ethereum WETH."
+    },
+    {
+     "url": "https://forno.celo.org eth_call WETH9() on 0xf7965f3981e4d5bc383bfbcb61501763e9068ca9; eth_getCode of the PositionManager, three Universal Routers and the PositionDescriptor",
+     "supports": "The periphery references the CELO token and does not contain the predeploy address."
+    },
+    {
+     "url": "https://docs.celo.org/operate/specification/native-bridge.md",
+     "supports": "Native ETH bridging is not supported and WETH is bridged as a standard ERC-20."
+    }
+   ]
+  },
+  {
+   "findingIndex": 3,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "On both chains owner() of the PoolManager returns 0x044aAF330d7fD6AE683EEc5c1C1d1fFf5196B6b7, which has 1,488 bytes of code with the same hash on Celo and X Layer. Its l1Owner() is 0x1a9C8182C09F50C8318d769245beA52c32BE35BC and its messenger() is 0x4200000000000000000000000000000000000007. Celo Blockscout serves verified source for it: forward requires msg.sender to be the messenger and xDomainMessageSender() to equal l1Owner, then calls the target. protocolFeeController() is the zero address on both chains. The EIP-1967 admin slot of the messenger predeploy holds 0x4200000000000000000000000000000000000018 on both chains and the implementation slot is set. On X Layer the ProxyAdmin owner is 0xC290be56089bCC83C6993583ce2cF51a7951D45A, a Safe with threshold 2 and three owners that have no code. On Celo the ProxyAdmin owner is 0x51a3a77bAF58FEf0309452ceacB09221E556F223, which has no code and unaliases to the Ethereum Safe 0x4092A77bAF58fef0309452cEaCb09221e556E112 with threshold 2 and two owners, each a 6 of 8 Safe. The Upgrade 19 notice describes the L2 Contract Manager as a consensus layer mechanism for predeploy upgrades. An eth_call with the CLZ opcode fails as not activated on both chains, so the Osaka rules that come with Karst are not active on either.",
+   "codeCheck": "setProtocolFeeController is owner only (src/ProtocolFees.sol:29-32) and no other function in src/ uses onlyOwner. setProtocolFee and collectProtocolFees accept only the controller (src/ProtocolFees.sol:36 and 48). isValidProtocolFee caps each direction at 1,000 pips (src/libraries/ProtocolFeeLibrary.sol:8 and 25-32), and Slot0 masks the stored value to 24 bits (src/types/Slot0.sol:78-86). Pool.swap takes the protocol share out of the fee the swapper paid in each step (src/libraries/Pool.sol:385-398), with the step fee computed in src/libraries/SwapMath.sol:63-105, so the share cannot exceed the fee paid. protocolFeesAccrued grows only in _swap (src/PoolManager.sol:238, src/ProtocolFees.sol:66-70) and collectProtocolFees subtracts with checked arithmetic before the transfer (src/ProtocolFees.sol:54-56). The owner and the controller reach accrued protocol fees and a levy of at most 0.1 percent per direction on later swaps. They do not reach pool reserves or ERC-6909 claims. lib/solmate is empty in this checkout, so Owned could not be read here. I tested the deployed contracts instead: an eth_call of transferOwnership(address) from the owner contract returns on both chains and the same call from another sender reverts with UNAUTHORIZED, as does setProtocolFeeController. The synced currency guard is covered by test/PoolManager.t.sol:1001-1039.",
+   "corrections": "1. Severity raised from low to medium. Low requires that no direct loss path was found. This finding has one: whoever controls the messenger can appoint a controller, add up to 0.1 percent per direction to every later swap and take what accrues. The actor is a chain level upgrade authority and the reach is capped at protocol fees. The same finding on the ETH gas OP Stack chains was set to medium in this cycle. 2. The owner role includes transferOwnership on the deployed contracts. A forged message can move ownership to another address, after which Uniswap governance cannot undo the change through the messenger. The finding says governance can undo it. 3. The guard in collectProtocolFees checks the synced currency and skips address(0). It does not check the lock state (src/ProtocolFees.sol:49). On Celo a native fee collection is therefore allowed while the CELO token is synced, which the research file already lists as a lead. 4. The same signers hold wider powers than the finding covers. On X Layer the proxy admin of the L1 OptimismPortal is owned by a Safe at the same address on Ethereum with threshold 2 and the same three owners, and the SystemConfig owner is one of those three accounts acting alone. On Celo the Security Council in the governance hotfix path is the same aliased Safe that owns the ProxyAdmin. The portal route is listed as a lead. 5. Accrued fees were checked for native CELO and the CELO token on Celo, where both are zero. Other currencies and X Layer were not checked.",
+   "sources": [
+    {
+     "url": "https://celo.blockscout.com/api/v2/smart-contracts/0x044aaf330d7fd6ae683eec5c1c1d1fff5196b6b7",
+     "supports": "Verified CrossChainAccount source and constructor arguments on Celo."
+    },
+    {
+     "url": "https://rpc.xlayer.tech eth_call owner(), protocolFeeController(), transferOwnership(address), setProtocolFeeController(address) on 0x360e68faccca8ca495c1b759fd9eee466db9fb32; l1Owner(), messenger() and eth_getCode on 0x044aAF330d7fD6AE683EEc5c1C1d1fFf5196B6b7; eth_getStorageAt admin and implementation slots of 0x4200000000000000000000000000000000000007; owner() on 0x4200000000000000000000000000000000000018; getThreshold(), getOwners() on 0xC290be56089bCC83C6993583ce2cF51a7951D45A; eth_getCode per owner",
+     "supports": "Owner chain, zero controller, owner only functions and a 2 of 3 Safe of accounts without code behind the messenger on X Layer."
+    },
+    {
+     "url": "https://forno.celo.org eth_call owner(), protocolFeeController(), protocolFeesAccrued(address), transferOwnership(address), setProtocolFeeController(address) on 0x288dc841A52FCA2707c6947B3A777c5E56cd87BC; l1Owner(), messenger() on the owner; eth_getStorageAt admin slot of 0x4200000000000000000000000000000000000007; owner() on 0x4200000000000000000000000000000000000018",
+     "supports": "Same owner contract on Celo and a ProxyAdmin owner of 0x51a3a77bAF58FEf0309452ceacB09221E556F223."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com eth_call getThreshold(), getOwners() on 0x4092A77bAF58fef0309452cEaCb09221e556E112 and its two owners; eth_getStorageAt admin slot of 0x64057ad1DdAc804d0D26A7275b193D9DACa19993; owner() on 0x313ce9cec2070b519f13bdafe07eabb4f215fee6; getThreshold(), getOwners() on 0xC290be56089bCC83C6993583ce2cF51a7951D45A; owner() on 0x5065809af286321a05fbf85713b5d5de7c8f0433",
+     "supports": "Celo's unaliased admin is a 2 of 2 Safe of two 6 of 8 Safes. The X Layer portal proxy admin is owned by a 2 of 3 Safe on Ethereum and the SystemConfig owner is an account without code."
+    },
+    {
+     "url": "https://docs.optimism.io/notices/archive/upgrade-19",
+     "supports": "Karst introduces the L2 Contract Manager for predeploy upgrades and the EIP-7825 gas cap."
+    },
+    {
+     "url": "https://forno.celo.org and https://rpc.xlayer.tech eth_call with init code 0x60011e5f5260205ff3",
+     "supports": "The CLZ opcode is not activated on either chain."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Whether the ERC-20 face of native CELO lets a caller be credited twice for one payment: once as msg.value under currency address(0) and once as a balance increase under the CELO token currency (A3).",
+   "agrees": true,
+   "note": "I traced every order of calls. A native credit arises only in _settle when the synced currency slot is zero, where paid equals msg.value (src/PoolManager.sol:353-354). A token credit equals balanceOf now minus the snapshot taken by the latest sync of the CELO token (src/PoolManager.sol:285-286 and 358-360). settle and settleFor are the only payable functions (src/PoolManager.sol:300 and 305) and the contract has no receive or fallback function, so value can enter with a credit only through them. While the CELO token is synced they revert on msg.value (src/PoolManager.sol:356). A native settle before the sync is already inside the snapshot. sync(address(0)) clears the currency slot (src/PoolManager.sol:281-283), and the slot can be set again only together with a fresh snapshot (src/libraries/CurrencyReserves.sol:27-32), so an old snapshot cannot be revived after a native settle. Each wei is credited once. test/Sync.t.sol:255-276 covers the revert with a NativeERC20. On chain the two balances of the PoolManager are equal, so the dual face is live and the check matters."
+  },
+  {
+   "check": "Whether take under one CELO face followed by repayment under the other face nets to a gain, and whether a balance drop between sync and settle can be turned into credit.",
+   "agrees": true,
+   "note": "Deltas are stored per account and per currency address (src/libraries/CurrencyDelta.sol:10-16), so a take under one face and a credit under the other leave two nonzero deltas and unlock reverts (src/PoolManager.sol:112). I tried take under address(0) before a sync of the token, followed by a token transfer back and settle: the result is a negative native delta and an equal positive token delta, and clearing either still requires paying the other. The subtraction at src/PoolManager.sol:360 is checked. One detail in the result needs a qualifier: a drop that is smaller than the amount paid in does not revert. It lowers the credit of the settler by the drop. That is a loss to the settler and gives no gain to the party that caused the drop. On Celo such a drop can come from a native take by nested code or from a native protocol fee collection, because the guard at src/ProtocolFees.sol:49 skips address(0). The research file lists the fee collection case as a lead."
+  },
+  {
+   "check": "Whether the fee currency functions debitGasFees and creditGasFees, which the client calls with msg.sender address(0), can lower the PoolManager's token balances outside a take (A2).",
+   "agrees": true,
+   "note": "op-geth core/celo_state_transition.go calls DebitFees with st.msg.From as the debited account, and core/vm/celo_evm.go makes the call with the zero address as caller and the fee currency as target. celo-kona rejects a fee currency that is not registered. FeeCurrencyDirectory at 0x15f344b9e6c3cb6f0376a36a64928b13f62c6276 returns 20 currencies and the PoolManager is not among them. I ran eth_call debitGasFees(PoolManager, 1) from 0xA1 on all 20: 19 revert with 'Only VM can call' and the USDC adapter reverts with 'caller is not VM'. The PoolManager has code, so it cannot be a transaction sender. The debit cannot name the PoolManager."
+  },
+  {
+   "check": "Whether a call can reach the PoolManager with msg.sender equal to address(0), which is the current protocolFeeController on both chains (A12, A8).",
+   "agrees": true,
+   "note": "For Celo I agree. The client calls only the fee currency with the zero address as caller, and the PoolManager is not a registered fee currency. Even if Governance registered it, the client would call debitGasFees and creditGasFees, which the PoolManager does not implement, and it has no fallback function, so the call would revert. For X Layer the caller of the gasless whitelist check was not confirmed by the researcher or by me. The builder source describes it as an uncommitted system call, which would rule out a state change. One route is not covered by this check on either chain: the deposit sender is taken from the event emitted by the L1 portal, so whoever can upgrade the portal can choose any sender, including the zero address. I list that as a lead."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L5",
+   "priority": "high",
+   "question": "Can the holders of the X Layer L1 upgrade authority (Safe 0xC290be56089bCC83C6993583ce2cF51a7951D45A on Ethereum, threshold 2, three owners without code, owner of the ProxyAdmin 0x313ce9cec2070b519f13bdafe07eabb4f215fee6 of OptimismPortal 0x64057ad1DdAc804d0D26A7275b193D9DACa19993) replace the portal with one that emits TransactionDeposited with an arbitrary from, and does the X Layer derivation accept such a deposit without any further check or delay?",
+   "why": "The OP deposit specification says the sender of a deposited transaction is the value in the portal event. A forged sender could call the PoolManager as the zero address, which is the current protocolFeeController, or call PositionManager as any position owner and withdraw that owner's liquidity. This would put pool reserves on X Layer within reach of two signers, which is a wider reach than the fee control described in the ownership finding. The same question applies to Celo with a 2 of 2 Safe of two 6 of 8 Safes."
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L4",
+   "priority": "medium",
+   "question": "Which tokens held by the X Layer PoolManager are OptimismMintableERC20 tokens whose bridge() is the L2StandardBridge predeploy 0x4200000000000000000000000000000000000010, and how much of each does the PoolManager hold?",
+   "why": "The admin slot of that predeploy holds the ProxyAdmin 0x4200000000000000000000000000000000000018, whose owner is the 2 of 3 Safe on X Layer. A replaced bridge could mint such tokens without backing and sell them into pools for the paired assets."
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "priority": "medium",
+   "question": "PositionManager 0xf7965f3981e4d5bc383bfbcb61501763e9068ca9 on Celo returns the CELO token 0x471EcE3750Da237f93B8E339c536989b8978a438 from WETH9(), and the first Universal Router contains the same address. How do the wrap, unwrap and sweep actions of these contracts behave when the wrapped native token has no deposit or withdraw function and its balanceOf equals the contract's native balance?",
+   "why": "This answers part of the research lead on periphery constructor arguments: the predeploy and the bridged WETH are not used. A sweep of the CELO token moves the contract's native balance, so native value left in the PositionManager or a router between actions could be taken under the token face on its way to or from the PoolManager."
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L4",
+   "priority": "low",
+   "question": "Does the deployed CELO token implementation 0xFeA1B35f1D5f2A58532a70e7A32e6F2D3Bc4F7B1 (version 1.2.0.0) match the monorepo source for transfer, transferFrom and balanceOf, and does it contain any function that passes a from address other than msg.sender or an allowance checked account to the transfer precompile?",
+   "why": "The CELO governance finding was checked against master source that reports version 1.3.0.0. A function in the deployed version that debits an arbitrary account would turn a governance only path into an unprivileged one."
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L6",
+   "priority": "low",
+   "question": "Which protocol hardfork did X Layer mainnet activate with the coordinated upgrade to xlayer-reth v0.0.7.3 and op-node xlayer/v0.1.7 that was due by 10 November 2026, and did it change transaction validity, gas rules or system calls?",
+   "why": "The v0.0.7 release notes mention support for a protocol hardfork and the same release introduced the risk control filter. The CLZ probe shows Osaka rules are not active, so the content of the fork is unknown to this review."
+  }
+ ]
+}

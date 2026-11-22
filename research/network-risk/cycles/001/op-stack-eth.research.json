@@ -1,0 +1,1841 @@
+{
+ "unit": "op-stack-eth",
+ "profiles": [
+  {
+   "chainId": 10,
+   "lens": "L1",
+   "summary": "OP Mainnet runs an OP Stack style EVM at the Osaka rule set on a reth based client. The opcodes the PoolManager bytecode uses (PUSH0, MCOPY, TLOAD, TSTORE) are present, the 24,576 byte code limit is unchanged, and the documented opcode differences touch only opcodes that src/ does not use.",
+   "deltas": [
+    {
+     "delta": "COINBASE returns the sequencer fee vault, PREVRANDAO returns the L1 value at the L1 origin block, and ORIGIN and CALLER carry an aliased address when an L1 contract sends a deposit. No file under src/ outside src/test reads block.number, block.timestamp, block.coinbase, prevrandao, basefee, chainid, blockhash or tx.origin (grep over src/ returned no matches).",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7702 delegated accounts exist on the chain (the EIP-2935 history contract at 0x0000F90827F1C53a10cb7A02335B175320002935 has 83 bytes of code, which marks the Prague rule set). Code at a delegated EOA can be repointed by its owner, so a hook at such an address can change after pool creation. Ethereum has the same property since Pectra.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "web3_clientVersion reports op-reth. An eth_call that runs init code 0x60011e5f5260205ff3 returns 255, so the CLZ opcode from EIP-7939 is live and the EVM is at the Osaka rule set.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Karst upgrade (Upgrade 19) activated a subset of Osaka on 8 July 2026 for OP, Soneium, Ink, Unichain, Mode, Metal and Zora: EIP-7825 caps a transaction at 16,777,216 gas, MODEXP and P256VERIFY are repriced, CLZ is added. Deposits are exempt from the cap. op-geth is no longer supported.",
+     "source": "https://docs.optimism.io/notices/archive/upgrade-19",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 10,
+   "lens": "L2",
+   "summary": "OP Mainnet keeps the Ethereum account model and one transaction as the unit that clears transient storage. The additions are L1 deposits with unsigned senders, address aliasing, and fee debits on the transaction sender. None of them changes the balance at the PoolManager address or leaves transient state across transactions.",
+   "deltas": [
+    {
+     "delta": "Deposited transactions (type 0x7E) come from L1 without a signature. The from balance is increased by the mint amount before execution and the mint stays when execution fails. The credit goes to the from address only, so it cannot raise the PoolManager balance unless the PoolManager address is the depositor.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "When an L1 contract deposits, the L2 sender is the L1 address plus 0x1111000000000000000000000000000000001111. An EOA or an EIP-7702 delegated account is not aliased. Deltas and ERC-6909 balances are indexed by msg.sender, so an L1 contract acts on L2 under its alias.",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "low"
+    },
+    {
+     "delta": "Every block starts with an L1 attributes deposit from 0xdeaddeaddeaddeaddeaddeaddeaddeaddead0001 to the L1Block predeploy. It is a separate transaction and does not call the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The L1 data fee and the operator fee are deducted from the transaction sender outside normal gas accounting and credited to fee vault predeploys. The PoolManager is a contract and is never a transaction sender.",
+     "source": "https://docs.optimism.io/op-stack/transactions/fees",
+     "relevance": "none"
+    },
+    {
+     "delta": "Transient storage: the deposit spec says a deposit is processed like an EIP-1559 transaction apart from fee, nonce and signature handling, and names no change to transient storage. eth_call exttload on the PoolManager for the synced currency slot and the unlock slot returns zero at the start of execution. No batching of several signed transactions into one execution context was found in the protocol documents.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "none"
+    },
+    {
+     "delta": "Planned, not active: the Lagoon upgrade adds a post-execution transaction (type 0x7D) through which the sequencer credits a gas refund to tx.from and debits the fee vaults after a transaction's EVM frame ends. Deposits get no refund. Activation status is given in the L6 profile.",
+     "source": "https://specs.optimism.io/protocol/lagoon/sdm.html",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 10,
+   "lens": "L3",
+   "summary": "OP Mainnet pays gas in ETH and has no fee payment in tokens. WETH is an ordinary non proxied predeploy. The legacy ERC-20 view of ETH still has code and mirrors the native balance, but it cannot transfer. The largest hazard under this lens is issuer control over pooled stablecoins.",
+   "deltas": [
+    {
+     "delta": "The gas token is ETH with 18 decimals. L1Block.isCustomGasToken() returns false and gasPayingToken() returns 0xEeee…EEeE with 18 decimals.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "none"
+    },
+    {
+     "delta": "WETH is a predeploy at 0x4200000000000000000000000000000000000006 with 2041 bytes of code. Its EIP-1967 implementation and admin slots are zero, and the predeploy spec lists it as not proxied. WETH and native ETH are two separate balances at the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The latest block reports a gas limit of 40,000,000. Liquidity removal in src/libraries/Pool.sol:146-238 updates two ticks and has no loop, so its gas does not grow with pool state.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "LegacyERC20ETH has 3,671 bytes of code at 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000. balanceOf(PoolManager) returns the PoolManager's native ETH balance, totalSupply returns 0, and transfer reverts with 'LegacyERC20ETH: transfer is disabled'. eth_call PoolManager.sync(LegacyERC20ETH) succeeds. ETH therefore has a second, read only ERC-20 face on this chain.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "EIP-7825 caps one transaction at 16,777,216 gas since Karst. Deposits are exempt and are bounded by 20,000,000 gas per L1 block.",
+     "source": "https://docs.optimism.io/op-stack/features/osaka-on-l2",
+     "relevance": "low"
+    },
+    {
+     "delta": "USDC at 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85 has a blacklister (0x551e855b7355c98534175879a300972856c04d7c) and a pauser. The PoolManager holds about 323,556 USDC and isBlacklisted(PoolManager) is false.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "high"
+    },
+    {
+     "delta": "The OP governance token is a non proxied predeploy at 0x4200000000000000000000000000000000000042 with 16,528 bytes of code. The explorer API lists about 848,800 OP at the PoolManager. Its mint and vote logic was not read in this cycle.",
+     "source": "https://explorer.optimism.io/api/v2/addresses/0x9a13f98cb987694c9f086b1f5eb990eea8264ec3/tokens?type=ERC-20",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 10,
+   "lens": "L4",
+   "summary": "The system contracts on OP Mainnet that could affect pooled assets are the upgradeable predeploy proxies, above all L2CrossDomainMessenger and L2StandardBridge, which are controlled by the aliased L1 upgrade multisig. No predeploy can move ETH or tokens out of the PoolManager under its current code.",
+   "deltas": [
+    {
+     "delta": "Proxies sit at the predeploy addresses 0x4200…0000 to 0x4200…07ff. Their admin slot is the ProxyAdmin predeploy 0x4200000000000000000000000000000000000018, and ProxyAdmin.owner() returns 0x6b1bae59d09fccbddb6c6cceb07b7279367c4e3b, the alias of 0x5a0Aae59D09fccBdDb6C6CcEB07B7279367C3d2A, which the Optimism docs describe as a 2-of-2 Safe of the Optimism Foundation and the Security Council. That owner can replace the code behind L2CrossDomainMessenger, L2StandardBridge and the other proxied predeploys.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "The slots for CrossL2Inbox (0x…22), L2ToL2CrossDomainMessenger (0x…23), SuperchainETHBridge (0x…24), ETHLiquidity (0x…25) and SuperchainTokenBridge (0x…28) hold proxy code with a zero EIP-1967 implementation. Interop token bridging is not active.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "none"
+    },
+    {
+     "delta": "Fee vault predeploys receive base fees, priority fees and L1 fees, and L2ToL1MessagePasser accumulates withdrawn ETH. None of them can debit another account.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "L2StandardBridge can mint and burn tokens created by OptimismMintableERC20Factory. Bridged tokens held by the PoolManager depend on the bridge code, which the ProxyAdmin owner can upgrade.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "Since Karst, fork activation runs network upgrade deposits that call L2ProxyAdmin.upgradePredeploys from the depositor account, so predeploy code changes at hard forks without a call from the ProxyAdmin owner. The Karst bundle had 31 such transactions.",
+     "source": "https://specs.optimism.io/protocol/karst/derivation.html",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 10,
+   "lens": "L5",
+   "summary": "On OP Mainnet the PoolManager is a plain contract, not a proxy. Its owner is a CrossChainAccount that forwards calls relayed by L2CrossDomainMessenger from the Ethereum timelock. A V4FeeAdapter is the protocol fee controller and fees are accruing. Bytecode parity with this repository was not checked.",
+   "deltas": [
+    {
+     "delta": "The PoolManager is at 0x9a13f98cb987694c9f086b1f5eb990eea8264ec3 with 24,009 bytes of code (networks.json). Its EIP-1967 implementation and admin slots are zero.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "none"
+    },
+    {
+     "delta": "Bytecode parity with this repository was not established in this cycle. The review owner forbids diffing, no Solidity compiler is installed in the session, and lib/solmate, lib/forge-std and lib/openzeppelin-contracts are empty directories, so the Owned base contract imported at src/ProtocolFees.sol:9 could not be read.",
+     "source": "src/ProtocolFees.sol:9",
+     "relevance": "low"
+    },
+    {
+     "delta": "owner() returns 0xa1dd330d602c32622aa270ea73d078b803cb3518. Storage slot 0 of that contract holds 0x4200000000000000000000000000000000000007 and slot 1 holds 0x1a9C8182C09F50C8318d769245beA52c32BE35BC. The explorer shows verified source named CrossChainAccount whose forward function requires msg.sender to be the messenger and xDomainMessageSender to equal the L1 owner.",
+     "source": "https://explorer.optimism.io/api/v2/smart-contracts/0xa1dd330d602c32622aa270ea73d078b803cb3518",
+     "relevance": "low"
+    },
+    {
+     "delta": "protocolFeeController() returns 0xd85393784234fb2ee4f077867a8b78e1ad4ce56b, verified as V4FeeAdapter. Its collect and triggerFeeUpdate functions are callable by anyone, collected fees go to the fixed TOKEN_JAR 0xb13285df724ea75f3f1e9912010b7e491dcd5ee3, and its owner and feeSetter are the CrossChainAccount. protocolFeesAccrued(native) is about 0.0303 ETH.",
+     "source": "https://explorer.optimism.io/api/v2/smart-contracts/0xd85393784234fb2ee4f077867a8b78e1ad4ce56b",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 10,
+   "lens": "L6",
+   "summary": "OP Mainnet has a single sequencer with an L1 forced inclusion path that bounds censorship at about 12 hours. Core settles atomically inside one transaction, so ordering and soft finality do not open a loss path in the PoolManager itself.",
+   "deltas": [
+    {
+     "delta": "One sequencer orders transactions. Users can bypass it by calling depositTransaction on the chain's OptimismPortal on L1. Such deposits are processed in order within the sequencing window, 12 hours by default.",
+     "source": "https://docs.optimism.io/op-stack/protocol/outages",
+     "relevance": "low"
+    },
+    {
+     "delta": "During a sequencer outage of more than 30 minutes, forced deposits wait until the sequencer returns or the 12 hour window expires, and L2 state stays speculative for that time.",
+     "source": "https://docs.optimism.io/op-stack/transactions/forced-transaction",
+     "relevance": "low"
+    },
+    {
+     "delta": "Karst is active since 8 July 2026. Lagoon is listed as in development with no mainnet date. Its spec adds post-execution transactions, sequencer defined gas refunds and the interop contract set.",
+     "source": "https://docs.optimism.io/op-stack/protocol/network-upgrades",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L1",
+   "summary": "Base runs its own reth based client and its own fork schedule since Azul. The EVM is at the Osaka rule set and the PoolManager opcodes are present. The material difference is that B20 tokens and their registries execute as node precompiles at addresses with empty or one byte code.",
+   "deltas": [
+    {
+     "delta": "COINBASE returns the sequencer fee vault, PREVRANDAO returns the L1 value at the L1 origin block, and ORIGIN and CALLER carry an aliased address when an L1 contract sends a deposit. No file under src/ outside src/test reads block.number, block.timestamp, block.coinbase, prevrandao, basefee, chainid, blockhash or tx.origin (grep over src/ returned no matches).",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7702 delegated accounts exist on the chain (the EIP-2935 history contract at 0x0000F90827F1C53a10cb7A02335B175320002935 has 83 bytes of code, which marks the Prague rule set). Code at a delegated EOA can be repointed by its owner, so a hook at such an address can change after pool creation. Ethereum has the same property since Pectra.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "low"
+    },
+    {
+     "delta": "web3_clientVersion reports reth 2.5.2 with base v1.5.6. An eth_call that runs init code 0x60011e5f5260205ff3 returns 255, so the CLZ opcode from EIP-7939 is live and the EVM is at the Osaka rule set.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "low"
+    },
+    {
+     "delta": "Base left the shared OP Stack fork schedule after Jovian and ships its own upgrades: Azul (28 May 2026), Beryl (25 June 2026), Cobalt (30 September 2026), Denim (5 November 2026). Azul enforces the EIP-7825 cap of 16,777,216 gas per transaction.",
+     "source": "https://docs.base.org/upgrades",
+     "relevance": "low"
+    },
+    {
+     "delta": "B20 tokens, the B20 factory, the Policy Registry and the Activation Registry run as native precompiles in the Base node. eth_getCode at the factory 0xB20f000000000000000000000000000000000000 returns empty code while eth_call isB20 and getB20Address return data. The registries at 0x8453…0001 and 0x8453…0002 hold the single byte 0xef. This is execution outside EVM bytecode at token addresses, which assumption A4 did not plan for.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "high"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L2",
+   "summary": "Base keeps the Ethereum account model and one transaction as the unit that clears transient storage. The additions are L1 deposits with unsigned senders, address aliasing, and fee debits on the transaction sender. None of them changes the balance at the PoolManager address or leaves transient state across transactions.",
+   "deltas": [
+    {
+     "delta": "Deposited transactions (type 0x7E) come from L1 without a signature. The from balance is increased by the mint amount before execution and the mint stays when execution fails. The credit goes to the from address only, so it cannot raise the PoolManager balance unless the PoolManager address is the depositor.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "When an L1 contract deposits, the L2 sender is the L1 address plus 0x1111000000000000000000000000000000001111. An EOA or an EIP-7702 delegated account is not aliased. Deltas and ERC-6909 balances are indexed by msg.sender, so an L1 contract acts on L2 under its alias.",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "low"
+    },
+    {
+     "delta": "Every block starts with an L1 attributes deposit from 0xdeaddeaddeaddeaddeaddeaddeaddeaddead0001 to the L1Block predeploy. It is a separate transaction and does not call the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The L1 data fee and the operator fee are deducted from the transaction sender outside normal gas accounting and credited to fee vault predeploys. The PoolManager is a contract and is never a transaction sender.",
+     "source": "https://docs.optimism.io/op-stack/transactions/fees",
+     "relevance": "none"
+    },
+    {
+     "delta": "Transient storage: the deposit spec says a deposit is processed like an EIP-1559 transaction apart from fee, nonce and signature handling, and names no change to transient storage. eth_call exttload on the PoolManager for the synced currency slot and the unlock slot returns zero at the start of execution. No batching of several signed transactions into one execution context was found in the protocol documents.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "none"
+    },
+    {
+     "delta": "Since Denim each block carries a BaseTime metadata deposit at transaction index 1, from the depositor account to the predeploy 0x4200000000000000000000000000000000000030. It writes a millisecond part and does not touch other contracts.",
+     "source": "https://docs.base.org/upgrades/denim/200ms-blocks",
+     "relevance": "none"
+    },
+    {
+     "delta": "Planned, not active: Everest adds Base Transactions (EIP-8430, type 0x79) with calls grouped in atomic phases, a separate payer, and gas reimbursed in tokens. Activation date is TBD. How transient storage behaves across call phases was not read in this cycle.",
+     "source": "https://docs.base.org/specifications/base-transactions",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L3",
+   "summary": "Base pays gas in ETH and has no fee payment in tokens. WETH is an ordinary non proxied predeploy. The chain now has enshrined B20 tokens with issuer seize, pause and transfer policies, and USDC with a blacklist is the largest ERC-20 balance at the PoolManager.",
+   "deltas": [
+    {
+     "delta": "The gas token is ETH with 18 decimals. L1Block.isCustomGasToken() returns false and gasPayingToken() returns 0xEeee…EEeE with 18 decimals.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "none"
+    },
+    {
+     "delta": "WETH is a predeploy at 0x4200000000000000000000000000000000000006 with 2041 bytes of code. Its EIP-1967 implementation and admin slots are zero, and the predeploy spec lists it as not proxied. WETH and native ETH are two separate balances at the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The latest block reports a gas limit of 40,000,000. Liquidity removal in src/libraries/Pool.sol:146-238 updates two ticks and has no loop, so its gas does not grow with pool state.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_getCode at the LegacyERC20ETH address 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000 returns empty code, so the native asset has no ERC-20 face on this chain. PoolManager.sync on an address with no code reverts.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "none"
+    },
+    {
+     "delta": "A transaction is capped at 16,777,216 gas since Azul. Base produces a block every 200 ms and the per block gas limit comes from SystemConfig and can change without an upgrade.",
+     "source": "https://docs.base.org/specifications/transactions/throughput-and-limits",
+     "relevance": "low"
+    },
+    {
+     "delta": "B20 is a native token standard with role gated mint, burn and seizeWithMemo, per feature pause, and allowlist or blocklist policies on the sender, the receiver and msg.sender of every transfer. Anyone can create a B20 token through the factory.",
+     "source": "https://docs.base.org/specifications/b20/introduction",
+     "relevance": "high"
+    },
+    {
+     "delta": "USDC at 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 has a blacklister (0x1f2e3a640175d20ac31ed523b6733b977173e277) and a pauser. The PoolManager holds about 12.25 million USDC and isBlacklisted(PoolManager) is false.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "high"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L4",
+   "summary": "Besides the upgradeable OP Stack predeploys, Base has native precompiles for B20 tokens and a shared Policy Registry whose entries decide whether the PoolManager may send or receive a given B20 token. No predeploy can move ETH out of the PoolManager under its current code.",
+   "deltas": [
+    {
+     "delta": "Proxies sit at the predeploy addresses 0x4200…0000 to 0x4200…07ff. Their admin slot is the ProxyAdmin predeploy 0x4200000000000000000000000000000000000018, and ProxyAdmin.owner() returns 0x8cc51c3008b3f03fe483b28b8db90e19cf076a6d, the alias of L1 address 0x7bb41c3008b3f03fe483b28b8db90e19cf07595c by arithmetic. Who controls that L1 address was not confirmed in this cycle. That owner can replace the code behind L2CrossDomainMessenger, L2StandardBridge and the other proxied predeploys.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "low"
+    },
+    {
+     "delta": "The slots for CrossL2Inbox (0x…22), L2ToL2CrossDomainMessenger (0x…23), SuperchainETHBridge (0x…24), ETHLiquidity (0x…25) and SuperchainTokenBridge (0x…28) hold proxy code with a zero EIP-1967 implementation. Interop token bridging is not active.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "none"
+    },
+    {
+     "delta": "Fee vault predeploys receive base fees, priority fees and L1 fees, and L2ToL1MessagePasser accumulates withdrawn ETH. None of them can debit another account.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "L2StandardBridge can mint and burn tokens created by OptimismMintableERC20Factory. Bridged tokens held by the PoolManager depend on the bridge code, which the ProxyAdmin owner can upgrade.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "Base specific system contracts: B20 factory precompile 0xB20f…0000, Activation Registry 0x8453…0001 (a Base operated switch for token features), Policy Registry 0x8453…0002 (shared allowlists and blocklists that any token can reference), and the BaseTime predeploy 0x4200…0030. policyExists(2) returns true on mainnet, so policies are in use.",
+     "source": "https://docs.base.org/specifications/b20/reference/constants",
+     "relevance": "high"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L5",
+   "summary": "On Base the PoolManager is a plain contract, not a proxy. Its owner is a CrossChainAccount that forwards calls relayed by L2CrossDomainMessenger from the Ethereum timelock. A V4FeeAdapter is the protocol fee controller and fees are accruing. Bytecode parity with this repository was not checked.",
+   "deltas": [
+    {
+     "delta": "The PoolManager is at 0x498581ff718922c3f8e6a244956af099b2652b2b with 24,009 bytes of code (networks.json). Its EIP-1967 implementation and admin slots are zero.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "none"
+    },
+    {
+     "delta": "Bytecode parity with this repository was not established in this cycle. The review owner forbids diffing, no Solidity compiler is installed in the session, and lib/solmate, lib/forge-std and lib/openzeppelin-contracts are empty directories, so the Owned base contract imported at src/ProtocolFees.sol:9 could not be read.",
+     "source": "src/ProtocolFees.sol:9",
+     "relevance": "low"
+    },
+    {
+     "delta": "owner() returns 0x31fafd4889fa1269f7a13a66ee0fb458f27d72a9. Storage slot 0 of that contract holds 0x4200000000000000000000000000000000000007 and slot 1 holds 0x1a9C8182C09F50C8318d769245beA52c32BE35BC. The layout matches the CrossChainAccount contract verified on OP Mainnet and World Chain. The source on this chain was not fetched.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "low"
+    },
+    {
+     "delta": "protocolFeeController() returns 0xc53dd825dedbe7814562528a1a30e8e5bcbb4b55 with 4,544 bytes of code, the same length as the OP Mainnet V4FeeAdapter. POOL_MANAGER() returns the Base PoolManager, TOKEN_JAR() returns 0x9bd25e67bf390437c8faf480ac735a27bcf6168c, and owner() and feeSetter() return the CrossChainAccount. Its source was not fetched because the Base explorer blocked the request. protocolFeesAccrued(native) is about 0.0337 ETH.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L6",
+   "summary": "Base has a single sequencer with an L1 forced inclusion path that bounds censorship at about 12 hours. Core settles atomically inside one transaction, so ordering and soft finality do not open a loss path in the PoolManager itself. Base now forks on its own schedule and has changed token level behaviour at two of its last three upgrades.",
+   "deltas": [
+    {
+     "delta": "One sequencer orders transactions. Users can bypass it by calling depositTransaction on the chain's OptimismPortal on L1. Such deposits are processed in order within the sequencing window, 12 hours by default. Base and World Chain run their own node builds and their current window values were not read in this cycle.",
+     "source": "https://docs.optimism.io/op-stack/protocol/outages",
+     "relevance": "low"
+    },
+    {
+     "delta": "During a sequencer outage of more than 30 minutes, forced deposits wait until the sequencer returns or the 12 hour window expires, and L2 state stays speculative for that time.",
+     "source": "https://docs.optimism.io/op-stack/transactions/forced-transaction",
+     "relevance": "low"
+    },
+    {
+     "delta": "Denim replaced Flashblocks with canonical 200 ms blocks on 5 November 2026. block.number advances ten times faster than before while block.timestamp stays in whole seconds. Core has no block number or timestamp dependence.",
+     "source": "https://docs.base.org/upgrades/denim/200ms-blocks",
+     "relevance": "none"
+    },
+    {
+     "delta": "Everest is announced with no date. It adds a transaction type with batching, sponsorship and gas payment in tokens, and B20 logic keeps changing at each Base upgrade.",
+     "source": "https://docs.base.org/upgrades",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L1",
+   "summary": "Unichain runs an OP Stack style EVM at the Osaka rule set on a reth based client. The opcodes the PoolManager bytecode uses (PUSH0, MCOPY, TLOAD, TSTORE) are present, the 24,576 byte code limit is unchanged, and the documented opcode differences touch only opcodes that src/ does not use.",
+   "deltas": [
+    {
+     "delta": "COINBASE returns the sequencer fee vault, PREVRANDAO returns the L1 value at the L1 origin block, and ORIGIN and CALLER carry an aliased address when an L1 contract sends a deposit. No file under src/ outside src/test reads block.number, block.timestamp, block.coinbase, prevrandao, basefee, chainid, blockhash or tx.origin (grep over src/ returned no matches).",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7702 delegated accounts exist on the chain (the EIP-2935 history contract at 0x0000F90827F1C53a10cb7A02335B175320002935 has 83 bytes of code, which marks the Prague rule set). Code at a delegated EOA can be repointed by its owner, so a hook at such an address can change after pool creation. Ethereum has the same property since Pectra.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "web3_clientVersion reports op-reth 2.9.0-rc.1. An eth_call that runs init code 0x60011e5f5260205ff3 returns 255, so the CLZ opcode from EIP-7939 is live and the EVM is at the Osaka rule set.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Karst upgrade (Upgrade 19) activated a subset of Osaka on 8 July 2026 for OP, Soneium, Ink, Unichain, Mode, Metal and Zora: EIP-7825 caps a transaction at 16,777,216 gas, MODEXP and P256VERIFY are repriced, CLZ is added. Deposits are exempt from the cap. op-geth is no longer supported.",
+     "source": "https://docs.optimism.io/notices/archive/upgrade-19",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L2",
+   "summary": "Unichain keeps the Ethereum account model and one transaction as the unit that clears transient storage. The additions are L1 deposits with unsigned senders, address aliasing, and fee debits on the transaction sender. None of them changes the balance at the PoolManager address or leaves transient state across transactions.",
+   "deltas": [
+    {
+     "delta": "Deposited transactions (type 0x7E) come from L1 without a signature. The from balance is increased by the mint amount before execution and the mint stays when execution fails. The credit goes to the from address only, so it cannot raise the PoolManager balance unless the PoolManager address is the depositor.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "When an L1 contract deposits, the L2 sender is the L1 address plus 0x1111000000000000000000000000000000001111. An EOA or an EIP-7702 delegated account is not aliased. Deltas and ERC-6909 balances are indexed by msg.sender, so an L1 contract acts on L2 under its alias.",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "low"
+    },
+    {
+     "delta": "Every block starts with an L1 attributes deposit from 0xdeaddeaddeaddeaddeaddeaddeaddeaddead0001 to the L1Block predeploy. It is a separate transaction and does not call the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The L1 data fee and the operator fee are deducted from the transaction sender outside normal gas accounting and credited to fee vault predeploys. The PoolManager is a contract and is never a transaction sender.",
+     "source": "https://docs.optimism.io/op-stack/transactions/fees",
+     "relevance": "none"
+    },
+    {
+     "delta": "Transient storage: the deposit spec says a deposit is processed like an EIP-1559 transaction apart from fee, nonce and signature handling, and names no change to transient storage. eth_call exttload on the PoolManager for the synced currency slot and the unlock slot returns zero at the start of execution. No batching of several signed transactions into one execution context was found in the protocol documents.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "none"
+    },
+    {
+     "delta": "Planned, not active: the Lagoon upgrade adds a post-execution transaction (type 0x7D) through which the sequencer credits a gas refund to tx.from and debits the fee vaults after a transaction's EVM frame ends. Deposits get no refund. Activation status is given in the L6 profile.",
+     "source": "https://specs.optimism.io/protocol/lagoon/sdm.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "Flashblocks stream partial blocks every 200 ms. The Unichain docs describe them as an out-of-protocol extension that does not change core consensus. Each flashblock holds whole transactions, so the transaction boundary that clears transient storage is unchanged.",
+     "source": "https://developers.uniswap.org/llms.mdx/docs/unichain/technical-information/flashblocks",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L3",
+   "summary": "Unichain pays gas in ETH and has no fee payment in tokens. WETH is an ordinary non proxied predeploy. The largest ERC-20 balances at the PoolManager are issuer controlled stablecoins with blacklist or freeze functions.",
+   "deltas": [
+    {
+     "delta": "The gas token is ETH with 18 decimals. L1Block.isCustomGasToken() returns false and gasPayingToken() returns 0xEeee…EEeE with 18 decimals.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "none"
+    },
+    {
+     "delta": "WETH is a predeploy at 0x4200000000000000000000000000000000000006 with 2865 bytes of code. Its EIP-1967 implementation and admin slots are zero, and the predeploy spec lists it as not proxied. WETH and native ETH are two separate balances at the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The latest block reports a gas limit of 60,000,000. Liquidity removal in src/libraries/Pool.sol:146-238 updates two ticks and has no loop, so its gas does not grow with pool state.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_getCode at the LegacyERC20ETH address 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000 returns empty code, so the native asset has no ERC-20 face on this chain. PoolManager.sync on an address with no code reverts.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7825 caps one transaction at 16,777,216 gas since Karst. Deposits are exempt and are bounded by 20,000,000 gas per L1 block.",
+     "source": "https://docs.optimism.io/op-stack/features/osaka-on-l2",
+     "relevance": "low"
+    },
+    {
+     "delta": "USDC at 0x078D782b760474a361dDA0AF3839290b0EF57AD6 has a blacklister and a pauser, and USD₮0 at 0x9151434b16b9763660705744891fA906F660EcC5 exposes isBlocked. The PoolManager holds about 978,360 USDC and 180,746 USD₮0, and is on neither list.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "high"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L4",
+   "summary": "The system contracts on Unichain that could affect pooled assets are the upgradeable predeploy proxies, above all L2CrossDomainMessenger and L2StandardBridge, which are controlled by the aliased L1 upgrade multisig. No predeploy can move ETH or tokens out of the PoolManager under its current code.",
+   "deltas": [
+    {
+     "delta": "Proxies sit at the predeploy addresses 0x4200…0000 to 0x4200…07ff. Their admin slot is the ProxyAdmin predeploy 0x4200000000000000000000000000000000000018, and ProxyAdmin.owner() returns 0x6b1bae59d09fccbddb6c6cceb07b7279367c4e3b, the alias of 0x5a0Aae59D09fccBdDb6C6CcEB07B7279367C3d2A, which the Optimism docs describe as a 2-of-2 Safe of the Optimism Foundation and the Security Council. That owner can replace the code behind L2CrossDomainMessenger, L2StandardBridge and the other proxied predeploys.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "The slots for CrossL2Inbox (0x…22), L2ToL2CrossDomainMessenger (0x…23), SuperchainETHBridge (0x…24), ETHLiquidity (0x…25) and SuperchainTokenBridge (0x…28) hold proxy code with a zero EIP-1967 implementation. Interop token bridging is not active.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "none"
+    },
+    {
+     "delta": "Fee vault predeploys receive base fees, priority fees and L1 fees, and L2ToL1MessagePasser accumulates withdrawn ETH. None of them can debit another account.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "L2StandardBridge can mint and burn tokens created by OptimismMintableERC20Factory. Bridged tokens held by the PoolManager depend on the bridge code, which the ProxyAdmin owner can upgrade.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "Since Karst, fork activation runs network upgrade deposits that call L2ProxyAdmin.upgradePredeploys from the depositor account, so predeploy code changes at hard forks without a call from the ProxyAdmin owner. The Karst bundle had 31 such transactions.",
+     "source": "https://specs.optimism.io/protocol/karst/derivation.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "The PoolManager itself sits at the vanity address 0x1f98400000000000000000000000000000000004. Its EIP-1967 implementation and admin slots are zero, so it is outside the ProxyAdmin upgrade path.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L5",
+   "summary": "On Unichain the PoolManager is a plain contract, not a proxy. Its owner is the aliased Ethereum timelock, which can act only through an L1 deposit. No protocol fee controller is set. Bytecode parity with this repository was not checked.",
+   "deltas": [
+    {
+     "delta": "The PoolManager is at 0x1f98400000000000000000000000000000000004 with 24,050 bytes of code, against 24,009 bytes on the other six chains (networks.json). It is not an EIP-1967 proxy.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "Bytecode parity with this repository was not established in this cycle. The review owner forbids diffing, no Solidity compiler is installed in the session, and lib/solmate, lib/forge-std and lib/openzeppelin-contracts are empty directories, so the Owned base contract imported at src/ProtocolFees.sol:9 could not be read.",
+     "source": "src/ProtocolFees.sol:9",
+     "relevance": "low"
+    },
+    {
+     "delta": "owner() returns 0x2bad8182c09f50c8318d769245bea52c32be46cd, which has no code. It equals 0x1a9C8182C09F50C8318d769245beA52c32BE35BC plus the alias offset, so only a deposit sent through this chain's OptimismPortal by that L1 contract can act as owner.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "protocolFeeController() returns the zero address and protocolFeesAccrued(native) is 0. No protocol fee can be set or collected until the owner names a controller.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L6",
+   "summary": "Unichain has a single sequencer with an L1 forced inclusion path that bounds censorship at about 12 hours. Core settles atomically inside one transaction, so ordering and soft finality do not open a loss path in the PoolManager itself.",
+   "deltas": [
+    {
+     "delta": "One sequencer orders transactions. Users can bypass it by calling depositTransaction on the chain's OptimismPortal on L1. Such deposits are processed in order within the sequencing window, 12 hours by default.",
+     "source": "https://docs.optimism.io/op-stack/protocol/outages",
+     "relevance": "low"
+    },
+    {
+     "delta": "During a sequencer outage of more than 30 minutes, forced deposits wait until the sequencer returns or the 12 hour window expires, and L2 state stays speculative for that time.",
+     "source": "https://docs.optimism.io/op-stack/transactions/forced-transaction",
+     "relevance": "low"
+    },
+    {
+     "delta": "Karst is active since 8 July 2026. Lagoon is listed as in development with no mainnet date. Its spec adds post-execution transactions, sequencer defined gas refunds and the interop contract set.",
+     "source": "https://docs.optimism.io/op-stack/protocol/network-upgrades",
+     "relevance": "low"
+    },
+    {
+     "delta": "Blocks are built inside a TEE with priority fee ordering, and the builder drops transactions that would revert for apps that enable revert protection. Block time is 1 second with 200 ms Flashblocks.",
+     "source": "https://blog.uniswap.org/rollup-boost-is-live-on-unichain",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L1",
+   "summary": "Zora runs an OP Stack style EVM at the Osaka rule set on a reth based client. The opcodes the PoolManager bytecode uses (PUSH0, MCOPY, TLOAD, TSTORE) are present, the 24,576 byte code limit is unchanged, and the documented opcode differences touch only opcodes that src/ does not use.",
+   "deltas": [
+    {
+     "delta": "COINBASE returns the sequencer fee vault, PREVRANDAO returns the L1 value at the L1 origin block, and ORIGIN and CALLER carry an aliased address when an L1 contract sends a deposit. No file under src/ outside src/test reads block.number, block.timestamp, block.coinbase, prevrandao, basefee, chainid, blockhash or tx.origin (grep over src/ returned no matches).",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7702 delegated accounts exist on the chain (the EIP-2935 history contract at 0x0000F90827F1C53a10cb7A02335B175320002935 has 83 bytes of code, which marks the Prague rule set). Code at a delegated EOA can be repointed by its owner, so a hook at such an address can change after pool creation. Ethereum has the same property since Pectra.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    },
+    {
+     "delta": "web3_clientVersion reports conduit-op-reth 2.5.1. An eth_call that runs init code 0x60011e5f5260205ff3 returns 255, so the CLZ opcode from EIP-7939 is live and the EVM is at the Osaka rule set.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Karst upgrade (Upgrade 19) activated a subset of Osaka on 8 July 2026 for OP, Soneium, Ink, Unichain, Mode, Metal and Zora: EIP-7825 caps a transaction at 16,777,216 gas, MODEXP and P256VERIFY are repriced, CLZ is added. Deposits are exempt from the cap. op-geth is no longer supported.",
+     "source": "https://docs.optimism.io/notices/archive/upgrade-19",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L2",
+   "summary": "Zora keeps the Ethereum account model and one transaction as the unit that clears transient storage. The additions are L1 deposits with unsigned senders, address aliasing, and fee debits on the transaction sender. None of them changes the balance at the PoolManager address or leaves transient state across transactions.",
+   "deltas": [
+    {
+     "delta": "Deposited transactions (type 0x7E) come from L1 without a signature. The from balance is increased by the mint amount before execution and the mint stays when execution fails. The credit goes to the from address only, so it cannot raise the PoolManager balance unless the PoolManager address is the depositor.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "When an L1 contract deposits, the L2 sender is the L1 address plus 0x1111000000000000000000000000000000001111. An EOA or an EIP-7702 delegated account is not aliased. Deltas and ERC-6909 balances are indexed by msg.sender, so an L1 contract acts on L2 under its alias.",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "low"
+    },
+    {
+     "delta": "Every block starts with an L1 attributes deposit from 0xdeaddeaddeaddeaddeaddeaddeaddeaddead0001 to the L1Block predeploy. It is a separate transaction and does not call the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The L1 data fee and the operator fee are deducted from the transaction sender outside normal gas accounting and credited to fee vault predeploys. The PoolManager is a contract and is never a transaction sender.",
+     "source": "https://docs.optimism.io/op-stack/transactions/fees",
+     "relevance": "none"
+    },
+    {
+     "delta": "Transient storage: the deposit spec says a deposit is processed like an EIP-1559 transaction apart from fee, nonce and signature handling, and names no change to transient storage. eth_call exttload on the PoolManager for the synced currency slot and the unlock slot returns zero at the start of execution. No batching of several signed transactions into one execution context was found in the protocol documents.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "none"
+    },
+    {
+     "delta": "Planned, not active: the Lagoon upgrade adds a post-execution transaction (type 0x7D) through which the sequencer credits a gas refund to tx.from and debits the fee vaults after a transaction's EVM frame ends. Deposits get no refund. Activation status is given in the L6 profile.",
+     "source": "https://specs.optimism.io/protocol/lagoon/sdm.html",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L3",
+   "summary": "Zora pays gas in ETH and has no fee payment in tokens. WETH is an ordinary non proxied predeploy. The legacy ERC-20 view of ETH still has code and mirrors the native balance, but it cannot transfer. The PoolManager holds very little here and its bridged stablecoin has no blacklister set.",
+   "deltas": [
+    {
+     "delta": "The gas token is ETH with 18 decimals. L1Block.isCustomGasToken() returns false and gasPayingToken() returns 0xEeee…EEeE with 18 decimals.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "none"
+    },
+    {
+     "delta": "WETH is a predeploy at 0x4200000000000000000000000000000000000006 with 2041 bytes of code. Its EIP-1967 implementation and admin slots are zero, and the predeploy spec lists it as not proxied. WETH and native ETH are two separate balances at the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The latest block reports a gas limit of 30,000,000. Liquidity removal in src/libraries/Pool.sol:146-238 updates two ticks and has no loop, so its gas does not grow with pool state.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    },
+    {
+     "delta": "LegacyERC20ETH has 3,671 bytes of code at 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000. balanceOf(PoolManager) returns the PoolManager's native ETH balance, totalSupply returns 0, and transfer reverts with 'LegacyERC20ETH: transfer is disabled'. eth_call PoolManager.sync(LegacyERC20ETH) succeeds. ETH therefore has a second, read only ERC-20 face on this chain.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    },
+    {
+     "delta": "EIP-7825 caps one transaction at 16,777,216 gas since Karst. Deposits are exempt and are bounded by 20,000,000 gas per L1 block.",
+     "source": "https://docs.optimism.io/op-stack/features/osaka-on-l2",
+     "relevance": "low"
+    },
+    {
+     "delta": "USDzC at 0xCccCCccc7021b32EBb4e8C08314bD62F7c653EC4 returns the zero address for blacklister and pauser. The PoolManager holds about 121 USDzC and 0.155 ETH, the smallest balances in the unit.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L4",
+   "summary": "The system contracts on Zora that could affect pooled assets are the upgradeable predeploy proxies, above all L2CrossDomainMessenger and L2StandardBridge, which are controlled by the aliased L1 upgrade multisig. No predeploy can move ETH or tokens out of the PoolManager under its current code.",
+   "deltas": [
+    {
+     "delta": "Proxies sit at the predeploy addresses 0x4200…0000 to 0x4200…07ff. Their admin slot is the ProxyAdmin predeploy 0x4200000000000000000000000000000000000018, and ProxyAdmin.owner() returns 0x5b5a62275df8c60a80d3a25faec5aa7de116b857, the alias of L1 address 0x4a4962275df8c60a80d3a25faec5aa7de116a746 by arithmetic. Who controls that L1 address was not confirmed in this cycle. That owner can replace the code behind L2CrossDomainMessenger, L2StandardBridge and the other proxied predeploys.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    },
+    {
+     "delta": "The slots for CrossL2Inbox (0x…22), L2ToL2CrossDomainMessenger (0x…23), SuperchainETHBridge (0x…24), ETHLiquidity (0x…25) and SuperchainTokenBridge (0x…28) hold proxy code with a zero EIP-1967 implementation. Interop token bridging is not active.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "none"
+    },
+    {
+     "delta": "Fee vault predeploys receive base fees, priority fees and L1 fees, and L2ToL1MessagePasser accumulates withdrawn ETH. None of them can debit another account.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "L2StandardBridge can mint and burn tokens created by OptimismMintableERC20Factory. Bridged tokens held by the PoolManager depend on the bridge code, which the ProxyAdmin owner can upgrade.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "Since Karst, fork activation runs network upgrade deposits that call L2ProxyAdmin.upgradePredeploys from the depositor account, so predeploy code changes at hard forks without a call from the ProxyAdmin owner. The Karst bundle had 31 such transactions.",
+     "source": "https://specs.optimism.io/protocol/karst/derivation.html",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L5",
+   "summary": "On Zora the PoolManager is a plain contract, not a proxy. Its owner is a CrossChainAccount that forwards calls relayed by L2CrossDomainMessenger from the Ethereum timelock. No protocol fee controller is set. Bytecode parity with this repository was not checked.",
+   "deltas": [
+    {
+     "delta": "The PoolManager is at 0x0575338e4c17006ae181b47900a84404247ca30f with 24,009 bytes of code (networks.json). Its EIP-1967 implementation and admin slots are zero.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "none"
+    },
+    {
+     "delta": "Bytecode parity with this repository was not established in this cycle. The review owner forbids diffing, no Solidity compiler is installed in the session, and lib/solmate, lib/forge-std and lib/openzeppelin-contracts are empty directories, so the Owned base contract imported at src/ProtocolFees.sol:9 could not be read.",
+     "source": "src/ProtocolFees.sol:9",
+     "relevance": "low"
+    },
+    {
+     "delta": "owner() returns 0x36eec182d0b24df3dc23115d64db521a93d5154f. Storage slot 0 of that contract holds 0x4200000000000000000000000000000000000007 and slot 1 holds 0x1a9C8182C09F50C8318d769245beA52c32BE35BC. The layout matches the CrossChainAccount contract verified on OP Mainnet and World Chain. The source on this chain was not fetched.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    },
+    {
+     "delta": "protocolFeeController() returns the zero address and protocolFeesAccrued(native) is 0. No protocol fee can be set or collected until the owner names a controller.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L6",
+   "summary": "Zora has a single sequencer with an L1 forced inclusion path that bounds censorship at about 12 hours. Core settles atomically inside one transaction, so ordering and soft finality do not open a loss path in the PoolManager itself.",
+   "deltas": [
+    {
+     "delta": "One sequencer orders transactions. Users can bypass it by calling depositTransaction on the chain's OptimismPortal on L1. Such deposits are processed in order within the sequencing window, 12 hours by default.",
+     "source": "https://docs.optimism.io/op-stack/protocol/outages",
+     "relevance": "low"
+    },
+    {
+     "delta": "During a sequencer outage of more than 30 minutes, forced deposits wait until the sequencer returns or the 12 hour window expires, and L2 state stays speculative for that time.",
+     "source": "https://docs.optimism.io/op-stack/transactions/forced-transaction",
+     "relevance": "low"
+    },
+    {
+     "delta": "Karst is active since 8 July 2026. Lagoon is listed as in development with no mainnet date. Its spec adds post-execution transactions, sequencer defined gas refunds and the interop contract set.",
+     "source": "https://docs.optimism.io/op-stack/protocol/network-upgrades",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L1",
+   "summary": "World Chain runs an OP Stack style EVM at the Osaka rule set on a reth based client. The opcodes the PoolManager bytecode uses (PUSH0, MCOPY, TLOAD, TSTORE) are present, the 24,576 byte code limit is unchanged, and the documented opcode differences touch only opcodes that src/ does not use.",
+   "deltas": [
+    {
+     "delta": "COINBASE returns the sequencer fee vault, PREVRANDAO returns the L1 value at the L1 origin block, and ORIGIN and CALLER carry an aliased address when an L1 contract sends a deposit. No file under src/ outside src/test reads block.number, block.timestamp, block.coinbase, prevrandao, basefee, chainid, blockhash or tx.origin (grep over src/ returned no matches).",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7702 delegated accounts exist on the chain (the EIP-2935 history contract at 0x0000F90827F1C53a10cb7A02335B175320002935 has 83 bytes of code, which marks the Prague rule set). Code at a delegated EOA can be repointed by its owner, so a hook at such an address can change after pool creation. Ethereum has the same property since Pectra.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "low"
+    },
+    {
+     "delta": "web3_clientVersion reports world-chain 2.8.2. An eth_call that runs init code 0x60011e5f5260205ff3 returns 255, so the CLZ opcode from EIP-7939 is live and the EVM is at the Osaka rule set.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "low"
+    },
+    {
+     "delta": "World Chain runs its own node build. Which named upgrade switched on the Osaka opcodes, and whether the EIP-7825 gas cap applies, was not confirmed from World Chain documentation in this cycle. Only the CLZ probe was run.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L2",
+   "summary": "World Chain keeps the Ethereum account model and one transaction as the unit that clears transient storage. The additions are L1 deposits with unsigned senders, address aliasing, and fee debits on the transaction sender. None of them changes the balance at the PoolManager address or leaves transient state across transactions.",
+   "deltas": [
+    {
+     "delta": "Deposited transactions (type 0x7E) come from L1 without a signature. The from balance is increased by the mint amount before execution and the mint stays when execution fails. The credit goes to the from address only, so it cannot raise the PoolManager balance unless the PoolManager address is the depositor.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "When an L1 contract deposits, the L2 sender is the L1 address plus 0x1111000000000000000000000000000000001111. An EOA or an EIP-7702 delegated account is not aliased. Deltas and ERC-6909 balances are indexed by msg.sender, so an L1 contract acts on L2 under its alias.",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "low"
+    },
+    {
+     "delta": "Every block starts with an L1 attributes deposit from 0xdeaddeaddeaddeaddeaddeaddeaddeaddead0001 to the L1Block predeploy. It is a separate transaction and does not call the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The L1 data fee and the operator fee are deducted from the transaction sender outside normal gas accounting and credited to fee vault predeploys. The PoolManager is a contract and is never a transaction sender.",
+     "source": "https://docs.optimism.io/op-stack/transactions/fees",
+     "relevance": "none"
+    },
+    {
+     "delta": "Transient storage: the deposit spec says a deposit is processed like an EIP-1559 transaction apart from fee, nonce and signature handling, and names no change to transient storage. eth_call exttload on the PoolManager for the synced currency slot and the unlock slot returns zero at the start of execution. No batching of several signed transactions into one execution context was found in the protocol documents.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "none"
+    },
+    {
+     "delta": "Priority Blockspace for Humans routes verified users through a PBHEntryPoint in front of the ERC-4337 EntryPoint. A PBH bundle is one transaction that executes UserOps from several users, so transient storage written by one UserOp is visible to the next. This is the same boundary as any ERC-4337 bundle on Ethereum, but World Chain gives these bundles top of block priority.",
+     "source": "https://worldcoin.github.io/world-chain/pbh/txs.html",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L3",
+   "summary": "World Chain pays gas in ETH and has no fee payment in tokens. WETH is an ordinary non proxied predeploy. The largest ERC-20 balances at the PoolManager are issuer controlled stablecoins with blacklist or freeze functions.",
+   "deltas": [
+    {
+     "delta": "The gas token is ETH with 18 decimals. L1Block.isCustomGasToken() returns false and gasPayingToken() returns 0xEeee…EEeE with 18 decimals.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "none"
+    },
+    {
+     "delta": "WETH is a predeploy at 0x4200000000000000000000000000000000000006 with 2041 bytes of code. Its EIP-1967 implementation and admin slots are zero, and the predeploy spec lists it as not proxied. WETH and native ETH are two separate balances at the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The latest block reports a gas limit of 280,000,000. Liquidity removal in src/libraries/Pool.sol:146-238 updates two ticks and has no loop, so its gas does not grow with pool state.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_getCode at the LegacyERC20ETH address 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000 returns empty code, so the native asset has no ERC-20 face on this chain. PoolManager.sync on an address with no code reverts.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "none"
+    },
+    {
+     "delta": "USDC at 0x79A02482A880bCE3F13e09Da970dC34db4CD24d1 has a blacklister (0xcb4f5150c828164d78e3a7c67165d2cbbcce3f50) and a pauser. The PoolManager holds about 66,644 USDC and is not blacklisted.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "high"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L4",
+   "summary": "The system contracts on World Chain that could affect pooled assets are the upgradeable predeploy proxies, above all L2CrossDomainMessenger and L2StandardBridge, which are controlled by the aliased L1 upgrade multisig. No predeploy can move ETH or tokens out of the PoolManager under its current code.",
+   "deltas": [
+    {
+     "delta": "Proxies sit at the predeploy addresses 0x4200…0000 to 0x4200…07ff. Their admin slot is the ProxyAdmin predeploy 0x4200000000000000000000000000000000000018, and ProxyAdmin.owner() returns 0xb2aa0c2c4fd6bfcbf699d4c787cd6cc0dc461a9d, the alias of L1 address 0xa1990c2c4fd6bfcbf699d4c787cd6cc0dc46098c by arithmetic. Who controls that L1 address was not confirmed in this cycle. That owner can replace the code behind L2CrossDomainMessenger, L2StandardBridge and the other proxied predeploys.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "low"
+    },
+    {
+     "delta": "The slots for CrossL2Inbox (0x…22), L2ToL2CrossDomainMessenger (0x…23), SuperchainETHBridge (0x…24), ETHLiquidity (0x…25) and SuperchainTokenBridge (0x…28) hold proxy code with a zero EIP-1967 implementation. Interop token bridging is not active.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "none"
+    },
+    {
+     "delta": "Fee vault predeploys receive base fees, priority fees and L1 fees, and L2ToL1MessagePasser accumulates withdrawn ETH. None of them can debit another account.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "L2StandardBridge can mint and burn tokens created by OptimismMintableERC20Factory. Bridged tokens held by the PoolManager depend on the bridge code, which the ProxyAdmin owner can upgrade.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "PBHEntryPoint is a World Chain contract in front of the ERC-4337 EntryPoint. The builder gives priority to transactions that target it. It does not hold or move third party balances.",
+     "source": "https://worldcoin.github.io/world-chain/pbh/architecture.html",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L5",
+   "summary": "On World Chain the PoolManager is a plain contract, not a proxy. Its owner is a CrossChainAccount that forwards calls relayed by L2CrossDomainMessenger from the Ethereum timelock. No protocol fee controller is set. Bytecode parity with this repository was not checked.",
+   "deltas": [
+    {
+     "delta": "The PoolManager is at 0xb1860d529182ac3bc1f51fa2abd56662b7d13f33 with 24,009 bytes of code (networks.json). Its EIP-1967 implementation and admin slots are zero.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "none"
+    },
+    {
+     "delta": "Bytecode parity with this repository was not established in this cycle. The review owner forbids diffing, no Solidity compiler is installed in the session, and lib/solmate, lib/forge-std and lib/openzeppelin-contracts are empty directories, so the Owned base contract imported at src/ProtocolFees.sol:9 could not be read.",
+     "source": "src/ProtocolFees.sol:9",
+     "relevance": "low"
+    },
+    {
+     "delta": "owner() returns 0xcb2436774c3e191c85056d248ef4260ce5f27a9d. Storage slot 0 of that contract holds 0x4200000000000000000000000000000000000007 and slot 1 holds 0x1a9C8182C09F50C8318d769245beA52c32BE35BC. The explorer shows verified source named CrossChainAccount whose forward function requires msg.sender to be the messenger and xDomainMessageSender to equal the L1 owner.",
+     "source": "https://worldchain-mainnet.explorer.alchemy.com/api/v2/smart-contracts/0xcb2436774c3e191c85056d248ef4260ce5f27a9d",
+     "relevance": "low"
+    },
+    {
+     "delta": "protocolFeeController() returns the zero address and protocolFeesAccrued(native) is 0. No protocol fee can be set or collected until the owner names a controller.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L6",
+   "summary": "World Chain has a single sequencer with an L1 forced inclusion path that bounds censorship at about 12 hours. Core settles atomically inside one transaction, so ordering and soft finality do not open a loss path in the PoolManager itself.",
+   "deltas": [
+    {
+     "delta": "One sequencer orders transactions. Users can bypass it by calling depositTransaction on the chain's OptimismPortal on L1. Such deposits are processed in order within the sequencing window, 12 hours by default. Base and World Chain run their own node builds and their current window values were not read in this cycle.",
+     "source": "https://docs.optimism.io/op-stack/protocol/outages",
+     "relevance": "low"
+    },
+    {
+     "delta": "During a sequencer outage of more than 30 minutes, forced deposits wait until the sequencer returns or the 12 hour window expires, and L2 state stays speculative for that time.",
+     "source": "https://docs.optimism.io/op-stack/transactions/forced-transaction",
+     "relevance": "low"
+    },
+    {
+     "delta": "The World Chain builder reserves part of each block for PBH transactions and orders them by priority fee. If the builder is offline, rollup-boost falls back to the default execution client ordering.",
+     "source": "https://worldcoin.github.io/world-chain/pbh/architecture.html",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L1",
+   "summary": "Ink runs an OP Stack style EVM at the Osaka rule set on a reth based client. The opcodes the PoolManager bytecode uses (PUSH0, MCOPY, TLOAD, TSTORE) are present, the 24,576 byte code limit is unchanged, and the documented opcode differences touch only opcodes that src/ does not use.",
+   "deltas": [
+    {
+     "delta": "COINBASE returns the sequencer fee vault, PREVRANDAO returns the L1 value at the L1 origin block, and ORIGIN and CALLER carry an aliased address when an L1 contract sends a deposit. No file under src/ outside src/test reads block.number, block.timestamp, block.coinbase, prevrandao, basefee, chainid, blockhash or tx.origin (grep over src/ returned no matches).",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7702 delegated accounts exist on the chain (the EIP-2935 history contract at 0x0000F90827F1C53a10cb7A02335B175320002935 has 83 bytes of code, which marks the Prague rule set). Code at a delegated EOA can be repointed by its owner, so a hook at such an address can change after pool creation. Ethereum has the same property since Pectra.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "low"
+    },
+    {
+     "delta": "web3_clientVersion reports op-reth 2.9.0-rc.1. An eth_call that runs init code 0x60011e5f5260205ff3 returns 255, so the CLZ opcode from EIP-7939 is live and the EVM is at the Osaka rule set.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Karst upgrade (Upgrade 19) activated a subset of Osaka on 8 July 2026 for OP, Soneium, Ink, Unichain, Mode, Metal and Zora: EIP-7825 caps a transaction at 16,777,216 gas, MODEXP and P256VERIFY are repriced, CLZ is added. Deposits are exempt from the cap. op-geth is no longer supported.",
+     "source": "https://docs.optimism.io/notices/archive/upgrade-19",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L2",
+   "summary": "Ink keeps the Ethereum account model and one transaction as the unit that clears transient storage. The additions are L1 deposits with unsigned senders, address aliasing, and fee debits on the transaction sender. None of them changes the balance at the PoolManager address or leaves transient state across transactions.",
+   "deltas": [
+    {
+     "delta": "Deposited transactions (type 0x7E) come from L1 without a signature. The from balance is increased by the mint amount before execution and the mint stays when execution fails. The credit goes to the from address only, so it cannot raise the PoolManager balance unless the PoolManager address is the depositor.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "When an L1 contract deposits, the L2 sender is the L1 address plus 0x1111000000000000000000000000000000001111. An EOA or an EIP-7702 delegated account is not aliased. Deltas and ERC-6909 balances are indexed by msg.sender, so an L1 contract acts on L2 under its alias.",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "low"
+    },
+    {
+     "delta": "Every block starts with an L1 attributes deposit from 0xdeaddeaddeaddeaddeaddeaddeaddeaddead0001 to the L1Block predeploy. It is a separate transaction and does not call the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The L1 data fee and the operator fee are deducted from the transaction sender outside normal gas accounting and credited to fee vault predeploys. The PoolManager is a contract and is never a transaction sender.",
+     "source": "https://docs.optimism.io/op-stack/transactions/fees",
+     "relevance": "none"
+    },
+    {
+     "delta": "Transient storage: the deposit spec says a deposit is processed like an EIP-1559 transaction apart from fee, nonce and signature handling, and names no change to transient storage. eth_call exttload on the PoolManager for the synced currency slot and the unlock slot returns zero at the start of execution. No batching of several signed transactions into one execution context was found in the protocol documents.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "none"
+    },
+    {
+     "delta": "Planned, not active: the Lagoon upgrade adds a post-execution transaction (type 0x7D) through which the sequencer credits a gas refund to tx.from and debits the fee vaults after a transaction's EVM frame ends. Deposits get no refund. Activation status is given in the L6 profile.",
+     "source": "https://specs.optimism.io/protocol/lagoon/sdm.html",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L3",
+   "summary": "Ink pays gas in ETH and has no fee payment in tokens. WETH is an ordinary non proxied predeploy. The largest ERC-20 balances at the PoolManager are issuer controlled stablecoins with blacklist or freeze functions.",
+   "deltas": [
+    {
+     "delta": "The gas token is ETH with 18 decimals. L1Block.isCustomGasToken() returns false and gasPayingToken() returns 0xEeee…EEeE with 18 decimals.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "none"
+    },
+    {
+     "delta": "WETH is a predeploy at 0x4200000000000000000000000000000000000006 with 2865 bytes of code. Its EIP-1967 implementation and admin slots are zero, and the predeploy spec lists it as not proxied. WETH and native ETH are two separate balances at the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The latest block reports a gas limit of 30,000,000. Liquidity removal in src/libraries/Pool.sol:146-238 updates two ticks and has no loop, so its gas does not grow with pool state.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_getCode at the LegacyERC20ETH address 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000 returns empty code, so the native asset has no ERC-20 face on this chain. PoolManager.sync on an address with no code reverts.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7825 caps one transaction at 16,777,216 gas since Karst. Deposits are exempt and are bounded by 20,000,000 gas per L1 block.",
+     "source": "https://docs.optimism.io/op-stack/features/osaka-on-l2",
+     "relevance": "low"
+    },
+    {
+     "delta": "USD₮0 at 0x0200C29006150606B650577BBE7B6248F58470c1 exposes isBlocked, USDG at 0xe343167631d89B6Ffc58B88d6b7fB0228795491D exposes isFrozen and paused, and USDC at 0x2D270e6886d130D724215A266106e6832161EAEd has a blacklister and a pauser. The PoolManager holds about 1.52 million USD₮0, 767,333 USDG and 676,274 USDC and is flagged on none of them.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "high"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L4",
+   "summary": "The system contracts on Ink that could affect pooled assets are the upgradeable predeploy proxies, above all L2CrossDomainMessenger and L2StandardBridge, which are controlled by the aliased L1 upgrade multisig. No predeploy can move ETH or tokens out of the PoolManager under its current code.",
+   "deltas": [
+    {
+     "delta": "Proxies sit at the predeploy addresses 0x4200…0000 to 0x4200…07ff. Their admin slot is the ProxyAdmin predeploy 0x4200000000000000000000000000000000000018, and ProxyAdmin.owner() returns 0x6b1bae59d09fccbddb6c6cceb07b7279367c4e3b, the alias of 0x5a0Aae59D09fccBdDb6C6CcEB07B7279367C3d2A, which the Optimism docs describe as a 2-of-2 Safe of the Optimism Foundation and the Security Council. That owner can replace the code behind L2CrossDomainMessenger, L2StandardBridge and the other proxied predeploys.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "low"
+    },
+    {
+     "delta": "The slots for CrossL2Inbox (0x…22), L2ToL2CrossDomainMessenger (0x…23), SuperchainETHBridge (0x…24), ETHLiquidity (0x…25) and SuperchainTokenBridge (0x…28) hold proxy code with a zero EIP-1967 implementation. Interop token bridging is not active.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "none"
+    },
+    {
+     "delta": "Fee vault predeploys receive base fees, priority fees and L1 fees, and L2ToL1MessagePasser accumulates withdrawn ETH. None of them can debit another account.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "L2StandardBridge can mint and burn tokens created by OptimismMintableERC20Factory. Bridged tokens held by the PoolManager depend on the bridge code, which the ProxyAdmin owner can upgrade.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "Since Karst, fork activation runs network upgrade deposits that call L2ProxyAdmin.upgradePredeploys from the depositor account, so predeploy code changes at hard forks without a call from the ProxyAdmin owner. The Karst bundle had 31 such transactions.",
+     "source": "https://specs.optimism.io/protocol/karst/derivation.html",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L5",
+   "summary": "On Ink the PoolManager is a plain contract, not a proxy. Its owner is the aliased Ethereum timelock, which can act only through an L1 deposit. No protocol fee controller is set. Bytecode parity with this repository was not checked.",
+   "deltas": [
+    {
+     "delta": "The PoolManager is at 0x360e68faccca8ca495c1b759fd9eee466db9fb32 with 24,009 bytes of code (networks.json). Its EIP-1967 implementation and admin slots are zero.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "none"
+    },
+    {
+     "delta": "Bytecode parity with this repository was not established in this cycle. The review owner forbids diffing, no Solidity compiler is installed in the session, and lib/solmate, lib/forge-std and lib/openzeppelin-contracts are empty directories, so the Owned base contract imported at src/ProtocolFees.sol:9 could not be read.",
+     "source": "src/ProtocolFees.sol:9",
+     "relevance": "low"
+    },
+    {
+     "delta": "owner() returns 0x2bad8182c09f50c8318d769245bea52c32be46cd, which has no code. It equals 0x1a9C8182C09F50C8318d769245beA52c32BE35BC plus the alias offset, so only a deposit sent through this chain's OptimismPortal by that L1 contract can act as owner.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "low"
+    },
+    {
+     "delta": "protocolFeeController() returns the zero address and protocolFeesAccrued(native) is 0. No protocol fee can be set or collected until the owner names a controller.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L6",
+   "summary": "Ink has a single sequencer with an L1 forced inclusion path that bounds censorship at about 12 hours. Core settles atomically inside one transaction, so ordering and soft finality do not open a loss path in the PoolManager itself.",
+   "deltas": [
+    {
+     "delta": "One sequencer orders transactions. Users can bypass it by calling depositTransaction on the chain's OptimismPortal on L1. Such deposits are processed in order within the sequencing window, 12 hours by default.",
+     "source": "https://docs.optimism.io/op-stack/protocol/outages",
+     "relevance": "low"
+    },
+    {
+     "delta": "During a sequencer outage of more than 30 minutes, forced deposits wait until the sequencer returns or the 12 hour window expires, and L2 state stays speculative for that time.",
+     "source": "https://docs.optimism.io/op-stack/transactions/forced-transaction",
+     "relevance": "low"
+    },
+    {
+     "delta": "Karst is active since 8 July 2026. Lagoon is listed as in development with no mainnet date. Its spec adds post-execution transactions, sequencer defined gas refunds and the interop contract set.",
+     "source": "https://docs.optimism.io/op-stack/protocol/network-upgrades",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L1",
+   "summary": "Soneium runs an OP Stack style EVM at the Osaka rule set on a reth based client. The opcodes the PoolManager bytecode uses (PUSH0, MCOPY, TLOAD, TSTORE) are present, the 24,576 byte code limit is unchanged, and the documented opcode differences touch only opcodes that src/ does not use.",
+   "deltas": [
+    {
+     "delta": "COINBASE returns the sequencer fee vault, PREVRANDAO returns the L1 value at the L1 origin block, and ORIGIN and CALLER carry an aliased address when an L1 contract sends a deposit. No file under src/ outside src/test reads block.number, block.timestamp, block.coinbase, prevrandao, basefee, chainid, blockhash or tx.origin (grep over src/ returned no matches).",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7702 delegated accounts exist on the chain (the EIP-2935 history contract at 0x0000F90827F1C53a10cb7A02335B175320002935 has 83 bytes of code, which marks the Prague rule set). Code at a delegated EOA can be repointed by its owner, so a hook at such an address can change after pool creation. Ethereum has the same property since Pectra.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "web3_clientVersion reports op-reth 2.9.0-rc.1. An eth_call that runs init code 0x60011e5f5260205ff3 returns 255, so the CLZ opcode from EIP-7939 is live and the EVM is at the Osaka rule set.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Karst upgrade (Upgrade 19) activated a subset of Osaka on 8 July 2026 for OP, Soneium, Ink, Unichain, Mode, Metal and Zora: EIP-7825 caps a transaction at 16,777,216 gas, MODEXP and P256VERIFY are repriced, CLZ is added. Deposits are exempt from the cap. op-geth is no longer supported.",
+     "source": "https://docs.optimism.io/notices/archive/upgrade-19",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L2",
+   "summary": "Soneium keeps the Ethereum account model and one transaction as the unit that clears transient storage. The additions are L1 deposits with unsigned senders, address aliasing, and fee debits on the transaction sender. None of them changes the balance at the PoolManager address or leaves transient state across transactions.",
+   "deltas": [
+    {
+     "delta": "Deposited transactions (type 0x7E) come from L1 without a signature. The from balance is increased by the mint amount before execution and the mint stays when execution fails. The credit goes to the from address only, so it cannot raise the PoolManager balance unless the PoolManager address is the depositor.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "When an L1 contract deposits, the L2 sender is the L1 address plus 0x1111000000000000000000000000000000001111. An EOA or an EIP-7702 delegated account is not aliased. Deltas and ERC-6909 balances are indexed by msg.sender, so an L1 contract acts on L2 under its alias.",
+     "source": "https://docs.optimism.io/op-stack/protocol/differences",
+     "relevance": "low"
+    },
+    {
+     "delta": "Every block starts with an L1 attributes deposit from 0xdeaddeaddeaddeaddeaddeaddeaddeaddead0001 to the L1Block predeploy. It is a separate transaction and does not call the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/deposits.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The L1 data fee and the operator fee are deducted from the transaction sender outside normal gas accounting and credited to fee vault predeploys. The PoolManager is a contract and is never a transaction sender.",
+     "source": "https://docs.optimism.io/op-stack/transactions/fees",
+     "relevance": "none"
+    },
+    {
+     "delta": "Transient storage: the deposit spec says a deposit is processed like an EIP-1559 transaction apart from fee, nonce and signature handling, and names no change to transient storage. eth_call exttload on the PoolManager for the synced currency slot and the unlock slot returns zero at the start of execution. No batching of several signed transactions into one execution context was found in the protocol documents.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "none"
+    },
+    {
+     "delta": "Planned, not active: the Lagoon upgrade adds a post-execution transaction (type 0x7D) through which the sequencer credits a gas refund to tx.from and debits the fee vaults after a transaction's EVM frame ends. Deposits get no refund. Activation status is given in the L6 profile.",
+     "source": "https://specs.optimism.io/protocol/lagoon/sdm.html",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L3",
+   "summary": "Soneium pays gas in ETH and has no fee payment in tokens. WETH is an ordinary non proxied predeploy. The largest ERC-20 balances at the PoolManager are issuer controlled stablecoins with blacklist or freeze functions.",
+   "deltas": [
+    {
+     "delta": "The gas token is ETH with 18 decimals. L1Block.isCustomGasToken() returns false and gasPayingToken() returns 0xEeee…EEeE with 18 decimals.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "none"
+    },
+    {
+     "delta": "WETH is a predeploy at 0x4200000000000000000000000000000000000006 with 2865 bytes of code. Its EIP-1967 implementation and admin slots are zero, and the predeploy spec lists it as not proxied. WETH and native ETH are two separate balances at the PoolManager.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The latest block reports a gas limit of 40,000,000. Liquidity removal in src/libraries/Pool.sol:146-238 updates two ticks and has no loop, so its gas does not grow with pool state.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_getCode at the LegacyERC20ETH address 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000 returns empty code, so the native asset has no ERC-20 face on this chain. PoolManager.sync on an address with no code reverts.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7825 caps one transaction at 16,777,216 gas since Karst. Deposits are exempt and are bounded by 20,000,000 gas per L1 block.",
+     "source": "https://docs.optimism.io/op-stack/features/osaka-on-l2",
+     "relevance": "low"
+    },
+    {
+     "delta": "USDC.e at 0xbA9986D2381edf1DA03B0B9c1f8b00dc4AacC369 returns the same address, 0x8be79275fcfd08a931087ecf70ba8a99aee3ac59, for owner, pauser and blacklister. That address has 133 bytes of code and does not answer getOwners or getThreshold. USDSC at 0x3f99231dD03a9F0E7e3421c92B7b90fbe012985a exposes isFrozen. The PoolManager holds about 517,001 USDC.e and 1.90 million USDSC and is flagged on neither.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "high"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L4",
+   "summary": "The system contracts on Soneium that could affect pooled assets are the upgradeable predeploy proxies, above all L2CrossDomainMessenger and L2StandardBridge, which are controlled by the aliased L1 upgrade multisig. No predeploy can move ETH or tokens out of the PoolManager under its current code.",
+   "deltas": [
+    {
+     "delta": "Proxies sit at the predeploy addresses 0x4200…0000 to 0x4200…07ff. Their admin slot is the ProxyAdmin predeploy 0x4200000000000000000000000000000000000018, and ProxyAdmin.owner() returns 0x6b1bae59d09fccbddb6c6cceb07b7279367c4e3b, the alias of 0x5a0Aae59D09fccBdDb6C6CcEB07B7279367C3d2A, which the Optimism docs describe as a 2-of-2 Safe of the Optimism Foundation and the Security Council. That owner can replace the code behind L2CrossDomainMessenger, L2StandardBridge and the other proxied predeploys.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "The slots for CrossL2Inbox (0x…22), L2ToL2CrossDomainMessenger (0x…23), SuperchainETHBridge (0x…24), ETHLiquidity (0x…25) and SuperchainTokenBridge (0x…28) hold proxy code with a zero EIP-1967 implementation. Interop token bridging is not active.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "none"
+    },
+    {
+     "delta": "Fee vault predeploys receive base fees, priority fees and L1 fees, and L2ToL1MessagePasser accumulates withdrawn ETH. None of them can debit another account.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "L2StandardBridge can mint and burn tokens created by OptimismMintableERC20Factory. Bridged tokens held by the PoolManager depend on the bridge code, which the ProxyAdmin owner can upgrade.",
+     "source": "https://specs.optimism.io/protocol/predeploys.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "Since Karst, fork activation runs network upgrade deposits that call L2ProxyAdmin.upgradePredeploys from the depositor account, so predeploy code changes at hard forks without a call from the ProxyAdmin owner. The Karst bundle had 31 such transactions.",
+     "source": "https://specs.optimism.io/protocol/karst/derivation.html",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L5",
+   "summary": "On Soneium the PoolManager is a plain contract, not a proxy. Its owner is a CrossChainAccount that forwards calls relayed by L2CrossDomainMessenger from the Ethereum timelock. No protocol fee controller is set. Bytecode parity with this repository was not checked.",
+   "deltas": [
+    {
+     "delta": "The PoolManager is at 0x360e68faccca8ca495c1b759fd9eee466db9fb32 with 24,009 bytes of code (networks.json). Its EIP-1967 implementation and admin slots are zero.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "none"
+    },
+    {
+     "delta": "Bytecode parity with this repository was not established in this cycle. The review owner forbids diffing, no Solidity compiler is installed in the session, and lib/solmate, lib/forge-std and lib/openzeppelin-contracts are empty directories, so the Owned base contract imported at src/ProtocolFees.sol:9 could not be read.",
+     "source": "src/ProtocolFees.sol:9",
+     "relevance": "low"
+    },
+    {
+     "delta": "owner() returns 0x044aaf330d7fd6ae683eec5c1c1d1fff5196b6b7. The explorer shows verified source named CrossChainAccount with immutable messenger 0x4200000000000000000000000000000000000007 and l1Owner 0x1a9C8182C09F50C8318d769245beA52c32BE35BC in the constructor arguments. Its storage slots 0 and 1 are zero, as expected for immutables.",
+     "source": "https://soneium.blockscout.com/api/v2/smart-contracts/0x044aaf330d7fd6ae683eec5c1c1d1fff5196b6b7",
+     "relevance": "low"
+    },
+    {
+     "delta": "protocolFeeController() returns the zero address and protocolFeesAccrued(native) is 0. No protocol fee can be set or collected until the owner names a controller.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L6",
+   "summary": "Soneium has a single sequencer with an L1 forced inclusion path that bounds censorship at about 12 hours. Core settles atomically inside one transaction, so ordering and soft finality do not open a loss path in the PoolManager itself. Soneium has a published policy and one past case of restricting specific contracts.",
+   "deltas": [
+    {
+     "delta": "One sequencer orders transactions. Users can bypass it by calling depositTransaction on the chain's OptimismPortal on L1. Such deposits are processed in order within the sequencing window, 12 hours by default.",
+     "source": "https://docs.optimism.io/op-stack/protocol/outages",
+     "relevance": "low"
+    },
+    {
+     "delta": "During a sequencer outage of more than 30 minutes, forced deposits wait until the sequencer returns or the 12 hour window expires, and L2 state stays speculative for that time.",
+     "source": "https://docs.optimism.io/op-stack/transactions/forced-transaction",
+     "relevance": "low"
+    },
+    {
+     "delta": "Karst is active since 8 July 2026. Lagoon is listed as in development with no mainnet date. Its spec adds post-execution transactions, sequencer defined gas refunds and the interop contract set.",
+     "source": "https://docs.optimism.io/op-stack/protocol/network-upgrades",
+     "relevance": "low"
+    },
+    {
+     "delta": "Soneium states that it restricts listed contracts at the level of its public RPCs under an intellectual property policy, with a grace period of about 12 hours, and says access through other means stays open. Press coverage of the January 2025 case describes the block as applied by the sequencer and bypassed through L1 forced inclusion.",
+     "source": "https://soneium.org/en/blog/philosophy-for-responsible-innovation",
+     "relevance": "low"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "B20 precompile tokens on Base give the issuer seize, pause and policy control over the PoolManager balance, and their rules change at hard forks",
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A4",
+    "A6"
+   ],
+   "effect": "both",
+   "severity": "high",
+   "difference": "Since the Beryl upgrade on 25 June 2026, Base has a native token standard called B20. Anyone can create a token through a factory precompile at 0xB20f000000000000000000000000000000000000, and all B20 tokens share logic that runs natively in the node. Each token has role gated mint, burn and seizeWithMemo, a pause switch per feature, and policy slots that are checked on every transfer against the sender, the receiver and msg.sender. The policies are allowlists or blocklists stored in a shared Policy Registry precompile, and one policy can back many tokens and be administered by a third party. Base changes the shared logic at hard forks: Cobalt added seize, and Denim on 5 November 2026 started to enforce the executor policy on plain transfer calls. Ethereum has no enshrined token logic of this kind.",
+   "mechanism": "1. A pool is created with a B20 token as one currency. Users pay in with sync, a token transfer and settle, which credits balanceOf(PoolManager) minus the synced reserves (src/PoolManager.sol:279-288 and 349-364). 2. Every payout calls transfer on the token with the PoolManager as msg.sender (src/PoolManager.sol:291-297, src/types/Currency.sol:55-86). For a B20 token that call passes through the TRANSFER pause check, then TRANSFER_EXECUTOR_POLICY on msg.sender, TRANSFER_SENDER_POLICY on from, and TRANSFER_RECEIVER_POLICY on to. msg.sender and from are both the PoolManager. 3. If the token admin pauses TRANSFER, binds a policy that does not authorise the PoolManager, or the admin of a referenced policy removes the PoolManager from an allowlist or adds it to a blocklist, the transfer reverts and take reverts with ERC20TransferFailed. Every pool, every ERC-6909 claim and the protocol fee balance in that currency are stuck together because they share one holder address. collectProtocolFees uses the same transfer path (src/ProtocolFees.sol:44-57). 4. If the issuer has configured SEIZE_EXEMPT_POLICY so that the PoolManager is not exempt, an account with SEIZE_ROLE can call seizeWithMemo(PoolManager, to, amount, memo). The seize skips allowances and the three transfer policies. The PoolManager balance falls without any delta being recorded, so the pools hold less than their accounting says, and the last LPs and claim holders to withdraw cannot be paid. 5. A hard fork can produce the freeze in step 3 with no action by the issuer after pool creation. Before Denim a token with a restrictive executor allowlist still allowed holder initiated transfer, so the PoolManager could pay out. Since Denim the same token rejects transfer from any msg.sender that is not on the executor allowlist. 6. A seize or pause in the middle of a settlement cannot be turned into credit: a lower balance makes reservesNow minus reservesBefore underflow and revert (src/PoolManager.sol:360).",
+   "impact": "All liquidity, ERC-6909 claims and accrued protocol fees held in the affected B20 token on Base. A seize is a direct loss for LPs of that token. A pause or policy change freezes the token side of every pool that uses it. The other currency of each pool is not affected. Which B20 tokens the Base PoolManager holds today, and in what amounts, could not be listed in this cycle because the public RPC rate limited log queries and the Base explorer blocked the request. The PoolManager's ETH, WETH and USDC on Base are not B20 tokens: the factory returns false for isB20(USDC).",
+   "preconditions": "A B20 token with market value is used in v4 pools on Base. For a freeze, the token admin, the pauser, or the admin of a policy the token references must act, or a Base hard fork must tighten enforcement for a configuration the token already has. For a seize, the issuer must hold SEIZE_ROLE and must have set SEIZE_EXEMPT_POLICY to a policy that does not authorise the PoolManager. With the slot unset no account is seizable. An unprivileged attacker cannot do any of this to a token issued by someone else. An attacker who issues their own B20 token gets no more than a hostile ERC-20 already gives on any chain.",
+   "mitigations": "Pool creators and LPs should read, for every B20 currency, the three transfer policy slots, the seize policy slots, the holders of DEFAULT_ADMIN_ROLE, SEIZE_ROLE and PAUSE_ROLE, and the admin of each referenced policy, and should treat a non renounced admin as able to freeze or seize. Front ends and routers on Base can call isAuthorized on the Policy Registry for the PoolManager under each bound policy and warn when it is false or when the policy admin is live. LPs caught by a freeze can still remove liquidity and keep the frozen side as ERC-6909 claims through mint (src/PoolManager.sol:322-329), which does not call the token, and take the other currency. The deployer should track each Base upgrade changelog for B20 changes before activation.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:322-329",
+    "src/PoolManager.sol:349-364",
+    "src/types/Currency.sol:55-86",
+    "src/types/Currency.sol:90-96",
+    "src/ProtocolFees.sol:44-57"
+   ],
+   "sources": [
+    {
+     "url": "https://docs.base.org/specifications/b20/introduction",
+     "supports": "B20 runs as precompiles in the Base node, is upgraded through hard forks, is created by anyone through the factory, and has roles, pause vectors and policies."
+    },
+    {
+     "url": "https://docs.base.org/specifications/b20/concepts/policies",
+     "supports": "Policy scopes and the account each one checks: sender, receiver, msg.sender as executor, mint receiver, seize exempt and seize receiver. Policies are shared and updated by a policy admin."
+    },
+    {
+     "url": "https://docs.base.org/base-chain/specs/reference/b20/changelog/02-cobalt-b20-seize",
+     "supports": "seizeWithMemo moves a holder balance to a destination, skips allowances and transfer policies, and works only for holders not authorised under SEIZE_EXEMPT_POLICY."
+    },
+    {
+     "url": "https://docs.base.org/base-chain/specs/reference/b20/changelog/03-denim-b20-transfer-executor-enforcement",
+     "supports": "Denim enforces TRANSFER_EXECUTOR_POLICY on msg.sender for transfer as well as transferFrom, a breaking change for tokens with a restrictive executor policy."
+    },
+    {
+     "url": "https://docs.base.org/specifications/b20/reference/constants",
+     "supports": "Precompile addresses of the factory, the Policy Registry and the Activation Registry, and the role and policy identifiers."
+    },
+    {
+     "url": "https://docs.base.org/upgrades",
+     "supports": "Activation dates of Beryl, Cobalt and Denim on Base mainnet."
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "On chain check: eth_getCode at the factory returns empty code while eth_call isB20(PoolManager) and isB20(USDC) return false and getB20Address returns an address starting 0xb2. policyExists(2) returns true. balanceOf and transfer on an uninitialised 0xb2 address revert."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Blacklist and freeze roles on the pooled stablecoins can stop every pool that holds them, because one address holds all balances",
+   "chainIds": [
+    10,
+    8453,
+    130,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A6"
+   ],
+   "effect": "freeze",
+   "severity": "high",
+   "difference": "The issuer model matches USDC on Ethereum, but the role holders are set per chain and several of the largest PoolManager balances in this unit are tokens that Ethereum pools do not hold in this form. On Soneium the bridged USDC.e returns one address, 0x8be79275fcfd08a931087ecf70ba8a99aee3ac59, for owner, pauser and blacklister. On Ink and Unichain USD₮0 exposes isBlocked. On Ink USDG and on Soneium USDSC expose isFrozen. Circle USDC on OP Mainnet, Base, Unichain, World Chain and Ink each has its own blacklister and pauser address.",
+   "mechanism": "1. All pools, ERC-6909 claims and protocol fees for a currency sit in one token balance at the PoolManager address. 2. FiatToken transfer carries the modifiers whenNotPaused, notBlacklisted(msg.sender) and notBlacklisted(to). When the PoolManager pays out, it is msg.sender (src/types/Currency.sol:55-86, called from src/PoolManager.sol:291-297 and src/ProtocolFees.sol:56). 3. If the blacklister lists the PoolManager address, or the pauser pauses the token, every take of that currency reverts with ERC20TransferFailed. sync still works because balanceOf is a view call. 4. The freeze covers every pool on the chain that uses the token, regardless of which pool or user caused the listing. 5. The freeze functions on USD₮0, USDG and USDSC were confirmed to exist by eth_call. Their effect on transfers and any balance destroying function were not read from source in this cycle.",
+   "impact": "At read time the PoolManager held about 12.25 million USDC on Base, 978,360 USDC and 180,746 USD₮0 on Unichain, 1.52 million USD₮0, 767,333 USDG and 676,274 USDC on Ink, 1.90 million USDSC and 517,001 USDC.e on Soneium, 323,556 USDC on OP Mainnet and 66,644 USDC on World Chain. A listing of the PoolManager freezes the whole balance of that token for all LPs, claim holders and the protocol. isBlacklisted, isBlocked or isFrozen returned false for the PoolManager on every token checked.",
+   "preconditions": "The token's blacklister, freezer or pauser acts against the PoolManager address or pauses the token. This is a privileged issuer action. An unprivileged attacker cannot trigger it directly. A realistic trigger is a compliance response to tainted funds that were routed through a pool.",
+   "mitigations": "LPs can exit the non frozen currency normally and hold the frozen currency as ERC-6909 claims through mint (src/PoolManager.sol:322-329) until the listing is lifted. Integrators should monitor the blacklist and pause state of each large pooled token for the PoolManager address on each chain. For Soneium USDC.e, the deployer should identify who controls 0x8be79275fcfd08a931087ecf70ba8a99aee3ac59 before treating it like Circle issued USDC.",
+   "coreRefs": [
+    "src/types/Currency.sol:55-86",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:322-329",
+    "src/ProtocolFees.sol:44-57"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/stablecoin-evm/master/contracts/v1/FiatTokenV1.sol",
+     "supports": "FiatTokenV1.transfer has the modifiers whenNotPaused, notBlacklisted(msg.sender) and notBlacklisted(to)."
+    },
+    {
+     "url": "https://rpc.soneium.org",
+     "supports": "eth_call on USDC.e 0xbA9986D2381edf1DA03B0B9c1f8b00dc4AacC369: owner(), pauser() and blacklister() all return 0x8be79275fcfd08a931087ecf70ba8a99aee3ac59, isBlacklisted(PoolManager) is false, balanceOf(PoolManager) is about 517,001. USDSC isFrozen(PoolManager) is false, balance about 1,898,135."
+    },
+    {
+     "url": "https://rpc-gel.inkonchain.com",
+     "supports": "eth_call on Ink: USD₮0 isBlocked(PoolManager) false and balance about 1,515,475. USDG isFrozen(PoolManager) false, paused false, balance about 767,333. USDC blacklister 0x2163ed19c381a39cf9c564ee73badc35a95d7417, balance about 676,274."
+    },
+    {
+     "url": "https://mainnet.unichain.org",
+     "supports": "eth_call on Unichain: USDC blacklister 0x15dab8b3c0cab0e4d1f96259420b1d42fd3ca55a, balance about 978,360. USD₮0 isBlocked(PoolManager) false, balance about 180,746."
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "eth_call on Base USDC: blacklister 0x1f2e3a640175d20ac31ed523b6733b977173e277, isBlacklisted(PoolManager) false, balance about 12,253,276."
+    },
+    {
+     "url": "https://mainnet.optimism.io",
+     "supports": "eth_call on OP Mainnet USDC: blacklister 0x551e855b7355c98534175879a300972856c04d7c, isBlacklisted(PoolManager) false, balance about 323,556."
+    },
+    {
+     "url": "https://worldchain-mainnet.g.alchemy.com/public",
+     "supports": "eth_call on World Chain USDC: blacklister 0xcb4f5150c828164d78e3a7c67165d2cbbcce3f50, isBlacklisted(PoolManager) false, balance about 66,644."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "PoolManager ownership rests on an upgradeable messenger predeploy on five chains and on the portal alias on two, and a takeover reaches protocol fees only",
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L5",
+   "assumptions": [
+    "A8",
+    "A12"
+   ],
+   "effect": "siphon",
+   "severity": "low",
+   "difference": "On Ethereum the owner is a contract that acts directly. On OP Mainnet, Base, Zora, World Chain and Soneium the owner is a CrossChainAccount that accepts a call only when msg.sender is L2CrossDomainMessenger at 0x4200000000000000000000000000000000000007 and xDomainMessageSender() equals the Ethereum timelock 0x1a9C8182C09F50C8318d769245beA52c32BE35BC. The messenger is a proxy whose admin is the ProxyAdmin predeploy, owned by an aliased L1 upgrade multisig, and since Karst predeploys are also upgraded by network upgrade deposits at fork activation. On Unichain and Ink the owner is the bare alias 0x2bad8182c09f50c8318d769245bea52c32be46cd, which only a deposit from the timelock through that chain's OptimismPortal can produce.",
+   "mechanism": "1. Whoever controls the messenger implementation can make xDomainMessageSender() return the timelock address and call CrossChainAccount.forward, which then calls the PoolManager as owner. On the alias chains the same result needs a change to deposit derivation or to the portal. 2. The owner can call setProtocolFeeController (src/ProtocolFees.sol:29-32). 3. The controller can call setProtocolFee for any pool, limited to 1,000 pips per direction by isValidProtocolFee (src/ProtocolFees.sol:35-41, src/libraries/ProtocolFeeLibrary.sol:25-32), and can call collectProtocolFees to any recipient. 4. collectProtocolFees subtracts the amount from protocolFeesAccrued[currency] with checked arithmetic before the transfer (src/ProtocolFees.sol:54-56), so it cannot pay out more than the fees accrued for that currency. Pool reserves and ERC-6909 claims are out of reach of the owner and the controller. 5. On OP Mainnet and Base the current controller forwards collections to a fixed token jar and lets anyone trigger collect, so the present setup does not let a caller redirect fees.",
+   "impact": "Accrued protocol fees, about 0.030 ETH of native fees on OP Mainnet and 0.034 ETH on Base at read time, plus whatever has accrued in ERC-20 currencies, which was not read, and up to 0.1 percent per direction of future swap volume on every pool of the chain. No LP principal. On the five chains without a controller nothing has accrued.",
+   "preconditions": "Control of the chain's L2 predeploy upgrade path: the aliased ProxyAdmin owner, a hard fork upgrade bundle, or a compromise of the L1 timelock itself. Each of these parties can already do more damage to bridged assets than to the PoolManager.",
+   "mitigations": "Uniswap governance can monitor ProtocolFeeControllerUpdated and OwnershipTransferred events on each chain. Swappers and LPs can read the protocol fee of a pool from slot0 before trading. No code change in core is needed because the owner's reach is already capped by src/ProtocolFees.sol:54-56.",
+   "coreRefs": [
+    "src/ProtocolFees.sol:29-32",
+    "src/ProtocolFees.sol:35-41",
+    "src/ProtocolFees.sol:44-57",
+    "src/libraries/ProtocolFeeLibrary.sol:25-32"
+   ],
+   "sources": [
+    {
+     "url": "https://worldchain-mainnet.explorer.alchemy.com/api/v2/smart-contracts/0xcb2436774c3e191c85056d248ef4260ce5f27a9d",
+     "supports": "Verified CrossChainAccount source on World Chain: forward requires msg.sender to be the messenger and messenger.xDomainMessageSender() to equal l1Owner. Constructor arguments are 0x4200…0007 and 0x1a9C8182C09F50C8318d769245beA52c32BE35BC."
+    },
+    {
+     "url": "https://soneium.blockscout.com/api/v2/smart-contracts/0x044aaf330d7fd6ae683eec5c1c1d1fff5196b6b7",
+     "supports": "Verified CrossChainAccount source on Soneium with immutable messenger and l1Owner and the same constructor arguments."
+    },
+    {
+     "url": "https://mainnet.optimism.io",
+     "supports": "eth_getStorageAt on the OP Mainnet owner 0xa1dd330d602c32622aa270ea73d078b803cb3518: slot 0 is the messenger predeploy, slot 1 is the timelock. The same two values were read on Base, Zora and World Chain. The messenger admin slot is 0x4200…0018 on all seven chains."
+    },
+    {
+     "url": "https://mainnet.unichain.org",
+     "supports": "eth_call owner() on the Unichain and Ink PoolManager returns 0x2bad8182c09f50c8318d769245bea52c32be46cd, which has no code and equals the timelock address plus the alias offset."
+    },
+    {
+     "url": "https://docs.optimism.io/op-stack/protocol/privileged-roles",
+     "supports": "The L2 ProxyAdmin owner is the aliased L1 ProxyAdmin owner and can upgrade L2 system contracts. For Optimism governed chains the L1 owner is a 2-of-2 Safe of the Foundation and the Security Council."
+    },
+    {
+     "url": "https://specs.optimism.io/protocol/overview.html",
+     "supports": "Network upgrade transactions at fork activation call L2ProxyAdmin.upgradePredeploys from the depositor account."
+    },
+    {
+     "url": "https://explorer.optimism.io/api/v2/smart-contracts/0xd85393784234fb2ee4f077867a8b78e1ad4ce56b",
+     "supports": "V4FeeAdapter source on OP Mainnet: collect sends to the immutable TOKEN_JAR and is callable by anyone."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Soneium restricts listed contracts at its own RPC and sequencer, which leaves L1 forced inclusion as the exit for pools that touch a listed token or hook",
+   "chainIds": [
+    1868
+   ],
+   "lens": "L6",
+   "assumptions": [
+    "A6"
+   ],
+   "effect": "degrade",
+   "severity": "low",
+   "difference": "Soneium has a published policy of restricting contracts it lists for intellectual property reasons and applied it to token contracts in January 2025. Soneium describes the restriction as acting on its public RPCs after a grace period of about 12 hours. Press coverage describes it as sequencer level and reports that users got around it with L1 forced inclusion. Ethereum has no operator who can apply such a list.",
+   "mechanism": "1. Every v4 pool on Soneium lives in the single PoolManager at 0x360e68faccca8ca495c1b759fd9eee466db9fb32. A restriction on a pooled token, on a hook, or on the router that users rely on stops normal submission of the transactions that call take or modifyLiquidity for the affected pools. 2. Core has no time based logic and no operator hooks, so nothing inside the PoolManager fails. The funds stay accounted and withdrawable. 3. An LP or swapper can still send the same call as a deposit through the Soneium OptimismPortal on Ethereum. The deposit must be processed within the sequencing window of 12 hours. Removing liquidity touches two ticks (src/libraries/Pool.sol:146-238) and fits easily in a deposit. 4. If the PoolManager address itself were listed, every pool on the chain would depend on the L1 path.",
+   "impact": "Delayed exits and stale prices for LPs in affected pools for as long as the listing lasts, with L1 gas cost for each forced transaction. No loss path inside core was found. The Soneium PoolManager held about 1.90 million USDSC, 517,001 USDC.e and 58 ETH at read time.",
+   "preconditions": "Soneium lists a contract that a pool depends on. The affected user must be able to send an L1 deposit, either from an EOA that owns the position or from any EOA that can relay a signed call to the user's L2 smart account.",
+   "mitigations": "Front ends on Soneium should document the OptimismPortal deposit path for removing liquidity. LPs should check the Soneium suspicious token list before entering a pool. Position managers should keep a call path that an L1 deposit can reach without an L2 relayer.",
+   "coreRefs": [
+    "src/PoolManager.sol:145-184",
+    "src/PoolManager.sol:291-297",
+    "src/libraries/Pool.sol:146-238"
+   ],
+   "sources": [
+    {
+     "url": "https://soneium.org/en/blog/philosophy-for-responsible-innovation",
+     "supports": "Soneium's statement that listed contracts are restricted at the RPC level, that a grace period of about 12 hours applies, and that the blacklist does not prevent access to the chain through other means."
+    },
+    {
+     "url": "https://blockworks.com/news/soneium-mainnet-censorship-complaints",
+     "supports": "Report that a token was blocked by the Soneium sequencer in January 2025 and that users bypassed the block with forced inclusion through OptimismPortal."
+    },
+    {
+     "url": "https://docs.optimism.io/op-stack/protocol/outages",
+     "supports": "Users can always bypass the sequencer by sending L2 transactions to OptimismPortal on L1, processed within the sequencer window, 12 hours by default."
+    }
+   ],
+   "evidence": "secondary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    10,
+    7777777
+   ],
+   "lens": "L3",
+   "check": "Whether LegacyERC20ETH at 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000, whose balanceOf mirrors the native ETH balance, lets a caller get credit twice for one ETH payment or take ETH under a second currency id (assumption A3).",
+   "result": "No loss path. sync(LegacyERC20ETH) succeeds and records the PoolManager's ETH balance. While that currency is synced, any settle with msg.value above zero reverts with NonzeroNativeValue (src/PoolManager.sol:356), so a native payment can never be counted both as msg.value and as a balance increase. The only way to raise the balance in that window is to force ETH in without a call, and settle then credits exactly that amount under the legacy currency id. That credit cannot leave: take calls transfer on the legacy contract (src/types/Currency.sol:73), which reverts with 'transfer is disabled' when called from the PoolManager address. The forced ETH stays in the PoolManager as surplus that no delta refers to. A caller can only lose their own ETH this way. The contract source could not be fetched, so the behaviour is taken from the predeploy spec and from eth_call.",
+   "source": "https://mainnet.optimism.io"
+  },
+  {
+   "chainIds": [
+    8453,
+    130,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L3",
+   "check": "Whether the native asset has an ERC-20 face on the chains where the predeploy spec lists LegacyERC20ETH.",
+   "result": "eth_getCode at 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000 returns empty code on all five chains, and L1Block.isCustomGasToken() is false. sync on an address without code reverts because the balanceOf call returns no data (src/types/Currency.sol:94), so the address cannot be synced.",
+   "source": "https://mainnet.base.org/"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L3",
+   "check": "Whether the WETH predeploy is upgradeable or shares a balance with native ETH.",
+   "result": "The EIP-1967 implementation and admin slots of 0x4200000000000000000000000000000000000006 are zero on all seven chains and the predeploy spec lists WETH9 as not proxied. The PoolManager's WETH balance and its native balance are separate numbers on every chain (for example 4,352 WETH and 6,502 ETH on Base).",
+   "source": "https://specs.optimism.io/protocol/predeploys.html"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "check": "Whether transient storage can survive from one user's transaction into another's (assumption A1): deposits, the L1 attributes transaction, Flashblocks.",
+   "result": "The deposit spec processes each deposit as its own transaction in the manner of an EIP-1559 transaction and lists no change to transient storage. Flashblocks group whole transactions. exttload of the synced currency slot and the unlock slot returns zero on all seven chains. unlock re-locks before it returns and reverts if any delta is open (src/PoolManager.sol:104-114), so the only value that can outlive a call inside one transaction is a stale sync.",
+   "source": "https://specs.optimism.io/protocol/deposits.html"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "check": "Whether the ETH mint of a deposit transaction, the L1 data fee, the operator fee or fee vault credits can change the PoolManager's balance outside a call (assumption A2 and A3).",
+   "result": "The mint credits the deposit's from address only. Fees are debited from the transaction sender and credited to vault predeploys. The PoolManager is never a sender. A deposit that sends value to the PoolManager must call settle or settleFor, the only payable functions (src/PoolManager.sol:300-307), and otherwise reverts while the mint stays with the depositor.",
+   "source": "https://specs.optimism.io/protocol/deposits.html"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "check": "Whether address aliasing lets someone act as the PoolManager, as the zero address controller, or as the owner (assumption A8).",
+   "result": "An L1 contract's L2 sender is its address plus 0x1111000000000000000000000000000000001111. To appear as the zero address a contract would have to sit at 0xeeeeffffffffffffffffffffffffffffffffeeef on L1, and to appear as the Unichain PoolManager at 0x0e873fffffffffffffffffffffffffffffffeef3. Both would need a chosen 160 bit address. EOAs and EIP-7702 delegated accounts are not aliased, so they act only as themselves. The owner alias on Unichain and Ink is reachable only by the L1 timelock.",
+   "source": "https://docs.optimism.io/op-stack/protocol/differences"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    57073,
+    1868
+   ],
+   "lens": "L3",
+   "check": "Whether the 16,777,216 gas cap per transaction (EIP-7825) or the block gas limit can make withdrawals impossible (assumption A9).",
+   "result": "modifyLiquidity updates two ticks and the bitmap with no loop (src/libraries/Pool.sol:146-238), take is one transfer, and a swap stops at the caller's price limit (src/libraries/Pool.sol:344), so a large swap can be split. Block gas limits read from chain are between 30 and 60 million. Deposits are exempt from the cap and bounded at 20 million gas per L1 block. World Chain is left out because its cap was not confirmed. The Base figure comes from https://docs.base.org/specifications/transactions/throughput-and-limits.",
+   "source": "https://docs.optimism.io/op-stack/features/osaka-on-l2"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L1",
+   "check": "Whether the opcodes the PoolManager needs exist and whether OP Stack opcode differences reach core (assumption A10).",
+   "result": "The deployed PoolManager answers owner() and exttload by eth_call on all seven chains, and the CLZ probe shows the Osaka rule set. The documented differences concern COINBASE, PREVRANDAO, ORIGIN and CALLER. A grep of src/ outside src/test finds no use of block fields, tx.origin, blockhash or selfdestruct.",
+   "source": "https://docs.optimism.io/op-stack/protocol/differences"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L4",
+   "check": "Whether interop contracts (SuperchainTokenBridge, SuperchainETHBridge, ETHLiquidity, CrossL2Inbox, L2ToL2CrossDomainMessenger) can mint, burn or move balances today.",
+   "result": "The five predeploy slots hold proxy code whose EIP-1967 implementation slot is zero on all seven chains. The Lagoon spec that defines these contracts is listed as in development with no mainnet date.",
+   "source": "https://mainnet.unichain.org"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L4",
+   "check": "Whether a pool can name a predeploy or precompile as its hook and make the PoolManager call it with harmful effect (assumption A7).",
+   "result": "Hook calls carry zero value (src/libraries/Hooks.sol:134) and the call is accepted only if the callee returns at least 32 bytes that start with the hook selector (src/libraries/Hooks.sol:152). A contract that does not implement the exact hook function makes the whole call revert, so no side effect survives. WETH at 0x…0006 and the registries at 0x8453…0001 and 0x8453…0002 also fail isValidHookAddress because their low bits set a returns-delta flag without the matching action flag (src/libraries/Hooks.sol:109-127).",
+   "source": "src/libraries/Hooks.sol:131-155"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "check": "Whether a B20 Asset stock split or reverse split changes balanceOf(PoolManager) without a transfer (assumption A2).",
+   "result": "The UI multiplier changes only the derived views balanceOfUI, scaledBalanceOf and totalSupplyUI. The docs state that balanceOf, transfer amounts, totalSupply and allowances stay raw. The PoolManager reads balanceOf only (src/types/Currency.sol:94).",
+   "source": "https://docs.base.org/specifications/b20/concepts/multipliers"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L1",
+   "check": "Whether a B20 shaped address that has not been created behaves like an address without code, where a transfer call succeeds and moves nothing (assumption A4).",
+   "result": "eth_call balanceOf and transfer (from the PoolManager) on the uninitialised address 0xb200000000000000000001000000000000000001 both revert, so take and sync on such a currency revert. An attacker who creates the token later in the same transaction controls only their own token.",
+   "source": "https://mainnet.base.org/"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L6",
+   "check": "Whether the move to 200 ms blocks and the BaseTime deposit in Denim affects core.",
+   "result": "block.number now advances ten times faster and block.timestamp is unchanged. No file under src/ outside src/test reads either value, and the BaseTime deposit calls only its own predeploy at 0x4200…0030.",
+   "source": "https://docs.base.org/upgrades/denim/200ms-blocks"
+  },
+  {
+   "chainIds": [
+    480
+   ],
+   "lens": "L2",
+   "check": "Whether one UserOp in a PBH or ERC-4337 bundle can leave transient state that takes funds from a later UserOp in the same transaction (assumption A1).",
+   "result": "sync has no lock check (src/PoolManager.sol:279-288), so an earlier UserOp can leave a synced ERC-20 currency. A later native settle with msg.value then reverts with NonzeroNativeValue (src/PoolManager.sol:356) unless the router calls sync(address(0)) first, which the comment at src/PoolManager.sol:348 advises. A later ERC-20 payment starts with its own sync and overwrites the stale value. The stale reserves can only make a later settle revert or credit a real balance increase to whoever calls settle next, and a router that follows sync, transfer, settle never leaves such an increase unclaimed. The outcome is a reverted UserOp, with no transfer of funds.",
+   "source": "https://worldcoin.github.io/world-chain/pbh/txs.html"
+  },
+  {
+   "chainIds": [
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L5",
+   "check": "Whether anyone can use the protocol fee functions while protocolFeeController is the zero address (assumption A12).",
+   "result": "setProtocolFee and collectProtocolFees require msg.sender to equal the controller (src/ProtocolFees.sol:36 and 48). No user transaction or aliased deposit can have the zero address as sender, and protocolFeesAccrued(native) is 0 on all five chains.",
+   "source": "https://rpc-gel.inkonchain.com"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L5",
+   "check": "Whether the deployed PoolManager is behind a proxy that an admin could repoint.",
+   "result": "The EIP-1967 implementation and admin slots of the PoolManager are zero on all seven chains, including the Unichain instance at 0x1f98400000000000000000000000000000000004, and the code length is 24,009 or 24,050 bytes, far above a proxy stub.",
+   "source": "https://mainnet.unichain.org"
+  },
+  {
+   "chainIds": [
+    130
+   ],
+   "lens": "L6",
+   "check": "Whether Flashblocks, TEE block building or revert protection on Unichain change how core settles.",
+   "result": "Flashblocks are preconfirmations of whole transactions and do not change consensus. Revert protection drops transactions that would revert before inclusion. Core settles inside one transaction and has no dependence on ordering or block time.",
+   "source": "https://developers.uniswap.org/llms.mdx/docs/unichain/"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "question": "Which B20 tokens does the Base PoolManager hold, and for each one what are the bound TRANSFER_SENDER, TRANSFER_RECEIVER, TRANSFER_EXECUTOR and SEIZE_EXEMPT policies, who administers them, and is the PoolManager authorised under each?",
+   "why": "It turns the B20 finding from a class of hazard into a list of pools with a live freeze or seize exposure. The log query for the factory was rate limited and the Base explorer blocked the request in this cycle.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L2",
+   "question": "In Base Transactions (EIP-8430, type 0x79, planned for Everest), is transient storage cleared between call phases, can a failed phase leave earlier phases committed, and at what point is the payer's token reimbursement debited?",
+   "why": "A phase boundary that keeps transient storage while reverting part of the transaction, or a token debit outside EVM execution, would touch assumptions A1, A2 and A5. Everest has no activation date yet.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    10,
+    130,
+    7777777,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "question": "When Lagoon is scheduled, do the sequencer defined gas refunds credit only tx.from as the draft says, and what can the activated SuperchainTokenBridge and SuperchainETHBridge do to balances of tokens that implement crosschainBurn?",
+   "why": "The draft credits ETH to senders outside EVM execution and activates bridge predeploys that mint and burn. The PoolManager cannot be a tx.from, but the final spec and the token bridge rules should be read before activation. OP Mainnet and Zora also have the legacy ETH view that turns any native balance change into a readable ERC-20 balance.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    130
+   ],
+   "lens": "L5",
+   "question": "How should bytecode parity for the Unichain PoolManager (24,050 bytes against 24,009 elsewhere) be established, given that the review owner forbids diffing against other copies?",
+   "why": "The findings and cleared items for Unichain assume the deployed code behaves like src/. A method that the owner accepts, such as a reproducible build of this repository compared by hash, is needed to close lens L5.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1868
+   ],
+   "lens": "L3",
+   "question": "Who controls 0x8be79275fcfd08a931087ecf70ba8a99aee3ac59, the single owner, pauser and blacklister of Soneium USDC.e, and what kind of contract is its 133 byte code?",
+   "why": "One account can freeze about 517,000 USDC.e at the PoolManager and can change the token's roles. Its threshold and signers decide how likely a freeze or a compromised role is.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    57073,
+    130,
+    1868
+   ],
+   "lens": "L3",
+   "question": "Do USD₮0, USDG and USDSC have a function that destroys or moves the balance of a blocked or frozen holder, and who holds that role on each chain?",
+   "why": "A balance destroying function applied to the PoolManager would be a loss for LPs, where a plain freeze is only a lock. Only the existence of isBlocked and isFrozen was confirmed.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    480
+   ],
+   "lens": "L1",
+   "question": "Which World Chain upgrade activated the Osaka opcodes, does the EIP-7825 gas cap apply there, and does the World Chain node add any execution rule beyond PBH ordering?",
+   "why": "World Chain runs its own node build and is not in the Upgrade 19 chain list. Only the CLZ probe and the PBH documents were checked.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    8453,
+    7777777,
+    480
+   ],
+   "lens": "L4",
+   "question": "Who controls the L1 addresses behind the L2 ProxyAdmin owners 0x8cc51c3008b3f03fe483b28b8db90e19cf076a6d (Base), 0x5b5a62275df8c60a80d3a25faec5aa7de116b857 (Zora) and 0xb2aa0c2c4fd6bfcbf699d4c787cd6cc0dc461a9d (World Chain)?",
+   "why": "These owners can replace L2CrossDomainMessenger and L2StandardBridge, which decides who can act as PoolManager owner and who can burn bridged tokens. Only the Optimism governed owner was matched to a documented multisig.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": []
+}

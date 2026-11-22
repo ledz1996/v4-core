@@ -1,0 +1,963 @@
+{
+ "unit": "arbitrum-family",
+ "profiles": [
+  {
+   "chainId": 42161,
+   "lens": "L1",
+   "summary": "Arbitrum One runs Nitro v3.13.0-rc.9 at ArbOS 61. Every opcode the PoolManager bytecode uses is supported with Ethereum semantics. The one execution difference that reaches pool code is Stylus: WASM contracts that must be activated, expire, and stop answering calls when the Stylus version changes.",
+   "deltas": [
+    {
+     "delta": "Stylus WASM programs are ordinary call targets, but a call fails unless the program is activated at the current Stylus version and is younger than the expiry period. The check is getActiveProgram in the client.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/programs/programs.go",
+     "relevance": "high"
+    },
+    {
+     "delta": "On chain, ArbWasm.stylusVersion() is 3, expiryDays() is 365, keepaliveDays() is 31 and activationGas() is 2^64-1. activateProgram burns activationGas before doing anything else, so no caller can activate or reactivate a program at present.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call to ArbWasm 0x71, queried 2026-11-22",
+     "relevance": "high"
+    },
+    {
+     "delta": "The ArbOS upgrade path runs UpgradeToVersion(3) for Stylus at ArbOS 59, which every chain moving from ArbOS 51 to 61 passes through. Programs activated at Stylus version 2 fail the version check afterwards.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/arbosState/arbosstate.go",
+     "relevance": "high"
+    },
+    {
+     "delta": "TSTORE, TLOAD and MCOPY exist since ArbOS 20 and SELFDESTRUCT follows EIP-6780.",
+     "source": "https://docs.arbitrum.io/run-a-node/arbos-releases/arbos20",
+     "relevance": "none"
+    },
+    {
+     "delta": "PUSH0 exists since ArbOS 11. block.number returns a parent chain estimate, block.prevrandao returns 1 and block.coinbase returns a fixed sequencer address. The PoolManager uses none of NUMBER, PREVRANDAO or COINBASE (ASSUMPTIONS.md A10).",
+     "source": "https://docs.arbitrum.io/arbitrum-essentials/arbitrum-vs-ethereum/solidity-support",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7702 delegated accounts are enabled since ArbOS 40, as on Ethereum after Pectra.",
+     "source": "https://docs.arbitrum.io/run-a-node/arbos-releases/arbos40",
+     "relevance": "low"
+    },
+    {
+     "delta": "A call to an ArbOS precompile with fewer than 4 bytes of calldata or an unknown selector reverts and consumes the gas supplied.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/precompiles/precompile.go",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 42161,
+   "lens": "L2",
+   "summary": "Transient storage is wiped at the start of every transaction that runs contract code, as on Ethereum. Nitro adds deposit, retryable and internal transaction types that change balances without running contract code, and it aliases the sender of unsigned parent chain messages.",
+   "deltas": [
+    {
+     "delta": "The state transition calls the ArbOS StartTxHook first and StateDB.Prepare after it. Prepare replaces the transient storage map. Paths that end in the hook (deposit, internal, submit retryable) run no contract code.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/state_transition.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "Retryable redeems are queued as separate transactions and each one goes through ApplyTransaction on its own, so an auto-redeem does not share transient storage with the transaction that scheduled it.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/block_processor.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "A deposit transaction mints to the sender and moves the value to the recipient with no EVM call. Retryable refunds credit the fee refund address and the beneficiary the same way. A parent chain sender can raise the native balance of any child chain address this way.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/tx_processor.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "Unsigned delayed inbox messages and retryables execute with msg.sender equal to the parent chain sender plus 0x1111000000000000000000000000000000001111.",
+     "source": "https://docs.arbitrum.io/how-arbitrum-works/deep-dives/l1-to-l2-messaging",
+     "relevance": "low"
+    },
+    {
+     "delta": "Unsigned and contract transactions from the delayed inbox take From from the aliased poster recorded by the bridge. Gas and call value come out of that account's child chain balance.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/parse_l2.go",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 42161,
+   "lens": "L3",
+   "summary": "The gas token is ETH with 18 decimals and the protocol gives it no ERC-20 face. The native mint and burn precompile is present and switched off. Issuer-controlled stablecoins held by the PoolManager carry the same block list functions as on Ethereum.",
+   "deltas": [
+    {
+     "delta": "ArbGasInfo reports a minimum base fee of 0.02 gwei, a speed limit of 7,000,000 gas per second, a block gas limit of 32,000,000 and a per-transaction gas limit of 32,000,000.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call to ArbGasInfo 0x6c (getMinimumGasPrice, getGasAccountingParams, getMaxTxGasLimit), queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "ArbOS 51 introduced the per-transaction cap of 32,000,000 execution gas and lets the last transaction of a block exceed the block limit by up to that cap.",
+     "source": "https://docs.arbitrum.io/run-a-node/arbos-releases/arbos51",
+     "relevance": "low"
+    },
+    {
+     "delta": "ArbNativeTokenManager at 0x73 lets addresses appointed by the chain owner mint native tokens to themselves and burn their own. On chain the feature time is 0 and the owner list is empty.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call ArbOwnerPublic.getNativeTokenManagementFrom() and getAllNativeTokenOwners(), queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "The PoolManager held 4,495 ETH, 8.89M USDC, 0.98M USDT0 and 48.9 WETH. USDC answers isBlacklisted(PoolManager) with false and USDT0 answers isBlocked(PoolManager) with false. These issuer controls exist on Ethereum too.",
+     "source": "https://arb1.arbitrum.io/rpc eth_getBalance and eth_call balanceOf, queried 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 42161,
+   "lens": "L4",
+   "summary": "ArbOS precompiles sit at 0x64 to 0x74. None of them answers the two ERC-20 calls the PoolManager makes, and none moves a third party's balance. The chain owner precompile can change the rules of the chain.",
+   "deltas": [
+    {
+     "delta": "balanceOf(address) and transfer(address,uint256) sent from the PoolManager address revert on every precompile from 0x64 to 0x74 and on 0xff, so sync reverts for these addresses and none can serve as a currency.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call with from set to the PoolManager, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "ArbOwner at 0x70 is callable only by chain owners and controls ArbOS upgrades, fee parameters, native token owners and transaction filterers. ArbOwnerPublic.getAllChainOwners() returns three addresses on chain.",
+     "source": "https://docs.arbitrum.io/arbitrum-essentials/precompiles/reference and https://arb1.arbitrum.io/rpc eth_call, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "ArbFilteredTransactionsManager exists at 0x74. The filterer list is empty and the filtering start time is 0.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call ArbOwnerPublic.getAllTransactionFilterers() and getTransactionFilteringFrom(), queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "mintNativeToken and burnNativeToken act on the caller's own balance only.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/precompiles/ArbNativeTokenManager.go",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 42161,
+   "lens": "L5",
+   "summary": "The PoolManager at 0x360e68faccca8ca495c1b759fd9eee466db9fb32 is owned by 0x2BAD8182C09F50c8318d769245beA52C32Be46CD, the alias of the Ethereum timelock. The protocol fee controller is a contract owned by the same alias and anyone can trigger fee collection through it. I did not compare the deployed bytecode with a build of this repository, because the review owner's instruction for this run forbids diffing this code against any other copy.",
+   "deltas": [
+    {
+     "delta": "The owner address has no code and nonce 9 on Arbitrum One. The Ethereum address 0x1a9C8182C09F50C8318d769245beA52c32BE35BC has 6,856 bytes of code, admin 0x408ED6354d4973f66138C91495F2f2FCbd8724C3 and a delay of 172,800 seconds. Only an unsigned message or retryable sent by that contract through the Arbitrum inbox produces a call from the owner address.",
+     "source": "https://arb1.arbitrum.io/rpc eth_getCode and eth_getTransactionCount; https://ethereum-rpc.publicnode.com eth_getCode and eth_call admin(), delay(); queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "protocolFeeController is 0x6b3c04567cc62fc5d6ab8d50f1bc1dee161eb2cc with owner() and feeSetter() equal to the owner alias and TOKEN_JAR() 0x95e337c5b155385945d407f5396387d0c2a3a263. An eth_call of collect((address,uint256)[]) from an arbitrary sender succeeds. Accrued protocol fees were 0.0163 ETH and 77.8 USDC.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "networks.json records the same PoolManager address on four networks and the same masked code hash on all three chains of this unit.",
+     "source": "research/network-risk/state/networks.json",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 42161,
+   "lens": "L6",
+   "summary": "One sequencer orders transactions and anyone can force a delayed inbox message in after at most 24 hours. ArbOS upgrades go through DAO votes, and the Security Council can act without one, as it did when it stopped Stylus activations. Governance is discussing who may activate Stylus programs and plans a way to deactivate them.",
+   "deltas": [
+    {
+     "delta": "delayBlocks is 7,200 Ethereum blocks on Arbitrum One. The delay buffer can shorten the force inclusion window to 30 minutes.",
+     "source": "https://docs.arbitrum.io/how-arbitrum-works/deep-dives/forced-transactions",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Security Council paused new Stylus activations and reactivations of expired programs. Active programs keep running until they expire and can be renewed with keepalive.",
+     "source": "https://docs.arbitrum.io/notices/stylus-activation-pause-notice",
+     "relevance": "high"
+    },
+    {
+     "delta": "A constitutional proposal of 2026-10-23 would let the Arbitrum Foundation authorise activations after an audit. Its authors put it on hold on 2026-11-18. The same text says protocol-level activation controls and the ability to deactivate a Stylus contract are planned for a later ArbOS proposal.",
+     "source": "https://forum.arbitrum.foundation/t/constitutional-aip-stylus-activation-contract/31605",
+     "relevance": "high"
+    },
+    {
+     "delta": "ArbOS 61 activated on 2026-08-20. Compliance transaction filtering and priority fee collection shipped in it and are disabled on Arbitrum One.",
+     "source": "https://docs.arbitrum.io/run-a-node/arbos-releases/arbos61",
+     "relevance": "low"
+    },
+    {
+     "delta": "ArbOwnerPublic.getScheduledUpgrade() returns version 0 and timestamp 0, so no ArbOS upgrade is scheduled on chain.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call, queried 2026-11-22",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L1",
+   "summary": "Robinhood Chain is an Arbitrum Nitro chain on Ethereum at ArbOS 61, running the same client build as Arbitrum One. Its documentation states a larger contract size limit than Ethereum. Stylus activation is blocked on chain.",
+   "deltas": [
+    {
+     "delta": "The RPC reports nitro/v3.13.0-rc.9 and ArbSys.arbOSVersion() returns 116, which is ArbOS 61. The documentation also states ArbOS 61.",
+     "source": "https://rpc.mainnet.chain.robinhood.com web3_clientVersion and eth_call to 0x64, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "The maximum contract code size is 96 KB and the maximum init code size is 192 KB, against 24 KB and 48 KB on Ethereum. I did not confirm the values from chain configuration.",
+     "source": "https://docs.robinhood.com/chain/differences-from-ethereum/",
+     "relevance": "low"
+    },
+    {
+     "delta": "ArbWasm.activationGas() is 2^64-1 and stylusVersion() is 3, so no Stylus program can be activated by an unprivileged caller.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call to ArbWasm 0x71, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "block.number, block.prevrandao, blockhash and block.coinbase differ from Ethereum as on any Nitro chain. The PoolManager reads none of them.",
+     "source": "https://docs.robinhood.com/chain/differences-from-ethereum/",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L2",
+   "summary": "Transaction types and transient storage behave as on Arbitrum One. The chain adds a list of transaction hashes, written by an operator account, that the state transition refuses to execute.",
+   "deltas": [
+    {
+     "delta": "A transaction whose hash is in the on-chain filter is not executed. The sender's nonce rises and all remaining gas is consumed. A filtered deposit sends its value to the filtered funds recipient, and a filtered retryable is created without an auto-redeem and with its refund addresses redirected.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/tx_processor.go",
+     "relevance": "high"
+    },
+    {
+     "delta": "ArbOwnerPublic.getFilteredFundsRecipient() returns 0xbbbd433db8700d8927faaaaf482e007e293ed568.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "Transient storage reset, retryable scheduling and sender aliasing come from the same client code as on Arbitrum One.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/state_transition.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "The documentation confirms that a parent chain contract appears on Robinhood Chain as its aliased address.",
+     "source": "https://docs.robinhood.com/chain/differences-from-ethereum/",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L3",
+   "summary": "The gas token is ETH with 18 decimals. The assets the chain is built around are issuer-controlled: Robinhood Stock Tokens share one upgrade beacon and block registry and can be paused and burned by the issuer, and USDG is a Paxos token with freeze and supply functions. Stock token balances do not rebase.",
+   "deltas": [
+    {
+     "delta": "ETH is the native gas token and fees include a parent chain data component charged inside the same gas limit.",
+     "source": "https://docs.robinhood.com/chain/gas-and-fees/",
+     "relevance": "none"
+    },
+    {
+     "delta": "Stock Tokens are ERC-20 contracts with 18 decimals. Splits and dividends change uiMultiplier() and leave balanceOf and totalSupply unchanged.",
+     "source": "https://docs.robinhood.com/chain/building-with-stock-tokens/",
+     "relevance": "low"
+    },
+    {
+     "delta": "The stock token at 0xbbB6c29bCc3a1028A2B54310DF73F4F7A3bcB373 (symbol ANT) is a beacon proxy. Its beacon 0xe10b6f6b275de231345c20d14ab812db62151b00 is also the address returned by ACCESS_CONTROLLED_REGISTRY() and carries isBlocked(address), blockAccounts(address[]), unblockAccounts(address[]), pause(), unpause() and upgradeTo(address). The logic contract 0xb35490d6f9163de4f80d88dc75c3516eb64c5ae2 carries adminBurn(address,uint256), burn(address,uint256), mint(address,uint256), pause() and updateMultiplier.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_getStorageAt, eth_getCode and eth_call, selector names from https://api.openchain.xyz/signature-database/v1/lookup, queried 2026-11-22",
+     "relevance": "high"
+    },
+    {
+     "delta": "USDG at 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168 is an upgradeable proxy whose logic carries isFrozen(address), decreaseSupplyFromAddress(uint256,address), upgradeTo and paused(). isFrozen(PoolManager) is false.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call and eth_getCode, queried 2026-11-22",
+     "relevance": "high"
+    },
+    {
+     "delta": "WETH at 0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73 is a proxy with an admin slot set and logic that carries bridgeMint, bridgeBurn, deposit and withdraw. The native asset has no ERC-20 face in the protocol itself.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_getStorageAt and eth_getCode, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "The PoolManager held 21,321 ETH, 16.98M USDG, 1,321 WETH and 3,134 ANT.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_getBalance and eth_call balanceOf, queried 2026-11-22",
+     "relevance": "high"
+    },
+    {
+     "delta": "ArbGasInfo reports a minimum base fee of 0.02 gwei, a block gas limit of 32,000,000 and a per-transaction gas limit of 32,000,000. Native token management is off and has no owners.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call to 0x6c and 0x6b, queried 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L4",
+   "summary": "The precompile set matches Arbitrum One. The transaction filtering precompile at 0x74 is in use here: one externally owned account is registered as filterer and has sent several thousand transactions.",
+   "deltas": [
+    {
+     "delta": "getAllTransactionFilterers() returns one address, 0xebdc18a1f5c42fc25552ea233facf4054df224b7. It has no code and nonce 6,237. getTransactionFilteringFrom() returns 1782295200, which is 2026-06-24 10:00 UTC.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call to ArbOwnerPublic 0x6b, eth_getCode, eth_getTransactionCount, queried 2026-11-22",
+     "relevance": "high"
+    },
+    {
+     "delta": "addFilteredTransaction and deleteFilteredTransaction on 0x74 accept any transaction hash from a registered filterer. The precompile does not check why the hash is listed.",
+     "source": "https://github.com/OffchainLabs/nitro/blob/v3.11.0/precompiles/ArbFilteredTransactionsManager.go",
+     "relevance": "high"
+    },
+    {
+     "delta": "Chain owners are 0x2a153c6a1b66dbc930a8d7017230ab0253005c09 (a proxy with an implementation slot) and 0x5eb36fd3a11f3a123c046e3bf84195bb4f5a2690 (4,594 bytes of code). I did not identify who controls them.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call getAllChainOwners(), eth_getCode, eth_getStorageAt, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "No precompile from 0x64 to 0x74 answers balanceOf(address) or transfer(address,uint256).",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call with from set to the PoolManager, queried 2026-11-22",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L5",
+   "summary": "The PoolManager at 0x8366a39cc670b4001a1121b8f6a443a643e40951 has the same owner alias as on Arbitrum One. The parent chain is Ethereum, so the alias maps to the same timelock. The fee controller is the same contract type with its own token jar. I did not compare the deployed bytecode with a build of this repository, because the review owner's instruction for this run forbids diffing this code against any other copy.",
+   "deltas": [
+    {
+     "delta": "Robinhood Chain settles to Ethereum and uses Ethereum blobs for data.",
+     "source": "https://docs.robinhood.com/chain/connecting/",
+     "relevance": "none"
+    },
+    {
+     "delta": "owner() is 0x2bad8182c09f50c8318d769245bea52c32be46cd, which has no code and nonce 3 here. protocolFeeController() is 0x6d0009504d129cf5002dba61d9ae8575aa79314c with owner() and feeSetter() equal to the alias and TOKEN_JAR() 0x2ac03e14cfe755426daaee0a4994184ce81482f8.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call, eth_getCode, eth_getTransactionCount, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "Owner actions reach this chain as delayed inbox messages from Ethereum. The transaction filterer can fail such a message by listing its hash, which would block changes to the fee controller. That affects governance and leaves pool funds untouched.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/tx_processor.go",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L6",
+   "summary": "One sequencer orders transactions first come, first served and screens them against a restricted address list. Force inclusion through Ethereum exists, but the operator can make a force-included transaction fail by listing its hash. Mainnet opened on 2026-07-01 according to a provider's documentation.",
+   "deltas": [
+    {
+     "delta": "The sequencer excludes any transaction associated with a sanctioned address.",
+     "source": "https://docs.robinhood.com/chain/differences-from-ethereum/",
+     "relevance": "high"
+    },
+    {
+     "delta": "Ordering is by arrival time at the sequencer and a higher fee does not move a transaction forward.",
+     "source": "https://docs.robinhood.com/chain/",
+     "relevance": "none"
+    },
+    {
+     "delta": "An independent risk page states that force inclusion can be nullified by transaction filtering and that the force inclusion bound is the smaller of 4 days and the delay buffer. I did not read the SequencerInbox on Ethereum to confirm the 4 days.",
+     "source": "https://ethbeat.org/layer2s/projects/robinhood",
+     "relevance": "high"
+    },
+    {
+     "delta": "A public dashboard counts about 1,351 distinct filtered transaction hashes, of which about 1,349 later landed as failed transactions. I did not reproduce the count.",
+     "source": "https://dune.com/ryeblocks_analytics/robinhood-censorship-and-forced-inclusion",
+     "relevance": "low"
+    },
+    {
+     "delta": "getScheduledUpgrade() returns version 0 and timestamp 0.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "Public mainnet launched on 2026-07-01 and the public testnet on 2026-02-10.",
+     "source": "https://docs.getblock.io/api-reference/robinhood",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L1",
+   "summary": "Elysium is an Arbitrum Orbit chain run by Kinetiq with Conduit. It launched on 2026-11-09 on what its documentation calls stock ArbOS 61, and the RPC reports ArbOS 61 from a locally built Nitro binary. An announced ArbOS upgrade will add a custom precompile and a predeploy, after which the chain no longer runs stock ArbOS.",
+   "deltas": [
+    {
+     "delta": "web3_clientVersion returns nitro/vlocal+unknown-unknown and ArbSys.arbOSVersion() returns 116 (ArbOS 61). The build cannot be matched to a tagged Nitro release from the RPC alone.",
+     "source": "https://rpc.elysium.kinetiq.xyz web3_clientVersion and eth_call to 0x64, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "The documentation describes the EVM as stock ArbOS 61 at launch.",
+     "source": "https://elysium.kinetiq.xyz/docs",
+     "relevance": "none"
+    },
+    {
+     "delta": "ArbWasm.activationGas() is 2^64-1 and stylusVersion() is 3, so no Stylus program can be activated by an unprivileged caller.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_call to ArbWasm 0x71, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "A read precompile that serves HyperCore state attested by the sequencer ships in an ArbOS network upgrade about four weeks after mainnet.",
+     "source": "https://elysium.kinetiq.xyz/docs/hypercore-market-data",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L2",
+   "summary": "The parent chain is HyperEVM (chain 999), so block.number and sender aliasing refer to HyperEVM. Transaction types and transient storage follow the Nitro client. Transaction data is kept off chain under the AnyTrust model.",
+   "deltas": [
+    {
+     "delta": "Elysium settles to HyperEVM. The l1BlockNumber field of the latest Elysium block was 51,937,854 when eth_blockNumber on HyperEVM returned 51,937,868.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_getBlockByNumber and https://rpc.hyperliquid.xyz/evm eth_blockNumber, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "Elysium is an Arbitrum Orbit Layer 2 that settles to HyperEVM, chain ID 999.",
+     "source": "https://elysium.kinetiq.xyz/docs/connecting-to-elysium",
+     "relevance": "low"
+    },
+    {
+     "delta": "Transient storage is reset per transaction by the Nitro client. This holds for Elysium only if its locally built binary keeps that code, which I could not check.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/state/statedb.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "Transaction data is stored off chain with one data availability server at launch and a fallback of posting full data to HyperEVM.",
+     "source": "https://elysium.kinetiq.xyz/docs",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L3",
+   "summary": "The gas token is HYPE with 18 decimals, bridged 1:1 from HyperEVM where it is also the native coin. The protocol has no wrapper or ERC-20 face for it. Bridged tokens are standard Arbitrum gateway representations and the bridges reject fee-on-transfer and rebasing tokens.",
+   "deltas": [
+    {
+     "delta": "HYPE is the native gas token and is passed as msg.value. It bridges in and out 1:1 with no wrapper asset.",
+     "source": "https://elysium.kinetiq.xyz/docs",
+     "relevance": "none"
+    },
+    {
+     "delta": "The minimum base fee is 0.5 gwei, the block gas limit is 32,000,000, there is no parent chain data fee and priority fees are collected by the network.",
+     "source": "https://elysium.kinetiq.xyz/docs/blocks-fees-and-ordering",
+     "relevance": "low"
+    },
+    {
+     "delta": "ArbGasInfo reports a minimum gas price of 500,000,000 wei and block and transaction gas limits of 32,000,000 each. Native token management is off and has no owners.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_call to 0x6c and 0x6b, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "HyperEVM tokens arrive as StandardArbERC20 representations minted by the gateway. Elysium-native tokens are locked in a per-token escrow wallet and need no bridge code. Fee-on-transfer and rebasing tokens are not supported by either bridge.",
+     "source": "https://elysium.kinetiq.xyz/docs/token-bridging-on-elysium",
+     "relevance": "low"
+    },
+    {
+     "delta": "The PoolManager held 9,855 HYPE.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_getBalance, queried 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L4",
+   "summary": "The precompile set at launch matches stock ArbOS 61, with no transaction filterers and no native token owners. The chain owner is an upgrade executor contract. The announced upgrade adds an ElysiumCoreWriter predeploy that holds HYPE in escrow and delivers callbacks to contracts.",
+   "deltas": [
+    {
+     "delta": "Addresses 0x64 to 0x74 hold the precompile marker code. getAllTransactionFilterers() and getAllNativeTokenOwners() return empty lists. getAllChainOwners() returns one address, 0xce4ceced412aa9359840c7d52bbd99827a5d42b9, a proxy that answers EXECUTOR_ROLE() and ADMIN_ROLE().",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_getCode, eth_getStorageAt and eth_call, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "No precompile from 0x64 to 0x74 answers balanceOf(address) or transfer(address,uint256).",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_call with from set to the PoolManager, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "The ElysiumCoreWriter predeploy will let contracts emit HyperCore order intents, prefund a HYPE gas escrow and receive result callbacks. It ships with the ArbOS upgrade about four weeks after mainnet.",
+     "source": "https://elysium.kinetiq.xyz/docs/trading-on-hypercore-from-elysium",
+     "relevance": "low"
+    },
+    {
+     "delta": "A Wormhole core proxy at 0xc8ad24fc6063c41cb5c12a8e3851aafc3b3cf027 reports Wormhole chain ID 74 and guardian set index 7. Its guardian set bytes equal those returned by the Wormhole core on Ethereum at 0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B.",
+     "source": "https://rpc.elysium.kinetiq.xyz and https://ethereum-rpc.publicnode.com eth_call getCurrentGuardianSetIndex() and getGuardianSet(uint32), queried 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L5",
+   "summary": "The PoolManager at 0xE2e105d3F7209A9DA11f83cCf3E7398a753823F1 is owned by a Uniswap Wormhole message receiver, so owner calls depend on the Wormhole guardian set in addition to Ethereum governance. No protocol fee controller is set. I did not compare the deployed bytecode with a build of this repository, because the review owner's instruction for this run forbids diffing this code against any other copy.",
+   "deltas": [
+    {
+     "delta": "owner() is 0xa9ae0c5eb238a519b7f5af27415eb6dd0744da8d. Its NAME() returns Uniswap Wormhole Message Receiver, messageSender() returns 0xf5f4496219f31cdcba6130b5402873624585615a, chainId() returns 74, MESSAGE_TIME_OUT_SECONDS() returns 172,800 and nextMinimumSequence() returns 0, so no message has been executed yet.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_call, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "On Ethereum, 0xf5F4496219F31CDCBa6130B5402873624585615a has code and its owner() is the timelock 0x1a9C8182C09F50C8318d769245beA52c32BE35BC.",
+     "source": "https://ethereum-rpc.publicnode.com eth_getCode and eth_call, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "protocolFeeController() is the zero address. No protocol fee can be set or collected until the owner sets a controller.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_call, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "networks.json records a PoolManager address used on no other network and the same masked code hash as the other two chains of this unit.",
+     "source": "research/network-risk/state/networks.json",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L6",
+   "summary": "One sequencer and one data availability server operate the chain. Batches reach HyperEVM about every 15 minutes and withdrawals wait about 5.5 days. Proving is permissioned. An ArbOS upgrade is announced for about four weeks after the 2026-11-09 launch, with Timeboost, a data availability committee and permissionless proving listed for later.",
+   "deltas": [
+    {
+     "delta": "Single sequencer at launch, a single Conduit-operated data availability server, and a challenge period of about 5.5 days.",
+     "source": "https://elysium.kinetiq.xyz/docs",
+     "relevance": "low"
+    },
+    {
+     "delta": "Blocks are produced every 100 ms and batches are posted to HyperEVM about every 15 minutes, so finalized can trail latest by that long. Transactions are ordered by priority fee.",
+     "source": "https://elysium.kinetiq.xyz/docs/blocks-fees-and-ordering",
+     "relevance": "low"
+    },
+    {
+     "delta": "The roadmap lists an ArbOS network upgrade about four weeks after mainnet, then native Timeboost, a multi-member data availability committee, permissionless proving and audits.",
+     "source": "https://elysium.kinetiq.xyz/docs",
+     "relevance": "high"
+    },
+    {
+     "delta": "Public mainnet opened on 2026-11-09.",
+     "source": "https://kinetiq.xyz/blog/elysium-public-mainnet-is-live",
+     "relevance": "none"
+    },
+    {
+     "delta": "getScheduledUpgrade() returns version 0 and timestamp 0, so the announced upgrade is not yet scheduled on chain.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_call, queried 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Operator transaction filtering on Robinhood Chain can fail any exit from the PoolManager, including force-included ones",
+   "chainIds": [
+    4663
+   ],
+   "lens": "L6",
+   "assumptions": [
+    "A3",
+    "A6"
+   ],
+   "effect": "freeze",
+   "severity": "high",
+   "difference": "Ethereum has no party that can make a chosen transaction fail. Robinhood Chain runs the ArbOS 61 compliance filtering feature. Its sequencer drops transactions that involve an address on a restricted list, and an operator account can write any transaction hash into the ArbFilteredTransactionsManager precompile at 0x74. The state transition then skips that transaction, raises the sender's nonce and consumes its gas, even when the transaction was force-included from Ethereum. On chain, filtering has been enabled since 2026-06-24 10:00 UTC and one externally owned account, 0xebdc18a1f5c42fc25552ea233facf4054df224b7 with nonce 6,237, is the registered filterer.",
+   "mechanism": "Every way to move funds out of the PoolManager is a call made inside unlock: modifyLiquidity with a negative delta, burn of ERC-6909 claims, and take. The contract has no exit that works without a successful child chain transaction. Step 1: the sequencer simulates each transaction and rejects it when it breaks a configured rule. The documented rule types cover a restricted sender or recipient, CALL, CREATE, CREATE2 or SELFDESTRUCT against a restricted address, and token transfers from or to one. Step 2: a user who then sends the transaction through the delayed inbox on Ethereum gets it included after the delay, but the filterer registers its hash first and RevertedTxHook skips the EVM call. The client code checks only whether the hash is in the list, so the list is whatever the filterer writes. Step 3: the user's liquidity and claims stay in the PoolManager with no other route out. The same rules mean that a take to a restricted recipient, or a hook or token that calls a restricted address on every operation, makes the transaction unacceptable to the sequencer. If the PoolManager, the PositionManager, or a widely used token or hook were put on the list, every transaction that calls it would be rejected. I could not confirm which rule set Robinhood has configured or whether any core contract is exempt, because the list is held off chain as salted hashes.",
+   "impact": "Funds are frozen for the affected sender or contract and cannot be taken by the filterer through this path. At the time of the query the PoolManager on this chain held 21,321 ETH, 16.98M USDG, 1,321 WETH and 3,134 ANT stock tokens. A listing of one LP freezes that LP's positions. A listing of a shared contract freezes every position that depends on it.",
+   "preconditions": "The filterer account, the compliance list provider or the chain owner must act. No unprivileged party can add a hash or an address. A third party can cause rejection of someone else's transaction only if that transaction already executes code or transfers chosen by the third party, for example a hook that pays out to addresses the third party controls.",
+   "mitigations": "Nothing in core can restore a forced exit. The deployer can ask the operator for a written commitment that the PoolManager and periphery addresses are never listed and can monitor FilteredTransactionAdded events on 0x74. Pool creators on this chain should avoid hooks that call or pay addresses supplied by third parties. LPs should treat force inclusion as unavailable when sizing positions.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114",
+    "src/PoolManager.sol:145-184",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:332-336",
+    "src/libraries/Hooks.sol:131-137"
+   ],
+   "sources": [
+    {
+     "url": "https://docs.robinhood.com/chain/differences-from-ethereum/",
+     "supports": "Robinhood Chain screens transactions at the sequencer and excludes any transaction associated with a sanctioned address."
+    },
+    {
+     "url": "https://docs.arbitrum.io/launch-arbitrum-chain/chain-config/sequencer/compliance-filtering",
+     "supports": "The rule set (origin, CALL and CREATE targets, token transfer events) and the precompile that fails delayed inbox transactions by hash."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/tx_processor.go",
+     "supports": "RevertedTxHook skips execution, raises the nonce and consumes all gas when the transaction hash is in the on-chain filter. Deposits and retryables are redirected in StartTxHook."
+    },
+    {
+     "url": "https://github.com/OffchainLabs/nitro/blob/v3.11.0/precompiles/ArbFilteredTransactionsManager.go",
+     "supports": "A registered filterer can add or delete any transaction hash with no further check."
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com eth_call ArbOwnerPublic.getAllTransactionFilterers(), getTransactionFilteringFrom(), getFilteredFundsRecipient(); eth_getTransactionCount of the filterer; eth_getBalance and balanceOf of the PoolManager; queried 2026-11-22",
+     "supports": "One filterer is registered, filtering started at timestamp 1782295200, the filterer has nonce 6,237, and the PoolManager balances are as stated."
+    },
+    {
+     "url": "https://ethbeat.org/layer2s/projects/robinhood",
+     "supports": "Independent statement that force inclusion on this chain can be nullified by transaction filtering."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Robinhood Stock Tokens and USDG let the issuer block, pause, burn or upgrade the tokens held by the PoolManager",
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A4",
+    "A6"
+   ],
+   "effect": "both",
+   "severity": "high",
+   "difference": "The assets this chain is built for are issuer-controlled in a more concentrated way than a typical Ethereum token. All Robinhood Stock Tokens are beacon proxies behind one contract, 0xe10b6f6b275de231345c20d14ab812db62151b00, which is both the upgrade beacon and the access registry with isBlocked, blockAccounts, pause and upgradeTo. The shared logic contract has adminBurn(address,uint256) and pause. USDG is an upgradeable Paxos token with isFrozen and decreaseSupplyFromAddress. The PoolManager already holds both.",
+   "mechanism": "Step 1, block or pause: if the registry blocks the PoolManager address or a token is paused, the token's transfer call fails. Currency.transfer treats a failed call as an error and reverts with ERC20TransferFailed, so every take and every collectProtocolFees in that token reverts. Settling needs a transfer into the PoolManager, which a pause or a block on the recipient would stop as well. One registry entry covers every stock token at once, and A6 applies because one address holds all pools. An LP can still remove liquidity, take the other currency of the pair and call mint to hold the frozen side as an ERC-6909 claim, because mint moves no tokens. The claim cannot be turned into tokens until the block is lifted. Step 2, burn: adminBurn against the PoolManager lowers balanceOf(PoolManager) with no matching delta. Pool reserves, claims and accrued fees then exceed the balance. Takes keep succeeding until the balance runs out, and the last LPs and claim holders bear the shortfall. Step 3, upgrade: upgradeTo on the beacon changes the code of every stock token in one transaction, which removes the A4 expectation that token code is fixed. I read function selectors and view results from chain. I did not read verified source, so the exact transfer check against the registry and the role holders are unconfirmed. Stock token splits and dividends do not create a balance change, because they move uiMultiplier and leave balanceOf fixed.",
+   "impact": "At the time of the query the PoolManager held 3,134.87 ANT stock tokens and 16,984,261 USDG. A block or pause freezes the stock token side of every pool that uses the affected tokens. A burn creates a loss equal to the burned amount, carried by whoever withdraws last. The other currency in each pair stays withdrawable.",
+   "preconditions": "The issuer (Robinhood Assets (Jersey) Limited for stock tokens, Paxos for USDG) or a holder of the relevant role must act. isBlocked(PoolManager) and isFrozen(PoolManager) are false today and both tokens are unpaused. No unprivileged party can trigger any of these functions.",
+   "mitigations": "The deployer can ask both issuers to confirm in writing how the PoolManager address is treated and can monitor the registry and beacon for block, pause and upgrade events. Pool creators and LPs should size stock token and USDG positions with a freeze and a shortfall in mind. A later cycle should read the verified source of the logic and registry contracts.",
+   "coreRefs": [
+    "src/types/Currency.sol:55-87",
+    "src/types/Currency.sol:90-96",
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:322-329",
+    "src/PoolManager.sol:349-365",
+    "src/ProtocolFees.sol:44-57"
+   ],
+   "sources": [
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com eth_getStorageAt (beacon slot), eth_getCode and eth_call on 0xbbB6c29bCc3a1028A2B54310DF73F4F7A3bcB373, 0xe10b6f6b275de231345c20d14ab812db62151b00, 0xb35490d6f9163de4f80d88dc75c3516eb64c5ae2 and 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168; queried 2026-11-22",
+     "supports": "Beacon and registry are one contract, the selectors listed are present in the bytecode, isBlocked and isFrozen return false for the PoolManager, paused() is false, and the PoolManager balances are as stated."
+    },
+    {
+     "url": "https://api.openchain.xyz/signature-database/v1/lookup?function=0x6abf7081,0xfaed47fd&filter=true",
+     "supports": "Selector names blockAccounts(address[]) and unblockAccounts(address[]). The same service resolved the other selector names quoted."
+    },
+    {
+     "url": "https://docs.robinhood.com/chain/building-with-stock-tokens/",
+     "supports": "Stock tokens are 18 decimal ERC-20s. The ERC-8056 multiplier changes on corporate actions while balanceOf and totalSupply stay fixed."
+    },
+    {
+     "url": "https://docs.robinhood.com/chain/stock-tokens/",
+     "supports": "Stock Tokens are debt securities issued by Robinhood Assets (Jersey) Limited, which also acts as tokenizer."
+    },
+    {
+     "url": "https://docs.robinhood.com/chain/contracts/",
+     "supports": "Canonical WETH and USDG addresses on Robinhood Chain."
+    },
+    {
+     "url": "https://cdn.robinhood.com/assets/robinhood/legal/rhj_final_terms_for_tokenised_debt_securities_linked_to_anthropic_pbc.pdf",
+     "supports": "0xbbB6c29bCc3a1028A2B54310DF73F4F7A3bcB373 is the securities ledger contract of a Robinhood stock token. Read through a search result excerpt only."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "A Stylus program used as a hook or token stops answering calls on expiry or a Stylus version change, and activation is blocked",
+   "chainIds": [
+    42161
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A4",
+    "A7"
+   ],
+   "effect": "freeze",
+   "severity": "medium",
+   "difference": "On Ethereum, code at an address keeps answering calls. On Arbitrum One a contract can be a Stylus WASM program. A call to it fails unless the program was activated at the current Stylus version and its last activation or keepalive is less than 365 days old. ArbOS 61, active since 2026-08-20, moved the Stylus version from 2 to 3. On chain, ArbWasm.activationGas() is 2^64-1, which makes activateProgram fail for everyone, so a program that has expired or needs the new version cannot be brought back by its users.",
+   "mechanism": "Hook path: the PoolManager calls the hook with call() and reverts the whole action when the call fails. For a hook address with the before or after remove liquidity flag, modifyLiquidity with a negative delta calls the hook, so a hook that no longer answers blocks every liquidity removal in its pools. Hooks with swap or donate flags block those actions the same way. Token path: transfer and balanceOf on a Stylus token that no longer answers revert, so take, sync and settle revert for that currency in every pool. Step 1: a pool is created with a Stylus hook or a Stylus token while the program is active. Step 2: the program reaches 365 days without a keepalive, or an ArbOS upgrade changes the Stylus version. getActiveProgram returns ProgramExpired or ProgramNeedsUpgrade and the call fails. Step 3: anyone who tries activateProgram is charged activationGas first, which exceeds any gas limit, so the call fails. Keepalive works only while the program is still active and at least 31 days old. ArbOS 61 also removed WASM multi-value support, so a program that relies on it cannot be reactivated even when activation reopens. I did not enumerate which pools on Arbitrum One use a Stylus hook or token, and I did not establish the date on which activation gas was raised, so I cannot say how many programs missed the move to version 3.",
+   "impact": "LP principal and fees in pools whose hook gates liquidity removal are stuck for as long as activation stays closed. For a Stylus token, every balance of that token in the PoolManager is stuck. No funds move to an attacker. Pools without Stylus hooks or tokens are unaffected.",
+   "preconditions": "A pool must use a Stylus program as its hook or as one of its currencies. Then either nobody pays for keepalive within the 365 day window, or governance ships a Stylus version change. No attacker action is required and none can speed it up. The Arbitrum Foundation or Security Council can reopen activation.",
+   "mitigations": "Pool creators on Arbitrum One should prefer EVM hooks. LPs in a pool with a Stylus hook should check ArbWasm.programVersion and programTimeLeft for the hook and for each token, and anyone can pay codehashKeepalive once the program is 31 days old. A hook author can leave the remove liquidity flags unset so that removals never depend on the hook.",
+   "coreRefs": [
+    "src/libraries/Hooks.sol:131-137",
+    "src/libraries/Hooks.sol:195-206",
+    "src/libraries/Hooks.sol:209-245",
+    "src/PoolManager.sol:145-184",
+    "src/types/Currency.sol:55-87",
+    "src/types/Currency.sol:90-96"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/programs/programs.go",
+     "supports": "CallProgram calls getActiveProgram, which returns an error when the program version differs from the Stylus version or the program is older than ExpiryDays. ProgramKeepalive requires an active program at least KeepaliveDays old."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/arbosState/arbosstate.go",
+     "supports": "The ArbOS 59 upgrade step calls UpgradeToVersion(3) on the Stylus parameters."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/precompiles/ArbWasm.go",
+     "supports": "ActivateProgram burns the configurable activation gas before activation. CodehashKeepalive does not."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_call ArbWasm.activationGas(), stylusVersion(), expiryDays(), keepaliveDays() at 0x71; queried 2026-11-22",
+     "supports": "activationGas is 0xffffffffffffffff, the Stylus version is 3, expiry is 365 days and keepalive needs 31 days."
+    },
+    {
+     "url": "https://docs.arbitrum.io/notices/stylus-activation-pause-notice",
+     "supports": "New activations and reactivation of expired programs are paused on Arbitrum One. Active programs run until they expire and can be renewed with keepalive."
+    },
+    {
+     "url": "https://docs.arbitrum.io/run-a-node/arbos-releases/arbos61",
+     "supports": "ArbOS 61 activated on Arbitrum One on 2026-08-20 and programs that rely on WASM multi-value can no longer be activated or reactivated."
+    },
+    {
+     "url": "https://docs.arbitrum.io/stylus/gentle-introduction",
+     "supports": "Stylus contracts must be reactivated once per 365 days or after any Stylus upgrade, and otherwise become uncallable."
+    },
+    {
+     "url": "https://forum.arbitrum.foundation/t/constitutional-aip-stylus-activation-contract/31605",
+     "supports": "The proposal to reopen activation through an Arbitrum Foundation process was put on hold on 2026-11-18, and a later ArbOS proposal plans the ability to deactivate a Stylus contract."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L2",
+   "check": "A1: whether an unlock flag, a currency delta or a synced currency can survive from one transaction into another through Nitro's extra transaction types (deposits, internal transactions, retryable submission, auto-redeems, manual redeems).",
+   "result": "The state transition runs the ArbOS start hook and then StateDB.Prepare, which replaces the transient storage map, before any contract code runs. Deposit, internal and submit-retryable transactions end inside the hook and execute no contract code. Each scheduled redeem is appended to a queue and applied as its own transaction. Lock.sol:10-27, CurrencyDelta.sol:28-41, CurrencyReserves.sol:15-38 and NonzeroDeltaCount.sol:12-34 therefore see one transaction as on Ethereum. The go-ethereum file was read on the fork's master branch, which may differ from the commit pinned by the release.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/state_transition.go and https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/block_processor.go"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L4",
+   "check": "A3 and A4: whether any ArbOS precompile can serve as an ERC-20 face of the native asset or as a currency whose transfer succeeds without moving anything.",
+   "result": "balanceOf(address) and transfer(address,uint256) revert on every precompile address from 0x64 to 0x74 and on 0xff when called from the PoolManager address. sync calls balanceOf (PoolManager.sol:285, Currency.sol:94) and reverts, so no delta can ever be credited in such a currency, and a take reverts in Currency.sol:64-86. ArbInfo.getBalance exposes native balances under a different selector that the PoolManager never calls.",
+   "source": "eth_call on https://arb1.arbitrum.io/rpc, https://rpc.mainnet.chain.robinhood.com and https://rpc.elysium.kinetiq.xyz, queried 2026-11-22"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L2",
+   "check": "A3: native balance credited to the PoolManager without a call, through a deposit transaction or a retryable refund address chosen by a parent chain sender.",
+   "result": "Native settlement credits msg.value only (PoolManager.sol:353-354) and sync of the native currency records no balance (PoolManager.sol:281-283). A forced credit raises address(this).balance and is credited to nobody. It cannot be claimed and it cannot make a settle revert.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/tx_processor.go"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L2",
+   "check": "Whether a parent chain message can debit the PoolManager's native balance by making the PoolManager the aliased sender of an unsigned transaction or retryable.",
+   "result": "The child chain sender is the parent chain msg.sender plus a fixed offset. Producing the PoolManager address needs control of one specific 160-bit parent chain address, which is a preimage search. Signed messages use the signer instead. No other transaction type takes fees from an account other than its sender.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/parse_l2.go"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L5",
+   "check": "A12: who can produce a call from the owner 0x2BAD8182C09F50c8318d769245beA52C32Be46CD, and what the owner and fee controller can do to pool funds.",
+   "result": "The address has no code on either chain and equals the Ethereum timelock 0x1a9C8182C09F50C8318d769245beA52c32BE35BC plus the alias offset. Both chains settle to Ethereum, so only that timelock, through each chain's inbox, yields this sender. The owner can only set the fee controller (ProtocolFees.sol:29-32). The controller can set a fee of at most 1000 pips per direction (ProtocolFees.sol:35-41, ProtocolFeeLibrary.sol:8, 25-32) and withdraw at most protocolFeesAccrued (ProtocolFees.sol:54-56).",
+   "source": "https://docs.arbitrum.io/how-arbitrum-works/deep-dives/l1-to-l2-messaging"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L5",
+   "check": "Permissionless collect on the fee controller contracts 0x6b3c04567cc62fc5d6ab8d50f1bc1dee161eb2cc and 0x6d0009504d129cf5002dba61d9ae8575aa79314c, including a call made inside an unlock.",
+   "result": "An eth_call of collect from an arbitrary sender succeeds on Arbitrum One, so anyone can trigger collectProtocolFees. The amount is capped by a checked subtraction from protocolFeesAccrued (ProtocolFees.sol:54-55), the transfer goes to the controller's fixed TOKEN_JAR, and a synced ERC-20 currency is refused (ProtocolFees.sol:49-52). A collection can only lower the PoolManager balance by fees that were already set aside, so it cannot create a settle credit. The Robinhood controller has the same code length and selectors. I did not simulate collect there.",
+   "source": "https://arb1.arbitrum.io/rpc eth_call collect((address,uint256)[]) from 0x00000000000000000000000000000000000a11ce, queried 2026-11-22"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L3",
+   "check": "A9: whether gas caps on these chains can make a large swap or a liquidity removal impossible to include.",
+   "result": "All three chains report a per-transaction limit and a block limit of 32,000,000 execution gas, and the last transaction of a block may overshoot the block limit. Parent chain data cost is charged on top of execution gas. A removal touches two ticks (Pool.sol:146-238) and a swap loop costs gas per initialized tick crossed (Pool.sol:344-437), so both fit with a wide margin, and a swap can be split with a price limit.",
+   "source": "eth_call ArbGasInfo.getGasAccountingParams() and getMaxTxGasLimit() on the three RPC endpoints, queried 2026-11-22; https://docs.arbitrum.io/run-a-node/arbos-releases/arbos51"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L3",
+   "check": "A2 and A3: the ArbOS native mint and burn precompile as a way for the chain to change the PoolManager's native balance or inflate the gas token.",
+   "result": "mintNativeToken and burnNativeToken act on the caller's own balance and require membership of the native token owner set. On all three chains getNativeTokenManagementFrom() is 0 and the owner list is empty. Enabling it needs the chain owner and a 7 day delay.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/precompiles/ArbNativeTokenManager.go"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "check": "A2: whether Robinhood Stock Token splits and dividends change balanceOf(PoolManager) between or across transactions.",
+   "result": "Corporate actions change uiMultiplier and leave balanceOf and totalSupply fixed. The token read on chain reports uiMultiplier 1e18 with no pending change. The value per token stays continuous through a split because the multiplier and the share price move in opposite directions, so pools see no jump. Issuer burn and block powers are reported separately as a finding.",
+   "source": "https://docs.robinhood.com/chain/building-with-stock-tokens/"
+  },
+  {
+   "chainIds": [
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "A7 and A4: Stylus programs as hooks or tokens on Robinhood Chain and Elysium.",
+   "result": "ArbWasm.activationGas() is 2^64-1 on both chains, so no unprivileged caller can activate a Stylus program and a contract with Stylus code that was never activated fails every call. I did not check whether any program was activated before the value was set. If one exists, the Arbitrum One finding applies to it.",
+   "source": "eth_call ArbWasm.activationGas() on https://rpc.mainnet.chain.robinhood.com and https://rpc.elysium.kinetiq.xyz, queried 2026-11-22"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L1",
+   "check": "A7 and A10: the 96 KB contract size limit stated in the Robinhood Chain documentation.",
+   "result": "The PoolManager never reads code size or code of other contracts. Hook permissions come from the address bits (Hooks.sol:337-339) and hook results are checked by length and selector (Hooks.sol:152-166). A larger hook or token contract changes nothing in these paths.",
+   "source": "https://docs.robinhood.com/chain/differences-from-ethereum/"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "A10: support and semantics of TSTORE, TLOAD, MCOPY, PUSH0 and SELFBALANCE, and the opcodes whose results differ on Nitro.",
+   "result": "All three chains are at ArbOS 61. TSTORE, TLOAD and MCOPY arrived with ArbOS 20 and PUSH0 with ArbOS 11. The opcodes that return different values on Nitro are NUMBER, PREVRANDAO, COINBASE and BLOCKHASH, and ASSUMPTIONS.md A10 records that the bytecode uses none of them. I did not disassemble the deployed code myself.",
+   "source": "https://docs.arbitrum.io/run-a-node/arbos-releases/arbos20"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L5",
+   "check": "A12 on Elysium: the owner path through the Uniswap Wormhole message receiver 0xa9ae0c5eb238a519b7f5af27415eb6dd0744da8d.",
+   "result": "The receiver accepts messages from 0xf5F4496219F31CDCBa6130B5402873624585615a on Ethereum, whose owner is the Ethereum timelock, verified by a Wormhole core whose guardian set (index 7) is byte-identical to the one on Ethereum. A forged message would need the guardian quorum. The owner can only set the fee controller, so the worst outcome is a protocol fee of 1000 pips per direction and loss of accrued protocol fees. LP principal and claims are out of reach (ProtocolFees.sol:29-57).",
+   "source": "eth_call on https://rpc.elysium.kinetiq.xyz and https://ethereum-rpc.publicnode.com, queried 2026-11-22"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L3",
+   "check": "A2 and A3 on Elysium: native HYPE and bridged tokens as pool assets.",
+   "result": "HYPE is the plain native asset with no wrapper or ERC-20 face in the protocol. HyperEVM tokens arrive as standard gateway representations that only the gateway mints and burns, and Elysium-native tokens need no bridge code. The bridges do not support fee-on-transfer or rebasing tokens. This rests on the documentation. I did not read the bridge contracts.",
+   "source": "https://elysium.kinetiq.xyz/docs/token-bridging-on-elysium"
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L4",
+   "check": "Transaction filtering and native token management on Arbitrum One.",
+   "result": "Both features exist in ArbOS 61 and both are off: no filterers, filtering time 0, no native token owners, management time 0. Turning either on needs a chain owner call and a 7 day delay.",
+   "source": "https://arb1.arbitrum.io/rpc eth_call to ArbOwnerPublic 0x6b, queried 2026-11-22; https://docs.arbitrum.io/run-a-node/arbos-releases/arbos61"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L4",
+   "question": "After the announced ArbOS upgrade (about four weeks after 2026-11-09), how are ElysiumCoreWriter result callbacks delivered: as ordinary transactions from a keeper account, or as system transactions or calls made by ArbOS, and does the upgrade add any system address that moves native HYPE?",
+   "why": "A callback delivered outside an ordinary transaction, or batched with other calls in one transaction context, would change the A1 transient storage boundary and the A8 sender model on this chain. A system address that moves HYPE would touch A3.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L1",
+   "question": "Which Nitro commit does Elysium run (the RPC reports a locally built binary), and does it change anything in state transition, transient storage or precompile dispatch compared with the tagged release?",
+   "why": "Every cleared item for Elysium that cites client source assumes the stock code. The docs say stock ArbOS 61 at launch and announce custom precompiles next.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L1",
+   "question": "Which v4 pools on Arbitrum One have a hook or currency whose code starts with the Stylus prefix, what do ArbWasm.programVersion and programTimeLeft return for them, and on what date was activation gas raised relative to the ArbOS 61 activation on 2026-08-20?",
+   "why": "This sizes the Stylus finding. A Stylus hook still at version 2 with remove liquidity flags means LP funds are frozen today.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "question": "In the verified source of the stock token logic 0xb35490d6f9163de4f80d88dc75c3516eb64c5ae2 and the registry 0xe10b6f6b275de231345c20d14ab812db62151b00, which of from, to and msg.sender does transfer check against isBlocked, who holds the block, pause, burn and upgrade roles, and is the upgrade delayed?",
+   "why": "The issuer control finding rests on selectors and view calls. If transfer also checks msg.sender or the recipient, a blocked recipient or caller changes which PoolManager calls revert.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L6",
+   "question": "Which compliance rules does the Robinhood sequencer apply: are token Transfer events to a restricted address inside a hook or token enough to reject a transaction, is the burn exception enabled, and are the PoolManager and Uniswap periphery exempt from listing?",
+   "why": "If event rules are on, a pool whose hook or token emits a transfer involving a restricted address is unusable on this chain, and an unprivileged party who can choose a payout address in a hook could block other users of that pool.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L6",
+   "question": "Who holds EXECUTOR_ROLE on the Elysium upgrade executor 0xce4ceced412aa9359840c7d52bbd99827a5d42b9, who are the validators and batch poster of the rollup on HyperEVM, and what force inclusion delay does its SequencerInbox set?",
+   "why": "With one sequencer, one data availability server and permissioned proving, these accounts decide whether LPs can exit during an outage and who can rewrite chain state.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L6",
+   "question": "Who controls the Robinhood Chain owners 0x2a153c6a1b66dbc930a8d7017230ab0253005c09 and 0x5eb36fd3a11f3a123c046e3bf84195bb4f5a2690, and what does the SequencerInbox on Ethereum set as the force inclusion delay?",
+   "why": "The chain owners appoint filterers and schedule ArbOS upgrades. The 4 day force inclusion bound comes from a secondary source only.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L5",
+   "question": "ASSUMPTIONS.md A12 says collectProtocolFees reverts while the manager is unlocked and the currency is synced, but ProtocolFees.sol:49-52 tests only the synced currency and never calls _isUnlocked (declared at ProtocolFees.sol:60). Does a collection made inside an unlock through the permissionless controller create any accounting gap?",
+   "why": "On these two chains anyone can trigger collection at any point of a transaction. I found no gain from it, because it only lowers the balance by accrued fees, but a reader of the core code should confirm and correct the assumption text.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L5",
+   "question": "Does the deployed PoolManager bytecode on these three chains match a build of this repository?",
+   "why": "This unit did not make the comparison because the review owner's instruction for the run forbids diffing this code against any other copy. The owner should decide whether a bytecode comparison against the deployed contracts falls under that rule.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L3",
+   "question": "Has any chain owner called setNativeTokenManagementFrom or added a native token owner or a transaction filterer since 2026-11-22?",
+   "why": "Native token owners can mint the gas token without limit, which would let them buy out the other side of every native pool. Both switches have a 7 day delay, so a periodic read of ArbOwnerPublic gives warning.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": []
+}

@@ -1,0 +1,241 @@
+{
+ "unit": "op-stack-eth",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "All six Base docs pages were fetched and say what the finding reports. The upgrades page lists Beryl on 25 June 2026, Cobalt on 30 September 2026 and Denim on 5 November 2026 for Base Mainnet. The introduction states that B20 runs as precompiles in the node, that Base upgrades the logic through hard forks, that every token is created through the factory, and that TRANSFER, MINT, BURN and SEIZE can be paused separately. The policies page gives the scope table: sender policy on from, receiver policy on to, executor policy on msg.sender, and a policy admin who can change membership for every token that references the policy. The Cobalt note confirms that seizeWithMemo skips allowances and the three transfer policies and that an unset SEIZE_EXEMPT_POLICY makes no account seizable. The Denim note confirms that the executor policy now runs on transfer and calls the change breaking for tokens with a restrictive executor policy. On chain at Base block 60,794,561 on 22 November 2026: eth_getCode at the factory is empty, isB20(PoolManager) and isB20(USDC) return false, policyExists(2) returns true, and balanceOf and transfer on the uninitialised address 0xb200000000000000000001000000000000000001 revert. I also closed the gap the finding left open about exposure. The explorer lists recent transfers between the PoolManager and two B20 tokens. OUSD (name OpenUSD, 0xB2000000000000000000002fEb517dFeC7415344, isB20 true, code 0xef, 6 decimals): balanceOf(PoolManager) is 5,341,029 of a total supply of 93,186,135. Its TRANSFER_SENDER_POLICY is policy 122, whose admin 0x251d2711ebeb0a09fdb8992f5506f3d949175246 has no code. The other five scopes are unset, pausedFeatures is empty, and the PoolManager is authorised under policy 122 today. AMDC (name Advanced Micro Devices, Inc., 0xB2000000000000000000000d8Ce462E99ee7A47B, 8 decimals): balanceOf(PoolManager) is 34.38. Policy 5 (admin 0xec0f05c174e54fbf0fe16ad930a8afebce612812) is bound to the sender, receiver, executor and mint receiver scopes, and SEIZE_EXEMPT_POLICY is policy 129 (admin 0x38467be00970af18076fd08f6b4cf38ba91572b1). The PoolManager is authorised under both today, so it can transfer and is seize exempt. Not confirmed: who holds DEFAULT_ADMIN_ROLE, PAUSE_ROLE, SEIZE_ROLE and BURN_BLOCKED_ROLE on either token, because the public endpoints refused archive log queries. The list of B20 tokens at the PoolManager is a sample of the 50 latest transfers and is incomplete.",
+   "codeCheck": "sync stores balanceOf(PoolManager) for the currency (src/PoolManager.sol:279-288, src/types/Currency.sol:90-96). _settle credits balanceOf minus the stored reserves with checked subtraction (src/PoolManager.sol:358-360), so a balance that fell between sync and settle reverts and gives no credit. take records the negative delta and then calls transfer with the PoolManager as msg.sender (src/PoolManager.sol:291-297, src/types/Currency.sol:55-86). A reverting token call ends in a revert that wraps ERC20TransferFailed (src/types/Currency.sol:82-86, src/libraries/CustomRevert.sol:83-119). collectProtocolFees uses the same transfer (src/ProtocolFees.sol:56). No storage in src/ tracks reserves per currency: every payout depends on the live token balance, so a seize or burn of the PoolManager balance is not detected and the shortfall falls on whoever withdraws last. mint and burn of ERC-6909 claims do not call the token (src/PoolManager.sol:322-336), and modifyLiquidity does not call it either (src/PoolManager.sol:145-184), so the claim based exit in the mitigations works at the core level. The balanceOf call decodes return data, and the transfer call is a raw call with no code size check, so a token whose code is the single byte 0xef works with this code. The live OUSD balance supports that. Tests cover a transfer that fails (test/PoolManager.t.sol:924-957) and a balance that only grows between sync and settle (test/Sync.t.sol:82-253). No test in test/ models a token that pauses, blocks the PoolManager, or lowers its balance from outside.",
+   "corrections": "1. The finding misses a second loss path. burnBlocked(from, amount) has existed since Beryl and is still callable. It destroys the balance of a holder that is not authorised under TRANSFER_SENDER_POLICY, and it needs BURN_BLOCKED_ROLE and an unpaused BURN feature. It does not read SEIZE_EXEMPT_POLICY. The statement that no balance can be removed while the seize slot is unset is therefore too strong: an issuer who blocks the PoolManager under the sender policy and holds BURN_BLOCKED_ROLE can burn its balance. OUSD has a sender policy bound, so this path applies to it if that role is granted. 2. The exposure is no longer hypothetical. The PoolManager holds about 5.34 million OUSD, and one account without code administers the policy that decides whether the PoolManager may send it. 3. take reverts with WrappedError that carries ERC20TransferFailed as context. 4. The claim based exit needs a caller whose unlock callback can call mint. Whether the deployed position manager offers that is outside this repository and was not checked. 5. The fork driven freeze in step 5 is a documented behaviour change. Neither of the two tokens found at the PoolManager has an executor allowlist that excludes it, so no instance of that freeze was observed. 6. PAUSE_ROLE, not the admin role, is what pauses TRANSFER. The admin can grant it.",
+   "sources": [
+    {
+     "url": "https://docs.base.org/upgrades",
+     "supports": "Base Mainnet activation dates of Beryl, Cobalt and Denim."
+    },
+    {
+     "url": "https://docs.base.org/specifications/b20/introduction",
+     "supports": "B20 runs as node precompiles, is upgraded by hard fork, is created through the factory, and has per feature pause and policies."
+    },
+    {
+     "url": "https://docs.base.org/specifications/b20/concepts/policies",
+     "supports": "Scope table with the account each scope checks, shared policies and the policy admin."
+    },
+    {
+     "url": "https://docs.base.org/base-chain/specs/reference/b20/changelog/02-cobalt-b20-seize",
+     "supports": "seizeWithMemo rules, and burnBlocked as a deprecated but callable burn of a holder blocked under TRANSFER_SENDER_POLICY."
+    },
+    {
+     "url": "https://docs.base.org/base-chain/specs/reference/b20/changelog/03-denim-b20-transfer-executor-enforcement",
+     "supports": "Executor policy enforced on transfer from Denim, described as breaking for restrictive executor policies."
+    },
+    {
+     "url": "https://docs.base.org/specifications/b20/reference/constants",
+     "supports": "Precompile addresses, role identifiers and policy scope identifiers used in the on-chain queries."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base-std/main/src/interfaces/IB20.sol",
+     "supports": "burnBlocked is gated by BURN_BLOCKED_ROLE and the BURN pause and reads TRANSFER_SENDER_POLICY. Signatures of policyId, pausedFeatures and hasRole."
+    },
+    {
+     "url": "https://base.blockscout.com/api/v2/addresses/0x498581ff718922c3f8e6a244956af099b2652b2b/token-transfers?type=ERC-20",
+     "supports": "Recent PoolManager transfers include the B20 tokens OUSD and AMDC."
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "eth_call and eth_getCode results: factory and registry answers, OUSD and AMDC balances at the PoolManager, bound policy ids, policy admins, isAuthorized for the PoolManager, pausedFeatures."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "The Circle source was fetched: FiatTokenV1.transfer carries whenNotPaused, notBlacklisted(msg.sender) and notBlacklisted(to) (lines 287-293), and transferFrom also checks from. I repeated the on-chain reads on 22 November 2026. Soneium USDC.e returns 0x8be79275fcfd08a931087ecf70ba8a99aee3ac59 for owner, pauser and blacklister. Blacklister addresses on OP Mainnet, Base, Unichain, World Chain and Ink match the finding. isBlacklisted, isBlocked and isFrozen return false for the PoolManager on every token, and paused is false where the call exists. Balances at the PoolManager: 12.57 million USDC on Base, 980,196 USDC and 180,760 USD₮0 on Unichain, 1.53 million USD₮0, 779,410 USDG and 767,378 USDC on Ink, 1.90 million USDSC and 516,436 USDC.e on Soneium, 335,159 USDC on OP Mainnet and 66,519 USDC on World Chain. These are within normal drift of the figures in the finding. One link is weaker than stated: the Base USDC and Soneium USDC.e proxies report version 2 and point to a 23,464 byte implementation, and I read only the V1 source. The implementation bytecode contains the blacklist(address) selector, so the list exists there. I did not read that the later version keeps the same three modifiers on transfer. For USDG the isFrozen call answers, but I did not find the freeze selectors in the implementation behind the EIP-1967 slot, so where that logic lives was not established.",
+   "codeCheck": "Every payout of an ERC-20 currency is a transfer call made by the PoolManager (src/types/Currency.sol:55-86), reached from take (src/PoolManager.sol:291-297) and collectProtocolFees (src/ProtocolFees.sol:56). There is one holder address for all pools, claims and fees, so a listing of that address or a token pause makes each of these calls revert. sync only reads balanceOf (src/PoolManager.sol:285), which the Circle source does not gate. A listed PoolManager also cannot receive, because transfer checks the recipient, so a settle that follows a token transfer fails as well. mint and burn of ERC-6909 claims do not touch the token (src/PoolManager.sol:322-336), so positions can still be closed into claims and swaps can still be settled in claims. No guard in src/ was missed. test/ has no case for a paused or blacklisting token.",
+   "corrections": "1. The effect is understated for USD₮0. The USD₮0 implementations on Unichain (0xaf37e8b6c9ed7f6318979f56fc287d76c30847ff) and Ink (0x06d886ff518b5e642e7e6aad3ce797b7dabd8e9a) contain the selectors of addToBlockedList(address) and destroyBlockedFunds(address). A blocked PoolManager could therefore lose its whole USD₮0 balance, about 1.53 million on Ink and 180,760 on Unichain, which is a loss for LPs and claim holders. I matched selectors in bytecode and did not read the source or the access control. USDSC on Soneium has freeze and unfreeze and none of the wipe selectors I tried. 2. The difference from Ethereum is thin. The Ethereum PoolManager is exposed to the same issuer roles. What is specific to this unit is the set of role holders and balances, and the single account behind all three roles of Soneium USDC.e. 3. The claim based exit depends on the contract that owns the position being able to call mint in its unlock callback. That was not checked. 4. Severity stays high: the actor is a token issuer and the frozen amount is the full balance of the token across all pools.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/stablecoin-evm/master/contracts/v1/FiatTokenV1.sol",
+     "supports": "transfer and transferFrom carry whenNotPaused and notBlacklisted on the caller, the sender and the recipient."
+    },
+    {
+     "url": "https://rpc.soneium.org",
+     "supports": "USDC.e owner, pauser and blacklister are one address. Balances and flags for USDC.e and USDSC at the PoolManager. USDSC implementation has freeze and unfreeze."
+    },
+    {
+     "url": "https://rpc-gel.inkonchain.com",
+     "supports": "Ink balances and flags for USD₮0, USDG and USDC. USD₮0 implementation contains destroyBlockedFunds(address)."
+    },
+    {
+     "url": "https://mainnet.unichain.org",
+     "supports": "Unichain balances and flags for USDC and USD₮0. USD₮0 implementation contains destroyBlockedFunds(address)."
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "Base USDC blacklister, pauser, flags, balance, version 2 and implementation address."
+    },
+    {
+     "url": "https://mainnet.optimism.io",
+     "supports": "OP Mainnet USDC blacklister, flags and balance."
+    },
+    {
+     "url": "https://worldchain-mainnet.g.alchemy.com/public",
+     "supports": "World Chain USDC blacklister, flags and balance."
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "The verified CrossChainAccount sources on World Chain and Soneium were fetched. forward requires msg.sender to be the messenger and xDomainMessageSender() to equal l1Owner, and the constructor arguments are 0x4200000000000000000000000000000000000007 and 0x1a9C8182C09F50C8318d769245beA52c32BE35BC. On chain, slots 0 and 1 of the owner contract hold those two values on OP Mainnet, Base, Zora and World Chain, and the Soneium contract returns them from messenger() and l1Owner(). owner() on Unichain and Ink is 0x2bad8182c09f50c8318d769245bea52c32be46cd with no code, which equals the timelock address plus the alias offset. On all seven chains the messenger has a non zero EIP-1967 implementation and its admin slot is 0x4200000000000000000000000000000000000018. ProxyAdmin.owner() is 0x6b1bae59d09fccbddb6c6cceb07b7279367c4e3b on OP Mainnet, Unichain, Ink and Soneium, 0x8cc51c3008b3f03fe483b28b8db90e19cf076a6d on Base, 0x5b5a62275df8c60a80d3a25faec5aa7de116b857 on Zora and 0xb2aa0c2c4fd6bfcbf699d4c787cd6cc0dc461a9d on World Chain. The OP docs identify 0x6b1b as the alias of the 2 of 2 Safe of the Foundation and the Security Council. The OP specification overview states that network upgrade transactions at fork activation call L2ProxyAdmin.upgradePredeploys from the depositor account, and the Upgrade 19 notice introduces that mechanism with Karst. The V4FeeAdapter source on OP Mainnet shows collect without access control sending to the immutable TOKEN_JAR. TOKEN_JAR() and POOL_MANAGER() on the OP Mainnet and Base controllers return fixed addresses and the right PoolManager. Accrued native fees are 0.0304 ETH on OP Mainnet and 0.0508 ETH on Base, and zero on the five chains with a zero controller. Accrued USDC on Base read 414 and then 14 a few minutes later, which fits a permissionless collect.",
+   "codeCheck": "setProtocolFeeController is owner only (src/ProtocolFees.sol:29-32). lib/solmate is an empty submodule in this checkout, so I read Owned.sol from the pinned commit 4b47a19: onlyOwner requires msg.sender == owner, and transferOwnership is the only other owner function. A search of src/ finds no other use of onlyOwner. setProtocolFee and collectProtocolFees accept only the controller (src/ProtocolFees.sol:36 and 48). The fee is capped at 1,000 pips per direction (src/libraries/ProtocolFeeLibrary.sol:25-32). protocolFeesAccrued grows only in _swap by amountToProtocol (src/PoolManager.sol:238, src/ProtocolFees.sol:66-70), which Pool.swap takes out of the fee the swapper paid in each step (src/libraries/Pool.sol:385-398). collectProtocolFees subtracts with checked arithmetic before the transfer (src/ProtocolFees.sol:54-56). The owner and the controller therefore reach accrued protocol fees and a levy of at most 0.1 percent per direction on later swaps. They do not reach pool reserves or ERC-6909 claims. The only guard on collection is the synced currency check (src/ProtocolFees.sol:49-52). It is covered by test/PoolManager.t.sol:1001-1039, and the caller checks by test/ProtocolFeesImplementation.t.sol:42-80.",
+   "corrections": "1. Severity raised from low to medium. The definition of low requires that no direct loss path was found. This finding has one: a party that controls the predeploy upgrade path or a fork bundle can appoint itself controller, take accrued fees and add up to 0.1 percent per direction to every later swap. The actor is chain governance, which would place it at high, and the reach is capped at protocol fees, so medium fits. 2. The list of actors is incomplete. Network upgrade deposits are written by the fork authors and can carry any sender. The Ecotone and Isthmus specifications define upgrade deposits sent from the zero address. A fork bundle could therefore call the PoolManager as the alias owner directly, or as the zero address controller on Unichain, Zora, World Chain, Ink and Soneium, without touching the messenger. 3. The statement that nothing has accrued on the five chains was checked for the native currency only. 4. Fee figures move: Base native fees were 0.0508 ETH at my read against 0.034 in the finding.",
+   "sources": [
+    {
+     "url": "https://worldchain-mainnet.explorer.alchemy.com/api/v2/smart-contracts/0xcb2436774c3e191c85056d248ef4260ce5f27a9d",
+     "supports": "Verified CrossChainAccount source and constructor arguments on World Chain."
+    },
+    {
+     "url": "https://soneium.blockscout.com/api/v2/smart-contracts/0x044aaf330d7fd6ae683eec5c1c1d1fff5196b6b7",
+     "supports": "Verified CrossChainAccount source and constructor arguments on Soneium."
+    },
+    {
+     "url": "https://docs.optimism.io/op-stack/protocol/privileged-roles",
+     "supports": "The L2 ProxyAdmin owner is the alias of the L1 ProxyAdmin owner, a 2 of 2 Safe of the Foundation and the Security Council for Optimism governed chains."
+    },
+    {
+     "url": "https://specs.optimism.io/protocol/overview.html",
+     "supports": "Network upgrade transactions call L2ProxyAdmin.upgradePredeploys from the depositor account at fork activation."
+    },
+    {
+     "url": "https://docs.optimism.io/notices/archive/upgrade-19",
+     "supports": "Karst introduces the L2 Contract Manager for L2 contract upgrades through the consensus layer, with mainnet activation planned for 8 July 2026."
+    },
+    {
+     "url": "https://specs.optimism.io/protocol/ecotone/derivation.html",
+     "supports": "An upgrade deposit with from set to the zero address (L1Block Proxy Update)."
+    },
+    {
+     "url": "https://explorer.optimism.io/api/v2/smart-contracts/0xd85393784234fb2ee4f077867a8b78e1ad4ce56b",
+     "supports": "V4FeeAdapter.collect has no access control and sends to the immutable TOKEN_JAR."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/transmissions11/solmate/4b47a19038b798b4a33d9749d25e570443520647/src/auth/Owned.sol",
+     "supports": "onlyOwner and transferOwnership at the commit this repository pins."
+    },
+    {
+     "url": "https://mainnet.optimism.io",
+     "supports": "Owner contract slots, messenger implementation and admin slots, ProxyAdmin owner, accrued fees, fee adapter immutables. The same reads were run on the other six RPC endpoints in networks.json."
+    }
+   ]
+  },
+  {
+   "findingIndex": 3,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "The Soneium post was fetched. It says the affected tokens were restricted at the RPC level, that the blacklisting applies to specific smart contracts on Soneium's public RPCs and does not prevent users from accessing the chain through other means, and that a grace period of around 12 hours applies before a contract moves from the suspicious list to the blacklist. The Blockworks article of 15 January 2025 was read through a fetch service because a direct request returned 403. It reports that the AIBO token was blocked by the sequencer and that users used forced inclusion through OptimismPortal. The OP docs state that users can always bypass the sequencer through OptimismPortal and that such transactions are processed within the sequencer window, 12 hours by default. The superchain registry file for Soneium gives seq_window_size = 3600 L1 blocks, which is 12 hours, and governed_by_optimism = true. Whether the block acted in the sequencer or only at the public RPC is not settled by a primary source: Soneium says RPC, the press says sequencer.",
+   "codeCheck": "modifyLiquidity, take and the pool library contain no operator switch and no time or block dependence (src/PoolManager.sol:145-184 and 291-297, src/libraries/Pool.sol:146-238). A search of src/ outside src/test finds no read of block fields or tx.origin. Removing liquidity updates two ticks, the bitmap and one position, with no loop, so it fits in a deposit. Nothing in core distinguishes a deposit from a sequenced transaction, since the only caller identity used is msg.sender. A restriction outside the EVM therefore delays exits and cannot change balances. I found no loss path that the finding missed.",
+   "corrections": "1. The evidence for sequencer level blocking is secondary. The primary source describes RPC level blocking only. If the block is at the RPC, any other RPC or a self run node is enough and the L1 deposit is not needed. 2. A position owned by an L2 contract account cannot be driven from the same address on L1, because a contract sender is aliased. The finding's precondition already covers this with the relay option. 3. The PoolManager balances quoted are USDSC and USDC.e figures that I confirmed in finding 1. The 58 ETH figure was not re-read. Severity stays low: an operational hazard with no loss path.",
+   "sources": [
+    {
+     "url": "https://soneium.org/en/blog/philosophy-for-responsible-innovation",
+     "supports": "RPC level restriction of listed contracts, the grace period of around 12 hours, and access through other means."
+    },
+    {
+     "url": "https://blockworks.com/news/soneium-mainnet-censorship-complaints",
+     "supports": "Press report of sequencer blocking in January 2025 and of forced inclusion through OptimismPortal."
+    },
+    {
+     "url": "https://docs.optimism.io/op-stack/protocol/outages",
+     "supports": "Users can bypass the sequencer through OptimismPortal, with a maximum delay of the sequencer window, 12 hours by default."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/superchain-registry/main/superchain/configs/mainnet/soneium.toml",
+     "supports": "Soneium seq_window_size = 3600 and governed_by_optimism = true."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Whether LegacyERC20ETH at 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000, whose balanceOf mirrors the native ETH balance, lets a caller get credit twice for one ETH payment or take ETH under a second currency id (assumption A3).",
+   "agrees": true,
+   "note": "Reproduced on OP Mainnet and Zora: the contract has 3,671 bytes of code, balanceOf(PoolManager) equals eth_getBalance (227.74 ETH on OP Mainnet), transfer and transferFrom called from the PoolManager revert with a disabled message, and eth_call sync(LegacyERC20ETH) succeeds. In the code, a settle with value reverts while any ERC-20 currency is synced (src/PoolManager.sol:356), and sync always stores the current balance (src/PoolManager.sol:285-286), so a native payment cannot fall between a legacy sync and its settle. settle and settleFor are the only payable functions and there is no receive or fallback, so the remaining inflow is forced ETH, which is the sender's own money and cannot leave as the legacy currency. A balance that falls, for example through a native fee collection that the guard at src/ProtocolFees.sol:49 allows, makes the subtraction at src/PoolManager.sol:360 revert. test/Sync.t.sol:255-276 covers the guard with a native backed ERC-20."
+  },
+  {
+   "check": "Whether transient storage can survive from one user's transaction into another's (assumption A1): deposits, the L1 attributes transaction, Flashblocks.",
+   "agrees": true,
+   "note": "I agree with the conclusion and reject one piece of its evidence. The deposit specification says a deposit is processed exactly like a type 2 transaction apart from fee, nonce and access list handling, and it does not mention transient storage. The exttload probe proves nothing: an eth_call starts a fresh execution context, so the synced currency and unlock slots read zero whatever the chain does between transactions. The clearance therefore rests on the specification alone. It was not checked against client source. Base has shipped its own upgrades since Azul and names Reth V2 as its reference client since Beryl, so the OP deposit specification is weaker evidence there. A lead is recorded for that."
+  },
+  {
+   "check": "Whether the ETH mint of a deposit transaction, the L1 data fee, the operator fee or fee vault credits can change the PoolManager's balance outside a call (assumption A2 and A3).",
+   "agrees": true,
+   "note": "The deposit specification states that the mint is added to the from account and persists if execution fails. from is an L1 EOA or an aliased L1 contract, and reaching the PoolManager address by aliasing would need a chosen 160 bit L1 address. Fees are charged to the transaction sender, and the PoolManager is never one. In the code only settle and settleFor are payable (src/PoolManager.sol:300-307) and both need the manager unlocked, so a deposit that sends value to any other function reverts and the value stays with the depositor."
+  },
+  {
+   "check": "Whether anyone can use the protocol fee functions while protocolFeeController is the zero address (assumption A12).",
+   "agrees": false,
+   "note": "The code reading is right: both functions compare msg.sender with the controller (src/ProtocolFees.sol:36 and 48). The chain fact is incomplete. The Ecotone and Isthmus specifications define network upgrade deposits whose from is the zero address. Those two only call the L1Block proxy, yet they show that the protocol itself can produce a zero address sender. A later fork bundle on Unichain, Zora, World Chain, Ink or Soneium could call setProtocolFee and collectProtocolFees that way. The reach is protocol fees only, and none has accrued in the native currency. The item should be recorded as safe against users and open to fork authors."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "question": "For OUSD at 0xB2000000000000000000002fEb517dFeC7415344, of which the PoolManager holds about 5.34 million, who holds DEFAULT_ADMIN_ROLE, PAUSE_ROLE, SEIZE_ROLE and BURN_BLOCKED_ROLE, who controls the policy 122 admin 0x251d2711ebeb0a09fdb8992f5506f3d949175246, and is policy 122 a blocklist?",
+   "why": "One account without code can stop every OUSD payout by listing the PoolManager under the sender policy, and a holder of BURN_BLOCKED_ROLE could then burn the balance. RoleGranted logs need an archive endpoint, which the public RPCs refused.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "question": "Which other B20 tokens does the PoolManager hold, and do tokenised stocks such as AMDC at 0xB2000000000000000000000d8Ce462E99ee7A47B (policy 5 on four scopes, seize exempt policy 129) keep the PoolManager authorised under each bound policy?",
+   "why": "The two tokens found came from a sample of 50 transfers. The factory emits about 225 creations a day, so a full list needs an indexer. Removing the PoolManager from policy 129 would make its AMDC balance seizable.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    130,
+    57073
+   ],
+   "lens": "L3",
+   "question": "Who can call addToBlockedList and destroyBlockedFunds on USD₮0 (owner 0x4dff9b5b0143e642a3f63a5bcf2d1c328e600bf8 on Unichain and 0xc95de55ce5e93f788a1faab2a9c9503f51a5dae2 on Ink), and what are the signers and threshold?",
+   "why": "The selectors are present in both implementations. A blocked PoolManager could lose about 1.53 million USD₮0 on Ink and 180,760 on Unichain, which turns the stablecoin finding from a freeze into a loss for this token.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L5",
+   "question": "Do the Karst bundle or any scheduled fork bundle contain upgrade deposits sent from the zero address, and should the owner set protocolFeeController to an inert non zero address on these five chains?",
+   "why": "The zero address passes the controller check at src/ProtocolFees.sol:36 and 48, and Ecotone and Isthmus used zero address senders for upgrade deposits. A non zero controller removes the dependency at no cost.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "question": "Does the execution client source (op-reth, and the Reth V2 based client Base adopted at Beryl) reset transient storage at the start of every transaction, including user deposits and network upgrade deposits?",
+   "why": "The clearance of assumption A1 rests on the deposit specification. The exttload probe by eth_call cannot show leakage between transactions. A stale unlock flag or synced currency carried across a transaction boundary would be a siphon path.",
+   "priority": "medium"
+  }
+ ]
+}

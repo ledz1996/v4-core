@@ -1,0 +1,213 @@
+{
+ "unit": "established-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "BEP-702 was fetched from raw.githubusercontent.com. Its status is Draft and it was created on 2026-07-16. Section 3.3 reserves every address that starts with 0xCA52 followed by eight zero bytes. Section 3.6 says seizeWithMemo reassigns the balance of the from account without an allowance and without the transfer policies, and that the account is seizable only when the holder policy does not authorize it. Section 3.8 lists six policy scopes and says each starts at policy 0 (ALWAYS_ALLOW), so no account is seizable on an unconfigured token. Section 3.9 says pause(TRANSFER) halts transfers and leaves seizeWithMemo callable. Section 3.12 says balanceOf returns the raw balance. BEP-718 lists BEP-702, BEP-703 and BEP-706 for Jenner and says token creation is opened by a governance-appointed activation switch. The BSC CHANGELOG entry for v1.8.2 schedules mainnet Jenner for 2026-12-08 02:30:00 UTC (1796697000), and params/config.go on master sets the mainnet JennerTime to 1796697000. BEP-703 names BEP-702 native tokens as eligible payment contracts. I also read the client, which the finding did not. core/vm/evm.go on master resolves any address with the CAS20 prefix to native code once IsJenner is true. core/vm/cas20_token.go implements transfer: it reverts with ContractPaused when TRANSFER is paused, reverts with PolicyForbids when the sender policy or the receiver policy does not authorize the account, and returns a 32 byte true on success. core/vm/cas20_admin.go implements seizeWithMemo: it requires SEIZE_ROLE, skips the transfer policies and moves the balance when the seize policy does not authorize the holder. On chain at BSC block 135,080,406 on 2026-11-22: the block timestamp is 1795351088, which is 15.6 days before JennerTime, and eth_getCode is empty at 0xCA5F000000000000000000000000000000000000, 0x7020000000000000000000000000000000000001, 0x7020000000000000000000000000000000000002, 0x0000000000000000000000000000000000002007 and two addresses in the token range. Not confirmed: mainnet behaviour after activation, whether governance opens token creation, and which tokens will have pools. These lie in the future.",
+   "codeCheck": "sync reads balanceOf through a static call (src/PoolManager.sol:285, src/types/Currency.sol:94), and BEP-702 section 3.2 permits reads under STATICCALL. take records the debit and then calls transfer with the PoolManager as caller (src/PoolManager.sol:291-297, src/types/Currency.sol:60-75). A revert from the token reaches src/types/Currency.sol:82-86 and reverts the take. collectProtocolFees ends in the same transfer (src/ProtocolFees.sol:56). A CAS20 transfer returns 32 bytes holding 1, which passes the success test at src/types/Currency.sol:68. initialize makes no call to either currency (src/PoolManager.sol:117-142), so a pool can be created for any CAS20 address. A seizure lowers balanceOf(PoolManager) and writes no delta. No function in src/ reconciles pool accounting with the real balance, so takes fail with InsufficientBalance once the sum requested exceeds what is left. A seizure that lands between sync and settle makes the checked subtraction at src/PoolManager.sol:360 revert for that settle. With the receiver policy closed, no token can reach the PoolManager and settle credits zero (src/PoolManager.sol:358-360). mint and burn make no token call (src/PoolManager.sol:322-336) and modifyLiquidity makes none (src/PoolManager.sol:145-184), so liquidity providers can leave with the counter-asset and an ERC-6909 claim on the frozen token, as the finding says. I found no guard in src/ that the finding missed. No test in test/ models a token whose issuer can move or block the PoolManager balance.",
+   "corrections": "1. The client on master names the holder scope SEIZE_EXEMPT_POLICY (core/vm/cas20_admin.go), while the BEP text names it SEIZE_HOLDER_POLICY. The semantics are the same. Tools that watch the PoolManager's seizability must use the getter the client exposes. 2. The finding attributes the hazard to issuer roles only. BEP-702 section 3.8 makes the PolicyRegistry a shared singleton, so the admin of a policy list can change the PoolManager's status for every token that references the list without holding a role on any of them. 3. The finding says the client implementation was not read. It is on bnb-chain/bsc master and agrees with the BEP on transfer, pause, policy checks and seizure. 4. Severity stays medium. The actor is a token issuer, which the scale places at high. No CAS20 token exists today, the PoolManager holds none, and the loss is limited to pools of the affected token. Raise it to high once a CAS20 token with a seizer or a restrictive sender policy has a balance at the PoolManager.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/BEPs/master/BEPs/BEP-702.md",
+     "supports": "Draft status, reserved prefix, seizeWithMemo semantics, six policy scopes with ALWAYS_ALLOW default, pause categories, raw balanceOf, revert with empty return data for an address that holds no token"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/BEPs/master/BEPs/BEP-718.md",
+     "supports": "Jenner contains BEP-702, BEP-703 and BEP-706, and token creation needs a separate activation switch"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/BEPs/master/BEPs/BEP-703.md",
+     "supports": "BEP-702 native tokens are eligible for the payment contract list"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/CHANGELOG.md",
+     "supports": "v1.8.2 schedules mainnet Jenner for 2026-12-08 02:30:00 UTC (1796697000)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/params/config.go",
+     "supports": "Mainnet JennerTime is 1796697000"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/evm.go",
+     "supports": "Addresses with the CAS20 prefix are routed to native code when IsJenner is true"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_token.go",
+     "supports": "transfer checks pause and the sender and receiver policies, and returns an encoded true"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_admin.go",
+     "supports": "seizeWithMemo requires SEIZE_ROLE, skips transfer policies, and uses a scope named SEIZE_EXEMPT_POLICY"
+    },
+    {
+     "url": "rpc https://bsc-dataseed1.bnbchain.org, eth_call, eth_getCode, eth_getStorageAt and eth_getBlockByNumber at blocks 135080399 to 135080406 on 2026-11-22",
+     "supports": "Latest block timestamp 1795351088 is before JennerTime, and the factory, registry, payment lane and token range addresses have no code"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "On chain at Polygon block 97,763,679 on 2026-11-22: eth_getBalance(PoolManager) and balanceOf(PoolManager) on 0x0000000000000000000000000000000000001010 both return 0x294bb558a23f1f1a300e0, about 3,120,217 POL. symbol() returns POL. transfer(0xdead, 1) called from the PoolManager address with zero value returns a 32 byte zero. The same transfer with value 1 from a funded test address returns true, and with the PoolManager as recipient it reverts. A 1 wei call with empty calldata to the PoolManager reverts. approve and transferFrom revert. transferWithSig reverts with 'Disabled feature', so no signature path moves the PoolManager balance. The published MRC20.sol and BaseERC20NoSig.sol agree with these results: balanceOf returns account.balance, transfer returns false when msg.value differs from value, and _transfer uses address.transfer. The deployed code is 5315 bytes and contains the selectors of that source.",
+   "codeCheck": "sync(0x1010) stores the native balance as reserves (src/PoolManager.sol:285-286, src/types/Currency.sol:94). _settle rejects msg.value while 0x1010 is synced (src/PoolManager.sol:356) and credits balance minus reserves with a checked subtraction (src/PoolManager.sol:358-360). settle and settleFor are the only payable functions (src/PoolManager.sol:300, src/PoolManager.sol:305) and the contract has no receive or fallback function, so only a forced transfer can raise the balance inside the window. take(0x1010) calls transfer with zero value (src/types/Currency.sol:73), receives a zero word, fails the test at src/types/Currency.sol:68 and reverts at src/types/Currency.sol:82-86. collectProtocolFees reverts the same way for this currency (src/ProtocolFees.sol:56). I tried to turn the mirror into a double credit. A caller can take native POL, sync 0x1010, force the same POL back and receive a 0x1010 credit. The native debit from the take remains (src/PoolManager.sol:294). It can be cleared only with msg.value (src/PoolManager.sol:353-354) or by a swap against a pool that other users funded with 0x1010, and those users could fund it only by forcing in their own POL. Operations on a pool the caller funds alone conserve each currency, so the 0x1010 credit never becomes native credit for free. test/Sync.t.sol:255-274 covers the rejected native settle with the NativeERC20 model from src/test/NativeERC20.sol. No test covers a token whose transfer returns false for the PoolManager.",
+   "corrections": "Nothing wrong in the mechanism. One detail to add: a take of amount zero on 0x1010 would see transfer return true, and it changes nothing because a zero delta is ignored (src/PoolManager.sol:369). The frozen funds belong only to a party that chose to fund a 0x1010 position through a forced transfer, so low is the right level.",
+   "sources": [
+    {
+     "url": "rpc https://polygon.drpc.org, eth_call, eth_getCode, eth_getStorageAt, eth_getBalance and eth_getBlockByNumber at blocks 97763679 to 97764038 on 2026-11-22",
+     "supports": "Native balance equals balanceOf on 0x1010, transfer from the PoolManager with zero value returns 0, transfer to the PoolManager with value reverts, approve, transferFrom and transferWithSig revert, a plain 1 wei call to the PoolManager reverts"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/maticnetwork/contracts/main/contracts/child/MRC20.sol",
+     "supports": "balanceOf returns account.balance, transfer returns false when msg.value differs from value, deposit is owner only"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/maticnetwork/contracts/main/contracts/child/BaseERC20NoSig.sol",
+     "supports": "transferWithSig reverts with 'Disabled feature'"
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "On chain: PoolManager storage slot 0 is 0x341c1511141022cf8ee20824ae0ffa3491f1302b on BNB Smart Chain and 0x47eb0cf11a1626462da3c830bcde64c3f582b5a6 on Avalanche. Slot 2 on Avalanche is zero and protocolFeesAccrued for AVAX is zero. Sourcify holds an exact match for the BNB Smart Chain owner. The source is UniswapWormholeMessageReceiver. receiveMessage is open to any caller. It calls parseAndVerifyVM on the Wormhole core contract, requires the emitter address to equal messageSender, the emitter chain to be 2, the sequence to be at least nextMinimumSequence, the message to be at most 2 days old, the payload receiver to be the contract itself and the receiver chain to be 4, and then performs the listed calls. The bytecode embeds the Wormhole core address 0x98f3c9e6e3face36baad05fe09d375ef1464288b. On that contract getCurrentGuardianSetIndex() returns 7, getGuardianSet(7) holds 19 addresses with no expiry, and quorum(19) returns 13. The Avalanche owner has no Sourcify entry. Its bytecode carries the same revert strings and embeds the Avalanche core contract 0x54a8e5f9c4cba08f9943965859f6c34eaf03e26c, whose guardian set 7 also holds 19 addresses. messageSender() returns 0xf5f4496219f31cdcba6130b5402873624585615a on both chains. On Avalanche chainId() returns 6 and nextMinimumSequence() returns 0. On BNB Smart Chain storage slot 0 of the receiver, which holds the sequence floor, is 4. The fee adapter on BNB Smart Chain returns the receiver for owner() and feeSetter(). Accrued protocol fees there were 0.05 BNB and 359.9 BSC-USD at the time of the query. The Wormhole documentation states that every VAA is a 13-of-19 attestation. Not confirmed: the Avalanche receiver source, and the upgrade path of the Wormhole core contracts.",
+   "codeCheck": "setProtocolFeeController is the only onlyOwner function in src/ (src/ProtocolFees.sol:29-32, checked by searching src/ for onlyOwner). setProtocolFee accepts only the controller and rejects a value above 1000 pips in either 12 bit half (src/ProtocolFees.sol:35-41, src/libraries/ProtocolFeeLibrary.sol:25-32). collectProtocolFees accepts only the controller and subtracts from protocolFeesAccrued with overflow checks (src/ProtocolFees.sol:48, src/ProtocolFees.sol:54-56). I checked that protocolFeesAccrued cannot exceed what swappers are debited. The step fee is at least amountIn times swapFee over (1e6 minus swapFee), rounded up (src/libraries/SwapMath.sol:72-74, src/libraries/SwapMath.sol:104). The protocol share at src/libraries/Pool.sol:391-396 is taken out of that step fee and is never larger, because swapFee is at least the protocol fee (src/libraries/ProtocolFeeLibrary.sol:38-46). _swap adds the share for the input currency only (src/PoolManager.sol:238). No owner or controller function touches pool liquidity, currency deltas or ERC-6909 balances. Owned is imported from lib/solmate, which is an empty directory in this checkout, so the ownership transfer function was not read in this repository. No test covers a cross-chain owner.",
+   "corrections": "The finding says the receiver checks were inferred from bytecode strings. For BNB Smart Chain they are now confirmed from verified source, including the 2 day timeout and the strictly increasing sequence. The 13 of 19 threshold is confirmed on chain through quorum(19) on the core contract the receiver calls. On Avalanche no controller exists, so the first accepted message would also name the first controller, and no protocol fee can accrue before that. Low stands. The reachable funds are accrued protocol fees and a fee of at most 0.1% per direction on later swaps. Liquidity provider principal and ERC-6909 claims are out of reach.",
+   "sources": [
+    {
+     "url": "rpc https://bsc-dataseed1.bnbchain.org, eth_call, eth_getCode, eth_getStorageAt and eth_getBlockByNumber at blocks 135080399 to 135080406 on 2026-11-22",
+     "supports": "PoolManager slots 0 and 2, receiver getters and bytecode, Wormhole core guardian set index 7 with 19 addresses and quorum(19) = 13, fee adapter owner() and feeSetter(), protocolFeesAccrued"
+    },
+    {
+     "url": "rpc https://api.avax.network/ext/bc/C/rpc, eth_call, eth_getCode and eth_getStorageAt at block 101069748 on 2026-11-22",
+     "supports": "PoolManager slot 0 is the receiver and slot 2 is zero, receiver getters and bytecode, Wormhole core guardian set 7 with 19 addresses"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/56/0x341c1511141022cf8ee20824ae0ffa3491f1302b?fields=sources",
+     "supports": "Verified source of UniswapWormholeMessageReceiver on BNB Smart Chain with exact match"
+    },
+    {
+     "url": "https://wormhole.com/docs/protocol/infrastructure/guardians/",
+     "supports": "19 guardians and a 13-of-19 quorum for every VAA"
+    }
+   ]
+  },
+  {
+   "findingIndex": 3,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "On chain at Polygon: PoolManager storage slot 0 is 0x8a1b966ac46f42275860f905dbc75efbfdc12374. Its fxChild() is 0x8397259c983751daf40400790063935a11afa28a and its l1Owner() is 0x1a9c8182c09f50c8318d769245bea52c32be35bc. Sourcify holds a match for the owner as EthereumProxy. processMessageFromRoot requires msg.sender to be fxChild and the sender argument to be l1Owner, and then performs the listed calls. FxChild.sol in the fx-portal repository requires msg.sender to be 0x0000000000000000000000000000000000001001 and forwards the decoded root sender. It never reads fxRoot. Bor v2.11.0 sends each record from 0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE to the StateReceiver through a direct EVM call (consensus/bor/statefull/processor.go, consensus/bor/contract/client.go) and reads the records from Heimdall (consensus/bor/bor.go). Polygon documentation says a record enters Heimdall state after two thirds or more of validators agree. This closes the link the finding left open. The v2.11.0 release notes confirm that Uburu replaced the StateReceiver at mainnet block 96787900 and that the public release followed a private one. That block has timestamp 2026-11-05 14:01:46 UTC and the release was published at 14:45 UTC on the same day. The fee adapter returns the proxy for owner() and feeSetter(). Accrued protocol fees were 539.8 POL and 137.8 USDC. I found a weaker precondition than the finding states. The content of a record is authenticated on Ethereum only by StateSender.registrations. FxRoot 0xfe5e5d361b2ad62c541bab87c45a0b9b018389a2 reports stateSender() 0x28e4f3a7f651294b9564800b2d01f35189a5bfbe, and registrations(FxChild) on that contract is FxRoot. StateSender.register lets the StateSender owner set the sender for any receiver. owner() of the StateSender is 0xfa7d2a996ac6350f4b56c043112da0366a59b74c, a Safe version 1.4.1 with 9 owners and threshold 5. An eth_call of register(0x2222222222222222222222222222222222222222, FxChild) from that Safe succeeds. The same call from an unrelated address reverts with 'StateSender.register: Not authorized to register'.",
+   "codeCheck": "The proxy can reach one privileged function, setProtocolFeeController (src/ProtocolFees.sol:29-32). A controller it names can set at most 1000 pips per direction (src/ProtocolFees.sol:35-41, src/libraries/ProtocolFeeLibrary.sol:25-32) and can withdraw at most protocolFeesAccrued, through a checked subtraction (src/ProtocolFees.sol:54-56). protocolFeesAccrued grows only at src/PoolManager.sol:238 by the share computed at src/libraries/Pool.sol:391-396, which is part of the fee the swapper is debited. No owner or controller function touches pool liquidity, currency deltas or ERC-6909 balances. Owned comes from lib/solmate, which is empty in this checkout. No test covers a cross-chain owner.",
+   "corrections": "1. The precondition is too narrow. Five of the nine signers of the Safe that owns the StateSender on Ethereum can register a new sender for FxChild and emit a StateSynced record whose data names the timelock as root sender. Honest Heimdall validators would relay it. No Heimdall majority and no client release is needed. 2. The two thirds Heimdall threshold, which the finding assumed, is confirmed by Polygon documentation. 3. The proxy checks, which the finding inferred from strings, are confirmed from verified source. 4. The post-Uburu StateReceiver source is public in the genesis-contracts repository, and its function set matches the 20 selectors deployed at 0x1001. It has three replay functions for failed records that any address can call. This is recorded as a lead. 5. Severity stays low because only the protocol fee stream is reachable and liquidity provider principal is out of reach. If the review counts future protocol fees as pool funds, the 5 of 9 path would justify medium.",
+   "sources": [
+    {
+     "url": "rpc https://polygon.drpc.org, eth_call, eth_getCode, eth_getStorageAt, eth_getBalance and eth_getBlockByNumber at blocks 97763679 to 97764038 on 2026-11-22",
+     "supports": "PoolManager slots 0 and 2, fxChild() and l1Owner() of the owner, fxRoot() of FxChild, fee adapter owner() and feeSetter(), protocolFeesAccrued, StateReceiver selectors and getters, timestamp of block 96787900"
+    },
+    {
+     "url": "rpc https://ethereum-rpc.publicnode.com, eth_call and eth_getCode at the latest block on 2026-11-22",
+     "supports": "FxRoot stateSender() and fxChild(), StateSender registrations(FxChild) and owner(), Safe getOwners() with 9 entries, getThreshold() = 5 and VERSION() = 1.4.1, eth_call of register from the Safe succeeds and from another address reverts"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0x8a1b966ac46f42275860f905dbc75efbfdc12374?fields=sources",
+     "supports": "Verified source of EthereumProxy with the fxChild and l1Owner checks"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/fx-portal/main/contracts/FxChild.sol",
+     "supports": "onStateReceive requires msg.sender 0x1001 and forwards the decoded root sender without reading fxRoot"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/fx-portal/main/contracts/FxRoot.sol",
+     "supports": "sendMessageToChild encodes msg.sender and calls stateSender.syncState(fxChild, data)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/maticnetwork/contracts/main/contracts/root/stateSyncer/StateSender.sol",
+     "supports": "syncState needs registrations[receiver] to equal msg.sender, and register can be called by the owner for any receiver"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/consensus/bor/statefull/processor.go",
+     "supports": "System messages are sent from BorSystemAddress with zero gas price through a direct EVM call"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/consensus/bor/bor.go",
+     "supports": "Records come from Heimdall pages and are committed one by one through CommitState"
+    },
+    {
+     "url": "https://docs.polygon.technology/pos/architecture/bor/state-sync",
+     "supports": "A state sync record is added to Heimdall state after two thirds or more of validators agree, and Bor applies it through a system call"
+    },
+    {
+     "url": "https://github.com/0xPolygon/bor/releases/tag/v2.11.0",
+     "supports": "Uburu replaced the StateReceiver at mainnet block 96787900, and v2.11.0 is the public release of a private build that validators already ran"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/maticnetwork/genesis-contracts/master/contracts/StateReceiver.sol",
+     "supports": "Post-Uburu StateReceiver source with commitState, receiver gas from an oracle, and three permissionless replay functions"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Whether one POL can be credited twice, once as address(0) and once as the 0x1010 token (A3 siphon).",
+   "agrees": true,
+   "note": "I traced every way the native balance can rise between sync(0x1010) and settle. settle and settleFor are the only payable functions (src/PoolManager.sol:300, src/PoolManager.sol:305) and both revert on msg.value while 0x1010 is synced (src/PoolManager.sol:356). The contract has no receive or fallback function, and a 1 wei eth_call with empty calldata reverts on chain. sync(address(0)) clears the synced currency (src/PoolManager.sol:281-283), and a later sync(0x1010) stores a balance that already contains the native payment. A native take inside the window lowers the balance and the checked subtraction at src/PoolManager.sol:360 reverts. A forced transfer costs the sender real POL and yields one credit. Taking POL and forcing it back yields a 0x1010 credit and leaves an equal native debit that only msg.value can clear. The token itself cannot debit the PoolManager: transfer needs msg.value from the caller, and approve, transferFrom and transferWithSig revert on chain."
+  },
+  {
+   "check": "Whether permissionless fee collection through the fee adapter while the PoolManager is unlocked lets a caller gain funds. collectProtocolFees has no lock check in this code (src/ProtocolFees.sol:44-57), and _isUnlocked declared at src/ProtocolFees.sol:60 is never called there.",
+   "agrees": true,
+   "note": "The verified adapter source on Sourcify (Polygon 0x59e84309afa65f084f9c03668583d231afb12cc6, exact match) shows collect is open to any caller and always passes the immutable TOKEN_JAR as recipient. I read only the adapter's own files in that bundle. In src/, collection lowers protocolFeesAccrued before the transfer (src/ProtocolFees.sol:55-56), and a falling balance never creates a credit: ERC-20 credit needs a rise since sync (src/PoolManager.sol:358-360) and native credit is msg.value (src/PoolManager.sol:354). The guard at src/ProtocolFees.sol:49 blocks collection of a synced ERC-20. A swapper who collects the fee of an unsettled swap still has to settle before unlock returns (src/PoolManager.sol:112), and a revert of unlock undoes the collection because it ran inside the callback. ASSUMPTIONS.md A12 says the function reverts while the manager is unlocked and the currency is synced. The code has no lock condition. It reverts whenever a non-native currency is synced, locked or unlocked, and test/PoolManager.t.sol:1001-1037 asserts this. The stricter behaviour creates no hazard."
+  },
+  {
+   "check": "Whether transient storage of the PoolManager (lock flag, deltas, synced currency and reserves) can leak from the last user transaction of a block into state sync calls that an attacker reaches through FxPortal.",
+   "agrees": true,
+   "note": "In Bor v2.11.0 the live path commitStateSyncPage calls statefull.PrepareStateSyncContext before each CommitState (consensus/bor/bor.go line 2205). PrepareStateSyncContext calls StateDB.Prepare when IsAustin is true, and Prepare replaces the transient storage map (core/state/statedb.go). params/config.go sets the mainnet AustinBlock to 91949700, which has timestamp 2026-08-13 13:59:37 UTC on chain, and the head is past 97.76 million. The fallback reasoning for earlier blocks also holds in src/: unlock ends with a zero delta count and a cleared lock (src/PoolManager.sol:112-113), so only a stale synced currency and reserves could survive a transaction, and those credit only tokens that arrive after the sync (src/PoolManager.sol:358-360). The replay functions of the StateReceiver run inside ordinary user transactions and get a fresh transient storage like any other transaction."
+  },
+  {
+   "check": "Whether any caller can have msg.sender equal to address(0), the value of protocolFeeController on Avalanche, and so pass the checks at src/ProtocolFees.sol:36 and src/ProtocolFees.sol:48.",
+   "agrees": true,
+   "note": "The Avalanche exchange integration page confirms that the C-Chain accepts only legacy, EIP-2930 and EIP-1559 transactions and rejects set-code transactions. On chain, slot 2 of the PoolManager is zero and protocolFeesAccrued for AVAX is zero. An exploit needs a call with a zero caller whose target and calldata the attacker chooses. A fixed system call would not give that, and a user transaction would need a signature that recovers to the zero address. I did not read the source of the post-Helicon VM, so this rests on documentation, as the cleared item already says. The exposure would be limited to setting protocol fees and collecting them. Naming a controller would remove the question."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L5",
+   "question": "Who are the nine signers of the Safe 0xFa7D2a996aC6350f4b56C043112Da0366a59b74C that owns the StateSender on Ethereum, is any delay or timelock placed in front of StateSender.register, and which other roles can change that Safe?",
+   "why": "Five signers can register a new sender for FxChild and forge a message from the Uniswap timelock to the PoolManager owner proxy on Polygon. An eth_call of register from the Safe succeeds today. This lowers the precondition of the Polygon owner path finding from a Heimdall majority to one multisig.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L4",
+   "question": "Do failedStateSyncHashes or the historic failed root at 0x1001 (leafCount 76, replayCount 9) contain a record addressed to FxChild whose payload targets the owner proxy 0x8a1b966ac46f42275860f905dbc75efbfdc12374, and who controls the gas oracle 0x5e3a5eafd4501332c0bc2acfd38df3ebc5152147 that sets the gas forwarded to receivers?",
+   "why": "The published StateReceiver source has replayFailedStateSync, replayFailedStateSyncWithData and replayHistoricFailedStateSync, all open to any caller, and the deployed selectors match. A governance message that failed on first delivery, for example for lack of receiver gas (the default is 160,000), can be executed later by anyone at a time of their choosing. That could restore a protocol fee controller that governance has since replaced.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "question": "After Jenner, does the deployed CAS20 handler expose SEIZE_EXEMPT_POLICY as on client master or SEIZE_HOLDER_POLICY as in the BEP-702 text, and does a call to a 0xCA52 address that holds no token revert with empty return data?",
+   "why": "The scope name decides which getter a monitor must read to learn whether the PoolManager is seizable. A4 assumes that a transfer call to a currency without code succeeds. In the reserved range it will revert, which changes take for any pool initialized on a token address that does not exist yet.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L5",
+   "question": "Is the Avalanche owner 0x47eb0cf11a1626462da3c830bcde64c3f582b5a6 verified on an explorer, and does its source equal the BNB Smart Chain receiver apart from the chain id constant?",
+   "why": "Sourcify has an exact match for the BNB Smart Chain receiver and no entry for the Avalanche one. The Avalanche checks rest on bytecode strings and getters.",
+   "priority": "low"
+  }
+ ]
+}
