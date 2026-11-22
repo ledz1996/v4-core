@@ -1,0 +1,78 @@
+{
+ "unit": "core-code-flow-swap",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I fetched the Hyperliquid page on the dual block architecture. It states a fast block duration of 1 second with a 3M gas limit and a slow block duration of 1 minute with a 30M gas limit, and that a sender is moved to big blocks by the HyperCore action evmUserModify with usingBigBlocks true. I queried eth_getBlockByNumber on https://rpc.hyperliquid.xyz/evm for blocks 51958402 to 51958471 myself: 69 blocks report gasLimit 3,000,000 and block 51958443 reports 30,000,000, as the finding says. The largest gasUsed in the sample was 1,860,095. The HyperEVM page states that the chain uses the Cancun hardfork without blobs. I tested the gas schedule for storage reads instead of inferring it: eth_estimateGas for PoolManager.extsload(startSlot, nSlots) with 1, 2, 51 and 101 empty slots returned 24,293, 26,473, 133,821 and 244,561 on HyperEVM and the same four numbers on Ethereum, which is about 2,200 gas per extra cold slot on both. The cold read cost of 2,100 that the estimate rests on therefore holds on HyperEVM. I fetched EIP-2929 (COLD_SLOAD_COST, SSTORE_RESET_GAS equal to 5000 minus COLD_SLOAD_COST), EIP-2200 (SSTORE_SET_GAS 20000, SSTORE_RESET_GAS 5000) and EIP-3529 (refund cap of one fifth of gas used). I did not measure SSTORE cost on HyperEVM, so the write costs rest on the Cancun statement in the docs. I fetched EIP-7825 and EIP-7607: the 16,777,216 gas cap per transaction is part of Fusaka, which activated on Ethereum mainnet on 2025-12-03, so the comparison value is in force. The repository snapshots hold the numbers the finding quotes (snapshots/TickBitmapTest.json:5-10, snapshots/SwapMathTest.json:2-9, snapshots/PoolManagerTest.json:12 and 16). I found no primary source that contradicts the finding. Not confirmed: the gas of one loop iteration of the deployed bytecode on HyperEVM was not measured by the researcher or by me. The public endpoint limits eth_getLogs to 1,000 blocks and rate limits, so I could not list pools to quote against.",
+   "codeCheck": "I read the swap path and wrote my own transcription of BitMath, FullMath, TickMath, SqrtPriceMath, SwapMath, TickBitmap and Pool from the source text. Pool.swap runs one loop pass per call to nextInitializedTickWithinOneWord (src/libraries/Pool.sol:344-348), and that call reads one bitmap word from storage (src/libraries/TickBitmap.sol:98 and 111). A pass that ends on an initialized tick calls crossTick, which reads and rewrites feeGrowthOutside0X128 and feeGrowthOutside1X128 and reads the slot that holds liquidityNet (Pool.sol:413-428, 602-612). No guard bounds the number of passes other than the amount and the price limit (Pool.sol:344). With liquidity 0 a step consumes nothing and ends on its target (src/libraries/SwapMath.sol:63-75), so a swap toward a far limit visits every word. modifyLiquidity has no access check for a pool without a hook (src/PoolManager.sol:145-184) and Pool.modifyLiquidity has no loop (Pool.sol:146-238), so removals are not affected. initialize accepts any price that getTickAtSqrtPrice accepts (PoolManager.sol:117-142, Pool.sol:100-107, src/libraries/TickMath.sol:121-129). In my transcription 200 positions of liquidity 1 on [t, t+1) for t from -200 to -1 in a spacing 1 pool cost 200 base units of currency1 in total, and a swap that moved the price by 100 and 200 ticks ran 101 and 201 passes. An empty pool walked from tick 0 to the lower limit ran 3,467 passes at spacing 1, 348 at spacing 10, 59 at spacing 60 and 19 at spacing 200, and returned the delta (0, 0). The arithmetic of the bounds is right: (3,000,000 - 123,144) / 14,342 is 200, / 48,542 is 59 and / 2,242 is 1,283. At 2,100 gas per cold read alone the spacing 1 walk needs more than 7,280,000 gas, which is above a small block. Actor check: every step is open to an ordinary account, the affected pools need no hook and no attacker token, and the victims only swap. The actor value unprivileged is right. Severity check: no funds leave and no position is locked, a swap can be split or sent to a big block, so low is right and the effect degrade is right.",
+   "corrections": "The finding says it did not confirm that the EIP-7825 cap is active on Ethereum. It is active since Fusaka on 2025-12-03. The run with 200 dust positions cannot give 401 passes for a 400 tick move: my transcription gives 203 passes (201 crossings of the ticks from 0 down to -200 and two further passes to the word end and to the limit), and 401 passes need about 400 dusted ticks. My pass counts for the empty walk are one lower than the finding's (3,467, 348, 59 and 19), which changes the bitmap floor to 7,773,014 gas and changes no conclusion. The 48,542 gas case needs both fee growth outside slots of a tick to go from zero to nonzero. That happens for a tick above the current price when it is crossed upward for the first time while both global fee growth values are nonzero (Pool.sol:533-539, 608-609). Dust placed below the price starts with both slots equal to the global values, so those crossings fall in the 14,342 gas case or lower. The attacker can bring a tick back to the first time state by removing and adding the dust position again. Refunds for slots set to zero are paid after execution and do not lower the gas limit a swap needs. The evidence grade can move from inferred to primary for the block limits and the cold read cost. The per pass total on HyperEVM stays an upper bound on the number of crossings until someone measures it.",
+   "sources": [
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/dual-block-architecture",
+     "supports": "Fast blocks last 1 second with a 3M gas limit, slow blocks last 1 minute with a 30M gas limit, and big blocks are reached through evmUserModify with usingBigBlocks true."
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm",
+     "supports": "The HyperEVM uses the Cancun hardfork without blobs."
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_getBlockByNumber for blocks 51958402 to 51958471",
+     "supports": "My own query: 69 blocks with gasLimit 3,000,000 and block 51958443 with 30,000,000."
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm and https://ethereum-rpc.publicnode.com eth_estimateGas of extsload(bytes32,uint256) on each PoolManager from 0x000000000000000000000000000000000000dEaD",
+     "supports": "24,293, 26,473, 133,821 and 244,561 gas for 1, 2, 51 and 101 cold slots on both networks, so a cold storage read costs the same on HyperEVM as on Ethereum."
+    },
+    {
+     "url": "https://eips.ethereum.org/EIPS/eip-2929",
+     "supports": "COLD_SLOAD_COST is charged for the first access to a slot and SSTORE_RESET_GAS becomes 5000 minus COLD_SLOAD_COST."
+    },
+    {
+     "url": "https://eips.ethereum.org/EIPS/eip-2200",
+     "supports": "SSTORE_SET_GAS is 20000 and SSTORE_RESET_GAS is 5000."
+    },
+    {
+     "url": "https://eips.ethereum.org/EIPS/eip-3529",
+     "supports": "Refunds are capped at one fifth of the gas used and are applied after execution."
+    },
+    {
+     "url": "https://eips.ethereum.org/EIPS/eip-7825",
+     "supports": "The cap of 16,777,216 gas per transaction."
+    },
+    {
+     "url": "https://eips.ethereum.org/EIPS/eip-7607",
+     "supports": "EIP-7825 is part of Fusaka, and Fusaka activated on Ethereum mainnet at timestamp 1764798551 (2025-12-03)."
+    },
+    {
+     "url": "src/libraries/Pool.sol:344-437",
+     "supports": "The swap loop, with one bitmap read per pass and the tick crossing at lines 413 to 428."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Extremes of tick, price, liquidity, amount and fee, tested as solvency of one pool: can any sequence make a pool pay out more of a currency than it took in. This matters for every pool, because the PoolManager keeps no reserve per pool and a pool that overpays would draw on the balances of the others.",
+   "agrees": true,
+   "note": "I did not reuse the researcher's model. I transcribed BitMath, FullMath, TickMath, SqrtPriceMath, SwapMath, TickBitmap, the position update and Pool.modifyLiquidity and Pool.swap from src/ and tested the parts against exact arithmetic instead of against the repository tests. mostSignificantBit and leastSignificantBit matched the bit length for all 256 single bit values and 200,000 random values. mulDiv and mulDivRoundingUp matched integer division in 200,000 random cases and reverted exactly when the result exceeds 256 bits. getSqrtPriceAtTick matched 1.0001^(tick/2) * 2^96 computed with 120 digit decimals for 20,000 random ticks and every power of two tick, returned the constants MIN_SQRT_PRICE and MAX_SQRT_PRICE at the two ends, and getTickAtSqrtPrice inverted it at every tested boundary and for 100,000 random prices. In 200,000 random swap steps the pool never received less input than the exact amount for the price move it recorded and never paid more output. In 6,000 random sequences with 54,600 swaps, static fees from 0 to 100 percent, protocol fees up to 1,000 in both directions and amounts up to 2^100, the net amount received in each currency stayed at or above the protocol fee accrued after every operation and after all positions were closed, and pool liquidity always equalled the sum of the positions in range. One difference from the researcher's account: 11 of my runs ended with a full removal that reverted in SafeCast, and in every one the cause was position principal above 2^127 base units in one currency (Pool.sol:212-234), with fees far below that bound. Each of these positions left in two partial removals and the pool stayed solvent, so this is no freeze and it needs a token with more than 2^127 base units in circulation."
+  },
+  {
+   "check": "A native asset that also answers as an ERC-20 at some address: can sync, settle and take, in any order, credit one payment twice or credit more than was paid. Exhaustive search over a model of src/PoolManager.sol:279-297 and 349-364.",
+   "agrees": true,
+   "note": "I traced the two ways a credit arises. settle with currency zero credits msg.value (src/PoolManager.sol:353-354). settle with a synced ERC-20 credits the rise of balanceOf since sync and reverts when msg.value is nonzero (PoolManager.sol:356-361). sync always stores the currency and the current balance together (src/libraries/CurrencyReserves.sol:27-32), and sync(address(0)) clears the currency, so there is no order in which a value sent with settle is also counted as a balance rise of the face. The PoolManager has no receive or fallback function and settle and settleFor are its only payable functions, so native value can reach it only through those two or without a call. A take lowers the balance and can only make the next settle revert on the checked subtraction at line 360. On chain today: on Arc at block 32606507 the contract at 0x3600000000000000000000000000000000000000 returned decimals 6 and balanceOf(PoolManager) 2441510655055, which equals floor(eth_getBalance / 1e12) with remainder 36650542181. I also tested the unit of the transfer amount on Arc, which the cleared item did not: at block 32607715 an eth_call of transfer(address,uint256) from the PoolManager with amount 2439973392361, its full balance in 6 decimal units, returned true, and the same call with 2439973392362 reverted with 'ERC20: transfer amount exceeds balance'. The face therefore counts transfer amounts and balances in the same unit, so a credit of one unit pays out one unit. A plain value transfer to the PoolManager with empty calldata reverted in eth_call, which fits the missing receive function. On Celo at block 83471372 the CELO token 0x471EcE3750Da237f93B8E339c536989b8978a438 returned exactly eth_getBalance of the PoolManager. On Polygon at block 97777777 the contract at 0x1010 returned exactly eth_getBalance, and an eth_call of transfer(address,uint256) with amount 1 from the PoolManager returned false, so a take of that currency reverts at src/types/Currency.sol:64-86. The Arc rounding gain is as the researcher states. I worked the cheapest round by hand: a settle with value brings the remainder to 1e12 - 1 at no net cost, one base unit that arrives without a call then yields one unit of the face, so a round gains 1e12 - 1 base units, which is less than 0.000001 USDC, and it still needs native value to arrive without a call. That part stays open under the researcher's lead and I did not test it."
+  },
+  {
+   "check": "afterSwap and the two _accountDelta calls: does the caller delta plus the hook delta always equal the pool delta, and can a cast or a packing step lose a value.",
+   "agrees": true,
+   "note": "A mistake here would let a hook in an attacker made pool book a credit with no matching debit and take it from the shared balance, so I read it line by line. The beforeSwap return is parsed only when the address has BEFORE_SWAP_RETURNS_DELTA_FLAG and stays zero otherwise (src/libraries/Hooks.sol:266-270). The specified part is added to the amount with a checked int256 addition and the sign test rejects a change of swap type (Hooks.sol:273-278). afterSwap reads the two halves with sar and signextend (src/types/BeforeSwapDelta.sol:25-37), adds the afterSwap return through toInt128 and a checked int128 addition (Hooks.sol:298-303, src/libraries/SafeCast.sol:40-43), and returns zero from callHookWithReturnDelta when the return delta flag is absent (Hooks.sol:163). The hook delta is placed in currency order by the same condition that Pool.swap uses (Hooks.sol:307-309, src/libraries/Pool.sol:453) and subtracted from the swap delta with per half overflow checks (src/types/BalanceDelta.sol:34-46). PoolManager.swap books the hook delta to the hook address and the remainder to msg.sender (src/PoolManager.sol:221-226), so the two entries sum to the delta that Pool.swap returned for the adjusted amount. toBalanceDelta masks the low half and shifts the high half (BalanceDelta.sol:14-18), so no bit of one half reaches the other. The party that pays for a hook's positive delta is the caller of swap in that pool, and both accounts must reach zero before unlock returns (PoolManager.sol:112)."
+  },
+  {
+   "check": "Tick crossing, the sign of liquidityNet, the tick stored after a step, and the price limit bounds.",
+   "agrees": true,
+   "note": "Extra check beyond the three. My bitmap transcription matched a brute force search over the set of initialized ticks in 20,000 random cases for both directions and spacings from 1 to 32,767. After every swap in the 6,000 sequences the stored tick was either getTickAtSqrtPrice of the stored price or one below it with the price exactly on that tick, and the stored liquidity equalled the sum of positions with tickLower <= tick < tickUpper. A wrong sign of liquidityNet or a wrong tick after a crossing would have broken that equality."
+  }
+ ],
+ "leads": []
+}

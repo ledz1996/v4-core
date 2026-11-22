@@ -1,0 +1,92 @@
+{
+ "unit": "established-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I fetched vms/saevm/cchain/libevm/extstate/statedb.go at avalanchego tag v1.15.3. Lines 45 to 56 define partitionStateKeysHook.TransformStateKey, which returns storageKey(key), and storageKey clears bit 0 of byte 0 (key[0] &^= 0x01). Lines 58 to 62 set the same bit for asset balances. I fetched core/state/statedb.go at libevm commit d398bc4dbe41. GetState, GetCommittedState and SetState call transformStateKey at lines 349, 359 and 422. SetTransientState and GetTransientState at lines 478 to 503 pass the slot index to the transient map unchanged, and opTload and opTstore in core/vm/eips.go lines 197 to 214 call them with the raw stack value. The go.mod of avalanchego v1.15.3 pins libevm v1.13.15-0.20261028200218-d398bc4dbe41, so the commit read is the one the tag builds against. On chain at Avalanche block 101090309 the endpoint reports avalanchego/1.15.3. eth_getStorageAt on the PoolManager returns the owner 0x47eb0cf11a1626462da3c830bcde64c3f582b5a6 for slot 0 and for slot 0x01 followed by 31 zero bytes. Slots 0x02 and 0x80 followed by 31 zero bytes return zero. An eth_call of extsload(bytes32) with slot 0x0100...00 returns the owner, so the rewrite applies to SLOAD inside the EVM and is more than an RPC detail. exttload(bytes32) for the same index returns zero. On Polygon and BNB Smart Chain the same getStorageAt and extsload reads return zero for slot 0x0100...00 while slot 0 holds the owner. I found no primary source that contradicts the claim. Not confirmed: no deployed hook or token with a slot pair that differs only in bit 248 was looked for, as the finding itself says.",
+   "codeCheck": "The fixed slots are as the finding lists them. owner is slot 0 (lib/solmate/src/auth/Owned.sol:17), protocolFeesAccrued and protocolFeeController are slots 1 and 2 (src/ProtocolFees.sol:21, src/ProtocolFees.sol:24), the three ERC-6909 mappings are slots 3 to 5 (src/ERC6909.sol:15-19) and _pools is slot 6 (src/PoolManager.sol:93, src/libraries/StateLibrary.sol:11). The on-chain reads agree: slot 2 holds the fee controller on Polygon and BNB Smart Chain. I searched src outside src/test for sstore and sload. The only raw writes are src/libraries/Pool.sol:547-556, which writes info.slot of a mapping entry, and src/libraries/TickBitmap.sol:67-73, which writes a keccak256 output. Every other write goes through Solidity mappings rooted at slots 1 to 6 (src/libraries/Pool.sol:83-91, src/libraries/Position.sol:34-41, src/libraries/StateLibrary.sol:324-326). Struct offsets are at most 6 for Pool.State and 2 for TickInfo and Position.State. extsload only reads (src/Extsload.sol:10-63). Two slots of the PoolManager can therefore alias only if two keccak256 outputs agree in all bits except bit 248, or if an output equals 0x01 followed by 31 bytes that encode 0 to 6. I found no path where a caller supplies a slot index that is written without hashing. The lock, the synced currency and reserves, the delta count and the deltas live in transient storage (src/libraries/Lock.sol:8-26, src/libraries/CurrencyReserves.sol:11-37, src/libraries/NonzeroDeltaCount.sol:9-33, src/libraries/CurrencyDelta.sol:10-41), which the node does not rewrite. The part about hooks holds as written. callHook forwards all gas to the hook address (src/libraries/Hooks.sol:131-135) and hook deltas are booked at src/PoolManager.sol:181 and src/PoolManager.sol:224. Core never reads hook storage, so a slot alias inside a hook is the hook author's own construction and reaches only the pools that use that hook.",
+   "corrections": "The actor pool-creator and the severity low are right. Three details. First, the mitigation that asks for fork tests against a C-Chain node is incomplete. A local EVM that loads state over RPC and executes SLOAD and SSTORE itself follows standard rules and would treat the two indexes as two slots. Only execution on an avalanchego node shows the alias. This is my reasoning from the source read and I did not run such a test. Second, the alias adds no power that a hook author lacks. A hook author can already write any privileged path into the hook. The alias only lets that path pass a review done on Ethereum rules. Third, eth_getStorageAt applies the same rewrite, so off-chain tools that read a hook's slot with bit 248 set see the value of the cleared index and cannot tell the two apart from the outside.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/libevm/extstate/statedb.go",
+     "supports": "TransformStateKey returns storageKey(key), which clears bit 0 of byte 0. assetBalanceKey sets that bit. Lines 45 to 62."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/libevm/d398bc4dbe41/core/state/statedb.go",
+     "supports": "GetState, GetCommittedState and SetState apply transformStateKey at lines 349, 359 and 422. The transient getters and setters at lines 478 to 503 do not. Prepare assigns a new transient map at line 1335."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/libevm/d398bc4dbe41/core/vm/eips.go",
+     "supports": "opTload and opTstore at lines 197 to 214 use the slot index unchanged."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/go.mod",
+     "supports": "avalanchego v1.15.3 depends on libevm v1.13.15-0.20261028200218-d398bc4dbe41."
+    },
+    {
+     "url": "rpc https://api.avax.network/ext/bc/C/rpc, eth_getStorageAt and eth_call extsload(bytes32) and exttload(bytes32) on 0x06380c0e0912312b5150364b9dc4542ba0dbbc85, block 101090309 on 2026-11-22, client avalanchego/1.15.3",
+     "supports": "Slot 0 and slot 0x0100...00 both return the owner 0x47eb0cf11a1626462da3c830bcde64c3f582b5a6. Slots 0x0200...00 and 0x8000...00 return zero. extsload(0x0100...00) returns the owner."
+    },
+    {
+     "url": "rpc https://polygon.drpc.org, eth_getStorageAt, eth_call with from set to the PoolManager and eth_simulateV1, blocks 97775747 to 97776111 on 2026-11-22",
+     "supports": "Slot 0x0100...00 of the Polygon PoolManager returns zero while slot 0 holds the owner."
+    },
+    {
+     "url": "rpc https://bsc-dataseed1.bnbchain.org, eth_getStorageAt, eth_call with from set to the PoolManager and eth_simulateV1, blocks 135120389 to 135120750 on 2026-11-22, client Geth/v1.8.2",
+     "supports": "Slot 0x0100...00 of the BNB Smart Chain PoolManager returns zero while slot 0 holds the owner."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Faces of POL: sync, settle, settleFor, take, mint, burn and fee collection across address(0) and 0x1010 in every order, with the call results of this cycle's sweep.",
+   "agrees": true,
+   "note": "I repeated the calls on https://polygon.drpc.org at blocks 97775747 to 97776111 with from set to the PoolManager. 0x1010 reverts on empty calldata with value 0 and with 1 wei. transfer(0xdead, 0) returns a 32 byte one. transfer(0xdead, 1) and transfer(0xdead, 1e18) return a 32 byte zero, which fails the test at src/types/Currency.sol:68. balanceOf(PoolManager) equals eth_getBalance (0x292a2ae720d24494676c1). A call to the PoolManager with empty calldata and 1 wei reverts, so only a forced transfer raises the balance inside a sync window. I traced the orders myself. The token path always calls with zero value (src/types/Currency.sol:73) and the hook path too (src/libraries/Hooks.sol:134), so no PoolManager call reaches 0x1010 with value. A native credit is msg.value only (src/PoolManager.sol:353-354) and is refused while 0x1010 is synced (src/PoolManager.sol:356). A take of native POL followed by sync(0x1010), a forced return and settle leaves a native debit and an equal 0x1010 credit, and the native debit still has to be paid. Fee collection in native POL during a 0x1010 sync lowers the balance and makes the settle subtraction at src/PoolManager.sol:360 revert. This also answers the open lead about selector 0xed9ef524. Two public signature databases resolve it to changeChildChain(address), and 0x42fc47fb to childChain(). The call succeeds when from is owner() of 0x1010, which is the contract 0xd9c7c4ed4b66858301d0cb28cc88bf655fe34861 (20340 bytes of code), and reverts from an unrelated address. It is an owner function and gives an ordinary account nothing."
+  },
+  {
+   "check": "P2, token take on a special address: does any swept address answer transfer(address,uint256) from the PoolManager with nothing or a 32 byte true while moving value that pools hold.",
+   "agrees": true,
+   "note": "I repeated a subset of the sweep with from set to the PoolManager. Polygon: 0x1000 and 0x1001 revert on every shape, 0x1002 has no code and answers every shape with empty data, WPOL returns true. BNB Smart Chain at blocks 135120389 to 135120750: ValidatorSet 0x1000, SystemReward 0x1002 and TokenHub 0x1004 accept empty calldata with and without value and revert on transfer and balanceOf. StakeHub 0x2002 and the precompile 0x66 revert on every shape. StakeCredit 0x2003 and GovToken 0x2005 revert on transfer with 0x8cd22d19 and return zero for balanceOf. 0x70, 0xCA5F000000000000000000000000000000000000, 0xCA52000000000000000000000000000000000001 and 0xffff...fffe have no code and return empty data. WBNB returns true. These match the research file. The argument for addresses that return empty data holds in the code. The take debits the caller before the call (src/PoolManager.sol:294). The debt can be cleared only by a settle, and sync on such an address reverts because balanceOf returns no data (src/types/Currency.sol:94). An eth_simulateV1 run confirmed that sync(0x1002) on Polygon and sync(0xCA52...01) on BNB Smart Chain revert. Burn needs claims that only a mint with its own debit creates (src/PoolManager.sol:326-327, src/PoolManager.sol:334-335), and pool operations conserve each currency, so the unlock ends with CurrencyNotSettled (src/PoolManager.sol:112). I read core/vm/cas20.go on the BSC master branch for the post-Jenner behaviour. cas20EnterCall reverts when value is attached and runCAS20Token reverts when the address does not carry the marker code, as the related cleared item says. The v1.8.2 changelog schedules Jenner for 2026-12-08 02:30 UTC and says token creation needs activation by a governance-appointed administrator."
+  },
+  {
+   "check": "Whether transient storage of one user transaction is visible to the next under the client source read this cycle.",
+   "agrees": true,
+   "note": "I ran eth_simulateV1 on https://polygon.drpc.org and https://bsc-dataseed1.bnbchain.org with one block of several calls. Call 1 is sync(wrapped native) on the PoolManager from an unrelated address. Calls 2 and 3 read exttload of the currency slot 0x27e0...93b9 and the reserves slot 0x1e07...bd95. Both return zero on both chains, so the sync of call 1 did not survive into the next transaction. For Avalanche the endpoint has no eth_simulateV1, so I read the source instead. vms/saevm/saexec/execution.go at v1.15.3 loops over the transactions with stateDB.SetTxContext and core.ApplyTransaction (lines 346 to 351), then applies the end of block operations with Op.ApplyTo, which only changes nonces and balances (vms/saevm/hook/hook.go lines 186 to 213). libevm core/state_transition.go calls st.state.Prepare at line 436 and Prepare assigns a new transient map at core/state/statedb.go line 1335. This supports the Avalanche item on the same question. On BNB Smart Chain I also read EVM.Call on master. A frame whose caller is the system address skips the balance check and the value transfer (core/vm/evm.go lines 311 to 347). No account can sign for that address and contract code never runs at it, so an ordinary account cannot produce a settle whose msg.value was not transferred."
+  },
+  {
+   "check": "P1 into the wrapped native token: sync(WPOL, WBNB or WAVAX), take native to the wrapper, settle, in every order, to see whether the wrapped tokens that the wrapper credits to the PoolManager can be claimed for less than their value.",
+   "agrees": true,
+   "note": "In the same eth_simulateV1 runs a call from the PoolManager with 1e18 value and empty calldata to the wrapper succeeded, and balanceOf(PoolManager) on the wrapper rose by exactly 0xde0b6b3a7640000 on Polygon (0x1ab5fb1e6b12cf04564 to 0x1ab6d929d64d4544564) and on BNB Smart Chain (0x205010ab851ea3d9b to 0x212e1c16bf94e3d9b). The caller is debited the native amount at src/PoolManager.sol:294 before the call and is credited at most the same amount of the wrapper at src/PoolManager.sol:358-364, so the sequence is an exchange at par. The PoolManager can send only the transfer selector, the hook selectors and empty calldata, so it cannot be made to call withdraw. The Avalanche credit was not observed on chain, as the research file says."
+  },
+  {
+   "check": "Whether the storage slot alias of the C-Chain (bit 248 cleared) lets anyone make two slots of the PoolManager collide.",
+   "agrees": true,
+   "note": "See the code check of finding 0. All persistent writes in src go to fixed slots 0 to 6 or to keccak256 outputs with small struct offsets, and the transient slots are not rewritten by the node. The asset balance partition is written only with the bit set (extstate/statedb.go lines 58 to 62 and 124 to 128) and contract code can never address it, because every SLOAD and SSTORE index has the bit cleared."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    56,
+    137,
+    43114
+   ],
+   "lens": "L3",
+   "priority": "medium",
+   "question": "Among the tokens the PoolManager holds on these three chains, which change state for the sender when the PoolManager sends a zero amount transfer, for example a reward that is auto-claimed to the sender in a second token, a per-sender transfer cooldown, or a fee swap-back?",
+   "why": "take(X, to, 0) records no delta (src/PoolManager.sol:294, src/PoolManager.sol:369) and still makes the PoolManager call X.transfer(to, 0) (src/types/Currency.sol:73), so any account can trigger sender-side token logic in the PoolManager's name at no cost. A reward paid to the PoolManager in token R between sync(R) and settle is credited to the caller (src/PoolManager.sol:358-360). A cooldown that restarts on every transfer could block later takes of X for every pool. This narrows the open lead on balances that rise without a transfer to one concrete trigger."
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L1",
+   "priority": "low",
+   "question": "Do any BNB Smart Chain validators still run a v1.7.x client with the opcode fusion interpreter, and from which block is a v1.8 client required?",
+   "why": "The BSC changelog says v1.8.0-alpha removed the superinstruction feature of pull 3395 entirely (pull 3759), which explains why master has no such code. The v1.7.1 and v1.7.3 notes list three fixes to fused opcodes, one for a wrong LT comparison. The public endpoint reports Geth/v1.8.2, and v1.8.2 is mandatory before Jenner on 2026-12-08. Until every validator has moved, blocks can still be produced by the fused interpreter. A divergence there is a consensus fault and was not tied to any PoolManager opcode pattern."
+  }
+ ]
+}

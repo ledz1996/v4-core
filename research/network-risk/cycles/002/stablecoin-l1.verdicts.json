@@ -1,0 +1,180 @@
+{
+ "unit": "stablecoin-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I reran the queries on 22 November 2026 with from set to the PoolManager. Arc, block 32,603,470: a call with empty calldata and 10^12 wei succeeds at 0x01, 0x04, 0x12, 0x100, 0xfffffffffffffffffffffffffffffffffffffffe and at the EntryPoint contracts v0.6, v0.7 and v0.8 (23,689, 16,035 and 21,738 bytes of code). balanceOf(PoolManager) returns 0 on each EntryPoint, transfer(address,uint256) reverts on each, and sync(EntryPoint) on the deployed PoolManager succeeds for all three. USDC.transfer of 1 unit from the PoolManager returns true for the recipients 0x1800000000000000000000000000000000000000, the log emitter, 0x01, the implementation 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6 and the PoolManager itself, and reverts for address(0) and for 0x3600000000000000000000000000000000000000 ('Blocked address'). A value call to 0x1800000000000000000000000000000000000000 reverts with 'Input too short', to address(0) with 'Zero address not allowed', and to the PoolManager itself with a bare revert. Tempo, eth_simulateV1 on the latest block near 50,305,000: OUSD.transfer of 1 unit from the PoolManager to FeeManager (0xfeec...), StablecoinDEX (0xdec0...) and 0x4d50500000000000000000000000000000000000 returns true, the PoolManager balance falls from 404,991.600244 to 404,991.600243 OUSD and the balance of the recipient address rises by 1 unit. A transfer to ReceivePolicyGuard reverts with 0x98387502, and to the pathUSD address, to the OUSD address and to address(0) with 0x9c8d2cd2. A self transfer of 1,000,000 units returns true and leaves the balance unchanged. The Tempo source at commit 697ea97 lists FeeManager, StablecoinDEX, the channel reserve and the guard as system custody addresses (tip20/mod.rs, PROTECTED), and the exchange pays withdrawals from an internal per-user balance (stablecoin_dex/mod.rs, withdraw), which a plain transfer does not write. An eth_call with override code on Tempo returned 0 for BALANCE(PoolManager) and SELFBALANCE and a failed inner CALL carrying 1 wei, so the native variant does not exist there. I did not find a function that pays out a surplus held by the three Tempo precompiles and did not search for one beyond the transfer call sites.",
+   "codeCheck": "take (src/PoolManager.sol:291-297) debits msg.sender through _accountDelta (src/PoolManager.sol:368-378) and then calls Currency.transfer with the recipient the caller supplied. The native branch is a CALL with empty calldata and all gas (src/types/Currency.sol:45-53). The token branch accepts empty return data or a 32 byte value of 1 (src/types/Currency.sol:55-86). Neither branch looks at the recipient. The debit stays in transient storage and unlock reverts at src/PoolManager.sol:112 unless the caller settles it, so reserves are whole. sync has no lock modifier and accepts any address (src/PoolManager.sol:279-288). _settle credits the rise of balanceOf under the synced id and rejects msg.value while an id is synced (src/PoolManager.sol:349-364). The sequence in step 5 therefore leaves the caller with a credit under the EntryPoint id and an equal debt under address(0) that must be paid. The recipient of a take is always a parameter chosen by msg.sender, and the recipient of collectProtocolFees is chosen by the controller (src/ProtocolFees.sol:44-57), so no third party can direct another user's payout to these addresses through core. I found no guard that the finding missed.",
+   "corrections": "The TIP20Factory address 0x20fc000000000000000000000000000000000000 also accepts a plain OUSD transfer from the PoolManager and its balance rises by the amount, so it belongs in the Tempo list. I tested value calls on 0x01, 0x04, 0x12, 0x100 and the log emitter and did not repeat 0x02, 0x03, 0x05 to 0x08 and 0x13. The actor value needs no change because no role is required. The only party that loses is the caller who names the recipient, or a person who accepts a claim under an EntryPoint id, so this item is no path to funds of other users.",
+   "sources": [
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "eth_call and eth_getCode at block 32,603,470 with from set to the PoolManager: value calls, EntryPoint balanceOf, transfer and sync results, USDC.transfer to special recipients"
+    },
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "eth_simulateV1 and eth_call on the latest block: OUSD transfers from the PoolManager to FeeManager, StablecoinDEX, 0x4d50..., TIP20Factory, the guard and itself, with balances before and after; BALANCE, SELFBALANCE and value CALL probe with override code"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/tip20/mod.rs",
+     "supports": "PROTECTED list of system custody addresses, _transfer debit and credit order, InvalidRecipient and AddressReserved rules"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/stablecoin_dex/mod.rs",
+     "supports": "the exchange keeps per-user balances in its own storage and pays withdrawals from them"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/quickstart/predeployed-contracts.md",
+     "supports": "addresses of FeeManager, StablecoinDEX, TIP20Factory, ReceivePolicyGuard and pathUSD"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "Arc block 32,603,470. Storage slot 0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee048ed3f8c3 of 0x3600000000000000000000000000000000000000 holds 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6 and implementation() returns the same address. The EIP-1967 slot is zero because the proxy uses the older slot. Sourcify reports a match for NativeFiatTokenV2_2 compiled with solc 0.6.12. In that source _balanceOf returns _account.balance divided by DECIMALS_SCALING_FACTOR, which is 10^12 (lines 3158 to 3167 of the flattened file), and transfer runs whenNotPaused and calls _transfer, which requires value times 10^12 to be at most from.balance and then calls NATIVE_COIN_AUTHORITY.transfer(from, to, valueIn18Decimals) at 0x1800000000000000000000000000000000000000 (lines 3105 to 3148). native_coin_authority.rs on the main branch sets ALLOWED_CALLER_ADDRESS to NATIVE_FIAT_TOKEN_ADDRESS and returns the revert 'Not enabled for native coin transfers' when the caller differs, before any balance is touched. On chain, balanceOf(PoolManager) returns 0x239f30dc553 (2,447,914.157395 USDC) on both the proxy and the implementation, and eth_getBalance of the PoolManager is 2447914157395768516399058 wei. transfer(0xdead, 1) on the implementation with from set to the PoolManager reverts with 'Not enabled for native coin transfers', and the same call on the proxy returns true. sync(0xc6ad...) and sync(0x3600...) on the deployed PoolManager succeed while it is locked. I did not open the file that defines NATIVE_FIAT_TOKEN_ADDRESS. The on-chain results match the value 0x3600000000000000000000000000000000000000.",
+   "codeCheck": "sync stores balanceOf(PoolManager) of any nonzero address together with that address (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32, src/types/Currency.sol:90-96). _settle credits reservesNow minus reservesBefore under the synced id with checked arithmetic, reverts on msg.value while an id is synced and then clears the id (src/PoolManager.sol:349-364). take calls transfer on the currency address itself (src/types/Currency.sol:55-86), so for the implementation id every take reverts, with any amount including zero, because the precompile check comes before the amount is read. A positive delta under that id can be minted as a claim or cleared (src/PoolManager.sol:310-329) and has no way back to USDC. One currency slot exists and every inflow is measured by one settle, so the same payment cannot also be credited under 0x3600 or address(0). The accounting of the other two ids is not reduced. I found no guard that the finding missed.",
+   "corrections": "The failed take surfaces as WrappedError with ERC20TransferFailed as its context (src/libraries/CustomRevert.sol:83-119, src/types/Currency.sol:82-86). As with finding 0, the loss falls on the party that pays into this id or accepts a claim or a pool in it. No other user is affected.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/5042/0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6?fields=sources,abi,compilation",
+     "supports": "verified source of NativeFiatTokenV2_2: _balanceOf, transfer, _transfer, DECIMALS_SCALING_FACTOR and the NATIVE_COIN_AUTHORITY address"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_authority.rs",
+     "supports": "transfer branch rejects any caller other than the native fiat token address with 'Not enabled for native coin transfers'"
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "eth_getStorageAt, eth_getBalance and eth_call at block 32,603,470: implementation slot, equal balanceOf on proxy and implementation, reverting transfer on the implementation, successful sync calls on the PoolManager"
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "account_keychain/mod.rs at commit 697ea97: authorize_transfer reads the transaction signer id from transient storage and returns Ok when it is zero (root signer), then returns Ok when the account argument differs from tx_origin, and only after both tests calls verify_and_update_spending. authorize_approve has the same two early returns. tip20/mod.rs: transfer, transferWithMemo and the allowance-free pull call check_and_update_spending_limit(from, amount), which is authorize_transfer(from, token, amount), and transferFrom consumes the allowance without that call. validate_call_scope_for_transaction returns Ok for a signer whose is_scoped flag is unset, so such a signer may call any contract. handler.rs: execute_batch runs every call of the transaction with the account as caller and as origin and checks the call scopes of the signer before execution. The documentation page on spending limits says 'Assets other than TIP-20 tokens, such as NFTs, don't count' and that a transferFrom that spends an allowance the account already granted does not count. The page on scopes says a signer without scopes can call anything and that a call outside the scopes reverts with CallNotAllowed. On 22 November 2026 the PoolManager held 404,991.600244 OUSD and 19,683.832162 pathUSD.",
+   "codeCheck": "ERC-6909 transfer and setOperator act on msg.sender with no further check (src/ERC6909.sol:25-33 and 58-64). burn lets an operator or an approved spender burn the owner's claim and credits the burner's delta (src/PoolManager.sol:332-336, src/ERC6909Claims.sol:13-22), and take pays that delta out with the PoolManager as the sending address of the TIP-20 transfer (src/PoolManager.sol:291-297, src/types/Currency.sol:55-86). The PoolManager is never tx.origin, so the spending limit of the victim's signer is not charged at any step. Core has no notion of the signer behind msg.sender and cannot add such a check.",
+   "corrections": "No actor value in the schema fits exactly. pool-creator is the nearest, because the victim must have granted the credential to the attacker, and the item is out of scope for the unprivileged goal. The 426,000 USD figure is the whole PoolManager balance and is an upper bound. I did not establish whether any account on Tempo holds ERC-6909 claims. The behaviour is documented by Tempo and is a property of its delegated credentials, which the PoolManager code cannot change. The same documentation sentence means that an allowance given to Permit2 before the credential was issued is also outside the limit.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/account_keychain/mod.rs",
+     "supports": "authorize_transfer and authorize_approve early returns for the root signer and for accounts other than tx.origin; validate_call_scope_for_transaction allows every call for an unscoped signer"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/tip20/mod.rs",
+     "supports": "which TIP-20 entry points call check_and_update_spending_limit"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler.rs",
+     "supports": "execute_batch uses the account as caller and origin for every call and validates call scopes first"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/accounts/access-keys/spending-limits.md",
+     "supports": "assets other than TIP-20 tokens and transferFrom on an existing allowance do not count against a spending limit"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/accounts/access-keys/scopes.md",
+     "supports": "a signer without scopes can call anything; a call outside the scopes reverts with CallNotAllowed"
+    },
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "eth_call balanceOf(PoolManager) on OUSD and pathUSD on 22 November 2026"
+    }
+   ]
+  },
+  {
+   "findingIndex": 3,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "In the verified source of NativeFiatTokenV2_2 the Pausable contract declares pauser and then paused, so both share storage slot 1, and whenNotPaused guards transfer, transferFrom, mint, burn and the four authorization functions of the native token contract (lines 3086, 3109, 3188, 3230, 3321, 3354, 3388, 3426) as well as approve, permit and the allowance functions. _balanceOf carries no pause check. On Arc, slot 1 of 0x3600000000000000000000000000000000000000 holds the pauser 0x51fa31e029abf0ce307bca9ee6bf48aed6345212, pauser() returns the same address and paused() returns false. I repeated the test with an eth_call state override that sets the byte above the pauser address in slot 1: paused() then returns true, USDC.transfer of 1 unit from the PoolManager reverts with 'Pausable: paused', USDC.transfer of 1 unit to the PoolManager from the PositionManager address reverts with the same message, a native send of 10^12 wei from the PoolManager succeeds, and balanceOf(PoolManager) still answers. The files evm.rs, handler.rs and opcode.rs of arc-node main contain no reference to a pause flag. Value-bearing frames are checked against the blocklist only. I did not rerun the fee adapter calls.",
+   "codeCheck": "take of 0x3600 calls transfer on the token and reverts when the token reverts (src/types/Currency.sol:55-86). take of address(0) is a value call that never touches the token contract (src/types/Currency.sol:45-53). settle with msg.value credits address(0) when no id is synced (src/PoolManager.sol:352-354). An ERC-20 credit needs the token balance of the PoolManager to rise after sync (src/PoolManager.sol:358-360), which a paused token prevents for ordinary transfers. collectProtocolFees pays through the same transfer routine (src/ProtocolFees.sol:44-57). Claims and pool balances are recorded per currency id, so the two ids over one balance are treated differently for the length of a pause.",
+   "corrections": "The statement that settle for 0x3600 credits nothing during a pause holds for ERC-20 payments. sync still works because balanceOf is not paused, and Arc keeps a SELFDESTRUCT that moves the balance to its target (crates/evm/src/opcode.rs), so native value forced into the PoolManager after sync(0x3600) would still be credited under 0x3600. This opens no exit for 0x3600 holders and does not change the verdict. The actor issuer is right: only the pauser role can trigger it.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/5042/0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6?fields=sources,abi,compilation",
+     "supports": "Pausable storage layout and every whenNotPaused modifier in NativeFiatTokenV2_2; _balanceOf has no pause check"
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "eth_getStorageAt slot 1, pauser() and paused() on 0x3600; eth_call with slot 1 overridden: transfers from and to the PoolManager revert with 'Pausable: paused' and a native send from the PoolManager succeeds"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs",
+     "supports": "no pause flag is read in frame initialisation; value-bearing frames go through check_blocklist_and_create_log"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/opcode.rs",
+     "supports": "Arc SELFDESTRUCT still transfers the balance to the target after blocklist checks"
+    }
+   ]
+  },
+  {
+   "findingIndex": 4,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "validator.rs on arc-node main: check_for_denylisted_addresses collects the sender, the to address and every recoverable EIP-7702 authority and returns the first one for which is_denylisted is true, and the caller rejects the transaction with DenylistedAddressError. chainspec.rs sets DENYLIST_ADDRESS_MAINNET to 0x3600000000000000000000000000000000000004 and its comment states that no node runs without the denylist. The changelog lists for v0.8.0 that denylist checks are mandatory and chain-derived. evm.rs, handler.rs and opcode.rs contain no reference to the denylist, and issue 513 (open, filed 13 November 2026) states that mempool admission is the only caller of is_denylisted and that a transaction already pooled still executes. On chain the address holds 1,494 bytes of code, owner() returns 0x49ec36db19623e4dadc1aa821cba2d1476f8e859 and isDenylisted(PoolManager) returns false. The RPC reports the client string arc/v1, so I could not confirm which release mainnet validators run. That part rests on the main branch and on the contract being live at the address the source names.",
+   "codeCheck": "Core has no admission logic of its own. A listed account cannot have its transactions admitted, so it cannot call unlock, burn or modifyLiquidity (src/PoolManager.sol:104-114, 145-184, 332-336) from that account. Positions are bound to msg.sender (src/PoolManager.sol:161), so a listed owner contract can still be driven by another account that is allowed to call it, since only the transaction's sender and to address are tested. A listing of the PoolManager address stops direct transactions to it and leaves calls that arrive through a router untouched. No funds move and no core guard is involved.",
+   "corrections": "The actor governance is right for the owner of the Denylist proxy. The severity low is consistent with the scale because the list acts on single accounts at admission, is not enforced during execution and moves no funds.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/execution-txpool/src/validator.rs",
+     "supports": "check_for_denylisted_addresses tests the sender, the to address and EIP-7702 authorities at mempool admission"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/execution-config/src/chainspec.rs",
+     "supports": "DENYLIST_ADDRESS_MAINNET and the statement that the denylist is mandatory"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/CHANGELOG.md",
+     "supports": "v0.8.0 makes denylist checks mandatory with chain-derived configuration"
+    },
+    {
+     "url": "https://github.com/circlefin/arc-node/issues/513",
+     "supports": "admission is the only enforcement point; the payload builder and the EVM do not check the denylist"
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "eth_getCode, owner() and isDenylisted(PoolManager) on 0x3600000000000000000000000000000000000004"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Walk of sync, settle, take, mint and burn across three ids over one balance on Arc: address(0), the USDC proxy 0x3600 and the USDC implementation 0xc6ad..., in every order, with the deployed contract probed for value-bearing calls.",
+   "agrees": true,
+   "note": "I traced the code myself. A native credit equals msg.value and needs the currency slot to be zero (src/PoolManager.sol:353-354). With an ERC-20 id synced, any msg.value reverts (line 356). sync writes currency and reserves together and sync(address(0)) clears only the currency (src/libraries/CurrencyReserves.sol:21-32), so the order sync(0x3600), sync(address(0)), settle with value, sync(0x3600) records the raised balance and credits nothing twice. The subtraction at line 360 is checked, so a balance that fell after sync reverts. settle and settleFor are the only payable functions in src/ outside src/test, and the contract has no receive or fallback function. On chain, with a funded sender set by a balance override, the Arc PoolManager reverts on 1 USDC of value with empty calldata, with sync(0x3600) and with unlock, and settle with value returns ManagerLocked (0x54e3ca0d). The four transient slot constants equal keccak256 of their names minus one (checked with web3_sha3). The rounding of balanceOf to 10^12 wei allows at most one ERC-20 unit of over-credit per sync and settle pair, and each pair needs an uncredited native inflow such as a SELFDESTRUCT, which costs far more gas at the 20 gwei minimum base fee than the 0.000001 USDC gained."
+  },
+  {
+   "check": "Can an ordinary account make the PoolManager's TIP-20 balance rise between sync and settle without paying the same amount, or fall without a take (A2)? I listed every balance write in the TIP-20 precompile and simulated transfers from the PoolManager to special recipients.",
+   "agrees": true,
+   "note": "Read at commit 697ea97. _transfer debits from and credits the resolved recipient through storage deltas, so a self transfer nets to zero, which eth_simulateV1 confirmed (1,000,000 units, balance unchanged). The allowance-free pull system_transfer_from is limited to FeeManager, StablecoinDEX and the channel reserve, and its comment says that pulling only from msg.sender is enforced at the call sites. I read all of them: fee AMM rebalance and mint (tip_fee_manager/amm.rs), the exchange's transfer_from, which receives the dispatcher's msg_sender for place, placeFlip and both swaps (stablecoin_dex/mod.rs and dispatch.rs), and open and top_up of the channel reserve, where top_up also requires msg_sender to be the payer. Every site pulls from msg.sender. The PoolManager can only send transfer, balanceOf, unlockCallback and the ten hook selectors, and an eth_call sweep of those eleven selectors from the PoolManager address returned UnknownFunctionSelector (0xaa4bc69a) on FeeManager, StablecoinDEX, the channel reserve, TIP403Registry, TIP20Factory, AddressRegistry, ReceivePolicyGuard, AccountKeychain and OUSD. claim_rewards credits msg.sender only, fee collection and refund act on the fee payer, permit needs an ECDSA signature of the owner, and burns need issuer roles. The custody list that protects FeeManager, the exchange, the channel reserve and the guard from burnAt does not include the PoolManager, which matches the existing issuer finding."
+  },
+  {
+   "check": "Does the USDC implementation at 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6, the only code that may call Native Coin Authority, let any role other than the proxy admin move or burn the native balance of an arbitrary account such as the PoolManager?",
+   "agrees": true,
+   "note": "Read in the Sourcify copy. transfer moves msg.sender's balance, transferFrom requires and reduces allowed[from][msg.sender], mint needs a minter and credits _to, and burn passes msg.sender to the precompile. permit and the EIP-3009 functions go through SignatureChecker, which for an owner with code makes a staticcall of isValidSignature and requires the magic value. src/ contains no isValidSignature, no receive and no fallback function outside src/test, so that call reverts for the PoolManager. The PoolManager never calls approve. rescueERC20 has the token contract call safeTransfer, which moves only the balance of the token contract. The precompile accepts mint, burn and transfer only from the native fiat token address, and a direct call to the implementation from the PoolManager address reverts on chain. Seizure of a balance therefore needs a proxy upgrade or the blocklist, both issuer roles."
+  },
+  {
+   "check": "Can a contract that gains control in the middle of a user's transaction (a hook, a token, a recipient of a native payout) use Multicall3From or Memo to call the PoolManager or USDC as that user, since CallFrom allows the transaction signer as substituted sender?",
+   "agrees": true,
+   "note": "The research unit did not read Memo. I did. Memo.memo calls CALL_FROM.callFrom(msg.sender, target, data) and takes no sender argument, the same pattern as _callFrom(msg.sender, ...) in every entry point of Multicall3From. init_subcall in evm.rs rejects a child caller that is neither the calling helper nor the transaction's signer with 'sender spoofing requires tx.origin as sender', rejects value and static context, and the registry admits only Memo and Multicall3From as callers of the precompile. A contract in the middle of a transaction would be passed as sender and fail that test. I read the repository sources and did not compare them with the deployed bytecode of the two helpers."
+  },
+  {
+   "check": "Can a third party set a receive policy for the PoolManager or for the Uniswap periphery on Tempo, so that payments into them are diverted to ReceivePolicyGuard with the attacker as recovery authority?",
+   "agrees": true,
+   "note": "set_receive_policy in tip403_registry/mod.rs at commit 697ea97 writes receive_policies[msg_sender] and has no account argument. It is the only writer of that mapping in the file. The PoolManager cannot emit its selector, and the registry answers all eleven selectors the PoolManager can emit with UnknownFunctionSelector. The open question about periphery contracts that forward calls stays a lead as the unit recorded it."
+  },
+  {
+   "check": "Opcode differential on Arc for the patterns the PoolManager uses, and the Tempo interpreter clearance: CALL with value, CALLVALUE, SELFBALANCE, STATICCALL, return data, MCOPY, PUSH0, TSTORE and TLOAD, gas forwarding, calls to codeless addresses and precompile dispatch.",
+   "agrees": true,
+   "note": "I ran the same eth_call with override code on an Ethereum endpoint, on Tempo and on Arc and compared the returned bytes. ADD, MUL, SUB, DIV, SDIV, MOD, SMOD, EXP, SIGNEXTEND, LT, GT, SLT, SGT, EQ, AND, OR, XOR, BYTE, SHL, SHR and SAR over 784 operand pairs of boundary values, ADDMOD and MULMOD over 1,728 triples, KECCAK256 at eleven lengths around the 136 byte block size, MCOPY with forward and backward overlap, and TSTORE followed by TLOAD and SLOAD gave identical output on all three. The token payout check of src/types/Currency.sol:64-74 was probed with callees that return nothing, 32 bytes of 1, 32 bytes of 2, 31 bytes, 64 bytes, 1 byte, a revert, an invalid opcode and no code: success flag, returndatasize and the word at memory 0 were identical on all three chains. On Tempo an eth_simulateV1 block with sync(OUSD) on the PoolManager as first transaction and exttload of the currency and reserves slots as second and third returned zero for both slots. These results describe the RPC nodes and their call path. Whether block production on Tempo uses the evm2 JIT is still unconfirmed, as the unit's lead says."
+  }
+ ],
+ "leads": []
+}

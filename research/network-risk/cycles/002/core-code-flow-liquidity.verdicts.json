@@ -1,0 +1,75 @@
+{
+ "unit": "core-code-flow-liquidity",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I repeated the on-chain reads and probes on 22 November 2026 with my own encoder and my own transcription of the source. Ethereum, block 26472482, RPC from networks.json: the pool id 21c67e77068de97969ba93d4aab21826d33ca12bb9f565d8496e8fda8a82ca27 is the keccak256 of the five words (0, USDC, 500, 10, 0). extsload on the PoolManager returns liquidityGross 4788029957109987 for tick 887270 and 0 for tick 887260, and slot0 holds tick -201869. An eth_call to the PositionManager (modifyLiquidities with MINT_POSITION and SETTLE_PAIR, sender balance set by state override) on ticks 887260 to 887270 with liquidity 1917559095893846714755826590044058, which is the cap minus the liquidity already on the tick, succeeds with a value of 51993092462 wei, reverts with 51993092461 wei, and reverts with 0xb8e3c385 followed by 0xd89e6 for one more unit of liquidity. That data is TickLiquidityOverflow(887270). A control add of one unit of liquidity on the same range succeeds before the fill. The ETH/USDC pool with fee 3000 and spacing 60 (id dce6394339af00981949f5f3baf27e3610c76326a700af57e4b3e3ae4977f78d) holds 2676939512896935 on tick 887220 at block 26472525. Liquidity 11505354575363080314586199770027335 on ticks 887160 to 887220 costs 1878783905959 wei, fails with one wei less, and one more unit reverts with TickLiquidityOverflow(887220). On 20 networks (all except Tempo) a multicall that initializes a new native pool with fee 777 and mints the top range one spacing wide at the cap succeeds with exactly 519766372 wei for spacing 1 and 1878783905959 wei for spacing 60, reverts with one wei less, and reverts with TickLiquidityOverflow(887272) or TickLiquidityOverflow(887220) for the cap plus one. The first Monad attempt for the cap plus one was rate limited and the repeat returned the same revert. Tempo answers every call that carries value with error -32003, value transfer not allowed. I did not repeat the spacing 200 probes or the read at block 26471794, which the public node refused with HTTP 403. The same slot at the latest block holds the value the finding quotes. These probes run the deployed contracts. They show that the deployed bytecode follows the formulas in src/ on this path. They do not prove that src/ compiles to that bytecode, and I did not compile anything.",
+   "codeCheck": "I read every file under src/ and traced the path. PoolManager.modifyLiquidity needs an open lock and an initialized pool, passes msg.sender as owner and the PoolKey spacing, and has no role check (src/PoolManager.sol:145-168). Pool.modifyLiquidity updates both ticks first (src/libraries/Pool.sol:159-162). updateTick adds the delta to liquidityGross with LiquidityMath.addDelta (Pool.sol:526-529). The cap comparison runs only for a delta of zero or more and compares liquidityGross of each tick with tickSpacingToMaxLiquidityPerTick (Pool.sol:165-173). A zero delta skips the whole block at Pool.sol:159, so fee collection is unaffected. A negative delta never reaches the comparison, so removal is unaffected. The cap is (2^128 - 1) divided by the number of usable ticks (Pool.sol:565-582). My transcription of that assembly gives 191757530477355301479181766273477, 1917559095893846719543856547154045, 11505354575363080317263139282924270 and 38345995821606768476828330790147420 for spacings 1, 10, 60 and 200. For a range above slot0.tick the amount is getAmount0Delta of the two tick prices, rounded up for an add (Pool.sol:209-217, src/libraries/SqrtPriceMath.sol:188-211, 261-271). With getSqrtPriceAtTick transcribed from src/libraries/TickMath.sol:57-114 the fill of the top range costs 519766372, 51993092462, 1878783905959 and 20966766746469 base units of currency0 for spacings 1, 10, 60 and 200. The bottom range costs 519766206, 51993074932, 1878783895257 and 20966766629403 base units of currency1 (Pool.sol:227-235, SqrtPriceMath.sol:234-254). These are the figures in the finding. I checked the TickMath constants against sqrt(1.0001^tick) computed with 120 digit decimals on 3,010 ticks. The largest relative difference was about 2.3e-10, which is the integer rounding at the lowest prices. I looked for a guard that would stop the fill. There is none: no minimum position size, no limit per owner, and the int128 casts at PoolManager.sol:164 and Pool.sol:215 are far above these numbers. The position must stay open, so the debit has to be settled before unlock returns (PoolManager.sol:112). The filler gets the payment back on removal, less at most one base unit of rounding.",
+   "corrections": "The actor is correct: any account can add liquidity to a pool without a hook, and the affected users did nothing unusual. The severity stays low. The medium row of the scale mentions blocked liquidity operations. Here only adds that touch the one filled tick are blocked, removal and fee collection keep working, and a range that ends one spacing further inside is accepted. No funds are taken or frozen. The freeze variant for a contract that must add on that tick in its exit path remains unconfirmed, as the finding says. The finding states that the hazard is the same on every network. It does not follow from a network difference, so it is a general property of this code and does not answer the search for a network-specific weakness. The cap applies to every tick. The finding treats the two boundary ticks because the cost there is dust. The cost rises steeply toward the current price. The side remark about Soneium is out of date: eth_getBalance for the PositionManager 0x1b35d13a2e2528f192637f14b05f0dc0e7deb566 returned 0 at block 31118892, and the one wei less probe reverted there like on the other networks. The source entries call the on-chain probes primary evidence for the formulas. They are primary evidence for the deployed contracts. The link from src/ to the numbers is the transcription, which I rebuilt independently with the same result.",
+   "sources": [
+    {
+     "url": "src/libraries/Pool.sol:159-173",
+     "supports": "Both ticks are updated first and the cap is compared only when the delta is zero or more. A zero delta skips the block."
+    },
+    {
+     "url": "src/libraries/Pool.sol:565-582",
+     "supports": "The cap is (2^128 - 1) divided by the number of usable ticks for the spacing."
+    },
+    {
+     "url": "src/libraries/Pool.sol:206-237",
+     "supports": "A range above slot0.tick is paid in currency0 only and a range below in currency1 only, from the prices of its two ticks."
+    },
+    {
+     "url": "src/libraries/SqrtPriceMath.sol:188-211",
+     "supports": "The currency0 amount is liquidity times the price difference divided by both prices, rounded up for an add."
+    },
+    {
+     "url": "src/PoolManager.sol:145-184",
+     "supports": "modifyLiquidity has no role check, uses msg.sender as the owner and books the debit to the caller."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "Blocks 26472482 to 26472525. extsload: liquidityGross 4788029957109987 at tick 887270 of pool 21c67e77...ca27 and 2676939512896935 at tick 887220 of pool dce63943...f78d. eth_call to PositionManager 0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e: the fill to the cap succeeds with 51993092462 wei and 1878783905959 wei, reverts with one wei less, and one more unit of liquidity reverts with TickLiquidityOverflow."
+    },
+    {
+     "url": "rpc endpoints listed in research/network-risk/state/networks.json",
+     "supports": "Latest block on 22 November 2026, 20 networks: a new native pool filled at the top range costs exactly 519766372 wei (spacing 1) and 1878783905959 wei (spacing 60), reverts with one wei less and reverts with TickLiquidityOverflow for the cap plus one. Tempo rejects calls with value (error -32003)."
+    },
+    {
+     "url": "https://rpc.soneium.org",
+     "supports": "eth_getBalance of the PositionManager 0x1b35d13a2e2528f192637f14b05f0dc0e7deb566 is 0 at block 31118892."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Can one owner change or withdraw another owner's position through modifyLiquidity, including by reusing a salt, by passing ticks of another position, or by removing more than it holds.",
+   "agrees": true,
+   "note": "The owner passed to the pool is always msg.sender (src/PoolManager.sol:161) and the position is stored under keccak256 of owner, tickLower, tickUpper and salt (src/libraries/Position.sol:34-41, 54-60). I replayed the four memory writes of the assembly byte by byte and compared the 58 hashed bytes with the packed 20, 3, 3 and 32 byte encoding on 5,000 random inputs with random bits above the owner address. All matched, so no two different (owner, range, salt) tuples share a preimage. A removal above the held amount reverts in LiquidityMath.addDelta at Position.sol:88 (src/libraries/LiquidityMath.sol:10-18). In my own model of the source, one removal in ten was sent by a randomly chosen owner on the range and salt of an existing position. Across 5,000 random sequences no owner ever removed more than it held under its own hash, and an owner with no position under that hash was always reverted."
+  },
+  {
+   "check": "Order of the steps inside Pool.modifyLiquidity: tick update, bitmap flip, fee growth read, Position.update, tick clearing, and the three price cases for the amounts. Covered add, remove, zero delta, full range, one spacing, ranges above, below and around the current tick, and several owners on shared ticks.",
+   "agrees": true,
+   "note": "I read Pool.sol:146-238, 488-558 and 592-612 and Position.sol:76-102 and checked the three fee growth cases by algebra: with the convention at Pool.sol:533-539 the three branches of getFeeGrowthInside (Pool.sol:498-509) all equal global minus below minus above, and the range test tickLower <= slot0.tick < tickUpper is the same in getFeeGrowthInside, in the amount branches (Pool.sol:209-236) and in the tick crossing of swap (Pool.sol:413-432). I then wrote a second, independent transcription of Pool, Position, TickBitmap, BitMath (with its lookup constants, checked on all 256 bit positions and 20,000 random words), LiquidityMath, SqrtPriceMath, SwapMath and the protocol fee split, and ran 5,000 random sequences (195,164 operations, 79,543 of them reverts) with four owners, two salts, spacings 1, 10, 60, 200, 2000 and 32767, start prices in the middle and within 3,000 ticks of both ends, swaps in both directions and both modes, protocol fees and donations. After every operation liquidityGross and liquidityNet equalled the sums over positions, the bitmap matched the ticks in use and pool liquidity equalled the liquidity in range. Every eighth operation and at the end, a copy of the pool was drained: every position could be removed, the pool had received at least what it paid out plus the protocol fees in both currencies, and no tick data was left. I found no departure from the cleared item."
+  },
+  {
+   "check": "Can an ordinary account make a hookless victim position impossible to remove, or leave a tick that can no longer be updated. Listed every revert on the removal path.",
+   "agrees": true,
+   "note": "I listed the reverts on the removal path myself: checkTicks, addDelta on liquidityGross and on the position, the checked int128 arithmetic for liquidityNet (Pool.sol:543), flipTick alignment, the two toInt128 casts of the fees (Pool.sol:192), the casts of the amounts (Pool.sol:212-235), the sum at src/PoolManager.sol:171 and the delta bookkeeping. With liquidityGross at or under the cap, which is below 2^127 for every spacing, none of the first four can fire for a position that exists. The amount casts and the sum are handled by removing in parts and by collecting fees with a zero delta first, and my model confirmed that on positions at extreme prices. What remains is uncollected fees of 2^127 base units or more, which is F-005. My model ran 2,423 self donations of up to 2^127 - 1 base units by an account that was the only liquidity in range, each followed by collection. They cost nothing and left every other position removable. In a first run without the collection step, pending fees plus one such donation crossed 2^127 and the position could no longer be updated. That is the F-005 condition, and a donor who is not the owner has to pay the donated amount for real, so it needs a currency with at least 2^127 base units. The cleared item says the same."
+  },
+  {
+   "check": "Hook deltas on liquidity changes: can afterAddLiquidity or afterRemoveLiquidity move more than the caller's own delta, which hook runs for a zero delta, and what a hook that calls modifyLiquidity itself can skip.",
+   "agrees": true,
+   "note": "Read src/libraries/Hooks.sol:131-168 and 195-245 and src/PoolManager.sol:171-183. The hook delta is taken from the return data only when the return-delta flag is set and the data is exactly 64 bytes (Hooks.sol:159-168). The caller is booked the pool delta minus the hook delta and the hook is booked the hook delta (Hooks.sol:230, 242, PoolManager.sol:181-183), so the two always add up to principal plus fees. Add and remove are split on liquidityDelta > 0 in both the before and the after call (Hooks.sol:201-205, 220-244). The zero address has no flag bits, so a pool without a hook makes no hook call and books no hook delta."
+  },
+  {
+   "check": "Does the liquidity path give the same amounts on each network's EVM. Sent read-only eth_call probes to the PositionManager listed in networks.json: a multicall that initializes a new native pool and mints a position above the price, and a second set that mints and burns the same position in one call. Each probe was sent once with exactly the value the source formulas require and once with one wei less.",
+   "agrees": true,
+   "note": "I repeated six of the fifteen probes per network with my own encoder: the fill of the top range to the cap for spacings 1 and 60, each with the exact value, with one wei less and with one unit above the cap. All 20 networks returned the same three outcomes and the same values to the wei. On Soneium the PositionManager balance was 0 at block 31118892, so the one wei less variant could be tested there and reverted. The probes exercise the deployed bytecode at public RPC nodes. They say nothing about src/ beyond the agreement with the transcribed formulas, and nothing about validator builds, as the cleared item states. I did not repeat the mint and burn probes or the Tempo probe."
+  }
+ ],
+ "leads": []
+}

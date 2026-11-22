@@ -1,0 +1,103 @@
+{
+ "unit": "op-stack-custom-gas",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "I fetched the three client files at tag xlayer/v0.1.7 of okx/optimism. xlayer_blacklist_contract.rs maps chain id 196 to 0x59055c0ef0be92018b33f877a3eB816355791727, calls isBlacklisted(sourceHash) through transact_system_call from the EIP-4788 system address, treats a revert or a malformed answer as false, and exempts system deposits and the L1 attributes depositor. In lib.rs, transact_raw calls intercept_blacklisted_deposit for every transaction, with no fork or flag condition. The function returns early for anything that is not a user deposit, and on a hit it passes an InvalidTransaction error with the text 'deposit blacklisted' to OpHandler::catch_error and returns the finalized state. In op-revm handler.rs, catch_error for a deposit reverts to the first journal checkpoint, bumps the caller nonce, adds the mint and commits. The same two files are present with the same mainnet address at the okx/optimism ref xlayer-dep/a492b62bbecbdcf3be90719e042c9abca47c8cc6 and on main. The release page for xlayer/v0.1.6 lists 'feat(rcs): intercept blacklisted L1 deposits before execution (51ce81a)' and says that release was for testnet only. The release pages for xlayer/v0.1.7 and xlayer-reth v0.0.7.3 say operators must run both by November 10, 2026, and neither page names the blacklist. Cargo.toml of xlayer-reth at tag v0.0.7.3 takes alloy-op-evm and op-revm from the path deps/optimism/rust, and .gitmodules points that path at okx/optimism. On chain at X Layer block 76,601,162 on 2026-11-22: the endpoint reports reth/v2.3.0-f60420a with the suffix xlayer/v0.0.7. The blacklist address holds 1,059 bytes of code, its EIP-1967 implementation slot holds 0xe44bfef30cfd8ecbfb917d78fa2ac215b3397f8e (3,516 bytes) and its admin slot holds 0x57ffb399eb2d8fb1831001ba893483bc13bd8c2f. owner() on the proxy and on the admin both return 0x6EE7bDA7aF04F61ccf93aB4b8Db2289aBe76C6aa, which has no code and account nonce 2,098. pendingOwner() is zero. The implementation bytecode contains the selectors of isBlacklisted(bytes32), blacklisted(bytes32), addToBlacklist(bytes32), removeFromBlacklist(bytes32), batchAddToBlacklist(bytes32[]), batchRemoveFromBlacklist(bytes32[]), operators(address) and setOperator(address,bool). addToBlacklist reverts with 0x7c214f04, the selector of NotOperator(), for an arbitrary sender and for the owner. setOperator(address,bool) succeeds in simulation from the owner and reverts with OwnableUnauthorizedAccount for another sender. isBlacklisted returns false for a test hash when called from 0xfffffffffffffffffffffffffffffffffffffffe. eth_getLogs for the contract over the last 100 blocks returned nothing. The OP Stack derivation specification says user deposits are placed in the first L2 block of an epoch, before sequenced transactions, and that an L2 block may keep an L1 origin whose timestamp is up to max_sequencer_drift older than its own. A hash therefore has to be listed in an L2 block that precedes the block of the deposit, and the sequencer chooses when it advances to the L1 origin that holds the deposit. One link is backed by release documents and not by direct observation: I could not read the submodule pointer of xlayer-reth v0.0.7.3, and I found no deposit that was voided on mainnet.",
+   "codeCheck": "Funds leave the PoolManager through take, which carries onlyWhenUnlocked (src/PoolManager.sol:291-297, 96-99), and unlock hands control to msg.sender and requires all deltas to be zero on return (src/PoolManager.sol:104-114). A liquidity position is stored under msg.sender (src/PoolManager.sol:161), so only that account can reduce it. ERC-6909 claims are burned from an account by that account, by its operator or by a spender with allowance (src/ERC6909Claims.sol:13-22), and each of these still needs a transaction on X Layer. collectProtocolFees pays out accrued protocol fees only and needs the controller (src/ProtocolFees.sol:44-57). No function in src/ depends on block time or lets a third party withdraw for an owner without the owner's earlier approval. A user whose transactions are never executed therefore cannot move funds out. I found no guard in src/ that the finding missed, and none could exist, because the hazard sits below the contract.",
+   "corrections": "The actor value operator is right: an ordinary account cannot list a hash and cannot make the sequencer filter a transaction. The balances moved since the research query. The PoolManager held 300.77 OKB and 5,945,282 USDT0 at block 76,601,162. Step 7 of the mechanism holds only while every transaction that could move the position is stopped. An account that already holds an ERC-6909 operator approval, an allowance or a PositionManager approval from the owner can act for the owner from a different sender, and the operator would have to filter or list that transaction as well. The finding says the rule is active by construction for chain id 196. That statement is true of the source at the release tag. Whether the running sequencer build pins that commit is unconfirmed, as the finding itself notes. Severity high follows the scale, since a freeze needs a privileged chain-level actor, and it matches the Robinhood Chain filter finding F-001.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/block/xlayer_blacklist_contract.rs",
+     "supports": "Chain id 196 maps to the blacklist proxy 0x59055c0ef0be92018b33f877a3eB816355791727. isBlacklisted(sourceHash) is a system call from SYSTEM_ADDRESS that fails open. Only user deposits are eligible."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/lib.rs",
+     "supports": "transact_raw calls intercept_blacklisted_deposit for every transaction and returns the failed deposit result on a hit. There is no fork or flag condition."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/op-revm/src/handler.rs",
+     "supports": "catch_error for a deposit reverts all changes, bumps the caller nonce, keeps the mint and commits."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/optimism/a492b62bbecbdcf3be90719e042c9abca47c8cc6/rust/alloy-op-evm/src/block/xlayer_blacklist_contract.rs",
+     "supports": "The ref published as xlayer-dep/a492b62bbecbdcf3be90719e042c9abca47c8cc6 carries the same file with the same mainnet address."
+    },
+    {
+     "url": "https://newreleases.io/project/github/okx/optimism/release/xlayer%2Fv0.1.6",
+     "supports": "The release notes list 'feat(rcs): intercept blacklisted L1 deposits before execution (51ce81a)' and say the release is for X Layer Testnet only."
+    },
+    {
+     "url": "https://newreleases.io/project/github/okx/optimism/release/xlayer%2Fv0.1.7",
+     "supports": "Operators must upgrade to op-node xlayer/v0.1.7 and xlayer-reth v0.0.7.3 by November 10, 2026. The notes do not name the blacklist."
+    },
+    {
+     "url": "https://newreleases.io/project/github/okx/xlayer-reth/release/v0.0.7.3",
+     "supports": "xlayer-reth v0.0.7.3 pairs with op-node xlayer/v0.1.7 and is in sync with Reth v2.3.0."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3/Cargo.toml",
+     "supports": "alloy-op-evm and op-revm come from the path deps/optimism/rust at this tag."
+    },
+    {
+     "url": "https://rpc.xlayer.tech web3_clientVersion; eth_getCode, eth_getStorageAt (EIP-1967 implementation and admin slots), owner(), pendingOwner() on 0x59055c0ef0be92018b33f877a3eB816355791727; owner() on 0x57ffb399eb2d8fb1831001ba893483bc13bd8c2f; eth_getCode and eth_getTransactionCount of 0x6EE7bDA7aF04F61ccf93aB4b8Db2289aBe76C6aa",
+     "supports": "Proxy, implementation, admin and owner are as the finding states. The owner is an account without code with nonce 2,098."
+    },
+    {
+     "url": "https://rpc.xlayer.tech eth_call addToBlacklist(bytes32) from an arbitrary sender and from the owner, setOperator(address,bool) from the owner and from another sender, operators(owner), isBlacklisted(bytes32) from 0xfffffffffffffffffffffffffffffffffffffffe, eth_getLogs over 100 blocks",
+     "supports": "Listing needs an operator, and only the owner can appoint one. No entry or event was observed in the window the endpoint allows."
+    },
+    {
+     "url": "https://specs.optimism.io/protocol/derivation.html",
+     "supports": "User deposits are in the first L2 block of an epoch and precede sequenced transactions. L2 timestamps are bounded by the L1 origin timestamp plus max_sequencer_drift."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I repeated the value calls with from set to the PoolManager, empty calldata and values of 1 wei and 10^18 wei. On Celo (PoolManager 0x288dc841A52FCA2707c6947B3A777c5E56cd87BC, block 0x4f9a2a7) the calls succeed for L2ToL1MessagePasser, the fee vaults at 0x11, 0x19, 0x1a and 0x1b, L1BlockNumber at 0x13, the wrapped native predeploy at 0x06, the three EntryPoints, and the registry addresses of FeeHandler (0xcd437749e43a154c07f3553504c68fbfd56b8778), MentoFeeHandlerSeller, UniswapFeeHandlerSeller, Reserve and Governance. They revert for the CELO token, LockedGold, CeloUnreleasedTreasury, EpochManager, Escrow, L2StandardBridge, L2CrossDomainMessenger and 0xfd. On X Layer (PoolManager 0x360e68faccca8ca495c1b759fd9eee466db9fb32) the calls succeed for the four fee vaults, 0x13, the predeploy at 0x06, Wrapped OKB at 0xe538905cf8410324e03A5A23C1c177a474D59b2b and the three EntryPoints, and L2ToL1MessagePasser reverts with 0xcdfaa111. The Celo message passer source at branch celo-rebase-17 has receive() calling initiateWithdrawal(msg.sender, 100000, empty bytes), and the deployed contract reports version 1.1.1-beta.1. Each EntryPoint returns 0 for balanceOf(PoolManager) and reverts on transfer(address,uint256) on both chains. Neither PoolManager address has code or balance on Ethereum.",
+   "codeCheck": "take debits msg.sender by the full amount before the transfer (src/PoolManager.sol:294) and then sends the native asset with empty calldata and all gas (src/types/Currency.sol:44-52), so the recipient sees the PoolManager as sender. The recipient is an argument of the caller's own take call, and no function in src/ lets another account choose it. The debit stays open until the caller settles, because unlock reverts while any delta is nonzero (src/PoolManager.sol:112). For the EntryPoint case, sync stores balanceOf(PoolManager) of any address (src/PoolManager.sol:279-288) and the settle path credits the rise under that address as currency (src/PoolManager.sol:358-364). The credit cannot be taken, because the ERC-20 branch of transfer reverts when the call fails (src/types/Currency.sol:60-86). The caller must clear it or mint it as a claim to close the unlock (src/PoolManager.sol:310-329). Pool reserves and other users' claims are untouched in every variant.",
+   "corrections": "No change to actor or severity. The actor value unprivileged is acceptable only in the sense that no role is needed. The one party that loses is the account that named the recipient, so this item is no path to other users' funds and no attacker gains from it. Step 7 should add that the credit under the EntryPoint id has to be cleared or minted before unlock returns. The op-stack-eth unit recorded the same hazard for the ETH chains, and the two entries can be merged.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/optimism/celo-rebase-17/packages/contracts-bedrock/src/L2/L2ToL1MessagePasser.sol",
+     "supports": "receive() calls initiateWithdrawal(msg.sender, RECEIVE_DEFAULT_GAS_LIMIT, empty bytes) with a limit of 100,000."
+    },
+    {
+     "url": "https://forno.celo.org eth_call with from 0x288dc841A52FCA2707c6947B3A777c5E56cd87BC, empty calldata and value 1 wei and 10^18 wei; getAddressForString on the registry 0x000000000000000000000000000000000000ce10; version() on 0x4200000000000000000000000000000000000016; balanceOf and transfer on the three EntryPoints",
+     "supports": "The listed Celo addresses accept the value call. EntryPoints report a zero deposit for the PoolManager and have no transfer function."
+    },
+    {
+     "url": "https://rpc.xlayer.tech eth_call with from 0x360e68faccca8ca495c1b759fd9eee466db9fb32, empty calldata and value 1 wei and 10^18 wei; version() on 0x4200000000000000000000000000000000000016; balanceOf and transfer on the three EntryPoints",
+     "supports": "Fee vaults, 0x13, both Wrapped OKB contracts and the EntryPoints accept value. The message passer reverts with 0xcdfaa111 and reports a custom gas token version."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com eth_getCode and eth_getBalance of both PoolManager addresses",
+     "supports": "No code and no balance on Ethereum at either address."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Faces on Celo: every way the PoolManager's native balance or a token balance can be read under a second currency id (the CELO token proxy, its implementation address, the four fee currency adapters, the wrapped native predeploy, any contract whose balanceOf returns a native balance), walked through sync, settle, take, mint and burn in each order.",
+   "agrees": true,
+   "note": "On chain at Celo block 0x4f9a355 the CELO token 0x471EcE3750Da237f93B8E339c536989b8978a438 returns 6166951836241617055206 for balanceOf(PoolManager), which equals eth_getBalance to the wei, so both currency ids read one balance. I traced the orders in src/. A native credit arises only at src/PoolManager.sol:354 while the synced slot is zero. A token credit arises only at 358-360 for the one address held in the single slot (src/libraries/CurrencyReserves.sol:15-32). A settle with value while a token is synced reverts at 356, and settle and settleFor are the only payable functions. take and mint debit the id the caller names (294, 326), and unlock needs every delta at zero (112). Each inflow is therefore credited under one id and each outflow debited under one id. Deployed contract probes agree: a plain value call to the PoolManager reverts, sync with value reverts, transfer on the token implementation 0xFeA1B35f1D5f2A58532a70e7A32e6F2D3Bc4F7B1 from the PoolManager reverts with 'CELO transfer failed', and the four fee currency adapters revert on transfer. I ran no multi-step simulation, so the orders rest on reading the source."
+  },
+  {
+   "check": "Whether a contract that the PoolManager calls (a hook, an unlock callback, a payout recipient or a currency) can reach the Celo transfer precompile with the PoolManager's balance as source, including through DELEGATECALL or CALLCODE.",
+   "agrees": true,
+   "note": "transfer.rs in celo-kona at HEAD halts unless input.caller equals the CELO token address for the chain, refuses static calls and requires 96 bytes of input. revm at main sets caller to the caller of the delegating frame for DELEGATECALL and to the calling contract for CALL and CALLCODE, and alloy-evm passes inputs.caller to the precompile unchanged. A frame can therefore present the token as caller only when the token address itself called that frame. On chain, an eth_call to 0xfd with (PoolManager, recipient, 1) fails from an arbitrary address, from the PoolManager and from the token implementation, and succeeds only when from is set to the token address, which no real transaction can do. transferFrom with the PoolManager as source reverts on allowance, the allowance is zero, and src/ never calls approve. The source was read at HEAD and the endpoint reports reth/v2.2.0-74cc8bb, so the exact build is unpinned. The on-chain probes match the source."
+  },
+  {
+   "check": "Cycle 1 critic gap and lead: where does the X Layer client discard transient storage between two transactions of one block, including the gasless whitelist call, the blacklist call, blacklisted deposits and the flashblocks builder (A1).",
+   "agrees": true,
+   "note": "revm journal inner.rs at main clears transient_storage in commit_tx, discard_tx and finalize. The X Layer blacklist path at tag xlayer/v0.1.7 ends in catch_error, which calls checkpoint_revert and commit_tx, and then in finalize. The fail-open blacklist query runs through system_call_with_caller, whose result state is dropped, and the error branch of transact_system_call calls discard_tx. The flashblocks builder in xlayer-reth main executes candidates with evm.transact, which finalizes per transaction. The one remaining gap is the one the item names: a non-deposit transaction rejected by the handler does not discard the journal. Such rejections come from validation and fee deduction before any frame runs, so no TSTORE by the PoolManager can precede them. I did not enumerate every error variant either, and the item states that limit."
+  }
+ ],
+ "leads": []
+}

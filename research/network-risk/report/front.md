@@ -1,6 +1,6 @@
 # PoolManager network risk report
 
-State on 2026-11-22: cycle 1 is merged and cycle 2 is running. The ledger holds 34 findings, 158 checks that came out safe, and 133 open leads across the 21 networks.
+State on 2026-11-22: cycles 1 and 2 are merged. The ledger holds 52 findings, 332 checks that came out safe, and 200 open leads across the 21 networks. Forty-six agents have worked on it so far, half of them as independent verifiers.
 
 ## The question
 
@@ -8,36 +8,44 @@ Can an ordinary account take funds that other users hold in this repository's Po
 
 ## Answer so far
 
-Cycle 1 found no such path. The planted weakness has not been identified yet.
+No critical or high finding exists for an ordinary attacker. The planted weakness has not been identified. Every verifier in cycle 2 was asked whether its unit contained it, and each answered no.
 
-Seven findings can be triggered by an ordinary account, and none of them moves or locks another user's funds in a pool that uses ordinary tokens and no hook. In three the loss falls on whoever makes an unusual call: a payout sent to a HyperCore bridge address (F-021), POL paid into the Polygon system token at `0x1010` (F-008), and a payout to a Tempo account whose receive policy rejects the PoolManager (F-033). One is a pricing trap, a Celo predeploy that names itself WETH and wraps CELO (F-025). One strands staking yield on rebasing stETH without touching principal (F-012). Two record places where the source disagrees with its own comments or tests and no funds move (F-006, F-014).
+Seventeen findings can be triggered by an ordinary account. They fall into five groups.
 
-The other 27 findings need a party the threat model excludes. The largest group is the same hazard on many networks: every pool of a currency shares one balance at one address, so a stablecoin issuer who blocklists the PoolManager stops all of them.
+Rebase capture, the only one where an attacker gains (F-041, medium, confirmed on Ethereum). Any account can call `sync`, cause the PoolManager's balance of a token to rise, and call `settle` to be credited the rise. Taking the pooled balance first and repaying the nominal amount works as well. For Ampleforth the public rebase is guarded by `msg.sender == tx.origin`, and an EIP-7702 delegated account passes that check while running code; the verifier simulated this on mainnet. The gain is the positive rebase on whatever the PoolManager holds of that token. Today that is 16 base units of AMPL, and the method reaches only pools in elastic or reward-pushing tokens.
 
-## What cycle 1 tested
+Yield that nobody can withdraw (F-012 stETH on Ethereum, F-037 Aave aTokens on Arbitrum One). The balance grows outside pool accounting and core has no function that pays the growth out. Principal is untouched.
 
-One balance under two currency ids. On Arc the native asset is USDC with 18 decimals and the same balance is an ERC-20 with 6 decimals. Celo exposes native CELO through the CELO token, Polygon exposes POL through `0x1010`, and Optimism and Zora list a legacy token that mirrors ETH. In each case the researchers walked `sync`, `settle` and `take` across both faces in every order and found no double credit. A native credit needs `settle` with value while no token is synced, and `settle` rejects value while a token is synced (`src/PoolManager.sol:353-356`). On Arc the 12 digit truncation in `balanceOf` gives at most one millionth of a dollar per call, far below the gas cost.
+Payouts to a recipient that swallows them. On every network family some address accepts a payout from the PoolManager and books it to the PoolManager itself, or holds it: HyperCore bridge addresses and the L1 block number precompile on HyperEVM (F-021), `L2ToL1MessagePasser`, the ERC-4337 EntryPoints and `L1BlockNumber` on the seven OP Stack chains (F-048), withdrawal predeploys, fee vaults and Celo core contracts on Celo and X Layer (F-047), EntryPoints, precompiles and custody addresses on Arc and Tempo (F-049), and Tempo accounts whose receive policy rejects the PoolManager (F-033). The caller is debited in full each time, so the only loser is the caller, or the user of a router that passes a recipient through unchecked.
 
-A chain without a native asset. Tempo has none. `CALLVALUE` is always 0 and the client rejects value transfers, so the native branch of `settle` always credits 0.
+Currency ids that take credit and cannot pay out: Polygon's system token at `0x1010` (F-008) and the USDC implementation address on Arc (F-050). Only someone who pays into such an id loses. The Celo predeploy that names itself WETH and wraps CELO (F-025) is a pricing trap of the same kind.
 
-Transient storage across transaction boundaries. Tempo batch transactions, Arc's Multicall3From, ERC-4337 and World Chain bundles, OP Stack deposits and Flashblocks, Nitro retryables, Monad's parallel execution, and the system transactions on Polygon, BNB Smart Chain and HyperEVM were each checked for an unlock flag, a delta or a stale `sync` reaching another party. No case moves funds. Where two users share one transaction, the earlier one can make the later one's native `settle` revert.
+Delay without loss. One cheap transaction on MegaETH uses a block's whole budget for new state and the node skips the rest of that block (F-042). A HyperEVM small block holds 3,000,000 gas, which fits about 200 tick crossings in one swap (F-039). A HyperCore transfer runs a linked contract ahead of every signed transaction in the block (F-044). Any account can fill one tick to the liquidity cap for dust and block later deposits on that tick, on every network (F-038). Withdrawals keep working in all four.
 
-The PoolManager as caller. `take` lets anyone make the PoolManager call any address with `transfer(address,uint256)` or with empty calldata, and `initialize` lets anyone name any address as a hook. On Tempo and Arc every precompile was called this way from the PoolManager address and all of them revert except real tokens. HyperEVM's CoreWriter cannot be reached with these selectors. This sweep was not complete on the other networks, which is the first job of cycle 2.
+The remaining two (F-006, F-014) record places where the source disagrees with its own comments, with no funds involved.
 
-Gas limits. HyperEVM's 3,000,000 gas blocks, Tempo's 250,000 gas per new storage slot, and the per-transaction caps on Ethereum, Monad, BNB Smart Chain and MegaETH leave room for liquidity removal, and a large swap can be split with a price limit.
+The other 35 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end.
 
-The source itself. Two readers went through `src/` line by line. They recomputed the transient slot constants, the TickMath and BitMath tables and the packing masks, checked the sign and rounding of every delta, and ran a Python transcription of the pool math through random sequences of adds, removals, swaps and donations. They found one way to lock a position, which needs a token with more than 1.7e38 base units of supply (F-005), and the fact that a pool's own hook can block removals from that pool (F-004). Both depend on a token or hook that the victims chose.
+## What has been tested
+
+One balance under two currency ids. Arc (native USDC with 18 decimals and an ERC-20 face with 6), Celo (CELO token), Polygon (`0x1010`), the legacy ETH token on Optimism and Zora, and stHYPE with wstHYPE on HyperEVM, which share one share balance. In each case `sync`, `settle` and `take` were walked across both faces in every order, twice by network researchers and once in a Python model of the settlement code. No order credits one deposit twice. A native credit needs `settle` with value while no token is synced, `settle` rejects value while a token is synced (`src/PoolManager.sol:353-356`), and only one currency can be synced at a time. On Arc the 12 digit truncation gives at most 0.000001 USDC per round against a 20 gwei minimum base fee.
+
+The PoolManager as caller of special addresses. `take` lets anyone make the PoolManager call any address with `transfer(address,uint256)` or with empty calldata, and `initialize` lets anyone name any address as a hook. Cycle 2 ran these call shapes from the PoolManager address against every precompile, predeploy and system contract the researchers could list: all 2,048 predeploy slots on each of the seven OP Stack chains, 122 special addresses on Polygon, BNB Smart Chain and Avalanche, and the full precompile sets of Tempo, Arc, Monad, MegaETH, HyperEVM and the Arbitrum family. Where a call succeeds, the caller owes the full amount, which is the payout-stranding group above.
+
+Opcodes. A verifier deployed nothing and used `eth_call` with init code to run 60 arithmetic, shift, hash, transient storage, `MCOPY` and `PUSH0` vectors on each of the 21 networks, and a second verifier repeated it in cycle 2. All agree with Ethereum. Avalanche differs in one place: the C-Chain clears bit 248 of every storage slot index, so two indexes map to one slot (F-040). The PoolManager writes only to slots 0 to 6 and to hash outputs, so core is unaffected; a hook with hand-picked slots is not.
+
+Transient storage across transactions. Read in client source for the OP Stack (op-revm, Base), Bor, BSC, AvalancheGo, Nitro, X Layer and Arc, and tested with `eth_simulateV1` on six OP Stack chains, Polygon and BNB Smart Chain. A second transaction always starts with an empty map. Batch transactions on Tempo and helper contracts on Arc share transient storage only among one sender's own calls.
+
+A chain without a native asset. On Tempo `CALLVALUE` is always 0 and value transfers are rejected, so the native branch of `settle` credits 0.
+
+The source itself. Six readings so far: two line by line, a swap trace, a liquidity trace, an attempt to break the custody invariants with a search over call sequences, and a check of every mask, shift, cast and `unchecked` block. Three independent Python transcriptions of the pool math stayed solvent across about 27,000 random operation sequences. The slot constants, error selectors, TickMath and BitMath tables were recomputed from the text.
 
 ## What is open
 
-Cycle 2 repeats the work under the narrowed threat model. Each network family sweeps every precompile, predeploy and system contract with the PoolManager as caller, compares opcode behaviour against the node's source, re-walks the faces of the native asset, and collects known weaknesses of the network. Four more readings of the source run alongside: a swap trace, a liquidity trace, an attempt to break the custody invariants, and a check of every mask, shift and cast.
+Three high-priority leads from the cycle 2 critic head the queue.
 
-The cycle 1 critic and verifiers left these leads at high priority:
+- A nested execution context with its own transient storage. `sync` needs no lock. If any network can run caller-chosen code inside a transaction under a fresh transient map while keeping its token transfers, one payment could be credited twice. Candidates named for checking: Tempo zones and the T14 account type due on 8 December 2026, Base transactions of type 0x79, Stylus host calls and retryable redeems, HyperEVM system calls with data, World Chain bundles, and Celo's fee currency calls. MegaETH's keyless deploy sandbox was checked and is safe.
+- A call that carries value without a matching balance debit. `settle` credits `msg.value` as paid. go-ethereum and BNB Smart Chain skip the balance check for the system caller address; whether anything an ordinary account sends can run with that caller is unchecked.
+- The repository's own tests, comments and test doubles that no reader has yet replayed against `src/`.
 
-- Read in client source where Arc, Avalanche, HyperEVM, X Layer and World Chain discard transient storage between two transactions of one block. Cycle 1 relied on documentation for those five.
-- Find out which functions of Base's B20 token precompile and policy registry an account with no role can call, and whether any of them changes another holder's balance.
-- Replay the concrete expectations in the repository's tests against the source by hand, since no compiler is installed here.
-- A verifier reports a Yul optimizer bug announced by the Solidity team on 2026-10-22 and asks whether it affects this build (solc 0.8.26 with `via_ir`). Nobody has checked this yet.
-- On five OP Stack chains the protocol fee controller is the zero address, and OP upgrade deposits are sent from the zero address. That path needs the chain operator and reaches protocol fees only, but the cycle 1 clearance of "nobody can call as the zero address" was wrong for those chains.
-
-Two limits apply to everything above. No compiler is available in this environment, so nothing was built or executed, and deployed bytecode was not compared with a build of this repository. The chain facts were read from the live official deployments, which may differ from what the CTF build will be when it is deployed.
+Two limits apply to everything above. No compiler is installed here, so nothing was built, and one question depends on that: the Solidity team's bug list marks solc 0.8.26, which `foundry.toml` pins, as affected by a Yul optimizer bug published on 22 October 2026, and the readers found none of its source patterns but could not inspect the optimized output. Second, the chain facts were read from the live official deployments, which may differ from the CTF build once it is deployed.

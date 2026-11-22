@@ -1,0 +1,98 @@
+{
+ "unit": "high-throughput",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I fetched the four cited sources and reran the chain queries on 2026-11-22. constants.rs sets rex::TX_STATE_GROWTH_LIMIT and rex::BLOCK_STATE_GROWTH_LIMIT to 1000 (lines 206 and 211). limit.rs builds the block limits for Rex through Rex6 with block_state_growth_limit taken from that constant (lines 381 to 399). BlockLimiter::pre_execution_check returns MegaBlockLimitExceededError::StateGrowthLimit for a candidate when block_state_growth_used is at or above the limit (lines 880 to 890), and the is_deposit flag gates only the two data availability tests (lines 821 to 845). post_execution_update_raw adds the usage of an executed transaction without a test, and its comment says the last transaction is allowed to exceed the limit (lines 895 to 943). The specification page states that the first transaction that brings the block to the limit must be included and that later candidates must be skipped before execution. The Rex upgrade page lists state growth of 1,000 per transaction and per block as a new limit. gas.rs computes the storage gas of a new slot as 20,000 times (multiplier minus 1), which is zero at multiplier 1 (lines 49 to 51). On chain, eth_estimateGas for a contract creation that writes n new slots returned 120,922 gas for n = 1, 22,559,391 gas for n = 999 and 'execution reverted' for n = 1,000 and n = 1,001, so the transaction limit of 1,000 entries with the new account counted as one is live on mainnet. The latest block and blocks 10,000,000, 20,000,000, 25,000,000, 30,000,000 and 32,000,000 report a base fee of 1,000,000 wei, and eth_feeHistory over the last 100 blocks shows the same base fee and a median priority fee of zero. At that price 22.56 million gas is 0.0000226 ETH, and 86,400 such transactions cost about 1.95 ETH. I found no primary source that contradicts the finding. Two links stay unconfirmed. I did not observe a mainnet block that was closed in this way, so the behaviour of the live sequencer rests on the reference implementation and the specification. The ordering rule of the sequencer is not documented in the pages I read. A podcast transcript with the MegaETH founders says the team rejects tip auctions per block, which is a secondary source.",
+   "codeCheck": "The finding needs nothing from the PoolManager code beyond the fact that its calls are ordinary transactions. modifyLiquidity (src/PoolManager.sol:145-184) and take (src/PoolManager.sol:291-297) require the unlocked flag, which exists only inside a call to unlock made in the same transaction (src/PoolManager.sol:104-114, src/libraries/Lock.sol:11-27). No function in src/ reads a block field or offers a path that a third party could execute for a user after a delay, so a withdrawal that is skipped for one block has to be included in a later block as a whole transaction. No state of a pool changes while the transaction waits, apart from what other included transactions do to the pool price. I found no guard in src/ that bears on this, and none is possible at contract level.",
+   "corrections": "The gas figure differs slightly with my own init code (22,559,391 against 22,559,525), which does not change the cost. The specification says later candidates are skipped when they depend on the exhausted resource, while the reference limiter skips every candidate. The finding follows the limiter, and that is the stricter reading. The precondition is stated too narrowly. The finding says a full stop needs the sender to be first in every block. If the sequencer serves pending transactions in arrival order, a run of N such transactions submitted together from several accounts would close N consecutive blocks for every transaction that arrives after the run, at 0.0000226 ETH per block. If the sequencer orders by priority fee, the same run with a priority fee of 1 wei outranks the current traffic, whose median priority fee is zero, until users pay more. This extension follows from the limiter logic and was not observed on chain. The severity stays low for the confirmed part, which is a delay inside one block. It would be medium under the scale if the multi-block case is confirmed, because liquidity operations would be blocked without loss for as long as the sender pays. The operator of the single sequencer can exclude such transactions, so the stall would last until the operator reacts.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs",
+     "supports": "pre_execution_check rejects any candidate once block_state_growth_used is at or above the limit, deposits are exempt from the data availability tests only, and post_execution_update_raw lets the last transaction exceed the limit"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/constants.rs",
+     "supports": "rex::TX_STATE_GROWTH_LIMIT and rex::BLOCK_STATE_GROWTH_LIMIT are both 1000"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/external/gas.rs",
+     "supports": "Storage gas of a new slot is SSTORE_SET_STORAGE_GAS_BASE times (multiplier minus 1)"
+    },
+    {
+     "url": "https://docs.megaeth.com/spec/megaevm/resource-limits.md",
+     "supports": "The transaction that reaches a block-level runtime limit is included and later candidates are skipped for the current block and may be reconsidered in a later block"
+    },
+    {
+     "url": "https://docs.megaeth.com/spec/network-upgrades/rex.md",
+     "supports": "Rex introduced a state growth limit of 1,000 per transaction and per block"
+    },
+    {
+     "url": "rpc https://mainnet.megaeth.com/rpc, eth_estimateGas, eth_feeHistory, eth_getBlockByNumber, eth_getCode, eth_call with from set to the PoolManager and with a code override at the PoolManager address, and eth_callMany, at blocks near 32572970 on 2026-11-22",
+     "supports": "A creation with 999 new slots is estimated at 22,559,391 gas, a creation with 1,000 new slots reverts, and the base fee is 1,000,000 wei in every block sampled with a median priority fee of zero"
+    },
+    {
+     "url": "https://rosetta.to/u/bankless/megaeth-mainnet-is-live-the-next-era-of-ethereum-scaling",
+     "supports": "Secondary source. A transcript in which the MegaETH founders say they do not want tip auctions per block"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "I reran the reads on rpc.monad.xyz at block 124498672 and fetched the Monad token list for the addresses. balanceOf(PoolManager) returned 2,640,693 GHO, 1,650,963 mUSD, 1,561,546 syrupUSDC, 299,944 apxUSD and 268,856 shMON. The figures moved a little since the researcher's query, and the order of magnitude is the same. GHO at 0xfc421ad3c883bf9e7c4f42de845c4e4405799e73 is a transparent proxy with implementation 0xb0e1c7830aa781362f79225559aa068e6bdaf1d1 and admin 0x06ba20fb633cbf38b7acfdc243829fb5f897e19c in the EIP-1967 slots. mUSD at 0xaca92e438df0b2401ff60da7e4337b687a2435da is a proxy with implementation 0xc2e2fbcef84dea88025a5b2599039c912ef6b61c and admin 0x685e7f8c9414bfa716b254b349153e2317929ac9. Its implementation holds the selectors of pause(), unpause(), freeze(address), forceTransfer(address,address,uint256) and the batch form of forceTransfer. paused() and isFrozen(PoolManager) both return false. syrupUSDC at 0xab6e5a0c3799d020c790d34f7b2c02639e238af7 has no proxy slot and holds the selectors of mint(address,uint256), burn(address,uint256), burnFrom(address,uint256) and BURNER_ROLE(). apxUSD at 0x3d78455e22d5dd49709ec135a59cb1c5a87ac3c6 is a 163 byte proxy with implementation 0x6b3788fd6604bbf03c5378d24e57bb334baad4af, which holds pause(), unpause(), burn(address,uint256), burnFrom(address,uint256) and upgradeToAndCall(address,bytes). paused() returns false. shMON at 0x1b68626dca36c7fe922fd2d55e4f631d962de19c is a proxy with a 120,874 byte implementation that holds upgradeTo(address), and owner() returns 0x48a3267bcc4cf230e9bc4cae0c11eebdb9a6a687. Its EIP-1967 admin slot holds 0x00b16590295092f12f4cec655296b6129c49489c, which the finding does not mention. I computed each selector with keccak256 and searched the deployed bytecode for it. As in the finding, the holders of the roles were not read, and I did not establish whether burn(address,uint256) needs an allowance or whether forceTransfer on mUSD applies only to frozen accounts. Those points decide between a pause and a loss. They do not change the actor or the fact that the controls exist.",
+   "codeCheck": "A token payout is one call to transfer, and take reverts when that call reverts or returns anything other than nothing or a 32 byte true (src/types/Currency.sol:55-86, src/PoolManager.sol:291-297). A token payment is measured as balanceOf(PoolManager) minus the synced value (src/PoolManager.sol:349-364), so a token that blocks transfers to the PoolManager also blocks payments. The PoolManager stores no reserve per currency. Pool state is liquidity, price and fee growth (src/libraries/Pool.sol:83-91), and claims are ERC-6909 balances (src/ERC6909.sol:15-19). A burn or forced transfer of the PoolManager balance therefore changes no accounting, and the shortfall falls on whoever withdraws last, because their take reverts in the token for lack of balance. One guard reduces the pause case. modifyLiquidity and swap only write deltas (src/PoolManager.sol:145-227), and mint and burn close deltas through ERC-6909 claims without any call to the token (src/PoolManager.sol:322-336). During a pause or a freeze of the PoolManager address a provider can still remove liquidity into claims and a swapper can still trade from and into claims. The token itself cannot enter or leave the PoolManager until the issuer lifts the measure.",
+   "corrections": "The mechanism says a paused token stops removals and swaps in every pool that uses it. The code stops take and settle for that currency. Removals and swaps that are closed with mint and burn of ERC-6909 claims continue (src/PoolManager.sol:322-336), so the effect of a pause is that the token cannot be paid out or paid in. The balances at block 124498672 are 2,640,693 GHO, 1,650,963 mUSD, 1,561,546 syrupUSDC, 299,944 apxUSD and 268,856 shMON. shMON has a proxy admin at 0x00b16590295092f12f4cec655296b6129c49489c in addition to the owner named in the finding. The actor value issuer is correct. No step is open to an ordinary account.",
+   "sources": [
+    {
+     "url": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager and with a code override at the PoolManager address, eth_getCode, eth_getBalance and eth_getStorageAt at block 124498672 on 2026-11-22",
+     "supports": "balanceOf(PoolManager) for the five tokens, the EIP-1967 implementation and admin slots, paused() false on mUSD and apxUSD, isFrozen(PoolManager) false on mUSD, owner() of shMON, BURNER_ROLE() on syrupUSDC and the selector constants found in each implementation"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/monad-crypto/token-list/main/tokenlist-mainnet.json",
+     "supports": "Addresses, symbols and decimals of GHO, mUSD, syrupUSDC, apxUSD and shMON on Monad mainnet"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Whether any address on either chain exposes the PoolManager's native balance, or the balance of a token it holds, under a second currency id, and whether two ids on one balance could be credited twice.",
+   "agrees": true,
+   "note": "I repeated the probes and reread the settlement code. On MegaETH eth_getCode at 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000 is empty. With a forwarding stub placed at the PoolManager address by code override, a 0.001 native call raised WETH.balanceOf(PoolManager) on MegaETH and WMON.balanceOf(PoolManager) on Monad by exactly 0.001. For the general case I traced every way to obtain a credit. settle credits msg.value only while the synced currency is zero, rejects msg.value while a token is synced, and otherwise credits the rise of one token since sync (src/PoolManager.sol:349-364). sync writes the currency and the reserves together, and sync of address(0) clears only the currency (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:21-32), so a stale reserve value cannot be paired with a later payment. PoolManager has no receive or fallback function and settle and settleFor are its only payable functions, so a native payout cannot be routed back into it. I walked the sequence take native, sync face, return the native amount by a forced transfer, settle, take through the face. It ends with a native debt equal to what was taken. One payment yields one credit even when two ids share a balance. The item's own limit stands: tokens outside the lists were not enumerated on Monad."
+  },
+  {
+   "check": "Sweep of every Monad precompile and system address with calls from the PoolManager address, and the matching sweep of precompiles, the 0x4200 predeploys and the 0x6342 system contracts on MegaETH: empty calldata with zero and nonzero value, transfer, balanceOf(PoolManager), the IHooks selectors and unlockCallback.",
+   "agrees": true,
+   "note": "I repeated a subset on both endpoints. On Monad 0x1000 and 0x1001 revert with 'method not supported' for transfer, balanceOf and empty calldata, with and without value, and a value call and a STATICCALL made from an inner frame at the PoolManager address both fail. 0x01 and 0x0100 return success with empty data, so a take of those ids debits the caller and moves nothing (src/types/Currency.sol:64-74, src/PoolManager.sol:294). 0x04 returns its input, which fails the transfer test because the first word is not 1 and gives a constant answer to balanceOf. monad_precompiles.cpp rejects any message whose kind is not CALL or whose flags are nonzero (lines 47 to 48). On MegaETH L1BlockNumber answers transfer and balanceOf with 0x193ef0f, L2ToL1MessagePasser accepts empty calldata with value and reverts on transfer and balanceOf, L2CrossDomainMessenger, Oracle and KeylessDeploy revert on all three shapes, and MegaAccessControl reverts with 0x1894f076. The address of L1BlockNumber ends in 0x13, which sets the add-liquidity return flag without the after-add-liquidity flag, so isValidHookAddress rejects it (src/libraries/Hooks.sol:113-116). None of these answers gives a credit, because a credit needs a rise of balanceOf between sync and settle or msg.value (src/PoolManager.sol:353-364). I did not repeat the full sweep of 256 predeploy addresses."
+  },
+  {
+   "check": "A1 from the node source: does transient storage end with the transaction on MegaETH, including after an error or a panic, and does the Monad client keep transient storage inside the per-transaction state (lead L-018).",
+   "agrees": true,
+   "note": "mega-evm evm/mod.rs describes discard_tx as the journal finalize step that every transaction ends with and that clears transient storage and warm sets (lines 420 to 426). I also ran eth_callMany on the MegaETH endpoint with two transactions against a contract placed by state override. The first stored 1 with TSTORE and the second read 0 with TLOAD. The same pair with SSTORE and SLOAD read 1, which shows that the two transactions shared state and only the transient value was dropped. In the Monad client execute_transaction.cpp constructs a new State object for each transaction and for each retry (lines 454 and 480), transient storage is the member transient_storage_ of AccountState (account_state.hpp line 70), and BlockState::merge copies the persistent storage map only (block_state.cpp lines 154 and 212). The lock flag, the deltas and the synced currency of one transaction therefore cannot reach the next one on either chain (src/libraries/Lock.sol:11-27, src/libraries/CurrencyDelta.sol:18-41, src/libraries/CurrencyReserves.sol:15-38). The Monad endpoint offers no multi-transaction simulation, so the Monad part rests on the source reading."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "question": "Does a run of N transactions that each create 1,000 new state entries, submitted together from several accounts, close N consecutive MegaETH blocks for every transaction that arrives after the run, and what limits per sender or per block does the sequencer's pending pool apply to such a run?",
+   "why": "The finding assumes the sender must win the first place in every block. Under arrival order a queued run would hold that place for N blocks at 0.0000226 ETH each, which is about 1.95 ETH for a day in which no PoolManager withdrawal is included. That would move the finding from a delay inside one block to blocked liquidity operations.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "question": "Is there a mainnet block in which a transaction with 1,000 new state entries is followed by further sequencer transactions in the same block? Search for transactions near 22.5 million gas that write about 1,000 fresh slots and read their position in the block.",
+   "why": "The block-level skip is confirmed in the reference limiter and the specification and was not observed on chain. One counterexample would show that the live sequencer does not apply the block limit as written, and one positive example would confirm it.",
+   "priority": "medium"
+  }
+ ]
+}

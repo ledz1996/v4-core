@@ -1,0 +1,62 @@
+{
+ "unit": "core-code-invariants-bits",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Do the 21 networks execute the bit level instructions of this unit as the code expects, and what do codeless and precompile targets return to a transfer shaped call.",
+   "agrees": true,
+   "note": "I wrote my own creation payload (843 bytes, 43 result words) and sent it with eth_call to the rpc URL of each of the 21 networks in state/networks.json on 2026-11-22. All 21 returned the expected words for SIGNEXTEND 15 and 2 on values with dirty upper bits, SAR 128 on a negative word, TLOAD before and after TSTORE on the CURRENCY_SLOT constant (0 and then the stored value), KECCAK256 of 64 bytes, MCOPY, PUSH0 and CALLVALUE. The same payload made the 68 byte transfer(address,uint256) call with a 32 byte output area at memory 0 and a 36 byte balanceOf staticcall to a codeless address, 0x01, 0x02, 0x04 and 0x100. On every network the codeless address, 0x01 and 0x100 returned success with empty return data and left memory word 0 unchanged, 0x02 returned the 32 byte SHA-256 of the input, and 0x04 returned the input. A second balanceOf call in the same execution returned the same word for every target. Under src/types/Currency.sol:64-74 the first group counts as a paid transfer that moves nothing and the caller alone is debited at src/PoolManager.sol:294, and 0x02 and 0x04 fail the test because the first word is not 1. The high level balanceOf call at Currency.sol:94 decodes a uint256, so it reverts on empty return data and sync cannot store a reserve for a codeless currency or for 0x01 or 0x100. I then swept addresses 0x01 to 0xff and 0x100 to 0x11f on all 21 networks with both call shapes and a 60,000 gas cap per call. Only 0x02, 0x03 and 0x04 answer balanceOf with 32 bytes or more, each with a constant, and no address in that range both answers balanceOf and passes the transfer test. 0x03 (RIPEMD-160) behaves like 0x02 and the researcher did not list it. On HyperEVM I also swept 0x0800 to 0x083f: only 0x0809 answers, with the HyperCore block number for both shapes, which the hyperevm unit already recorded. My probe contract was the caller, so this check covers precompiles that ignore the caller. Chain specific system contracts above 0x11f belong to the network units."
+  },
+  {
+   "check": "Transient slot constants, the hash used for delta slots and the nonzero delta counter.",
+   "agrees": true,
+   "note": "A wrong slot constant or a hash that mixes two accounts would break the lock or the delta ledger for every pool, so I recomputed the constants with a second implementation. web3_sha3 on https://ethereum-rpc.publicnode.com returned keccak256 of ReservesOf, Currency, NonzeroDeltaCount and Unlocked as 0x1e07...bd96, 0x27e0...93ba, 0x7d4b...9a0c and 0xc090...ab24, each exactly one above the constant in src/libraries/CurrencyReserves.sol:11-13, src/libraries/NonzeroDeltaCount.sol:9-10 and src/libraries/Lock.sol:8. https://arb1.arbitrum.io/rpc gave the same digest for Unlocked. I read the rest of the path. getDelta and applyDelta both call _computeSlot with (target, currency) in that order and both words masked to 160 bits (src/libraries/CurrencyDelta.sol:10-33). applyDelta adds an int128 to an int256 with checked arithmetic (CurrencyDelta.sol:37). syncCurrencyAndReserves is the only writer of a nonzero currency and it writes the reserves in the same block, and resetCurrency writes zero to the currency slot only (CurrencyReserves.sol:21-32), so a stale reserve can never be paired with a newer currency. _accountDelta returns on a zero delta, decrements only when the slot returns to zero and increments only when it leaves zero (src/PoolManager.sol:368-378), so the counter equals the number of nonzero slots and the wrapping sub in decrement is not reached at zero. unlock reads that counter before it locks (PoolManager.sol:112-113). My 21 network probe also showed TLOAD of the CURRENCY_SLOT constant returns 0 in a fresh execution and the stored value after TSTORE."
+  },
+  {
+   "check": "Every cast and every unchecked block in the non-test sources (30 occurrences of unchecked, 104 of assembly): can a wrap or a truncation give a caller a larger credit or a smaller debit.",
+   "agrees": true,
+   "note": "I read every function that moves a delta and tried to find an input that wraps. take, mint and donate negate the result of toInt128(uint256), which rejects values of 2^127 and above (src/libraries/SafeCast.sol:56-59, src/PoolManager.sol:291-297, 322-329, src/libraries/Pool.sol:469-471). clear compares the cast amount with the stored delta before it negates (PoolManager.sol:310-319). _settle subtracts with checked arithmetic and casts the result (PoolManager.sol:358-364). In Pool.swap the protocol share cannot exceed the step fee. On a full step the fee is ceil(amountIn * s / (1e6 - s)) and the share is floor((amountIn + fee) * p / 1e6) with p at most s, and amountIn * p <= fee * (1e6 - p) follows from the fee formula. On a partial exact input step amountIn + fee equals the remaining amount and the fee is at least remaining * s / 1e6 (src/libraries/SwapMath.sol:63-105, Pool.sol:385-397). A step fee of 2^128 or more would wrap the unchecked multiplication at Pool.sol:404-405, and in that case the total input is at least 2^128, so one of the two toInt128 calls at Pool.sol:453-461 reverts and the whole swap is undone. The exact input remainder moves toward zero by at most its own size and the exact output remainder is reduced by at most itself (SwapMath.sol:72-97, Pool.sol:371-382). The unchecked negation of liquidityNet at Pool.sol:423-425 is safe because liquidityNet is built with checked int128 arithmetic from amounts bounded by the per tick cap, which is below 2^127 for every spacing from 1 to 32767 (Pool.sol:543, 565-582). uint128(-liquidity) in src/libraries/SqrtPriceMath.sol:266-287 yields the correct magnitude for the minimum int128 as well. LiquidityMath.addDelta reverts when any bit above bit 127 is set (src/libraries/LiquidityMath.sol:10-19). I found no cast or unchecked operation that gives a caller a larger credit or a smaller debit."
+  },
+  {
+   "check": "Hook return data: which bits of the returned words the PoolManager uses, and whether dirty bits in a hook answer can change a value outside that hook's own pool.",
+   "agrees": true,
+   "note": "parseFee assigns a full memory word to a uint24 in assembly (src/libraries/ParseBytes.sol:16-21), so I followed the dirty bits. The value is used only when the pool fee is the dynamic flag (src/libraries/Hooks.sol:263). It reaches Pool.swap through the memory struct and is consumed by an AND with 0x400000, an AND with 0xBFFFFF and a comparison of that masked result with 1,000,000 (src/libraries/LPFeeLibrary.sol:61-78, src/libraries/Pool.sol:303-305). calculateSwapFee masks its fee argument to 24 bits again (src/libraries/ProtocolFeeLibrary.sol:38-46). No bit above bit 23 can reach the swap fee. The delta word of a hook is split by sar 128 and signextend 15, so both halves are valid int128 values (src/types/BalanceDelta.sol:61-71, src/types/BeforeSwapDelta.sol:22-36). The caller receives the pool delta minus the hook delta with a checked cast on each half, and the hook address receives the hook delta (Hooks.sol:230, 242, 312, src/PoolManager.sol:181-183, 224-226), so the two entries cancel within the currencies of that pool. The specified part of a beforeSwap delta is added to the swap amount with checked arithmetic and a sign change reverts (Hooks.sol:273-278). The length rules are as stated: at least 32 bytes and a matching selector for every hook, exactly 64 bytes when a delta is parsed, exactly 96 bytes for beforeSwap (Hooks.sol:152, 166, 259). A hook can therefore change values only inside the pool that names it."
+  },
+  {
+   "check": "Compiler bugs listed for solc 0.8.26: does the source text contain the patterns that the Solidity bug list names, in particular the Yul optimizer bug SOL-2026-7 of 22 October 2026.",
+   "agrees": true,
+   "note": "I fetched both sources. bugs_by_version.json on the develop branch lists eight entries for 0.8.26, the same eight the researcher names. bugs.json gives SOL-2026-7 (YulOptimizerKnowledgeBaseStaleBookkeeping) as introduced in 0.8.19, fixed in 0.8.38, severity low, condition yulOptimizer true. The Solidity post of 22 October 2026 says that with via-IR any code may be affected, including code without inline assembly, and that the two decisive conditions cannot be checked from Solidity or Yul source alone. foundry.toml sets solc 0.8.26, via_ir and the optimizer, so this build is inside the affected range. The researcher's screen of the handwritten assembly is correct as far as it goes, and the item is rightly left open as lead L-028 instead of cleared outright. The post reports no bytecode difference in about 283,000 verified via-IR compilations and names a decisive test: compile the same sources with compiler builds at commits ce5702db and 00d5ee65 and compare the bytecode. That test uses only this repository. The other seven entries need a recursive storage struct with a dynamic array, require with a custom error that uses named arguments, delete on a bytes element under the legacy pipeline, mutual recursion, or a storage array at the end of storage, and I found none of these in src/ or lib/solmate/src/auth/Owned.sol."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "question": "Does this checkout produce identical PoolManager bytecode, apart from the metadata hash, when compiled with the foundry.toml settings by solc built at commit ce5702db (last commit before the fix of SOL-2026-7) and at commit 00d5ee65 (the fix)?",
+   "why": "The Solidity team names this comparison as the decisive test for the Yul optimizer bug in 0.8.19 to 0.8.37. The build uses 0.8.26 with via-IR and the optimizer, so it is in the affected range, and a source level screen cannot settle it. A difference would mean a stale load or a dropped store in code that moves pool funds on all 21 networks. The test compiles this repository twice and compares no other copy of the code. It refines lead L-028.",
+   "priority": "medium"
+  }
+ ]
+}

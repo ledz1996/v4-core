@@ -1,0 +1,91 @@
+{
+ "unit": "op-stack-eth",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I fetched the four cited contract sources and reran the chain queries on 22 November 2026. L2ToL1MessagePasser.sol on the develop branch has RECEIVE_DEFAULT_GAS_LIMIT = 100000 at line 21 and a receive function at lines 60-62 that calls initiateWithdrawal(msg.sender, RECEIVE_DEFAULT_GAS_LIMIT, bytes('')). initiateWithdrawal records msg.sender as sender and the first argument as target, so a payout from the PoolManager names the PoolManager address as the L1 target. StakeManager.sol at tag v0.7.0 has receive() calling depositTo(msg.sender) at lines 42-44, balanceOf returning deposits[account].deposit at lines 38-40 and withdrawTo debiting deposits[msg.sender] at lines 134-146. EntryPoint.sol at v0.7.0 lowers a sender deposit at line 504 after the validateUserOp call at line 490 and a paymaster deposit at line 535 before the validatePaymasterUserOp call at line 538, and a revert of either call ends in FailedOpWithRevert (lines 496 and 547), which undoes the debit. L1BlockNumber.sol has payable receive and fallback functions that return the L1 block number as one word and no other state changing function. On chain I used eth_call with the PoolManager code overridden by a forwarding stub, so the target saw the PoolManager as msg.sender and a separate tx.origin. On all seven chains a 0.001 ETH call with empty calldata succeeds at L2ToL1MessagePasser, at EntryPoint v0.6, v0.7 and v0.8, at L1BlockNumber and at the fee vaults, and reverts at L2StandardBridge with 'StandardBridge: function can only be called from an EOA'. On OP Mainnet and Base a Multicall3 call showed the effect: balanceOf(PoolManager) at each of the three EntryPoints went from 0 to 1000000000000000 after the value call, and messageNonce() of the message passer rose by one (0x8b67 to 0x8b68 on OP Mainnet, 0x209c2 to 0x209c3 on Base). transfer(address,uint256) from the PoolManager reverts at all three EntryPoints on all seven chains, and L1BlockNumber answers transfer and balanceOf with the L1 block number (0x193eea2 at the time), which is never 1. On Ethereum, eth_getCode is empty and the nonce is 0 at all seven PoolManager addresses, and eth_getBalance at 0x498581ff718922c3f8e6a244956af099b2652b2b is 58773641109313318 wei. I found no primary source that contradicts the finding. I did not read the EntryPoint v0.6 and v0.8 sources and rely on the eth_call results for those two versions.",
+   "codeCheck": "take requires only the unlocked flag, debits msg.sender by amount and then transfers (src/PoolManager.sol:291-297). For currency address(0) the transfer is call(gas(), to, amount, 0, 0, 0, 0) and reverts only if that call fails (src/types/Currency.sol:45-53). Nothing in that path looks at the recipient, so a recipient that accepts the value and books it to msg.sender leaves the PoolManager as the owner of the deposit or withdrawal. The debit is a negative delta of the caller under address(0). unlock reverts while any delta is open (src/PoolManager.sol:112), and a native debt can be closed only by settle with msg.value while the synced currency is zero (src/PoolManager.sol:353-354, 364), by burning address(0) claims (332-336) or by a pool credit, so the caller pays the full amount. Step 6 also holds. sync has no lock check and stores balanceOf(PoolManager) of any address that returns 32 bytes (src/PoolManager.sol:279-288, src/types/Currency.sol:90-96). After the native payout to the EntryPoint, settle with zero value computes reservesNow - reservesBefore = amount, resets the synced currency and credits that amount under the EntryPoint id (src/PoolManager.sol:356-364). The credit can be minted as a claim (322-329). It can never be paid out, because take would call transfer on the EntryPoint, which reverts, and the transfer check then reverts with ERC20TransferFailed (src/types/Currency.sol:64-86). I looked for a guard that the finding missed and found none that applies: the msg.value check at line 356 only blocks a native settle while an ERC-20 is synced, the int128 cast at line 294 only bounds amount below 2^127, and the delta count check is what forces the caller to pay. I also looked for a way to turn this against other users and found none in core: the recipient of a take is an argument of the caller, the hook split and fee collection never send native value to an address chosen by a third party (src/PoolManager.sol:177-183, 220-226, src/ProtocolFees.sol:44-57), and the PoolManager balance of ETH ends where it started.",
+   "corrections": "No change to actor or severity. The actor value unprivileged is right in the sense that no role is needed, and the reader should note that the only party who loses is the account that named the recipient, so this finding gives no path to funds of other users. Three additions. First, the value call succeeds on all seven chains, where the finding reports results for OP Mainnet, Base and Unichain only. Second, take(address(0), L2ToL1MessagePasser, 0) also succeeds, creates no debt because a zero delta is skipped (src/PoolManager.sol:369), and still makes the PoolManager start a zero value withdrawal and raise the message nonce. It carries empty data and the PoolManager address as target, which has no code on Ethereum, so it gives no authority on L1. Third, L1BlockNumber is a proxied predeploy, so the statement that no function pays the ETH out holds for the current implementation, and the chain's proxy admin could change that.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L2/L2ToL1MessagePasser.sol",
+     "supports": "receive() at lines 60-62 calls initiateWithdrawal(msg.sender, RECEIVE_DEFAULT_GAS_LIMIT, bytes('')) with the limit 100000, and the withdrawal records msg.sender as sender and as target"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/eth-infinitism/account-abstraction/v0.7.0/contracts/core/StakeManager.sol",
+     "supports": "receive() calls depositTo(msg.sender), balanceOf returns the deposit, withdrawTo debits the deposit of its own caller"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/eth-infinitism/account-abstraction/v0.7.0/contracts/core/EntryPoint.sol",
+     "supports": "a sender or paymaster deposit is lowered only in the validation step around validateUserOp and validatePaymasterUserOp, and a revert of those calls reverts the operation"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/legacy/L1BlockNumber.sol",
+     "supports": "receive and fallback are payable and return the L1 block number, and the contract has no function that sends ETH"
+    },
+    {
+     "url": "https://mainnet.optimism.io",
+     "supports": "eth_call with the PoolManager as msg.sender through a code override: value call results at the message passer, EntryPoints, L1BlockNumber, fee vaults and L2StandardBridge, the EntryPoint deposit rising from 0 to 1000000000000000, and messageNonce rising from 0x8b67 to 0x8b68"
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "the same eth_call results on Base, with messageNonce rising from 0x209c2 to 0x209c3"
+    },
+    {
+     "url": "https://mainnet.unichain.org",
+     "supports": "the same value call, balanceOf and transfer results on Unichain"
+    },
+    {
+     "url": "https://rpc.zora.energy/",
+     "supports": "the same value call, balanceOf and transfer results on Zora"
+    },
+    {
+     "url": "https://worldchain-mainnet.g.alchemy.com/public",
+     "supports": "the same value call, balanceOf and transfer results on World Chain"
+    },
+    {
+     "url": "https://rpc-gel.inkonchain.com",
+     "supports": "the same value call, balanceOf and transfer results on Ink"
+    },
+    {
+     "url": "https://rpc.soneium.org",
+     "supports": "the same value call, balanceOf and transfer results on Soneium"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "empty code and nonce 0 at the seven PoolManager addresses on Ethereum, and a balance of 58773641109313318 wei at 0x498581ff718922c3f8e6a244956af099b2652b2b"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Whether a B20 transfer made by a take survives when the surrounding call frame reverts, which would let a caller keep tokens while the PoolManager's delta is rolled back.",
+   "agrees": true,
+   "note": "Tested on Base with one eth_call to Multicall3 and the PoolManager code overridden by a stub. With a stub that forwards transfer(recipient, 1000000) to OUSD at 0xB2000000000000000000002fEb517dFeC7415344 and returns, the recipient balance went from 0 to 1000000 and the PoolManager balance fell from 5339760947620 to 5339759947620. With a stub that makes the same transfer and then reverts, the inner transfer returned true, the frame reverted, and both balances read afterwards in the same call were unchanged (0 and 5339760947620). The precompile write is therefore undone with the frame, the same as contract storage, and the delta at src/PoolManager.sol:294 and the token movement at line 295 cannot be separated by a revert. eth_getCode at the token returns the single byte 0xef. Source for the result: https://mainnet.base.org/ at the head block on 22 November 2026."
+  },
+  {
+   "check": "Sweep of 38 predeploy slots, 20 precompile addresses and 26 preinstalled or reserved addresses with msg.sender set to the PoolManager and a separate tx.origin, for the call shapes P1, P2, P3 and P5: does any target accept a token style call and move value that the caller does not owe.",
+   "agrees": true,
+   "note": "I reran a wider sweep: all 2,048 addresses from 0x4200000000000000000000000000000000000000 to 0x42000000000000000000000000000000000007ff on each of the seven chains, with the PoolManager as msg.sender through a code override, for five shapes (empty calldata with 0.001 ETH, empty calldata without value, transfer of 0, transfer of 1, balanceOf(PoolManager)). The only addresses that do not revert are the ones the research lists: WETH at slot 0x06, the fee vaults at 0x11, 0x19, 0x1a and 0x1b, L1BlockNumber at 0x13, L2ToL1MessagePasser at 0x16 and the governance token slot 0x42 (a token on OP Mainnet, Zora, World Chain, Ink and Soneium, no code on Unichain, a revert on Base). transfer returns true only at WETH and the governance token, and L1BlockNumber returns the L1 block number, which fails the test at src/types/Currency.sol:68. The code argument also holds without the sweep: every take debits the caller by amount before the call (src/PoolManager.sol:294), and a credit needs a rise of balanceOf(PoolManager) between sync and settle (src/PoolManager.sol:358-360), so a target matters only if a call the PoolManager can be made to send raises such a balance by more than the caller is debited. None of the answering targets does that. Limits of my rerun: each sub-call had a gas cap of 300,000, I did not repeat the ten hook selectors, and among the preinstalled addresses I retested only the three EntryPoints."
+  },
+  {
+   "check": "Cycle 1 lead: does the execution client source reset transient storage at the start of every transaction, including user deposits, failed deposits and rejected transactions (assumption A1).",
+   "agrees": true,
+   "note": "Source: revm main crates/context/src/journal/inner.rs calls transient_storage.clear() in commit_tx (line 158), discard_tx (line 192) and finalize (line 250), and the journal revert at lines 625-638 restores transient entries. op-revm handler.rs at commit 72fcf9479ea7ee1105b823d23da8bf58ba58136d calls commit_tx in execution_result (line 428), discard_tx in the error path (line 501), and for a failed deposit checkpoint_revert followed by commit_tx (lines 524-535). The Base handler at v1.5.6 has the same three calls (lines 340, 368-377, 386). The workspace at that op-revm commit pins revm 43.0.3, and I read revm at main, so the exact pinned revision of inner.rs is unconfirmed. I added a chain test that does not depend on the commit: eth_simulateV1 with two calls in one simulated block against an overridden stub, where the first call runs TSTORE(0, 1) and the second returns TLOAD(0). The second call returned 0 on OP Mainnet, Base, Unichain, Zora, Ink and Soneium. This covers OP Mainnet, whose endpoint does not report a commit. The World Chain endpoint refused eth_simulateV1, so that chain rests on the source reading only. In the code, the lock flag is cleared and all deltas are zero when unlock returns (src/PoolManager.sol:112-113), so the synced currency and reserves are the only values that a missing reset could carry over."
+  },
+  {
+   "check": "Faces, native asset with the read only LegacyERC20ETH view: orders not listed in cycle 1, namely a native take before sync(LegacyERC20ETH), and inflows that the PoolManager itself can be made to cause.",
+   "agrees": true,
+   "note": "On OP Mainnet and Zora the address 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000 has 3,671 bytes of code, balanceOf(PoolManager) returns the native balance (247.90 ETH on OP Mainnet), transfer from the PoolManager reverts with 'LegacyERC20ETH: transfer is disabled' and a value call with empty calldata reverts. On the other five chains the address has no code. In the code, settle and settleFor are the only payable functions (src/PoolManager.sol:300-307), a settle with value reverts while the legacy id is synced (line 356), and a native credit equals msg.value only while the synced currency is zero (lines 353-354), so one payment cannot be counted under both ids. I walked the order take, sync(legacy), forced return of the same ETH by SELFDESTRUCT, settle: the caller ends with a native debt and an equal legacy credit, and the legacy credit cannot be paid out because take reverts at src/types/Currency.sol:82-86. The sweep above found no predeploy that sends ETH to its caller on an empty call, a transfer call or a balanceOf call. The legacy contract source is no longer on the develop branch (HTTP 404), so its behaviour is taken from eth_call."
+  },
+  {
+   "check": "Whether anyone other than the token issuer can move the PoolManager's B20 balance: allowance, permit, factory privilege, or the shared Policy Registry.",
+   "agrees": true,
+   "note": "I read b20_stablecoin/logic/v3.rs and dispatch.rs at tag v1.5.6. transfer uses ctx.caller() as the source account (v3.rs lines 209-232). transfer_from reads allowance(from, caller) and reverts with InsufficientAllowance below the amount (lines 234-273). approve writes the allowance of the caller only (lines 275-293). permit recovers a signer and requires it to equal the owner before it calls approve (lines 678-694). The PoolManager sends only transfer, balanceOf, hook selectors and unlockCallback (src/types/Currency.sol:60-73 and 94, src/libraries/Hooks.sol:131-134, src/PoolManager.sol:110), so it never sets an allowance. On chain at OUSD: transferFrom(PoolManager, other, 1) from an unrelated account reverts with selector 0x192b9e4e, allowance(PoolManager, x) is 0 for the two spenders I tried, burn(1) from an unrelated account reverts with a missing role error, a transfer from the PoolManager to itself returns true and leaves its balance unchanged, and transfers to the token address and to the zero address revert with 0x9cfea583. I did not reread the factory and Policy Registry parts of this cleared item."
+  }
+ ],
+ "leads": []
+}

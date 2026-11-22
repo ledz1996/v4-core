@@ -1,0 +1,123 @@
+{
+ "unit": "arbitrum-family",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I queried both chains on 2026-11-22. On Elysium the token 0xb47c4C8F73F009CC0C0d3f92B388d13E293F0B65 returns l1Address() 0xb88339CB7199b77E23DB6E890353E22632Ba630f and l2Gateway() 0x5DC84e4Cb0F9082246E92a5585C5395592B1aF1f, a total supply of 4,047,748 and a PoolManager balance of 182,936. It reverts on isBlacklisted, blacklister, pauser, paused and owner, so the token itself has no block list. On HyperEVM the parent token names 0x33aa4e959132e49552cb754fb6585bdcdf874beb as blacklister, the gateway 0xd97B30dE0bA0C2eAeE942afce77530e06c5F122c holds 4,273,238 USDC, its counterpartGateway() is the Elysium gateway above, isBlacklisted(gateway) is false, and blacklist(gateway) from an arbitrary sender reverts with 'Blacklistable: caller is not the blacklister'. The Elysium documentation page says the canonical bridge locks the token in the standard gateway on HyperEVM, that the gateway holds the escrow itself, and lists both USDC addresses. I did not simulate a blacklist entry for the gateway followed by a withdrawal. That step rests on the FiatToken transfer rule, which I confirmed on Arbitrum One USDC in the check of finding 1.",
+   "codeCheck": "sync stores balanceOf(PoolManager) for any currency address (src/PoolManager.sol:279-288), _settle credits the rise in that balance (src/PoolManager.sol:358-364) and take calls transfer on the currency (src/PoolManager.sol:291-297, src/types/Currency.sol:55-87). None of these reads anything about the token except balanceOf and the transfer result, so a representation that keeps transferring on Elysium keeps working in every pool after its backing is blocked on the parent chain. No funds leave the PoolManager and no call reverts, as the finding says.",
+   "corrections": "The figures moved since the research queries: the PoolManager balance is 182,936 USDC, and the gateway holds 4.27M against a supply of 4.05M. One further control exists that the finding does not list. The Elysium token is a beacon proxy (beacon 0x659f40efd07d70224b7ac61e4721f6f3e11b625e, implementation 0xbd080eef044a3e6226757487c5cef33568afefd6). The beacon owner is the proxy contract 0xce4ceced412aa9359840c7d52bbd99827a5d42b9, which can replace the logic of the token. I did not identify who controls that contract. This is a governance class control and does not change the actor or the severity.",
+   "sources": [
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz eth_call l1Address(), l2Gateway(), totalSupply(), balanceOf(PoolManager), isBlacklisted(address), blacklister(), pauser(), owner() on 0xb47c4C8F73F009CC0C0d3f92B388d13E293F0B65, eth_getStorageAt of the beacon slot, owner() and implementation() on the beacon, queried 2026-11-22",
+     "supports": "The Elysium token is a gateway representation of the HyperEVM token with no block list, a supply of 4.05M and a PoolManager balance of 182,936, and it is a beacon proxy."
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_call blacklister(), balanceOf(gateway), isBlacklisted(gateway), blacklist(gateway) from 0x00000000000000000000000000000000000a11ce on 0xb88339CB7199b77E23DB6E890353E22632Ba630f, and counterpartGateway() on 0xd97B30dE0bA0C2eAeE942afce77530e06c5F122c, queried 2026-11-22",
+     "supports": "The parent token has a blacklister, the gateway holds 4.27M and is not listed, and only the blacklister can list it."
+    },
+    {
+     "url": "https://elysium.kinetiq.xyz/docs/bridging-hyperevm-tokens-to-elysium",
+     "supports": "The token locks in the standard gateway on HyperEVM, the gateway holds the escrow itself, and the page lists the two USDC addresses."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "I queried Arbitrum One on 2026-11-22 and ran two simulations with eth_simulateV1. USDC returns blacklister() 0xac5b4946a8c29eafb42e1742b3ab82e6d5771329 and isBlacklisted(PoolManager) false, and blacklist(PoolManager) from an arbitrary sender reverts with 'Blacklistable: caller is not the blacklister'. In a simulation the blacklister lists the PoolManager, after which a 1 unit transfer from the PoolManager reverts with 'Blacklistable: account is blacklisted', and a 1 unit transfer to the PoolManager from another holder reverts with the same message. USDC therefore blocks both directions, which the finding left untested. USDT0 returns owner() 0x4dff9b5b0143e642a3f63a5bcf2d1c328e600bf8 and isBlocked(PoolManager) false, and addToBlockedList and destroyBlockedFunds revert for an arbitrary sender with 'Ownable: caller is not the owner'. In a simulation the owner blocks the PoolManager, a transfer from the PoolManager reverts with 'TetherToken: from is blocked', destroyBlockedFunds succeeds and balanceOf(PoolManager) reads zero afterwards. PYUSD returns isFrozen(PoolManager) false and freeze from an arbitrary sender reverts with a missing role error. cbBTC returns blacklister() 0x2b1565cd8bf6b5126cedb5000bc2d855bcbcedb8 and isBlacklisted(PoolManager) false. Balances at the PoolManager were 8.80M USDC, 0.96M USDT0, 25,779 PYUSD and 15.11 cbBTC. I did not simulate a freeze on PYUSD or cbBTC.",
+   "codeCheck": "take debits the caller and then calls Currency.transfer (src/PoolManager.sol:291-297). For an ERC-20 the call result must be success with empty return data or a 32 byte value of 1, and anything else reverts with a wrapped ERC20TransferFailed (src/types/Currency.sol:64-86). collectProtocolFees uses the same transfer (src/ProtocolFees.sol:44-56). A blocked PoolManager therefore cannot pay out the token through any path. mint lowers the caller's delta and writes an ERC-6909 balance without calling the token (src/PoolManager.sol:322-329, src/ERC6909.sol:79-83), so a provider can still remove liquidity and hold the blocked side as claims. _settle credits only a measured rise in balanceOf (src/PoolManager.sol:358-360), so when the token also rejects the PoolManager as recipient no debt in that token can be paid and swaps that pay it in revert. A burn of the PoolManager balance by the issuer lowers balanceOf with no delta, and nothing in the code reduces pool amounts, claims or accrued fees to match.",
+   "corrections": "The balances moved since the research queries. For USDC the block applies to transfers in both directions. The actor and the severity stand: only the role holders can act, and the scale puts a freeze that needs a token issuer at high.",
+   "sources": [
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_call blacklister(), isBlacklisted(PoolManager), blacklist(PoolManager) on USDC 0xaf88d065e77c8cC2239327C5EDb3A432268e5831, and eth_simulateV1 with blacklist by the blacklister followed by transfers from and to the PoolManager, queried 2026-11-22",
+     "supports": "Only the blacklister can list the PoolManager, and a listed PoolManager can neither send nor receive USDC."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_call owner(), isBlocked(PoolManager), addToBlockedList and destroyBlockedFunds from an arbitrary sender on USDT0 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9, and eth_simulateV1 with addToBlockedList, transfer, destroyBlockedFunds and balanceOf, queried 2026-11-22",
+     "supports": "The USDT0 owner can block the PoolManager and destroy its balance, and no other account can."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_call isFrozen(PoolManager) and freeze(PoolManager) on PYUSD 0x46850aD61C2B7d64d08c9C754F45254596696984, blacklister() and isBlacklisted(PoolManager) on cbBTC 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf, balanceOf(PoolManager) on all four tokens, queried 2026-11-22",
+     "supports": "PYUSD freeze is role gated, cbBTC has a blacklister, the PoolManager is not listed on either, and the balances are as stated."
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I queried Arbitrum One on 2026-11-22. aArbUSDT 0x6ab707Aca953eDAeFBc4fD23bA73294241490620 returns balanceOf(PoolManager) 1,504.63 and scaledBalanceOf(PoolManager) 1,214.96, and aArbUSDCn 0x724dc807b04555b71ed48a6896b6F41593b8C637 returns 443.31 and 373.89. Both name 0x794a61358D6845594F94dc1DB02A252b5b4814aD as POOL(). That pool returns FLASHLOAN_PREMIUM_TOTAL() 5, FLASHLOAN_PREMIUM_TO_PROTOCOL() 10000 and POOL_REVISION() 12, and it reverts with empty data on backUnbacked and mintUnbacked, so the bridge path that once added to the supplier index is not present. The Aave v3.4 proposal says the part of the flash loan fee that went to suppliers was removed and that yield accrual becomes the only entry point for a liquidity index increase. The Aave documentation says yield is distributed by continuously increasing the holder's balance. I did not read the Aave pool source at revision 12, so the statement that no call inside one transaction raises the index rests on the proposal text and the two on-chain settings.",
+   "codeCheck": "sync records balanceOf(PoolManager) at the moment of the call (src/PoolManager.sol:285-286) and _settle credits reservesNow minus that record (src/PoolManager.sol:358-360). Transient storage does not outlive the transaction, so the record and the settle always fall in one transaction and one block timestamp. A balance that grows only with time is therefore fully inside the record and never produces a credit. I looked for any other path that pays out balance above the recorded amounts and found none: take debits the caller the full amount (src/PoolManager.sol:294-295), burn needs existing claims (src/PoolManager.sol:332-336), collectProtocolFees is limited to protocolFeesAccrued (src/ProtocolFees.sol:54-56), and a sync of address zero only clears the currency slot (src/PoolManager.sol:281-283, src/libraries/CurrencyReserves.sol:21-25). The accrued interest stays in the PoolManager balance and belongs to no pool, claim or caller.",
+   "corrections": "The actor value unprivileged is acceptable only in the sense that no privilege is needed. No account acts and no account gains. Nothing is taken from the PoolManager and nothing is frozen, so this item is outside the goal of the review and should be reported as lost yield for providers who choose a rebasing currency. The scaled balance of aArbUSDT read 1,214.96 at my query against 1,214.98 in the finding. The warning in the preconditions is the part worth keeping: a token whose balanceOf(PoolManager) can be raised by a call that any account may make inside a transaction would let that account collect the PoolManager's share through sync and settle. Lead 5 of the research file covers the search for such a token and I add what I found on xUSD as a lead.",
+   "sources": [
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_call balanceOf(PoolManager), scaledBalanceOf(PoolManager), POOL(), UNDERLYING_ASSET_ADDRESS() on aArbUSDT and aArbUSDCn, and FLASHLOAN_PREMIUM_TOTAL(), FLASHLOAN_PREMIUM_TO_PROTOCOL(), POOL_REVISION(), backUnbacked, mintUnbacked on 0x794a61358D6845594F94dc1DB02A252b5b4814aD, queried 2026-11-22",
+     "supports": "The PoolManager holds aTokens whose balance exceeds the scaled balance, the whole flash loan premium goes to the protocol, and the pool has no bridge functions."
+    },
+    {
+     "url": "https://governance.aave.com/t/arfc-bgd-aave-v3-4/21572",
+     "supports": "Aave v3.4 removed the flash loan fee component that went to suppliers, and yield accrual is the only way the liquidity index rises."
+    },
+    {
+     "url": "https://aave.com/docs/aave-v3/smart-contracts/tokenization",
+     "supports": "Yield is distributed to aToken holders by continuously increasing their balance."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "P2, P3 and P4 with a special address as currency: can transfer succeed while moving something the caller is not debited for, or can balanceOf rise between sync and settle without a payment.",
+   "agrees": true,
+   "note": "I swept 342 addresses on Arbitrum One and on Robinhood Chain (0x01 to 0x12f, 0x7f0 to 0x811, 0x1000, 0x1001, 0x2000, 0xa4b05, 0xa4b06) and 42 addresses on Elysium (0x01 to 0x11, 0x64 to 0x74, 0xc8, 0xc9, 0xff, 0x100, 0x800, 0x801, 0x80f, 0xa4b05) with from set to the PoolManager and the calldata of transfer(address,uint256) and balanceOf(PoolManager). The Elysium endpoint limits request rates, which is why the set is smaller there. Only 0x02, 0x03 and 0x04 return data to balanceOf (32, 32 and 36 bytes). Their answers to transfer are a hash, a padded hash and an echo of the calldata, and none is the value 1 that Currency.sol:68 requires. 0x01 and every address without code return empty data to both calls, so transfer counts as success and moves nothing, and sync reverts when it decodes the empty answer (Currency.sol:94). 0x05 to 0x11 fail on the input. Every ArbOS precompile address (0x64 to 0x69, 0x6b to 0x74, 0xff, 0xa4b05) reverts on both calls on all three chains. The dispatcher source at v3.11.3 shows why: an unknown selector returns ErrExecutionReverted with zero gas left (precompiles/precompile.go lines 747-752). My direct calls to 0xc8 and 0xc9 are answered by the node's own interface and say nothing about calls made from a contract. No address in the sweep gives a constant that changes between sync and settle. The public endpoints of Arbitrum One and Robinhood Chain now report nitro v3.13.0-rc.9, later than the v3.11.3 source that was read. The sweep reflects the running build."
+  },
+  {
+   "check": "A3 faces: every way one balance at the PoolManager can be reached under two currency ids, walked through sync, settle, take, mint and burn in both orders.",
+   "agrees": true,
+   "note": "On each chain I simulated a 1e18 native transfer with empty calldata from the PoolManager to the wrapped token (0x82aF49447D8a07e3bd95BD0d56f35241523fBab1, 0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73, 0xbA876237B0F021A6c6D852d6c26E107997cC5E81). balanceOf(PoolManager) on the wrapper rose by exactly 1e18 and fell by exactly 1e18 after a transfer out. totalSupply() equals the native balance of the wrapper to the wei on all three chains, so the wrapper keeps its own ledger and is backed one for one. In the code a native take debits the caller the full amount under currency address zero before the call (PoolManager.sol:294-295). A wrapper credit needs a sync of the wrapper before and a settle after, and that settle credits the same amount under the wrapper id (PoolManager.sol:358-364). The caller then holds a wrapper credit and an equal native debt, and the native debt can only be cleared with msg.value after the currency slot is reset (PoolManager.sol:353-356). I found no order that yields a credit without an equal payment. No ArbOS precompile answers balanceOf, so the protocol has no second form of the native asset on these chains."
+  },
+  {
+   "check": "A1 at the pinned commit: does any Nitro transaction type run contract code before the transient storage reset, and does a simulated second transaction see the first one's transient storage.",
+   "agrees": true,
+   "note": "I fetched core/state_transition.go and core/state/statedb.go of the Offchain Labs go-ethereum fork at commit f3a966e and arbos/tx_processor.go of Nitro v3.11.3. execute() calls StartTxHook at line 636 and returns at once when the hook ends the transaction. Otherwise it calls StateDB.Prepare at line 737, before RevertedTxHook, evm.Create and evm.Call, and Prepare replaces the transient map at statedb.go line 1599. tx_processor.go contains no evm.Call or evm.Create in any hook. A filtered or pre-recorded reverted transaction skips the EVM call entirely. I repeated the two call simulation with eth_simulateV1 on all three endpoints with a contract placed by state override: TSTORE in the first call, TLOAD in the second, and the second returned zero each time. Two links are unconfirmed. I could not confirm that Nitro v3.11.3 pins commit f3a966e, because github.com pages are not reachable from this session. The public endpoints of Arbitrum One and Robinhood Chain report nitro v3.13.0-rc.9+b72783f, and the source for that tag returned 404 on raw.githubusercontent.com, so the source reading describes an older build than the one that answered the simulation."
+  },
+  {
+   "check": "P1, native take to a special address: does any precompile, predeploy or bridge contract accept value with empty calldata from the PoolManager and return more than the caller is debited.",
+   "agrees": true,
+   "note": "The same sweep sent 1 wei with empty calldata from the PoolManager. Addresses 0x01 to 0x08 and every address without code accept the value. 0x09 to 0x11 and every ArbOS precompile address reject it, which matches the dispatcher rule that input shorter than 4 bytes fails with all gas used (precompiles/precompile.go lines 743-746 at v3.11.3). A simulation on Robinhood Chain and on Arbitrum One showed that EntryPoint 0.7 at 0x0000000071727De22E5E9d8BAf0edAc6f37da032 books 1e18 sent by the PoolManager as balanceOf(PoolManager), reverts on transfer(address,uint256) from the PoolManager and reverts on withdrawTo from another account. The deposit can become a credit under the EntryPoint address as currency and can never be taken, so the caller pays the full native amount and recovers nothing. The cleared item names this for Robinhood Chain only. It is the same on Arbitrum One. take debits before the call (PoolManager.sol:294-295) and I found no recipient that returns value to the caller."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "question": "Which go-ethereum commit does the build nitro v3.13.0-rc.9+b72783f pin, and do StartTxHook, StateDB.Prepare, the precompile dispatcher and the precompile registry in that build match what was read at v3.11.3 and commit f3a966e?",
+   "why": "Both public endpoints report v3.13.0-rc.9 built on 2026-11-16, and the research read the source of v3.11.3. The tag did not resolve on raw.githubusercontent.com in this session. The on-chain probes agree with the older source, yet a new precompile or a changed transaction hook in the running build would not show in a sweep of known addresses.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L3",
+   "question": "Who can call the payout function of the exchanger behind xUSD at 0xe80772Eaf6e2E18B651F160Bc9158b2A5caFCA65, and can the call be made from a contract inside one transaction?",
+   "why": "xUSD is a credit based rebasing token: it answers rebasingCreditsPerTokenHighres() and creditsBalanceOf(address), the PoolManager is in the rebasing state, and changeSupply(uint256) reverts with 'Caller is not the EXCHANGER'. If any account can trigger the supply change, that account can call sync before it and settle after it and take the PoolManager's share of the rebase (src/PoolManager.sol:279-288 and 358-364). The PoolManager holds 62.35 xUSD today, so the amount at risk is small. The role is not enumerable and I did not find the exchanger address.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L3",
+   "question": "Who controls the proxy contract 0xce4ceced412aa9359840c7d52bbd99827a5d42b9 that owns the beacon 0x659f40efd07d70224b7ac61e4721f6f3e11b625e of the standard bridged tokens on Elysium?",
+   "why": "The beacon owner can replace the logic of Elysium USDC and of every other standard gateway representation in one call. The PoolManager holds 182,936 USDC of this kind. This is a governance class control that the research file does not record.",
+   "priority": "low"
+  }
+ ]
+}

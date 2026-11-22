@@ -1,0 +1,210 @@
+{
+ "unit": "hyperevm",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "I read the two verified implementations on Sourcify (exact match for both) and reran the chain reads on 2026-11-22 near block 51,966,500. The EIP-1967 slot of stHYPE (0xfFaa4a3D97fE9107Cef8a3F48c069F577Ff76cC1) holds 0xe71caf5c1fe56d8897c7b604295d23968049e057 and that of wstHYPE (0x94e8396e0869c9F2200760aF0621aFd240E1CF38) holds 0x104324863cfb2220756c60384efa9bb67a57aaf7. wstHYPE.sol keeps no balances: balanceOf returns sthype.sharesOf(who) / 1e6 (line 149) and _transfer calls sthype.transferShares(from, to, amount * 1e6) (line 110). stHYPE.sol stores shares, converts with totalSupplyRaw over totalShares (lines 442 to 459), interpolates the supply over syncStart to syncEnd (lines 495 to 513), applies a lower supply at once in syncSupply (lines 400 to 404), restricts syncSupply to REBASER_ROLE (line 394) and blocks transfer and transferShares while transferPaused is set (lines 264 to 288). On chain: stHYPE totalSupply 2,275,416.78, wstHYPE totalSupply 2,192,579.21, ratio 1.03778, balancePerShare 1.037780935902397401, syncEnd minus syncStart 82,800 seconds, rewardsToSync 123.556 HYPE, transferPaused false. sharesOf(PoolManager) and both balanceOf(PoolManager) are zero. rebase() on the Overseer 0xB96f07367e69e86d6e9C3F29215885104813eeAE reverts with AccessControlUnauthorizedAccount (0xe2517d3f) for role 0x5fde63b5...0b75 from an unrelated address and from the PoolManager, and that role value equals keccak256 of REBASER_ROLE. pendingSlashExists() exists and returns false. The issuer page states that the two tokens are two interfaces to the same data, that a transfer of one performs the same action for the other, and warns about multi entry point tokens. The Hyperliquid staking page states that no automatic slashing is implemented at present. I also ran one creation style eth_call that reads stHYPE.balanceOf of a third holder, calls Overseer.mint(address) with 1 HYPE, reads again, calls burnAndRedeemIfPossible and reads again. Both calls succeeded and the holder balance stayed at 106401669038400087184 in all three reads, so a public mint or burn does not move the rate inside one execution. I did not simulate Overseer.redeem(uint256) and the Overseer implementation 0x2b8698dd4b8addf7ddcabc46c6aedafe5a70b11c is not verified, so the statement that only the rebaser can move the rate rests on these simulations and on the role gate in stHYPE.",
+   "codeCheck": "The PoolManager keys every delta on the pair of caller and currency address (src/libraries/CurrencyDelta.sol:10-16 and 28-41) and every claim on uint160 of the currency (src/PoolManager.sol:322-336, src/types/Currency.sol:110-118), so the two token addresses are two unrelated ids. take debits the id it names and calls transfer on that contract (src/PoolManager.sol:291-297, src/types/Currency.sol:55-87); both contracts return a 32 byte true to the PoolManager for a zero amount transfer, which the success test at Currency.sol:64-74 accepts. A credit is the rise of one balanceOf between sync and settle (src/PoolManager.sol:279-288 and 349-365), the subtraction at line 360 is checked, and one transient slot holds the synced currency (src/libraries/CurrencyReserves.sol:27-32), so one deposit of shares gives one credit. I looked for a guard that would stop the loss shift and found none: nothing in src compares the shares held with the sum owed under both ids, and no function reconciles pool state with a token balance. I also looked for an unprivileged variant. The rate is a function of block.timestamp and four storage fields that only syncSupply, mint and burn write, mint and burn keep the rate (stHYPE.sol lines 244 to 256 with the conversion at 442 to 447), and my simulation agrees. The three effects in the finding follow: a fixed stHYPE amount owed while the rate grows leaves yield in the PoolManager, a lower supply makes the same stHYPE amount cost more shares, which a take under the stHYPE id draws from the common share balance, and a pause stops transferShares, which stops wstHYPE transfers as well.",
+   "corrections": "The actor issuer is correct for the loss shift and for the freeze, since both need a call by a holder of REBASER_ROLE or PAUSER_ROLE, and the slash that would lead to a lower supply is not available to an ordinary account. An ordinary account that deposits under the stHYPE id before such a rebase gains only if that rebase happens. Medium fits because the PoolManager holds neither token today and the loss needs pools or claims under both ids. The statement about slashing is backed by the Hyperliquid staking page, which the finding did not cite.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/999/0xe71caf5c1fe56d8897c7b604295d23968049e057?fields=sources,compilation",
+     "supports": "stHYPE implementation, exact match: shares, transfer, transferShares gated by WRAPPER_ROLE, syncSupply gated by REBASER_ROLE with the immediate branch for a lower supply, linear interpolation, pauseTransfer"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/999/0x104324863cfb2220756c60384efa9bb67a57aaf7?fields=sources,compilation",
+     "supports": "wstHYPE implementation, exact match: balanceOf reads stHYPE.sharesOf divided by 1e6, transfer calls stHYPE.transferShares"
+    },
+    {
+     "url": "https://docs.valantis.xyz/stakedhype/integrate/wsthype",
+     "supports": "Issuer statement that stHYPE and wstHYPE are different interfaces to the same data and the warning about multi entry point tokens"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_getStorageAt implementation slot, eth_call totalSupply, balanceOf(PoolManager), sharesOf(PoolManager), syncStart, syncEnd, rewardsToSync, transferPaused, balancePerShare, hasRole on stHYPE; rebase() and pendingSlashExists() on the Overseer",
+     "supports": "Ratio 1.03778, interval 82,800 seconds, 123.556 HYPE of rewards, PoolManager holds no shares, rebase reverts for callers without the role"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_call creation probe from the zero address with 2 HYPE: balanceOf(0x40db8941e90c5a540c52159d9f3b9ad4417364b3) on stHYPE before and after Overseer.mint(address) and burnAndRedeemIfPossible",
+     "supports": "Public mint and burn succeed and leave a third holder's stHYPE balance unchanged inside one execution"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/staking.md",
+     "supports": "There is currently no automatic slashing implemented"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "The Hyperliquid transfers page states that a HyperCore to HyperEVM transfer is credited by a system transaction that calls transfer(recipient, amount) on the linked contract as the system address, that it costs 200k gas at the base gas price of the next HyperEVM block, that the linked contract may have arbitrary bytecode and that nothing is guaranteed about what the transfer call does. In the archive client, src/node/types/mod.rs lines 83 to 101 split a block body into the first system_tx_count transactions and the rest, src/node/evm/executor.rs lines 225 to 227 add gas to the block total only when is_system_transaction is false, and lines 39 to 43 define a system transaction as one with gas price zero. On chain I read eth_getSystemTxsByBlockNumber for 40 blocks ending at 51,966,640. Four system transactions came from 0x2000000000000000000000000000000000000157 and called transfer on the linked contract 0x33af3c2540ba72054e044efe504867b39ae421f5 with 200,000 gas and gas price 0. In block 51,966,623, which holds two system transactions, the first signed transaction has cumulativeGasUsed equal to its own gasUsed (325,780), so the system transactions are not counted. The public RPC returns no receipt for a system transaction hash, so the statement that they execute before the signed transactions rests on the block layout in the archive client and its README. spotDeployState returns a gas auction with startGas 500.0, endGas 500.0 and currentGas null; the finding quotes currentGas 500.0. The dual block page states that the HyperEVM mempool is onchain state of the L1, which is relevant to whether pending transactions can be seen. I found no source that contradicts the finding.",
+   "codeCheck": "unlock is open to any caller and calls unlockCallback on msg.sender (src/PoolManager.sol:104-114). swap, modifyLiquidity, take, settle, mint and burn check only the unlock flag (src/PoolManager.sol:96-99, 187-227, 291-336). No line in src outside src/test reads tx.origin or compares msg.sender with a fixed address other than the hook self call test (src/libraries/Hooks.sol:171-175) and the owner and controller tests (src/ProtocolFees.sol:29 and 36 and 48). A linked contract that runs inside a system transaction is therefore an ordinary caller. It must leave every delta at zero before unlock returns (src/PoolManager.sol:112), so it pays for what it takes. The pinned revm fork clears transient storage in commit_tx, so the unlock flag, deltas and synced currency do not carry into the first signed transaction. The effect is position in the block and nothing else: reserves, positions and claims of other users are not reachable through this path.",
+   "corrections": "The finding's own open points stay open: I did not measure whether an unlock with a swap and settlement in claims fits in 200,000 gas, and I did not confirm the order of several system transactions or how early a HyperCore action must be sent to land ahead of a given signed transaction. One addition: the exchange API documents a sendToEvmWithData action that calls coreReceiveWithData on the linked contract with a gasLimit and a data field chosen by the sender, so the 200,000 gas figure may not bound what a linked contract can do at the top of a block. The auction field that reads 500.0 is startGas and endGas. This is an ordering hazard for swappers within their own price limits and is no path to funds held for other users.",
+   "sources": [
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers",
+     "supports": "System transaction calls transfer on the linked contract as the system address, 200k gas, linked contract may have arbitrary bytecode"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/types/mod.rs",
+     "supports": "Lines 83 to 101: the first system_tx_count transactions of a block are the system transactions"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/evm/executor.rs",
+     "supports": "Lines 39 to 43 and 225 to 227: a system transaction has gas price zero and its gas is left out of the block total"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_getSystemTxsByBlockNumber for blocks 51,966,600 to 51,966,640; eth_getBlockByNumber and eth_getTransactionReceipt for block 51,966,623",
+     "supports": "System transactions from 0x2000...0157 call transfer on a linked contract with 200,000 gas and gas price 0; the first signed transaction has cumulative gas equal to its own gas"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md",
+     "supports": "sendToEvmWithData calls coreReceiveWithData on the linked contract and carries gasLimit and data fields"
+    },
+    {
+     "url": "https://api.hyperliquid.xyz/info spotDeployState",
+     "supports": "gasAuction startGas 500.0, endGas 500.0, currentGas null on 2026-11-22"
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I reran the calls with the PoolManager as sender on 2026-11-22. 0x0000000000000000000000000000000000000809 has no code and a zero balance, and it answers empty calldata with 1 wei of value, empty calldata without value, the transfer shape and the balanceOf shape with one 32 byte word that holds the L1 block number (0x495e7718 and following). A value call that succeeds leaves the value at that address. EntryPoint v0.7 (16,035 bytes) and v0.6 (23,689 bytes) both accept empty calldata with 1 wei from the PoolManager, answer balanceOf(PoolManager) with a 32 byte zero and revert on transfer(address,uint256). spotMeta lists STHYPE at index 119 with evmContract 0x94e8396e0869c9f2200760af0621afd240e1cf38, the wstHYPE contract, and the transfers page states that an EVM to HyperCore credit is taken from the Transfer log of the linked contract. In the verified source an stHYPE transfer emits Transfer from the stHYPE contract only (stHYPE.sol lines 244 to 256), while a wstHYPE transfer emits one log from each contract (wstHYPE.sol line 112 and stHYPE.sol line 285). The 0x settler changelog has the entry that payouts naming a HyperCore system address revert on HyperEVM unless the payer funds the transfer. That HyperCore credits nobody for an stHYPE transfer to 0x2000000000000000000000000000000000000077 follows from the documented rule and was not observed on chain.",
+   "codeCheck": "take debits the caller before the payout (src/PoolManager.sol:294-295). The native payout is a call with empty calldata and all gas whose only test is the success flag (src/types/Currency.sol:44-53), so a recipient that accepts value ends the matter for the PoolManager. For the EntryPoint id, sync stores balanceOf(PoolManager) (src/PoolManager.sol:285-286), settle credits the rise (lines 358-364), and a take under that id reverts because the EntryPoint reverts on transfer (src/types/Currency.sol:82-86). The credit therefore exists only as a delta or a claim under the EntryPoint address, and deltas and claims of one address cannot pay a debt under another (src/libraries/CurrencyDelta.sol:10-16). The caller still owes the native amount when unlock checks the delta count (src/PoolManager.sol:112). I looked for a way to turn any of these into a gain at the cost of others and found none: anyone can raise the PoolManager's EntryPoint deposit through depositTo, and the result is the same worthless credit paid for in full.",
+   "corrections": "The stHYPE part is a consequence of the documented crediting rule and needs stHYPE in the PoolManager, which holds none. The actor value unprivileged is right in the sense that any caller can do it, and the loser is that caller or the user of a router that passes the recipient through. No other user loses funds.",
+   "sources": [
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_call from 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F to 0x0809 (empty with value 1, empty, transfer, balanceOf), eth_getCode and eth_getBalance of 0x0809",
+     "supports": "0x0809 accepts every shape including a value call and returns the L1 block number"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_call from the PoolManager to 0x0000000071727De22E5E9d8BAf0edAc6f37da032 and 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789",
+     "supports": "Both EntryPoints accept value with empty calldata, answer balanceOf with 32 bytes and revert on transfer"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers",
+     "supports": "EVM to HyperCore credits are based on the Transfer log of the linked contract"
+    },
+    {
+     "url": "https://api.hyperliquid.xyz/info spotMeta",
+     "supports": "STHYPE index 119 is linked to the wstHYPE contract"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xProject/0x-settler/master/CHANGELOG.md",
+     "supports": "On HyperEVM the settler reverts if a payout names a HyperCore system address as recipient unless the payer funds the transfer"
+    }
+   ]
+  },
+  {
+   "findingIndex": 3,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "src/node/evm/mrb.rs in the archive client sets MAINNET_ACTIVATION_BLOCK to 50,988,232 (line 12) and returns multiplier 5 for ECRECOVER, 10 for MODEXP, BN254 add, multiply, pairing and BLAKE2F, and 40 for the KZG point evaluation (lines 64 to 79). src/node/evm/factory.rs replaces MODEXP with the Osaka version and wraps the seven precompiles so that the gas limit is divided and the gas used multiplied by that factor. src/evm/spec.rs maps both spec ids to CANCUN. The release nb-20261110 was published on 2026-11-10 with the line about repricing precompiles at the MRB hard fork and the request to upgrade before 11 November 0:00 UTC on mainnet. I ran the gas probe on both chains on 2026-11-22: ECRECOVER 15,115 on HyperEVM against 3,115 on Ethereum, BN254 add 1,615 against 265, multiply 60,115 against 6,115, pairing with empty input 450,115 against 45,115, MODEXP with empty input 5,115 against 615, and SHA256 and identity equal on both. The dual block page gives 3M gas for fast blocks, 30M for slow blocks and the evmUserModify action. The latest block on the public RPC has gas limit 3,000,000.",
+   "codeCheck": "The raw calls in src outside src/test are the native payout (src/types/Currency.sol:48), the ERC-20 transfer (Currency.sol:73) and the hook call (src/libraries/Hooks.sol:134), and the high level calls are balanceOf (Currency.sol:94 and 102) and unlockCallback (src/PoolManager.sol:110). None targets a precompile, so core gas is unchanged. A hook is called with all remaining gas and a failed call reverts the action (src/libraries/Hooks.sol:131-137). A removal calls the hook before and after (src/PoolManager.sol:156 and 178, src/libraries/Hooks.sol:201-205 and 232-243) and core has no path that skips it. Four pairings cost 45,000 plus 4 times 34,000, which is 181,000 on Ethereum and 1,810,000 with the multiplier, so the arithmetic in the finding is right.",
+   "corrections": "Nothing in the facts. The hazard needs a hook that calls a repriced precompile on the removal path and the finding names none on HyperEVM, so this is a note for hook authors. The actor governance stands for the repricing itself, which validators adopt through a node release.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/evm/mrb.rs",
+     "supports": "Activation block 50,988,232 and the multiplier table"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/evm/factory.rs",
+     "supports": "V2 swaps in the Osaka MODEXP and wraps seven precompiles with the multiplier"
+    },
+    {
+     "url": "https://github.com/hl-archive-node/nanoreth/releases/tag/nb-20261110",
+     "supports": "Release of 2026-11-10 that reprices precompiles at the MRB hard fork"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm and https://ethereum-rpc.publicnode.com eth_call creation probe 0x5a5f5f5f5f61<address>5afa5a60405260205260005260605ff3 for 0x01, 0x02, 0x04, 0x05, 0x06, 0x07, 0x08",
+     "supports": "Measured gas 15,115, 1,615, 60,115, 450,115 on HyperEVM against 3,115, 265, 6,115, 45,115 on Ethereum"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/dual-block-architecture",
+     "supports": "Fast blocks 3M gas, slow blocks 30M gas, evmUserModify"
+    }
+   ]
+  },
+  {
+   "findingIndex": 4,
+   "verdict": "plausible",
+   "severity": "medium",
+   "factCheck": "The aligned quote assets page states that the treasury deployer will designate a treasury address, that both deployers stake 500k HYPE, that activation is by validator vote after both have sent the authorization transactions from the staking accounts, and that the HyperEVM balance is held 9 to 1 between the treasury address and the linked contract. The exchange endpoint page gives authorizeAqav2Role the fields token and role and no address field. On 2026-11-22 the address 0xc20699185c15d0a2fd65779bb5d69f5b0b113c00 had no code, EVM nonce 1,035,948 and 0.012 HYPE, and the info API returned role missing, delegated 0.0 and an empty spot balance list for it. Its USDC balance was 5,023,602,132 and that of the CoreDepositWallet 558,178,017, a ratio of 9.0000. In 40 recent blocks I saw system transactions on the USDC token from both addresses, each with 200,000 gas and gas price 0, and one at block 51,967,072 moved 1,570.52 USDC from the CoreDepositWallet to the treasury address. These facts support that the treasury address is a designated address that has never acted on HyperCore. They do not show how the designation is authorised. I found no source that states whether the designated address must prove control on the EVM side, whether a contract address is accepted, or whether the address can be changed after activation. That link is unconfirmed, as the finding says.",
+   "codeCheck": "If the PoolManager address were the sender of such a transaction, the token would move the PoolManager's balance with no call into the PoolManager. No guard in src would see it: pool state is never compared with a token balance, sync reads the balance only to open a measuring window (src/PoolManager.sol:279-288), and settle credits only a rise inside that window with a checked subtraction (lines 358-360). Later takes of that currency would revert in the token transfer once the balance is short (src/types/Currency.sol:64-86). The code reading in the finding is correct.",
+   "corrections": "The 9 to 1 rule moves tokens toward the treasury address while it holds less than nine times the balance of the linked contract, as the transfer at block 51,967,072 shows. An outflow from a PoolManager named as treasury address would need its balance to exceed that ratio, which the party that controls the linked contract of a new token could arrange. No public source gives the exact rebalancing rule, so the direction and size of the transfers in that case are an inference. The actor operator is right: a validator vote and two staked deployers are needed. Medium is the highest rating the evidence supports while the consent link is open.",
+   "sources": [
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets",
+     "supports": "Treasury deployer designates a treasury address; 500k HYPE stake each; activation by validator vote; 9 to 1 ratio between treasury address and linked contract"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md",
+     "supports": "authorizeAqav2Role has the fields token and role only"
+    },
+    {
+     "url": "https://api.hyperliquid.xyz/info userRole, delegatorSummary, spotClearinghouseState for 0xc20699185c15d0a2fd65779bb5d69f5b0b113c00",
+     "supports": "role missing, delegated 0.0, no balances"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_getCode, eth_getTransactionCount, eth_call USDC balanceOf for the treasury address and the CoreDepositWallet; eth_getSystemTxsByBlockNumber around 51,966,620 and 51,967,072",
+     "supports": "No code, nonce 1,035,948, balances at 9 to 1, system transactions from both addresses on the USDC token"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Assumption A1 for system transactions, including the AQAv2 ones whose sender is the CoreDepositWallet or the treasury address: can an unlock flag, a delta or a stale sync written in one transaction be read by the next transaction of the block?",
+   "agrees": true,
+   "note": "I read the cited files. executor.rs lines 192 to 213 run every transaction through self.evm.transact, the Cargo.toml pins all revm crates to hl-archive-node/revm at fdf9b16bdd4388a680c97440c6e7f085647ece01, and journal/inner.rs of that commit clears transient_storage in commit_tx (line 113), discard_tx (line 144) and finalize (line 178). reth_copy.rs compares gas used, receipts root and logs bloom with the header. One sentence in the client README says that nanoreth does not re-execute blocks. The same paragraph says blocks are imported through new_payload, block_import/service.rs calls engine.new_payload, and consensus/mod.rs calls validate_block_post_execution, so the executor does run on import and the comparison is meaningful. The limit named in the cleared item stands: the validator binary is closed, and a header comparison detects a leak only if some past transaction depended on it. In src the only state that can be left set at the end of a transaction is the synced currency and reserves (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32), and the next sync or ERC-20 settle overwrites or resets it (src/PoolManager.sol:361), so even a leak would give a failed native settle for the next caller and no credit."
+  },
+  {
+   "check": "Can a native payout to WHYPE, whose fallback wraps the value for the sender, leave the PoolManager owing native HYPE that it no longer holds, or give the caller a WHYPE credit it did not pay for?",
+   "agrees": true,
+   "note": "The WHYPE runtime code (2,041 bytes) dispatches only the eleven WETH9 selectors and contains no DELEGATECALL, STATICCALL, BALANCE of another account or transient storage opcode. A creation probe that sent 1 wei with empty calldata and then read balanceOf of itself returned 1, so the wrap is credited to msg.sender. WHYPE totalSupply equals its native balance (3,273,640.26). From the PoolManager, empty calldata with and without value succeeds with empty return data and a 1 wei transfer returns true. In src the caller is debited the native amount before the payout (src/PoolManager.sol:294-295), the WHYPE credit is the measured rise (lines 358-364), and both deltas must be cleared before unlock returns (line 112). The native balance falls by what the caller still has to pay in, and the WHYPE balance rises by what the caller may take out. I agree that this is a wrap paid by the caller."
+  },
+  {
+   "check": "stHYPE and wstHYPE: can one deposit be credited under both currency ids, can an ordinary account raise the stHYPE balance of the PoolManager inside its own sync window, and does rounding between the two units pay out more than a dust amount?",
+   "agrees": true,
+   "note": "The verified sources match the description. One transient slot holds the synced currency (src/libraries/CurrencyReserves.sol:27-32) and settle resets it (src/PoolManager.sol:361), so one arrival of shares is measured under one id. I tested the second question on chain: inside one eth_call a public Overseer.mint(address) with 1 HYPE and a burnAndRedeemIfPossible both succeeded and the stHYPE balance of a third holder was the same to the wei before and after each. rebase() reverts for callers without REBASER_ROLE. Not covered: Overseer.redeem(uint256) and the unverified Overseer implementation. The PoolManager holds no shares, so no funds depend on this today."
+  },
+  {
+   "check": "Recheck of assumption A3 on 2026-11-22: does native HYPE now have an ERC-20 face or a linked EVM contract, and is any HyperCore token linked to the PoolManager, to WHYPE or to a system address?",
+   "agrees": true,
+   "note": "spotMeta returned 520 tokens on my read, one more than in the cleared item. HYPE (index 150) has evmContract null. 194 tokens have a linked contract, no address appears twice, and none is the PoolManager, WHYPE, the bridge, CoreWriter or an address in the 0x20 system range. USDC (index 0) is linked to 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24. The PoolManager cannot become a linked contract through an ordinary account: the finalizer must be the deployer or the address in storage slot 0 or in the slot keccak256 of HyperCore deployer, slot 0 is the owner, which eth_getStorageAt confirms as 0x2d09d0c2f82c59b19b3c65a48ce2c550bf0921f9, and the named slot reads zero (lib/solmate/src/auth/Owned.sol via src/ProtocolFees.sol:9 and 26), and every other write in src goes to a mapping slot derived by keccak256."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "question": "What bounds the gasLimit of a sendToEvmWithData action, is the gas of the resulting coreReceiveWithData system transaction left out of the block total like other system transactions, and where in the block is it placed?",
+   "why": "The exchange API lets the sender of this HyperCore action choose a gas limit and a data payload for a call into a linked contract, and anyone can link a contract of their own. If the limit is large, the 200,000 gas bound in the ordering finding does not hold, and uncounted execution ahead of signed transactions could also lengthen blocks. Neither the cycle 1 state nor the cycle 2 research file mentions this action.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "question": "Is there a past HyperEVM block in which one transaction called PoolManager.sync on an ERC-20 without a settle and a later transaction of the same block made a native settle with value that succeeded?",
+   "why": "Such a pair is a read only test of assumption A1 against the validator itself: with leaked transient storage the second transaction would revert with NonzeroNativeValue (src/PoolManager.sol:356). It needs an archive node or an indexer with traces, since sync emits no event and the public RPC limits eth_getLogs to 1,000 blocks.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L3",
+   "question": "Does Overseer.redeem(uint256) or any other public function of the unverified Overseer implementation at 0x2b8698dd4b8addf7ddcabc46c6aedafe5a70b11c change stHYPE totalSupplyRaw or totalShares out of proportion inside one transaction?",
+   "why": "A simulation in this check showed that public mint and burnAndRedeemIfPossible leave a holder's stHYPE balance unchanged. redeem and the remaining selectors of the 24,255 byte implementation were not tried. A public call that moves the rate would let an ordinary account open a sync window on the stHYPE id and be credited the rise, once the PoolManager holds stHYPE.",
+   "priority": "low"
+  }
+ ]
+}
