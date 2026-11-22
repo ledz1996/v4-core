@@ -1,0 +1,597 @@
+{
+ "unit": "high-throughput",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 143,
+   "lens": "L1",
+   "summary": "The Monad client source for CALL, value transfer, transient storage and precompile dispatch was read this cycle. Each behaves as on Ethereum for the call shapes the PoolManager issues. The only additions are the two Monad precompiles, which reject every call kind other than a plain CALL.",
+   "deltas": [
+    {
+     "delta": "call_impl forwards min(requested, remaining minus remaining/64), adds the 2300 stipend when value is sent, charges 9000 for value and 25000 for a new account, returns 0 at depth 1024 and returns 1 only when the callee status is Success. Return data is copied up to the requested size. The PoolManager's three CALL sites (src/types/Currency.sol:48, src/types/Currency.sol:73, src/libraries/Hooks.sol:134) see Ethereum semantics.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/runtime/call.cpp",
+     "relevance": "none"
+    },
+    {
+     "delta": "pre_call pushes a state version, checks the sender balance and moves value for CALL and CALLCODE only. A DELEGATECALL moves nothing and a STATICCALL carries no value. post_call accepts the version on Success and rejects it on every other status, which rolls back balances, storage and transient storage together.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/execute_message.cpp",
+     "relevance": "none"
+    },
+    {
+     "delta": "Transient storage is the member transient_storage_ of AccountState. State::set_transient_storage writes the current version of the account state, and State::pop_reject drops that version when a frame fails. A TSTORE made in a reverted frame is gone, as EIP-1153 requires.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/state.cpp",
+     "relevance": "none"
+    },
+    {
+     "delta": "resolve_precompile lists 0x01 to 0x11 and 0x0100. is_precompile adds the staking address 0x1000 and, from MONAD_NINE, the reserve balance address 0x1001. No other address is intercepted. Mainnet runs MONAD_TEN since timestamp 1788359400.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/precompiles.cpp",
+     "relevance": "none"
+    },
+    {
+     "delta": "check_call_monad_precompile returns status Rejected when the message kind is anything other than CALL or when any flag is set, so DELEGATECALL, CALLCODE and STATICCALL to 0x1000 and 0x1001 fail before dispatch. A STATICCALL of balanceOf from the PoolManager address to both addresses returned failure with empty data.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/monad/monad_precompiles.cpp",
+     "relevance": "none"
+    },
+    {
+     "delta": "MIP-15, status Review, proposes six Glamsterdam EIPs for the next revision: EIP-7708 (native transfers emit a log), EIP-7843, EIP-7981, EIP-7997, EIP-8024 (DUPN, SWAPN, EXCHANGE) and EIP-8246 (remove the SELFDESTRUCT burn). MIP-7, status Review, reserves opcode 0xAE for Monad extensions. Neither is active. The client maps eip_7708_active to the Amsterdam revision, which mainnet has not reached.",
+     "source": "https://raw.githubusercontent.com/monad-crypto/MIPs/main/MIPs/MIP-15.md",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 143,
+   "lens": "L2",
+   "summary": "The genesis allocation holds one funded account and no contract code, so Monad has no predeploys. The reserve balance check runs at depth zero after execution and turns the whole transaction into a revert. It can stop a deposit of MON by an account that dips below its reserve, and it cannot stop a payout.",
+   "deltas": [
+    {
+     "delta": "MONAD_MAINNET_ALLOC contains a single account with a balance and no code. Every contract on Monad, WMON included, was deployed by an ordinary transaction.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/monad/chain/monad_mainnet_alloc.hpp",
+     "relevance": "none"
+    },
+    {
+     "delta": "execute_call_message and execute_create_message call revert_transaction only when depth is zero. A violation sets status ReserveBalanceViolation, and post_call then rejects the outermost state version. No partial effect of the transaction survives, including transient storage.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/execute_message.cpp",
+     "relevance": "low"
+    },
+    {
+     "delta": "Category Labs wrote on 2026-06-26 that block execution aborts and the chain halts if a sender cannot pay its fee at the start of execution, and that the reserve balance rule exists to prevent this. The post lists three bugs found before mainnet in the rule and its implementation. All three concern fee solvency of senders. None concerns contract balances.",
+     "source": "https://www.category.xyz/blogs/finding-bugs-that-frontier-models-miss",
+     "relevance": "low"
+    },
+    {
+     "delta": "The public endpoint accepts state overrides in eth_call and answers debug_traceCall with the top-level frame. A probe that replaced the PoolManager code with a forwarding stub was used to issue STATICCALL and value CALL from the PoolManager address.",
+     "source": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 143,
+   "lens": "L3",
+   "summary": "The Monad PoolManager holds 216,011,585 MON natively and, among the 147 listed tokens checked, 65 with a balance. Four large holdings were not in the cycle 1 record: GHO, syrupUSDC, apxUSD and shMON. WMON credits a deposit to the caller on any calldata, so a native payout to WMON turns PoolManager MON into PoolManager WMON at one to one.",
+   "deltas": [
+    {
+     "delta": "balanceOf(PoolManager) for the tokens of the Monad token list, the Uniswap list and the Monad documentation page: USDC 16,225,901, GHO 2,729,903, mUSD 1,645,837, syrupUSDC 1,561,546, AUSD 1,503,156, WMON 927,087, apxUSD 299,944, shMON 269,214, DUST 206,681, LVMON 71,090, USDT0 61,683, LV 28,219, apyUSD 10,999, and 52 smaller balances. Tokens outside these lists were not enumerated.",
+     "source": "https://raw.githubusercontent.com/monad-crypto/token-list/main/tokenlist-mainnet.json and rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22",
+     "relevance": "high"
+    },
+    {
+     "delta": "GHO (0xfc421ad3c883bf9e7c4f42de845c4e4405799e73) is a proxy with implementation 0xb0e1c7830aa781362f79225559aa068e6bdaf1d1 and proxy admin slot 0x06ba20fb633cbf38b7acfdc243829fb5f897e19c. apxUSD (0x3d78455e22d5dd49709ec135a59cb1c5a87ac3c6) is a 163 byte proxy whose implementation carries pause, unpause, burn(address,uint256) and upgradeToAndCall. shMON (0x1b68626dca36c7fe922fd2d55e4f631d962de19c) is a proxy with a 120,874 byte implementation, upgradeTo and owner 0x48a3267bcc4cf230e9bc4cae0c11eebdb9a6a687. syrupUSDC (0xab6e5a0c3799d020c790d34f7b2c02639e238af7) has no proxy slot and carries mint, burn(address,uint256), burnFrom and a BURNER_ROLE constant. The holders of these roles were not read.",
+     "source": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22",
+     "relevance": "high"
+    },
+    {
+     "delta": "WMON (0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A) accepts empty calldata and every IHooks selector with empty return data, which is the behaviour of a fallback that deposits. A probe that sent 0.001 MON from the PoolManager address to WMON raised WMON.balanceOf(PoolManager) by exactly 0.001. The selectors found in its 3,249 bytes are deposit() and withdraw(uint256) and the ERC-20 set.",
+     "source": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "No listed token answered with a balance that mirrors the PoolManager's native balance. The liquid staking tokens held (shMON, sMON, gMON, aprMON, LVMON, mcMON) are share tokens. Whether any of them changes balances without a transfer was not read from their sources.",
+     "source": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 143,
+   "lens": "L4",
+   "summary": "Every Monad precompile and system address was called from the PoolManager address with the call shapes P1, P2, P3 and P5. No address other than WMON both accepts transfer and moves value, and no address answers a hook call with the expected selector except the identity precompile, whose address fails the hook flag check.",
+   "deltas": [
+    {
+     "delta": "Sweep result. 0x01 and 0x0100 return success with empty data for every shape. 0x02 and 0x03 return 32 bytes for every shape. 0x04 returns the calldata. 0x05 to 0x08 accept empty calldata only. 0x09 to 0x11 revert. 0x1000 and 0x1001 revert with 'method not supported' for every shape, with and without value. The EIP-2935 contract (83 bytes) reverts. 0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02, the EIP-7002 and EIP-7251 addresses, SYSTEM_SENDER 0x6f49a8F621353f12378d0046E7d7e4b9B249DC9e, 0xfffffffffffffffffffffffffffffffffffffffe and 0xfee5fee5fee5fee5fee5fee5fee5fee5fee5fee5 have no code.",
+     "source": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "The staking dispatch table has eighteen selectors. Input shorter than four bytes and any other selector go to precompile_fallback, which returns MethodNotSupported and costs 40000 gas. The reserve balance contract has one selector, 0x3a61584e, and the same fallback. None of the thirteen selectors the PoolManager can send (transfer, balanceOf, the ten IHooks functions and unlockCallback) is in either table.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/monad/staking/staking_contract.cpp",
+     "relevance": "none"
+    },
+    {
+     "delta": "A Spearbit review of July and August 2025 reported that DELEGATECALL to the staking precompile reused msg.value without moving funds, which allowed theft of staked MON, and that STATICCALL reached state-changing functions. Both are marked fixed, and the current source carries the check on message kind and flags.",
+     "source": "https://cantina.xyz/portfolio/d90b081f-fb8c-4ca7-8e68-6a9219288ae1",
+     "relevance": "low"
+    },
+    {
+     "delta": "Three swept addresses pass isValidHookAddress: 0x10 (afterDonate), 0x0100 (afterRemoveLiquidity) and 0x1000 (afterInitialize). 0x10 and 0x1000 revert on the hook call and 0x0100 returns empty data.",
+     "source": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4326,
+   "lens": "L1",
+   "summary": "The mega-evm source was read for the rules that cycle 1 took from documentation. MegaEVM wraps the revm opcode handlers with gas and resource accounting and leaves the semantics of TSTORE, TLOAD, CALLVALUE, RETURNDATACOPY, MCOPY and PUSH0 unchanged. A child frame that exceeds its resource share reverts and the parent continues, which the PoolManager treats as a failed call.",
+   "deltas": [
+    {
+     "delta": "The REX6 instruction table registers TLOAD, TSTORE, MCOPY, PUSH0, CALLVALUE, RETURNDATASIZE and RETURNDATACOPY as compute_gas_ext wrappers of the revm handlers. Only SSTORE, LOG, CREATE, the CALL family, SELFDESTRUCT, SLOAD, SELFBALANCE and the block and account read opcodes carry further layers.",
+     "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/evm/instructions.rs",
+     "relevance": "none"
+    },
+    {
+     "delta": "forward_gas_ext caps the gas given to a child at the parent's gas minus two hundredths of it. From REX4 a value-carrying CALL or CALLCODE also receives STORAGE_CALL_STIPEND of 23,000 gas that can pay storage gas such as LOG and cannot pay computation.",
+     "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/evm/instructions.rs and https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/constants.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "A child frame that exceeds its share of compute gas, data size, KV updates or state growth reverts with MegaLimitExceeded(uint8,uint64) and the parent may continue. Each child receives 98 hundredths of the parent's remaining budget.",
+     "source": "https://docs.megaeth.com/spec/megaevm/resource-limits.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "From REX4 the CALL family, SELFDESTRUCT and SELFBALANCE check whether the target is the block beneficiary while volatile data access is disabled, and revert the executing frame if so. SELFBALANCE triggers detention only when the executing contract is the beneficiary.",
+     "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/evm/instructions.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "BlockSec tested MegaEVM, the stateless validator and SALT from 2025-10-11 to 2025-11-28. Four high findings concern node denial of service or a crash (unbounded TSTORE, cheap KZG, KZG gas cost, looping of costly opcodes). Three are marked confirmed and one fixed. The full report was not obtained, only the index page.",
+     "source": "https://blocksec.com/audit-report/audit-report-megaeth--megaevm--stateless-validator---salt",
+     "relevance": "low"
+    },
+    {
+     "delta": "A pull request of April 2026 fixed three REX4 audit findings: intrinsic usage escaped the data and KV limits, the detained compute limit was not applied after CALL-like opcodes, and state growth was not refunded on SELFDESTRUCT. All three are resource accounting faults in the node.",
+     "source": "https://github.com/megaeth-labs/mega-evm/pull/230",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4326,
+   "lens": "L2",
+   "summary": "The node ends every transaction by finalizing the revm journal, which clears transient storage. The KeylessDeploy sandbox reads the parent journal's account state through a separate database view and has no access to the parent's transient storage. The block limiter applies its state growth test to deposit transactions as well.",
+   "deltas": [
+    {
+     "delta": "MegaEvm::execute_transaction calls transact, and the comment on discard_tx states that finalize is the journal reset that transact ends every transaction with: it clears entries, logs, transient storage and warm sets. A caught panic goes through the same reset.",
+     "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/evm/mod.rs",
+     "relevance": "none"
+    },
+    {
+     "delta": "SandboxDb holds a reference to the parent journal's EvmState and to the database. It serves accounts, code and storage from them. Transient storage is not part of that state.",
+     "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/sandbox/state.rs",
+     "relevance": "none"
+    },
+    {
+     "delta": "BlockLimiter::pre_execution_check exempts deposits from the two data availability tests only. The tests on block data, KV updates, compute gas and state growth run for every candidate, deposits included.",
+     "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "The public endpoint accepts state overrides in eth_call and refuses debug_traceCall. Effects of value calls from the PoolManager were read with a stub placed at the PoolManager address by override.",
+     "source": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4326,
+   "lens": "L3",
+   "summary": "The MegaETH PoolManager holds 2.236 ETH and 67 tokens worth about 17,000 dollars, mostly USDm. A transaction that creates 999 storage slots costs 22.6 million gas, which is 0.0000226 ETH at the base fee seen in every sampled block, and the block limit for new state is 1,000 entries. Storage slots map to SALT buckets through a fixed-seed hash, and a bucket doubles when it is more than 80 percent full.",
+   "deltas": [
+    {
+     "delta": "Blockscout lists 67 ERC-20 balances for the PoolManager: USDm 14,133, MEGA 30,064, USDT0 674, BTC.b 0.005, USDe 299, CUSD 149, wstETH 0.065, wiTRY 473 and others below 200 dollars. Eight Aave aTokens are among them with balances below one dollar each. iTRY itself is not held, only its wrapper.",
+     "source": "https://megaeth.blockscout.com/api/v2/addresses/0xacb7e78fa05d562e0a5d3089ec896d57d057d38e/token-balances",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_estimateGas for a creation that writes n new storage slots returned 121,056 gas for n = 1, 2,346,903 for n = 100, 20,333,678 for n = 900, 22,357,175 for n = 990 and 22,559,525 for n = 999. A creation with 1,000 slots reverts, which places the limit at 1,000 entries with the new account counted as one. Blocks 32562921 to 32562971 all report a base fee of 1,000,000 wei, one block per second and about 23 transactions.",
+     "source": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22",
+     "relevance": "high"
+    },
+    {
+     "delta": "TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT are both 1,000. The first transaction that brings the block counter to the limit is included. Later candidates are skipped until the next block.",
+     "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/constants.rs",
+     "relevance": "high"
+    },
+    {
+     "delta": "Storage gas for a zero to nonzero SSTORE is 20,000 times (multiplier minus 1), with multiplier equal to bucket capacity divided by 256. The bucket is (ahash(address and slot) mod NUM_KV_BUCKETS) plus NUM_META_BUCKETS with a fixed seed. A bucket doubles when used slots exceed 80 percent of capacity, up to 2^40 slots. The multiplier is read from the parent block.",
+     "source": "https://docs.megaeth.com/spec/megaevm/dual-gas-model.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "WETH at 0x4200000000000000000000000000000000000006 accepts any calldata with empty return data. A probe that sent 0.001 ETH from the PoolManager address raised WETH.balanceOf(PoolManager) by exactly 0.001.",
+     "source": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4326,
+   "lens": "L4",
+   "summary": "All 256 addresses from 0x4200000000000000000000000000000000000000 to 00ff except 0x42 hold code, and 236 of them are proxies without an implementation. Seven predeploys accept a value transfer from the PoolManager, and one of them, L1BlockNumber, answers every call with the L1 block number. The six MegaETH system contracts revert on every call shape the PoolManager can send.",
+   "deltas": [
+    {
+     "delta": "Sweep of 0x42...00 to 0x42...ff from the PoolManager address. 236 addresses revert with 'Proxy: implementation not initialized'. Eleven initialized proxies (00, 02, 07, 0f, 12, 14, 15, 17, 18, 20, 21) revert on every shape. SequencerFeeVault (11), L2ToL1MessagePasser (16), BaseFeeVault (19), L1FeeVault (1a) and OperatorFeeVault (1b) accept empty calldata with value and revert on transfer, balanceOf and the hook selectors. WETH (06) behaves as an ERC-20 wrapper. 0x42...42 has no code.",
+     "source": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "L2StandardBridge (10) accepted a value call in a top-level eth_call sent from the PoolManager address and rejected it when the PoolManager address made the call as an inner frame of a call sent by another account. This matches a sender test of the form msg.sender equals tx.origin. The implementation source was not read.",
+     "source": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "L1BlockNumber (13, implementation 0xc0d3c0d3c0d3c0d3c0d3c0d3c0d3c0d3c0d30013, 537 bytes) returns one word for every calldata, with and without value and under STATICCALL. The word was 0x193eb93 and later 0x193ebd3 and equals L1Block.number(). A value call of 0.001 ETH from the PoolManager address succeeded and left the ETH at the predeploy.",
+     "source": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "A value call of 0.001 ETH from the PoolManager address to L2ToL1MessagePasser raised the contract's balance by that amount and its messageNonce from ...01aa to ...01ab. The same call to the four fee vaults raised their balances and changed nothing else that the probe read.",
+     "source": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "Oracle, HighPrecisionTimestamp, KeylessDeploy and SequencerRegistry (0x6342...01, 02, 03, 06) revert with empty data on all shapes. MegaAccessControl and MegaLimitControl (04, 05) revert with 0x1894f076. 0x6342...07 has no code. The interceptors match on target address and four-byte selector, and input shorter than four bytes is never intercepted.",
+     "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/system/intercept.rs",
+     "relevance": "none"
+    },
+    {
+     "delta": "39 swept addresses pass isValidHookAddress: 0x10, 0x0100, 35 OP Stack proxies with low bits such as 0x10, 0x20, 0x40, 0x80 and 0xc0, the EIP-4788 contract and 0xff...fe. Each reverts on its flagged hook selectors or returns empty data.",
+     "source": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "One transaction can use the whole per-block budget for new state on MegaETH, and the node skips every later candidate of that block",
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A9"
+   ],
+   "effect": "degrade",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "MegaETH counts new accounts and new storage slots per transaction and per block, and both limits are 1,000 entries. Ethereum has no such counter. The block limiter admits the transaction that brings the block counter to the limit and then rejects every further candidate before execution, whatever that candidate would do. The base fee has stayed at its floor of 1,000,000 wei in every block sampled.",
+   "mechanism": "A sender submits one transaction that creates 1,000 new state entries, for example a contract creation that writes 999 fresh storage slots. eth_estimateGas accepts that creation at 22,559,525 gas, which at the base fee of 1,000,000 wei is about 0.0000226 ETH, and rejects a creation with 1,000 slots. Storage gas is zero for slots in buckets of minimum size, so the cost is the compute gas of the writes. After this transaction the block counter for state growth equals the block limit. BlockLimiter::pre_execution_check then returns StateGrowthLimit for every later candidate of that block, including a liquidity removal or a take that creates no new state. Those candidates are skipped and can enter a later block. A sender who repeats this in every one second block spends about 1.95 ETH per day. Calls to modifyLiquidity and take on the PoolManager have no path that avoids the block limiter. What the sender achieves depends on where its transaction lands inside each block. Candidates placed before it are included. The ordering rule of the sequencer was not confirmed, so the share of each block that the sender can close was not established.",
+   "impact": "Removals, swaps and claims on the PoolManager can be delayed block by block while the sender keeps paying. No balance moves and no position changes. The delay ends when the sender stops or when users' transactions are ordered ahead of the sender's.",
+   "preconditions": "The base fee stays near its floor, and the sender's transaction is ordered early in each block. No role is needed. A full stop of withdrawals would need the sender to be first in every block, which the public record does not show to be possible.",
+   "mitigations": "Core has no setting for this. Users can resubmit, pay a higher priority fee if the sequencer orders by fee, or use the L1 deposit path, whose transactions are placed at the start of a block in the OP Stack design. That placement was not confirmed in the MegaETH node source. The chain operator can raise the block limit above the transaction limit or price new state entries in minimum-size buckets.",
+   "coreRefs": [
+    "src/PoolManager.sol:145-184",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs",
+     "supports": "pre_execution_check rejects a candidate when block_state_growth_used is at or above block_state_growth_limit, and only the data availability tests are skipped for deposits"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/constants.rs",
+     "supports": "TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT are both 1000"
+    },
+    {
+     "url": "https://docs.megaeth.com/spec/megaevm/resource-limits.md",
+     "supports": "The first transaction that meets or exceeds a block-level runtime limit is included and later candidates are skipped for the current block"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/external/gas.rs",
+     "supports": "SSTORE storage gas is the base of 20,000 times (multiplier minus 1), which is zero at multiplier 1"
+    },
+    {
+     "url": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22",
+     "supports": "eth_estimateGas returned 22,559,525 gas for a creation writing 999 new slots, a creation writing 1,000 slots reverts, and five sampled blocks report a base fee of 1,000,000 wei"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "F-015",
+   "title": "Role holders on GHO, syrupUSDC, apxUSD, shMON and mUSD can pause, burn, move or replace balances that the Monad PoolManager holds",
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A6"
+   ],
+   "effect": "both",
+   "actor": "issuer",
+   "severity": "high",
+   "difference": "Five further tokens with issuer controls sit at the single PoolManager address on Monad, next to the dollar tokens that F-015 already lists. The PoolManager holds 2,729,903 GHO, 1,645,837 mUSD, 1,561,546 syrupUSDC, 299,944 apxUSD and 269,214 shMON.",
+   "mechanism": "The PoolManager records what each pool is owed and trusts balanceOf to stay equal to the sum. GHO, apxUSD, shMON and mUSD are proxies, so the party that controls the proxy can replace the token logic. The apxUSD and mUSD implementations contain pause, and a paused token makes every take of that currency revert at src/types/Currency.sol:73-86, which stops removals and swaps in every pool that uses it. The syrupUSDC and apxUSD code contains burn(address,uint256), and the mUSD implementation contains forceTransfer(address,address,uint256) and freeze. If the role holder applies one of them to the PoolManager address, the balance falls while the pool accounting stays unchanged, and the last liquidity providers to withdraw cannot be paid. This reading rests on the selectors found in the deployed bytecode. Which accounts hold the roles, and whether burn(address,uint256) needs an allowance, was not confirmed.",
+   "impact": "All pools on Monad that use the affected token. The amounts at the time of the query are listed above: about 6.2 million units of dollar tokens and 269,214 shMON.",
+   "preconditions": "The issuer or the holder of the relevant role acts against the PoolManager address or pauses or upgrades the token. An ordinary account cannot trigger it.",
+   "mitigations": "Liquidity providers can weigh the issuer controls of each token before they supply it. The deployer cannot remove the dependency, because one address holds the balances of every pool.",
+   "coreRefs": [
+    "src/types/Currency.sol:60-86",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:349-364"
+   ],
+   "sources": [
+    {
+     "url": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22",
+     "supports": "balanceOf(PoolManager) for the five tokens, the EIP-1967 implementation and admin slots, paused() false on apxUSD and mUSD, owner() of shMON, BURNER_ROLE() on syrupUSDC, isFrozen(PoolManager) false on mUSD, and the PUSH4 selector constants found in each implementation"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/monad-crypto/token-list/main/tokenlist-mainnet.json",
+     "supports": "Token addresses, symbols and decimals on Monad mainnet"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L4",
+   "check": "Sweep of every Monad precompile and system address (0x01 to 0x11, 0x0100, 0x1000, 0x1001, the EIP-2935, EIP-4788, EIP-7002 and EIP-7251 addresses, SYSTEM_SENDER, 0xff...fe, the MIP-11 fee account and WMON) with calls from the PoolManager address: empty calldata with zero and nonzero value, transfer with amounts 0, 1 and 1e18, balanceOf(PoolManager), the ten IHooks selectors and unlockCallback.",
+   "result": "No address gives credit without payment and none moves PoolManager value on a transfer call except WMON, which is an ordinary wrapper. 0x01 and 0x0100 return success with empty data, so a take of those ids debits the caller and moves nothing (src/types/Currency.sol:64-74), and sync reverts on the empty answer. 0x02, 0x03 and 0x04 answer balanceOf with a constant, so settle after sync credits zero (src/PoolManager.sol:358-360), and they fail the transfer test because the first word is not 1. 0x1000 and 0x1001 revert on every shape and fail under STATICCALL. Addresses without code behave as on Ethereum.",
+   "source": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L4",
+   "check": "Sweep of 0x01 to 0x11, 0x0100, all 256 addresses 0x4200000000000000000000000000000000000000 to 00ff, 0x6342000000000000000000000000000000000001 to 0007, the EIP-2935 and EIP-4788 contracts, the EIP-7002 and EIP-7251 addresses, LegacyERC20ETH, the L1 attributes depositor, the system address and 0xff...fe with the same call shapes from the PoolManager address.",
+   "result": "No address gives credit without payment. Only WETH returns success on transfer with a true word, and it is an ordinary wrapper. Seven predeploys accept a native payout (L2ToL1MessagePasser, four fee vaults, WETH and L1BlockNumber), and in each case the caller of take is debited the full amount at src/PoolManager.sol:294 before the transfer. The six MegaETH system contracts revert on all shapes, with NotIntercepted (0x1894f076) for MegaAccessControl and MegaLimitControl. The precompiles behave as on Ethereum.",
+   "source": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L4",
+   "check": "Whether the L1BlockNumber predeploy at 0x4200000000000000000000000000000000000013, which answers balanceOf(PoolManager) with a number that rises over time, can serve as a currency that yields credit.",
+   "result": "No. The answer equals L1Block.number(), which changes only through the L1 attributes transaction at the start of a block. Inside one transaction sync and settle read the same value and the credit is zero (src/PoolManager.sol:358-360). Transient storage does not survive the transaction, so a sync from an earlier block cannot be used. A transfer call returns the same word, which is not 1, so take reverts at src/types/Currency.sol:68 and 82-86. Its low bits are 0x13, which isValidHookAddress rejects because bit 1 is set without bit 10 (src/libraries/Hooks.sol:113-116).",
+   "source": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L4",
+   "check": "What a native payout from the PoolManager does at each predeploy that accepts it, and whether the caller owes the full value: take(address(0), predeploy, amount) for L2ToL1MessagePasser, the four fee vaults, WETH, L1BlockNumber and L2StandardBridge.",
+   "result": "The caller owes the full amount in every case, because take records the debit before the transfer and unlock reverts unless it is settled (src/PoolManager.sol:112, 294-295). L2ToL1MessagePasser keeps the ETH and registers a withdrawal whose sender and target are the PoolManager address, so the value is lost to the caller. The fee vaults and L1BlockNumber keep the ETH. WETH credits the PoolManager with the same amount of WETH. L2StandardBridge rejects the call when the PoolManager is called by another account. The op-stack-eth unit recorded the same self-inflicted loss as a low finding in this cycle, and chain 4326 can be added to it.",
+   "source": "rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    143,
+    4326
+   ],
+   "lens": "L3",
+   "check": "Faces of the native asset through the wrapper: sync(wrapper), take(address(0), wrapper, X) so that the PoolManager itself deposits X into WMON or WETH, settle, then take, mint, burn and native settle in every order.",
+   "result": "The sequence nets to zero. The native payout debits the caller X of currency address(0) and lowers the native balance by X. The wrapper credits the PoolManager with X, and settle credits the caller X of the wrapper id, which is the measured rise since sync. The caller then holds a debt of X native and a credit of X wrapped, and unlock requires both to be closed (src/PoolManager.sol:112). Closing them returns X native to the PoolManager or removes X wrapped from it. Without the earlier sync the wrapped tokens stay with the PoolManager as unowned surplus and the caller still owes X. mint and burn only move the same deltas into claims (src/PoolManager.sol:322-336). The one to one credit was confirmed on both chains with a probe of 0.001 native units.",
+   "source": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22 and rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    143,
+    4326
+   ],
+   "lens": "L3",
+   "check": "Whether any address on either chain exposes the PoolManager's native balance, or the balance of a token it holds, under a second currency id, and whether two ids on one balance could be credited twice.",
+   "result": "No second face was found. MON and ETH have no ERC-20 interface among the precompiles and predeploys swept, LegacyERC20ETH has no code on MegaETH, and no listed Monad token mirrors the native balance. For the general case the code keeps one synced currency in one transient slot (src/libraries/CurrencyReserves.sol:17-36), settle credits only the rise of that one currency or msg.value and rejects msg.value while an ERC-20 is synced (src/PoolManager.sol:353-361), and take debits exactly the amount it sends (src/PoolManager.sol:294-295). Each credit therefore needs its own payment even if two ids shared one balance. Tokens outside the lists checked were not enumerated on Monad.",
+   "source": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22 and rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Opcode differential from the Monad client source for the patterns the PoolManager relies on: CALL with value, gas forwarding, calls to addresses without code, return data, STATICCALL, TSTORE and TLOAD with rollback, and precompile dispatch.",
+   "result": "No departure from Ethereum was found. call_impl applies the 63/64 rule, the 2300 stipend and the depth limit and reports success only for status Success. pre_call moves value for CALL and CALLCODE inside a pushed state version, and post_call rejects that version on any failure, which restores balances, storage and transient storage. Precompile dispatch happens after pre_call, so a reverted precompile call returns the value. The Monad precompiles return Rejected for any call kind other than CALL, which the caller sees as a failed call.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/runtime/call.cpp"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Whether the 8 MB memory cap per transaction (MIP-3) can break a PoolManager path that copies return data, or freeze a withdrawal.",
+   "result": "No. The PoolManager copies hook return data and revert data in full (src/libraries/Hooks.sol:140-149, src/libraries/CustomRevert.sol:83-119) and copies 32 bytes after a token transfer (src/types/Currency.sol:73). A callee that returns more than the remaining memory makes the PoolManager frame halt, which reverts the call. Only a hook or token chosen for the pool can do this, and that case is F-004. A removal in a pool without such a hook uses a few hundred bytes of memory.",
+   "source": "https://raw.githubusercontent.com/monad-crypto/MIPs/main/MIPs/MIP-3.md"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "Opcode differential from the mega-evm source: TSTORE, TLOAD, CALLVALUE, RETURNDATASIZE, RETURNDATACOPY, MCOPY, PUSH0, CALL with value, the 98/100 forwarding rule, per-frame resource budgets and the storage call stipend.",
+   "result": "The opcode bodies are the revm handlers with accounting wrappers, so results are those of Ethereum Prague. The changed rules are fail-closed for the PoolManager. A child that receives less gas or exceeds its resource share reverts, and the PoolManager reverts on a failed native transfer, token transfer, hook call or unlock callback (src/types/Currency.sol:51-53 and 82-86, src/libraries/Hooks.sol:137). No path treats a failed call as success. The extra 23,000 gas stipend on value calls cannot pay computation, and the PoolManager forwards all gas anyway.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/evm/instructions.rs"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "A1 from the node source: does transient storage end with the transaction, including after an error or a panic, and does the KeylessDeploy sandbox share it.",
+   "result": "Yes for the transaction boundary and no for the sandbox. Every transaction ends with the journal finalize step that clears transient storage, and the panic recovery path calls the same step. The sandbox database reads accounts and storage from the parent journal state and has its own journal. Together with the cycle 1 reading of the Monad client this answers the open question on transient storage for chains 143 and 4326.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/evm/mod.rs"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "check": "Whether an attacker can inflate the SALT bucket that holds a victim's storage slot until a zero to nonzero write there becomes unaffordable, given that the bucket index comes from a fixed-seed hash.",
+   "result": "Not on the normal path. A bucket doubles when it is more than 80 percent full, so reaching multiplier 2^k needs about 205 times 2^k entries in that bucket, each paying 20,000 times (multiplier minus 1) storage gas at the multiplier in force. The total is about 2.7 million times 4^k gas. Multiplier 1,024 costs the attacker about 2.8 ETH at the current base fee and adds 20.5 million gas, about 0.00002 ETH, to one write by the victim. A write that exceeds the 10 billion gas transaction limit needs a multiplier near 500,000 and about 740,000 ETH. A removal mostly clears slots or rewrites nonzero slots, and the recipient of a payout can choose an address that already holds the token. The figures are computed from the documented rule, and the value of NUM_KV_BUCKETS was not read.",
+   "source": "https://docs.megaeth.com/spec/megaevm/dual-gas-model.md"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L4",
+   "check": "Whether a call that the PoolManager issues can match a MegaETH call interceptor (Oracle sendHint, KeylessDeploy, MegaAccessControl, MegaLimitControl) and produce a synthetic success.",
+   "result": "No. Each interceptor requires the target address and a specific four-byte selector. The PoolManager can address a system contract only as a currency or as a hook, with transfer, balanceOf, an IHooks selector or empty calldata. None of these matches, the call falls through to the contract code, and the code reverts on all of them. The hook route is closed earlier, because the addresses end in 1 to 6 and fail isValidHookAddress (src/libraries/Hooks.sol:111-120).",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/system/intercept.rs"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "check": "Whether gas detention or disableVolatileDataAccess can be imposed on another user's PoolManager transaction.",
+   "result": "No. Detention state is reset at the start of each transaction and applies to the transaction that made the volatile read. The access control switch covers the caller's frame and its descendants. A third party is in neither position for a victim's transaction unless the victim's pool uses that party's hook or token, which is F-018. Since REX4 the cap is relative, so a transaction can always spend 20 million compute gas after the read.",
+   "source": "https://github.com/megaeth-labs/mega-evm/blob/main/docs/spec/evm/gas-detention.md"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L4",
+   "check": "Known weakness: the Spearbit finding that DELEGATECALL to the staking precompile credited stake without moving MON, and its STATICCALL variant. Can an ordinary account use the precompile against PoolManager funds today.",
+   "result": "No. The fix rejects every message whose kind is not CALL or whose flags are nonzero before dispatch, and the STATICCALL probe from the PoolManager address fails. The PoolManager never issues DELEGATECALL (no use in src outside tests) and cannot send a staking selector. The precompile takes funds only from msg.value of its caller.",
+   "source": "https://cantina.xyz/portfolio/d90b081f-fb8c-4ca7-8e68-6a9219288ae1"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "check": "Known weaknesses in the reserve balance rule: the Code4rena finding on EIP-7702 delegation status that let a sender stall block proposals for free, the testnet crash of 2025-09-27 from relaxed balance merging, and the three bugs described by Category Labs. Can any of them be used against funds in the PoolManager.",
+   "result": "No path was found. All of them concern whether a sender can pay its fee and whether consensus and execution agree on that. Their effect is a stalled or halted chain, which delays every user alike and moves no balance. The execution check skips accounts whose final code is contract code, so the PoolManager is never the account under test. A user who adds MON and ends below the reserve can have the deposit reverted when the emptying exception does not apply, and a payout only raises the recipient's balance.",
+   "source": "https://code4rena.com/reports/2025-09-monad and https://github.com/code-423n4/2025-09-monad/blob/3d1f9a1d/README.md and https://www.category.xyz/blogs/finding-bugs-that-frontier-models-miss"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "Known weaknesses: the BlockSec findings on MegaEVM (unbounded TSTORE, cheap KZG, KZG gas cost crash, costly opcode loops) and the REX4 audit fixes. Can an ordinary account use them against funds in the PoolManager.",
+   "result": "No path was found. Each is a way to load or crash the node or to escape a resource limit. The PoolManager writes transient storage at fixed slots and at one slot per account and currency (src/libraries/CurrencyDelta.sol:10-41), which a caller can multiply only at its own gas cost, and the effect is on node memory. Three of the four BlockSec findings are marked confirmed without a stated fix, so node availability under these loads stays an operator matter. Only the report index was read.",
+   "source": "https://blocksec.com/audit-report/audit-report-megaeth--megaevm--stateless-validator---salt"
+  },
+  {
+   "chainIds": [
+    143,
+    4326
+   ],
+   "lens": "L4",
+   "check": "Which special addresses pass isValidHookAddress, and what a pool created with one of them as hook can do.",
+   "result": "Monad has three (0x10, 0x0100, 0x1000) and MegaETH has 39 among the swept addresses. 0x1000 on Monad, the EIP-4788 contract and 0xff...fe on MegaETH carry an initialize flag and fail the hook call, so no pool can be created with them. The others let a pool be created and then block only the flagged action: donate, swap, or for 0x0100 every call with liquidityDelta of zero or less. A provider would have to choose such a pool. The 0x0100 case is the one cycle 1 recorded, and it also exists on any chain with the P256 precompile.",
+   "source": "rpc https://rpc.monad.xyz, eth_call with from set to the PoolManager, eth_getCode, eth_getBalance and eth_getStorageAt at blocks 124455000 to 124466634 on 2026-11-22 and rpc https://mainnet.megaeth.com/rpc, eth_call with from set to the PoolManager and with state overrides, eth_getCode, eth_getBalance, eth_estimateGas and eth_getBlockByNumber at blocks 32558000 to 32563302 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "check": "Aave aTokens and other yield tokens at the MegaETH PoolManager: can growth of the balance between sync and settle be collected by an ordinary account.",
+   "result": "The eight aToken balances are below one dollar each. An aToken balance depends on the stored index and the block timestamp, both fixed inside one transaction unless the reserve is touched, so sync and settle in one transaction see the same value in the usual case. Growth across blocks stays with the PoolManager as surplus that no pool is owed. The arbitrum-family unit recorded this class for Arbitrum One in this cycle. The claim about the index was not tested on chain here.",
+   "source": "https://megaeth.blockscout.com/api/v2/addresses/0xacb7e78fa05d562e0a5d3089ec896d57d057d38e/token-balances"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "question": "How does the MegaETH sequencer order candidates inside a block (arrival order or priority fee), and are transactions that were skipped for a block-level limit placed ahead of newer arrivals in the next block?",
+   "why": "This decides whether one sender who fills the state growth budget each block delays other users by one block or can keep them out for as long as it pays.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "question": "Are L1 deposit transactions placed before sequencer transactions in every MegaETH block, and what does the node do when a deposit itself brings the block's state growth counter to 1,000 while further deposits of the same L1 block remain?",
+   "why": "The block limiter applies the state growth test to deposits. If a later deposit can be skipped, the forced inclusion path that F-017 relies on has a gap, and a derivation mismatch would be an operator-level fault.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "question": "Which currencies outside the Monad token list, the Uniswap list and the documentation page have a balance at the Monad PoolManager? Enumerate currency0 and currency1 from the Initialize events and repeat the classification for issuer controls, second entry points and balances that change without transfers.",
+   "why": "The list checked covers 147 tokens. A token with two entry points or a rebasing balance outside that list was not looked at.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "question": "Who holds the proxy admin of GHO (0x06ba20fb633cbf38b7acfdc243829fb5f897e19c) and of mUSD (0x685e7f8c9414bfa716b254b349153e2317929ac9), the owner of shMON (0x48a3267bcc4cf230e9bc4cae0c11eebdb9a6a687), BURNER_ROLE on syrupUSDC and the upgrade right on apxUSD, and does burn(address,uint256) on syrupUSDC and apxUSD need an allowance from the account?",
+   "why": "This decides whether an issuer action against the PoolManager address is a pause that can be undone or a loss, for about 6.2 million units of dollar tokens and 269,214 shMON.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "question": "What is NUM_KV_BUCKETS in the SALT repository, and can entries for a chosen bucket be found without brute force given the fixed-seed hash?",
+   "why": "The cost estimate for inflating one bucket assumes the attacker can place entries at will. The estimate also bounds a combined case in which the sequencer censors a user and the user's forced removal through L1, which an earlier lead puts at 20 million gas, needs a new slot in an inflated bucket.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    143,
+    4326
+   ],
+   "lens": "L1",
+   "question": "Obtain the full BlockSec report for MegaEVM and the Runtime Verification report for Monad execution and read the notes on fixed gas calls, sender balance taint and reserve balance proofs.",
+   "why": "Only the index of the BlockSec report and a search extract of the Runtime Verification report were read. A note could describe a behaviour of value calls that matters for native payouts.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-018",
+   "outcome": "cleared",
+   "answer": "For Monad and MegaETH the client sources confirm that a TSTORE does not reach the next transaction. Monad keeps transient storage inside the per-transaction State object (cycle 1) and rolls it back with the state version stack on a failed frame. MegaETH ends every transaction, including one that errors or panics, with the revm journal finalize step that clears transient storage, and the KeylessDeploy sandbox does not share it. Chains 137, 43114 and 4217 are outside this unit."
+  },
+  {
+   "leadId": "L-054",
+   "outcome": "finding",
+   "answer": "One creation that writes 999 new slots reaches 1,000 new state entries and costs 22,559,525 gas, about 0.0000226 ETH at the base fee of 1,000,000 wei. A transaction that brings the block counter to 1,000 is included and the limiter then skips every later candidate of that block. The state growth test also runs for deposit transactions. Recorded as a low finding with effect degrade. The ordering rule of the sequencer was not confirmed."
+  },
+  {
+   "leadId": "L-061",
+   "outcome": "cleared",
+   "answer": "Slots map to buckets by a fixed-seed hash of address and slot modulo the number of buckets, a bucket doubles above 80 percent fill, and the multiplier comes from the parent block. Inflating one bucket to multiplier 2^k costs about 2.7 million times 4^k gas. Multiplier 1,024 costs about 2.8 ETH and adds 20.5 million gas to one new write, which is negligible on the normal path and above the 20 million gas that the lead reports for a forced deposit. That case needs the sequencer to censor the user as well, and the user can avoid new writes in a targeted bucket by choosing a recipient that already holds the token. The bucket count was not read."
+  },
+  {
+   "leadId": "L-056",
+   "outcome": "inconclusive",
+   "answer": "MegaETH: Blockscout lists 67 tokens at the PoolManager, about 17,000 dollars in total, with eight aTokens below one dollar each and wiTRY but no iTRY. Monad: 65 of 147 listed tokens have a balance, and GHO, syrupUSDC, apxUSD and shMON were added to the issuer control record. Tokens outside the lists on Monad were not enumerated, and the liquid staking tokens were classified by type and not by source."
+  },
+  {
+   "leadId": "L-025",
+   "outcome": "cleared",
+   "answer": "A new storage slot in a bucket of minimum size costs no storage gas, and the measured cost is about 22,500 gas per new slot (22,357,175 gas for 990 slots in a creation). Every transaction pays 60,000 intrinsic gas, and each LOG topic adds 3,750 storage gas. A first liquidity add with about 11 new slots and a removal therefore cost close to their Ethereum gas plus the intrinsic difference, far below the limits of 200 million compute gas and 1,000 new state entries per transaction. The high estimate for the 4,394 byte probe comes from the storage gas charged on deployed code. No modifyLiquidity call was simulated."
+  }
+ ]
+}
