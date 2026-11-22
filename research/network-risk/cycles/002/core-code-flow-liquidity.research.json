@@ -1,0 +1,383 @@
+{
+ "unit": "core-code-flow-liquidity",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Any account can fill a boundary tick to the per tick liquidity cap for a dust payment, which blocks later deposits that use that tick",
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "assumptions": [],
+   "effect": "degrade",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "None. The cap and the amount formula are part of the pool math and give the same numbers on every network. Read-only probes against the PoolManager on 20 of the 21 networks returned identical results. Tempo could not be probed with a native payment because the node rejects calls that carry value.",
+   "mechanism": "Pool.modifyLiquidity adds liquidityDelta to liquidityGross of the lower and the upper tick of the range (src/libraries/Pool.sol:160-162, 524-531). For a delta of zero or more it reverts with TickLiquidityOverflow when liquidityGross of either tick is above tickSpacingToMaxLiquidityPerTick (Pool.sol:165-173). The cap is (2^128 - 1) divided by the number of ticks (Pool.sol:565-582): 191757530477355301479181766273477 for spacing 1, 1917559095893846719543856547154045 for spacing 10, 11505354575363080317263139282924270 for spacing 60 and 38345995821606768476828330790147420 for spacing 200, which are the values in test/Tick.t.sol:115-141. A range that lies above the current tick is paid in currency0 only, with getAmount0Delta(sqrtLower, sqrtUpper, liquidity) rounded up (Pool.sol:209-217, src/libraries/SqrtPriceMath.sol:188-211, 261-271). That amount is liquidity times the difference of the inverse sqrt prices, and at the highest usable ticks the sqrt prices are close to 2^160, so the amount is tiny. Filling the highest usable tick to the cap with a range one spacing wide costs 519,766,372 base units of currency0 at spacing 1, 51,993,092,462 at spacing 10, 1,878,783,905,959 at spacing 60 and 20,966,766,746,469 at spacing 200. The mirror case at the lowest usable tick is paid in currency1 and costs 519,766,206, 51,993,074,932, 1,878,783,895,257 and 20,966,766,629,403 base units. The cost does not depend on where the pool trades as long as the range is out of range. After the fill, every add whose range starts or ends on that tick reverts, whoever the owner is and however small the amount. An owner who removes liquidity from that tick can add back at most what it removed. Removals never run the cap check, because the check sits inside the branch for a delta of zero or more (Pool.sol:165), so nothing is locked. The filler can remove its position at any time and gets its payment back, so the fill costs gas and idle dust. Flash accounting does not make it free: the position has to stay, so the debit has to be settled. I confirmed the numbers three ways. A Python transcription of Pool, Position, TickBitmap, SqrtPriceMath and TickMath gives them. An eth_call through the PositionManager on Ethereum for the ETH/USDC 0.05 percent pool (spacing 10) minted 1917559095893846714755826590044058 units of liquidity on the range 887260 to 887270 with a value of 51,993,092,462 wei, reverted with one wei less, and reverted with TickLiquidityOverflow(887270) for one more unit of liquidity. The same three calls on a pool created inside the call gave the same outcome on 20 networks for spacings 1, 60 and 200.",
+   "impact": "New deposits that use the filled tick stop in that pool. This covers the usual full range position and every position that ends on the lowest or highest usable tick. Principal and fees of existing positions are not touched and can be withdrawn. A liquidity provider can avoid the block by choosing an outer tick further inside, at the price of a position that front ends do not show as full range. A contract that always adds on the filled tick, such as a full range vault or a hook that holds one fixed full range position, cannot take deposits or reinvest fees while the fill stands. If such a contract has to add liquidity on that tick before it can pay out, its withdrawals stop too. I looked for one deployed contract of that kind and did not find it, so the freeze variant is unconfirmed. For a currency with 18 decimals the cost is below 0.00003 of one token for every spacing up to 200. For a currency with 6 decimals it is about 520 tokens at spacing 1 and about 1.88 million tokens at spacing 60, so the attacker fills the end whose currency is cheap per base unit. On the Ethereum ETH/USDC 0.05 percent pool the liquidityGross of tick 887270 was 4788029957109987 at block 26471794, 18 orders of magnitude under the cap, and the fill costs about 0.00000005 ETH.",
+   "preconditions": "An initialized pool in which at least one of the two currencies is cheap per base unit. Any account can act. No hook, no role and no ordering advantage is needed. The fill lasts until the filler removes its position.",
+   "mitigations": "Core has no switch for this. Front ends and liquidity providers can fall back to an outer tick one or more spacings inside the usable range when the boundary tick is full. Authors of vaults and hooks should not hard-code the lowest and highest usable ticks in any path that must succeed for a withdrawal, and should let the range be changed. Operators can watch liquidityGross of the two boundary ticks of important pools through extsload and compare it with the cap.",
+   "coreRefs": [
+    "src/libraries/Pool.sol:159-181",
+    "src/libraries/Pool.sol:206-237",
+    "src/libraries/Pool.sol:520-531",
+    "src/libraries/Pool.sol:565-582",
+    "src/libraries/SqrtPriceMath.sol:188-211",
+    "src/libraries/SqrtPriceMath.sol:261-271",
+    "src/PoolManager.sol:145-184"
+   ],
+   "sources": [
+    {
+     "url": "src/libraries/Pool.sol:165-173",
+     "supports": "The cap is checked only when liquidityDelta is zero or more, on liquidityGross of both ticks."
+    },
+    {
+     "url": "src/libraries/Pool.sol:209-217",
+     "supports": "A range above the current tick is paid in currency0 only, from the sqrt prices of its two ticks."
+    },
+    {
+     "url": "src/libraries/Pool.sol:565-582",
+     "supports": "The cap is (2^128 - 1) divided by the number of ticks for the spacing."
+    },
+    {
+     "url": "test/Tick.t.sol:115-141",
+     "supports": "The repository tests state the same cap values for spacings 1, 10, 60 and 200 that the cost figures use."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "extsload on PoolManager 0x000000000004444c5dc75cB358380D2e3dE08A90 at block 26471794: pool id 21c67e77068de97969ba93d4aab21826d33ca12bb9f565d8496e8fda8a82ca27 (ETH/USDC, fee 500, spacing 10) has liquidityGross 4788029957109987 at tick 887270 and 0 at tick 887260. eth_call at the latest block (about 26471905) from an account with an overridden balance to PositionManager 0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e, modifyLiquidities with MINT_POSITION and SETTLE_PAIR on ticks 887260 to 887270: liquidity 1917559095893846714755826590044058 succeeds with value 51993092462 wei, reverts with 51993092461 wei, and liquidity one unit higher reverts with data 0xb8e3c385 followed by 0xd89e6, which is TickLiquidityOverflow(887270). The ETH/USDC fee 3000 spacing 60 pool gives the same pattern at tick 887220 with 1878783905959 wei."
+    },
+    {
+     "url": "rpc endpoints listed in research/network-risk/state/networks.json",
+     "supports": "On 20 networks (all except Tempo) an eth_call to the PositionManager multicall that initializes a new native pool and mints on the top one spacing range succeeds with a value of exactly 519766372, 1878783905959 and 20966766746469 wei for spacings 1, 60 and 200, reverts with one wei less, and reverts with TickLiquidityOverflow for one liquidity unit above the cap. On Soneium the PositionManager already holds 176652317140 wei that the settlement draws on, so the lower value was reduced by that balance and the one wei less check could not be made for spacing 1."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Can one owner change or withdraw another owner's position through modifyLiquidity, including by reusing a salt, by passing ticks of another position, or by removing more than it holds.",
+   "result": "No. The position is looked up under keccak256 of owner, tickLower, tickUpper and salt, and the owner is always msg.sender (src/PoolManager.sol:161, src/libraries/Position.sol:34-41). The assembly lays the four fields out as 20, 3, 3 and 32 bytes without overlap, and bytes above the address fall outside the hashed range (Position.sol:54-66). I rebuilt the layout byte for byte and compared it with the packed encoding that test/libraries/Position.t.sol:75-80 expects on 3,000 random inputs, with dirty upper bits in the owner word. A removal larger than the position reverts in LiquidityMath.addDelta (Position.sol:88, src/libraries/LiquidityMath.sol:10-18), after the tick updates, and the revert undoes those. In 6,000 random sequences on a Python transcription, every attempt by a second owner, by the same owner under a different salt, or for one unit more than the position held reverted.",
+   "source": "src/libraries/Position.sol:34-67"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Order of the steps inside Pool.modifyLiquidity: tick update, bitmap flip, fee growth read, Position.update, tick clearing, and the three price cases for the amounts. Covered add, remove, zero delta, full range, one spacing, ranges above, below and around the current tick, and several owners on shared ticks.",
+   "result": "The order is sound. A new tick gets its feeGrowthOutside before the fee growth inside the range is read (src/libraries/Pool.sol:160-162, 533-539, 184-185). A tick whose liquidityGross returns to zero is deleted only after the last position has been paid from its values (Pool.sol:187-203). A position that still has liquidity keeps both its ticks alive, because liquidityGross is the sum of the positions on the tick, so its checkpoint can never meet a re-initialized tick. A position with zero liquidity earns nothing at its next update because fees use the liquidity held before the update (src/libraries/Position.sol:82-97). Amounts use slot0.tick for the range test and the stored sqrt price for the in range case, add rounds up and remove rounds down (Pool.sol:206-237, src/libraries/SqrtPriceMath.sol:261-288). I transcribed Pool, Position, TickBitmap, LiquidityMath, SqrtPriceMath, SwapMath and TickMath into Python and ran 6,000 random sequences (254,069 operations, 50,789 of them reverts) with four owners, two salts, spacings 1, 10, 60, 200, 2000 and 32767, start prices in the middle and within 3,000 ticks of both ends, swaps, donations and protocol fees. After every operation liquidityGross and liquidityNet of each tick equalled the sums over positions, the bitmap bit was set exactly for ticks with liquidityGross above zero, pool liquidity equalled the liquidity of positions in range at slot0.tick, and the pool never owed more of either currency than it had received. At the end every position could be removed in full and all tick data was gone. A second set of 6,000 sequences without swaps or donations, 3,614 of them started in the state where slot0.tick is one below the tick of the price, paid no fees to anyone and left no owner with more than it had paid in.",
+   "source": "src/libraries/Pool.sol:146-238"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Can an ordinary account make a hookless victim position impossible to remove, or leave a tick that can no longer be updated. Listed every revert on the removal path.",
+   "result": "No path found for a token with fewer than 2^127 base units. On removal the cap is not checked (src/libraries/Pool.sol:165). liquidityGross cannot underflow because it is the sum of the positions. liquidityNet stays inside int128 because its size is bounded by liquidityGross, and the cap is at most 6076470837873901133274546561281575204 (spacing 32767), below 2^127. The same bound keeps pool liquidity inside uint128 when ticks are crossed. flipTick cannot revert for a tick that was initialized, since only aligned ticks can be initialized (src/libraries/TickBitmap.sol:47-75). FullMath.mulDiv in Position.update cannot revert because the product of a 256 bit growth difference and a 128 bit liquidity divided by 2^128 fits in 256 bits. The casts of the principal amounts can revert for a very large position, and the owner then removes in parts. The sum of principal and fees can exceed int128, and the owner then collects fees with a zero delta first (src/PoolManager.sol:171). What remains is the known case of uncollected fees of 2^127 base units or more (F-005). I checked whether flash accounting gives a cheaper route to that bound: it does not. An account that is the only liquidity in range can donate to itself at no cost and wrap feeGrowthGlobal past 2^256, as the comment at Pool.sol:80-82 says, but positions out of range see no change in their fee growth inside, and after later tick crossings they are owed only real swap fees (six self donations of 2^127 - 1 units in the transcription, then swaps through both victim ranges). When a victim is in range, its share of a donation is real value the donor has to pay.",
+   "source": "src/libraries/Pool.sol:159-238"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Hook deltas on liquidity changes: can afterAddLiquidity or afterRemoveLiquidity move more than the caller's own delta, which hook runs for a zero delta, and what a hook that calls modifyLiquidity itself can skip.",
+   "result": "The caller delta after the hook is the pool delta minus the hook delta, and the hook is credited the hook delta, so the two always add up to principal plus fees (src/libraries/Hooks.sol:219-244, src/PoolManager.sol:171-183). The hook delta is read only when the matching return-delta bit is set, and then the return data must be exactly 64 bytes (Hooks.sol:159-168). A zero delta runs the remove hooks (Hooks.sol:201-205, 220-244). When the hook itself is the caller, the hook calls are skipped and no delta is taken (Hooks.sol:171-175, 217). A pool without a hook has none of these paths. The hazard for pools whose liquidity providers chose a hook is already recorded as F-004. One comment differs from the code: src/interfaces/IHooks.sol:50 and 81 say the delta passed to the after hooks includes the hook delta, while the code passes principal plus fees before the hook delta is known. This changes no balance.",
+   "source": "src/libraries/Hooks.sol:195-245"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "donate from entry to the last delta: who is debited, who can receive, rounding, the tick and price mismatch at a boundary, and whether a donation can be redirected away from positions that were in range.",
+   "result": "The donor is debited the two amounts, each cast to int128, and fee growth rises by amount times 2^128 divided by the liquidity in range, rounded down (src/libraries/Pool.sol:466-480, src/PoolManager.sol:256-276). A donation reverts when no liquidity is in range. The rounding remainder is below one base unit per donation and stays in the PoolManager. In the transcription each in range position was owed at most its exact share and the shares never added up to more than the donation, across all donations in 6,000 sequences. Positions out of range were unchanged. The two concrete values of test/PoolManager.t.sol:841-864 (34028236692093846346337 and 68056473384187692692674 for 100 and 200 units on 1e18 liquidity) come out of the source formula. Two things can redirect a donation, and both are stated in src/interfaces/IPoolManager.sol:150-155: liquidity added just before the donation takes a share, and after a zeroForOne swap that ends exactly on a tick, slot0.tick is one below the tick of the price, so the donation goes to the range below. Both cost the donor's intended recipients future income and take nothing that a position already holds.",
+   "source": "src/libraries/Pool.sol:466-480"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L5",
+   "check": "Do the liquidity related tests in the repository hold against the source text: test/libraries/TickBitmap.t.sol, LiquidityMath.t.sol, Position.t.sol, SafeCast.t.sol, the modifyLiquidity fuzz in test/libraries/Pool.t.sol:43-84, the salt tests and the two fixed cases of test/ModifyLiquidity.t.sol, and the liquidity and donate cases of test/PoolManager.t.sol.",
+   "result": "All hold. The 18 fixed vectors of TickBitmap.t.sol for nextInitializedTickWithinOneWord, the flip sequences, and the fuzz properties for compress, flipTick alignment, the search on the fixture bitmap and the search on an empty bitmap passed on the transcription (20,000 random inputs each). LiquidityMath: the three revert cases, addDelta(2^127, -2^127) = 0 and the int128 minimum fuzz passed. Position: the position hash and the revert conditions of the update fuzz passed. SafeCast: the conditions in the source are the ones the tests state. Pool.t.sol: the order of expected reverts (ticks misordered, lower bound, upper bound, underflow for a negative delta, empty position for zero, cap on the lower tick, misaligned lower, misaligned upper, int128 overflow of an amount) is the order in which the source reaches them. ModifyLiquidity.t.sol: the salt and router separation tests follow from the position hash, and the two fixed cases (spacing 32767 and spacing 1) are within one pip of the closed form, with differences of one base unit from rounding up. PoolManager.t.sol: ManagerLocked comes before PoolNotInitialized, and the donate reverts and values match. The JavaScript reference of the ffi fuzz test was not run.",
+   "source": "test/libraries/TickBitmap.t.sol:130-320"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Does the liquidity path give the same amounts on each network's EVM. Sent read-only eth_call probes to the PositionManager listed in networks.json: a multicall that initializes a new native pool and mints a position above the price, and a second set that mints and burns the same position in one call. Each probe was sent once with exactly the value the source formulas require and once with one wei less.",
+   "result": "All 20 networks agree with the source formulas to the wei. Mint probes (9 per network): the highest tick filled to the cap for spacings 1, 60 and 200 (519766372, 1878783905959 and 20966766746469 wei, and TickLiquidityOverflow for one unit above the cap), a range next to a mid price, a range from tick -887190 to 887270 whose amount is 9185290247808691312573729382907766498, a range next to the lowest tick, spacing 32767, the largest liquidity whose amount stays below 2^127 (amount 170141183460469231731687013724867035278 accepted) and the next step above it (SafeCastOverflow). Mint and burn probes (6 per network): the caller owes exactly one wei, which is the gap between rounding up on add and rounding down on remove, and the call fails with zero value. These probes exercise TickMath, the 512 bit multiply and divide, signed tick arithmetic, the bitmap, the position hash, tick clearing, transient deltas and native settlement. Two side observations. The Soneium PositionManager holds 176652317140 wei that any caller's payment can draw on, so on Soneium the probe values were reduced by that balance, and the one wei less variant could not be tested for the spacing 1 mint and for the six mint and burn probes. On BNB Smart Chain the token id has to be read at a pinned block because new positions are minted every block. The probes ran against public RPC nodes at the latest block on 2026-11-22 and say nothing about validator builds. Donations and fee collection were not probed on chain because no deployed periphery contract exposes donate.",
+   "source": "rpc endpoints listed in research/network-risk/state/networks.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Same question for Tempo, where the node answers any call that carries value with 'value transfer not allowed' and eth_getBalance returns the constant 4242424242424242424242424242424242424242424242424242424242424242424242424242 for the PositionManager.",
+   "result": "Partly covered. The value probes cannot run on Tempo. I used a probe that needs no payment: a position on ticks -887271 to -887270 of a new pool at the lowest price, with liquidity equal to a multiple of the product of the two sqrt prices, so that the amount on add and on remove is exact and the caller owes nothing. Mint and burn in one call succeeded on Tempo and on Ethereum for multiples 1 and 7, failed on both for liquidity one unit higher or lower (one base unit owed), and reverted on both with SafeCastOverflow for multiple 1000003, whose amount is above 2^127. An add that is paid in a TIP-20 currency was not probed. A pool with currency address(0) can be initialized on Tempo but can never receive a payment, so it holds nothing.",
+   "source": "https://rpc.mainnet.tempo.xyz"
+  },
+  {
+   "chainIds": [
+    7777777,
+    8453
+   ],
+   "lens": "L1",
+   "check": "Lead L-133, second half: is there a hook that must add liquidity on a tick an attacker can fill cheaply. Read the Zora coin hook, which adds liquidity inside afterSwap.",
+   "result": "Not affected at realistic prices. CoinRewardsV4.mintLpReward runs inside afterSwap without a try block and adds a position one spacing wide that starts two spacings away from the current tick (CoinRewardsV4.sol lines 134-204, ZoraV4CoinHook.sol line 415 on the main branch). A full tick there would make every swap in the pool revert. The fill cost near the current tick is the cap times about 0.01 divided by the sqrt price in currency0, or times the sqrt price in currency1. With the cap of 3.8e34 for spacing 200 this is above the whole supply of a coin with 1e27 base units unless the price ratio in base units is beyond about 1e11, which only the far ends of the tick range reach. I read the repository source and did not check that the deployed hooks run this code.",
+   "source": "https://raw.githubusercontent.com/ourzora/zora-protocol/main/packages/coins/src/libs/CoinRewardsV4.sol"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "question": "Which deployed vaults or hooks on the 21 networks keep a position whose tickLower or tickUpper is the lowest or highest usable tick and call modifyLiquidity with a positive delta inside their withdrawal path or inside a swap hook, for example to reinvest fees before paying out?",
+   "why": "Filling such a tick to the cap costs dust (519,766,372 base units at spacing 1, 1,878,783,905,959 at spacing 60). For a contract of that kind the fill turns from a blocked deposit into blocked withdrawals or blocked swaps until the filler removes its position. The Zora coin hook was checked and adds near the current tick, where the fill is out of reach.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "question": "On Tempo, does an add that is paid in a TIP-20 currency cost exactly the amount the source formulas give, for example 519766372 base units for the highest tick at spacing 1? The check needs an account with a TIP-20 balance and a Permit2 allowance, or an eth_call with a state override of the TIP-20 balance.",
+   "why": "Tempo is the only network where the liquidity path could not be probed with a payment, because the node rejects calls that carry value. Its client uses a separate execution engine, and the stablecoin unit has an open question on whether a JIT backend is active.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "question": "Has any pool with meaningful liquidity already had its lowest or highest usable tick filled to the cap? Read liquidityGross of both boundary ticks for the largest pools of each network through extsload and compare with tickSpacingToMaxLiquidityPerTick.",
+   "why": "The fill is cheap and silent. On Ethereum the two largest ETH/USDC pools and the ETH/USDT 0.05 percent pool were clean at block 26471794. Other pools and networks were not read.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-133",
+   "outcome": "finding",
+   "answer": "Cost to fill the highest usable tick to the cap with a range one spacing wide, in base units of currency0: 519,766,372 at spacing 1, 1,878,783,905,959 at spacing 60 and 20,966,766,746,469 at spacing 200. Cost at the lowest usable tick, in base units of currency1: 519,766,206, 1,878,783,895,257 and 20,966,766,629,403. The figures come from a transcription of the source and were reproduced to the wei by eth_call through the PositionManager on 20 networks. The cost does not depend on the pool price. Recorded as the low finding in this file. Second half: no deployed contract was found that must add on those ticks in its exit path. The Zora coin hook adds liquidity inside afterSwap, but next to the current tick, where the fill cost exceeds the token supply. The search for other vaults and hooks is carried forward as a lead."
+  },
+  {
+   "leadId": "L-118",
+   "outcome": "inconclusive",
+   "answer": "Covered in this unit and all satisfied by the source text: test/libraries/TickBitmap.t.sol, LiquidityMath.t.sol, Position.t.sol and SafeCast.t.sol, the modifyLiquidity fuzz conditions of test/libraries/Pool.t.sol, the salt tests and the two fixed cases of test/ModifyLiquidity.t.sol, and the modifyLiquidity and donate cases of test/PoolManager.t.sol. Not covered here: Hooks.t.sol, LPFeeLibrary.t.sol, FullMath.t.sol, BitMath.t.sol, CustomAccounting.t.sol, ERC6909Claims.t.sol, PoolManager.clear.t.sol, PoolManagerInitialize.t.sol, NoDelegateCall.t.sol, DynamicReturnFees.t.sol and the remaining expectRevert cases of PoolManager.t.sol. The JavaScript reference used by the ffi fuzz test in ModifyLiquidity.t.sol was not run."
+  }
+ ]
+}

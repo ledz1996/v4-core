@@ -1,0 +1,392 @@
+{
+ "unit": "core-code-flow-swap",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "The swap loop pays for every bitmap word and every initialized tick on its way, and a HyperEVM small block holds 3,000,000 gas",
+   "chainIds": [
+    999
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A9"
+   ],
+   "effect": "degrade",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "HyperEVM produces small blocks with a 3,000,000 gas limit every second and big blocks with a 30,000,000 gas limit about once a minute. A sender reaches big blocks only after setting the usingBigBlocks flag on its HyperCore account. I sampled blocks 51958402 to 51958471 through the public RPC: 69 had gasLimit 3,000,000 and one (51958443) had 30,000,000. For comparison, state/networks.json records an Ethereum block gas limit of 59,999,943, and EIP-7825 specifies a cap of 16,777,216 gas per transaction. I did not confirm in this session that the cap is active on Ethereum.",
+   "mechanism": "Pool.swap runs one loop iteration per step (src/libraries/Pool.sol:344-437). Each iteration reads one tick bitmap word from storage (Pool.sol:347-348, src/libraries/TickBitmap.sol:85-121), computes the price of the next tick and runs one swap step. When the step ends on an initialized tick, crossTick reads the tick slot and reads and rewrites both fee growth slots of that tick (Pool.sol:413-428, 602-612). The repository gas snapshots give 2,242 to 2,287 gas for the bitmap search, which includes the cold storage read, and 919 to 1,565 gas for a swap step with liquidity. I use 2,242 gas as the floor for one iteration and leave out the swap step, TickMath and loop bookkeeping. A crossing adds one cold read (2,100) and two read and write pairs. Each pair costs 5,000 gas when the slot changes from one nonzero value to another and 22,100 gas when it is written for the first time. That gives about 14,342 gas per crossing when both fee growth slots change, and about 48,542 when both are written for the first time. With the repository figure of 123,144 gas for a simple swap as fixed cost, a 3,000,000 gas transaction fits at most about 200 crossings, about 59 when the fee growth slots are written for the first time, and about 1,283 empty bitmap words. The real numbers are lower, because the floor leaves out the computation. I did not measure gas on HyperEVM. Three things an ordinary account controls raise the iteration count of other people's swaps. First, modifyLiquidity lets anyone add a position of one liquidity unit on any aligned tick pair of a pool without a hook (src/PoolManager.sol:145-184, Pool.sol:159-181). In my transcription of the source, 200 such positions on [t, t+1) below the price of a pool with tick spacing 1 made every tick initialized, each cost 1 base unit of one currency, and a swap that moved the price by 100, 200 and 400 ticks ran 101, 201 and 401 iterations, each with a crossing. Second, a step with zero liquidity in range consumes nothing and moves the price to the next word boundary (src/libraries/SwapMath.sol:63-75), so a swap that runs past the last position toward its price limit visits every word on the way. From tick 0 to the lower limit that is 3,468 iterations at tick spacing 1, 349 at spacing 10, 60 at spacing 60 and 20 at spacing 200, which is at least 7,775,256 gas at spacing 1 from the bitmap reads alone. Third, initialize has no access control and accepts any price from MIN_SQRT_PRICE up to one unit below MAX_SQRT_PRICE (PoolManager.sol:117-142, Pool.sol:100-107), so a third party can create a pool id at an extreme price before anyone else uses it. The gap to the market price then has to be walked with swaps that take no tokens and still pay for every word.",
+   "impact": "No funds leave the PoolManager and no position is frozen. Pool.modifyLiquidity has no loop (Pool.sol:146-238), so removals fit in a small block in every case I looked at. The cost falls on swappers and arbitrageurs in pools with tick spacing 1 or other small spacings. In a pool where every tick carries a dust position, one small block transaction can move the price by at most about 59 to 200 ticks, which is 0.6 to 2.0 percent at spacing 1. A larger move needs several transactions with nearer price limits, or a big block. A swap that names the extreme price limit and exceeds the liquidity on its side runs out of gas in a small block where it would otherwise end with a partial fill. A contract that must complete one large swap in one transaction, for example a liquidation, can stall until it is sent to a big block. The dust positions cost the attacker about 161,276 gas each by the repository snapshot for a simple add, plus one base unit, and stay until the attacker removes them.",
+   "preconditions": "The pool has a small tick spacing, since at spacing 60 a move of 59 crossings is already more than 40 percent. The attacker pays gas for each dust position. The victim sends the swap to a small block, or the swap sits inside a contract that cannot split it. Any account can undo the third case by walking the price in several transactions.",
+   "mitigations": "Routers and keepers on HyperEVM can pass a price limit close to the expected end price and split large swaps. Contracts that depend on one atomic swap can use pools with a wider tick spacing or send the transaction to a big block. Pool creators can initialize the pool ids they intend to use at the market price before announcing them. Liquidity providers do not need to act, because removal does not loop.",
+   "coreRefs": [
+    "src/libraries/Pool.sol:344-437",
+    "src/libraries/Pool.sol:602-612",
+    "src/libraries/TickBitmap.sol:85-121",
+    "src/libraries/SwapMath.sol:63-75",
+    "src/PoolManager.sol:117-142",
+    "src/PoolManager.sol:145-184",
+    "src/libraries/Pool.sol:146-238"
+   ],
+   "sources": [
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/dual-block-architecture",
+     "supports": "Fast blocks last 1 second with a 3M gas limit and slow blocks last 1 minute with a 30M gas limit. A sender is directed to big blocks by the HyperCore action evmUserModify with usingBigBlocks true."
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_getBlockByNumber for blocks 51958402 to 51958471",
+     "supports": "69 of the 70 sampled blocks report gasLimit 3,000,000 and block 51958443 reports 30,000,000."
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm",
+     "supports": "The HyperEVM uses the Cancun hardfork without blobs. That the gas schedule equals Ethereum's Cancun schedule is my inference from this sentence."
+    },
+    {
+     "url": "https://eips.ethereum.org/EIPS/eip-2929",
+     "supports": "COLD_SLOAD_COST is 2100 and SSTORE_RESET_GAS becomes 5000 minus COLD_SLOAD_COST, which is 2900."
+    },
+    {
+     "url": "https://eips.ethereum.org/EIPS/eip-2200",
+     "supports": "SSTORE_SET_GAS is 20000."
+    },
+    {
+     "url": "https://eips.ethereum.org/EIPS/eip-7825",
+     "supports": "The cap of 16,777,216 gas per transaction that I quote for Ethereum as comparison."
+    },
+    {
+     "url": "snapshots/TickBitmapTest.json:5-10",
+     "supports": "nextInitializedTickWithinOneWord costs 2,242 to 2,287 gas in the repository snapshots."
+    },
+    {
+     "url": "snapshots/SwapMathTest.json:2-9",
+     "supports": "computeSwapStep costs 919 to 1,565 gas in the repository snapshots."
+    },
+    {
+     "url": "snapshots/PoolManagerTest.json:12-16",
+     "supports": "A simple add of liquidity costs 161,276 gas and a simple swap 123,144 gas through the test routers."
+    },
+    {
+     "url": "src/libraries/Pool.sol:344-437",
+     "supports": "One loop iteration per bitmap word or initialized tick, with the tick crossing at lines 413 to 428."
+    }
+   ],
+   "evidence": "inferred"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Line by line trace of a swap in a pool without a hook, from PoolManager.swap to the last delta written, for exact input and exact output in both directions.",
+   "result": "swap rejects a zero amount and an uninitialized pool before anything else (src/PoolManager.sol:193-196). With hooks equal to address(0) beforeSwap returns the caller's amount unchanged and afterSwap returns a zero hook delta, because no permission bit is set (src/libraries/Hooks.sol:252-255, 298, 306). Pool.swap treats a negative amount as exact input and a positive amount as exact output at every place that branches on it (src/libraries/Pool.sol:313, 371, 453; src/libraries/SwapMath.sol:61). For exact input the remaining amount rises toward zero by amountIn plus fee and the calculated amount grows by amountOut. For exact output the remaining amount falls by amountOut and the calculated amount falls by amountIn plus fee (Pool.sol:371-382). The final delta puts the specified amount in currency1 exactly when zeroForOne differs from exact input (Pool.sol:453-461), so the caller is debited the input currency and credited the output currency in all four cases. Both casts to int128 revert on overflow (Pool.sol:455, 459; src/libraries/SafeCast.sol:40-43). The protocol fee is booked to the input currency (PoolManager.sol:216, 238). _accountPoolBalanceDelta writes amount0 to currency0 and amount1 to currency1 for msg.sender (PoolManager.sol:226, 381-384). I found no step where a sign, an operand order or a cast gives the caller more than the pool math computed.",
+   "source": "src/PoolManager.sol:187-253, 368-384; src/libraries/Pool.sol:279-463; src/libraries/SwapMath.sol:51-107"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "beforeSwap: the returned delta, the check that the swap type does not change, and the fee override word, including a hook that returns dirty upper bits.",
+   "result": "The hook result must be exactly 96 bytes and start with the beforeSwap selector, otherwise the call reverts (src/libraries/Hooks.sol:152-154, 259). The specified delta is read only when the address carries BEFORE_SWAP_RETURNS_DELTA_FLAG (Hooks.sol:266-270). It is added to the caller's amount with checked arithmetic, and the call reverts when an exact input amount becomes positive or an exact output amount becomes negative (Hooks.sol:273-278). An amount of exactly zero is allowed and makes Pool.swap return a zero delta without touching state (src/libraries/Pool.sol:320). The fee word is read only for a dynamic fee pool (Hooks.sol:263). parseFee assigns a full 32 byte word to a uint24 in assembly (src/libraries/ParseBytes.sol:16-21). The value is then used only through isOverride, which ANDs with 0x400000, and removeOverrideFlag, which ANDs with 0xBFFFFF, followed by a comparison with 1,000,000 (src/libraries/LPFeeLibrary.sol:61-78, Pool.sol:303-305). Both masks are 24 bit constants, so upper bits supplied by the hook cannot reach the fee, whatever the compiler does with the assignment. Without the override bit the stored fee is used. A hook can set the fee of its own dynamic fee pool to any value from 0 to 100 percent, which is the recorded hook trust finding F-004 and does not reach pools without that hook.",
+   "source": "src/libraries/Hooks.sol:248-282; src/libraries/ParseBytes.sol:9-28; src/libraries/LPFeeLibrary.sol:61-78; src/libraries/Pool.sol:300-320"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "afterSwap and the two _accountDelta calls: does the caller delta plus the hook delta always equal the pool delta, and can a cast or a packing step lose a value.",
+   "result": "afterSwap takes the specified and unspecified parts of the beforeSwap return, adds the afterSwap return to the unspecified part with a checked int128 cast and a checked addition (src/libraries/Hooks.sol:295-303), places the two parts in currency order with the same rule that Pool.swap uses (Hooks.sol:307-309 against src/libraries/Pool.sol:453), and subtracts the hook delta from the swap delta (Hooks.sol:312). The subtraction works on sign extended halves and reverts when a half leaves the int128 range (src/types/BalanceDelta.sol:34-46). PoolManager.swap then credits the hook delta to the hook address and the remainder to msg.sender (src/PoolManager.sol:221-226). The pool was run with the adjusted amount, so the two accounts together receive exactly the pool delta and each must reach zero before unlock returns (PoolManager.sol:112). I transcribed these lines and ran 20,000 random combinations of direction, amount and hook delta. Caller plus hook equalled the pool delta in every accepted case, and the accepted and rejected cases matched the conditions written in test/CustomAccounting.t.sol:195-209.",
+   "source": "src/libraries/Hooks.sol:284-315; src/types/BalanceDelta.sol:14-71; src/types/BeforeSwapDelta.sol:9-37; src/PoolManager.sol:220-227, 368-384"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Fee split between protocol and liquidity providers in each step, and the unchecked subtraction of the protocol share.",
+   "result": "The swap fee is the LP fee when the protocol fee is zero and protocolFee + lpFee - floor(protocolFee * lpFee / 1e6) otherwise (src/libraries/Pool.sol:307, src/libraries/ProtocolFeeLibrary.sol:38-46). It equals the protocol fee only when the LP fee is zero, because the protocol fee field is 12 bits wide and capped at 1,000. In that case the whole step fee goes to the protocol. Otherwise the protocol receives floor((amountIn + feeAmount) * protocolFee / 1e6) and the rest goes to fee growth (Pool.sol:391-405). In 300,000 random step shapes over the whole price range, with liquidity from 0 to 2^127 and amounts up to 2^255, the protocol share never exceeded the step fee, so the unchecked subtraction at Pool.sol:395 did not wrap. The transcribed swap reproduced the protocol fee totals that test/PoolManager.t.sol:779-818 and test/DynamicFees.t.sol:286-318 expect in 12,000 random cases, including the rounding up when the LP fee is zero. Rounding favours liquidity providers over the protocol and never the swapper.",
+   "source": "src/libraries/Pool.sol:283-308, 384-407; src/libraries/ProtocolFeeLibrary.sol:17-46; src/libraries/SwapMath.sol:63-105"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Rounding of every amount in a swap step, asking who gains if a result is off by one unit.",
+   "result": "Exact input: the amount after fee is rounded down, the input needed to reach the target is rounded up, the fee on a full step is rounded up, the fee on a partial step is the whole remainder, and the output is rounded down (src/libraries/SwapMath.sol:64-86). Exact output: the output to the target is rounded down, the input and the fee are rounded up (SwapMath.sol:88-104). The next price is rounded up when currency0 comes in and down when currency1 comes in, which moves the price less than the exact result for an input and more for an output (src/libraries/SqrtPriceMath.sol:31-120, 146-148, 175-177). Every rounding step is against the swapper. The transcription returned the values asserted in test/libraries/SwapMath.t.sol:69-180 for seven fixed vectors and the Swap event values asserted in test/DynamicFees.t.sol:156-279, test/DynamicReturnFees.t.sol:94, test/PoolManager.t.sol:501-503 and 608.",
+   "source": "src/libraries/SwapMath.sol:51-107; src/libraries/SqrtPriceMath.sol:31-289; src/libraries/FullMath.sol:14-116; src/libraries/UnsafeMath.sol:12-28"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Tick crossing, the sign of liquidityNet, the tick stored after a step, and the price limit bounds.",
+   "result": "The loop asks the bitmap for the next tick at or below the current tick when zeroForOne and above it otherwise (src/libraries/Pool.sol:347-348, src/libraries/TickBitmap.sol:94-119), clamps the result to MIN_TICK and MAX_TICK (Pool.sol:351-356) and uses the nearer of that tick's price and the limit as the target (src/libraries/SwapMath.sol:25-36). A crossing happens only when the step ends exactly on the price of an initialized tick. It flips both fee growth outside values with the updated growth of the input currency and applies liquidityNet with its sign reversed for zeroForOne (Pool.sol:413-428, 602-612). After a zeroForOne step that ends on a tick the stored tick is one below it (Pool.sol:431). I traced the following oneForZero swap, a liquidity add on each side of that tick and a donate from that state. Each of them treats the pool as sitting just below the tick, which agrees with the liquidity value the swap left. A zeroForOne limit must be above MIN_SQRT_PRICE and a oneForZero limit below MAX_SQRT_PRICE (Pool.sol:322-338), so a swap cannot cross MIN_TICK downward or reach the price of MAX_TICK. Addition of liquidityNet reverts above 2^128 - 1 (src/libraries/LiquidityMath.sol:10-19) and the per tick cap keeps the sum over all ticks below that bound (Pool.sol:165-173, 565-582). The transcription returned the next tick and the initialized flag asserted in 19 fixed cases of test/libraries/TickBitmap.t.sol:130-293 and met its two fuzz properties in 40,000 random cases.",
+   "source": "src/libraries/Pool.sol:322-359, 409-449, 596-612; src/libraries/TickBitmap.sol:16-121; src/libraries/TickMath.sol:57-237"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Extremes of tick, price, liquidity, amount and fee, tested as solvency of one pool: can any sequence make a pool pay out more of a currency than it took in. This matters for every pool, because the PoolManager keeps no reserve per pool and a pool that overpays would draw on the balances of the others.",
+   "result": "I wrote a third transcription of FullMath, UnsafeMath, BitMath, TickMath, SqrtPriceMath, SwapMath, LiquidityMath, TickBitmap, the position update and Pool.initialize, modifyLiquidity, swap and donate from the source text, with 256 bit wrapping where the source is unchecked or assembly. I checked it against the fixed values in the repository tests named in the other items. I then ran 8,000 random sequences of 5 to 40 operations: tick spacings 1, 10, 60, 200, 32767 and random, starting prices over the whole range including MIN_TICK and the ticks next to MAX_TICK, static fees from 0 to 100 percent, a per swap fee override in 40 percent of the swaps, protocol fees from 0 to 1,000 in both directions, liquidity up to 2^126, exact input and exact output amounts up to 2^255 with both the extreme and nearby price limits, and donations up to 2^126. After every operation, and after all positions were removed, the net amount the pool had received in each currency was at least the protocol fee accrued, in all 8,000 runs. 17 runs ended with a position that could not be removed. In each of them the fees paid into the pool in one currency exceeded 2^127 base units, which is the recorded finding F-005 and cannot happen for a token whose supply is below 2^127.",
+   "source": "src/libraries/Pool.sol:94-612; src/libraries/SwapMath.sol:20-107; src/libraries/SqrtPriceMath.sol:31-289; src/libraries/TickMath.sol:57-237; src/libraries/Position.sol:76-102"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Zero liquidity in range: a swap step with liquidity 0 moves the price for free. Can that give the swapper tokens or damage positions.",
+   "result": "With liquidity 0 the input to the target, the output and the fee are all 0, the step reaches its target and no fee growth is added (src/libraries/SwapMath.sol:66-74, 84-90; src/libraries/Pool.sol:401). In the transcription a swap of 1e18 exact input through an empty range returned the delta (0, 0) and only moved the price and tick. Positions are not affected, because a later add or removal computes its amounts from the price and tick of that moment with the usual rounding (Pool.sol:206-237) and the solvency runs above include such moves. The free move matters for contracts that read a pool price as an oracle and for the gas cost recorded in the finding of this unit. It does not move funds in core.",
+   "source": "src/libraries/SwapMath.sol:63-105; src/libraries/Pool.sol:344-437"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L4",
+   "check": "Swap hook calls to an address that is a precompile, a system contract or an account without code: can the PoolManager be made to accept such a call during a swap.",
+   "result": "callHook reverts unless the call succeeds and the return data is at least 32 bytes that start with the selector that was sent (src/libraries/Hooks.sol:131-155). An address without code returns nothing and fails this test. beforeSwap also needs exactly 96 bytes (Hooks.sol:259) and afterSwap with the return delta flag exactly 64 bytes (Hooks.sol:166). A contract that returns its input unchanged passes the selector test but returns the whole call data, which is longer than 96 bytes for beforeSwap and longer than 64 bytes for afterSwap, so it cannot act as a swap hook that returns deltas. It can only pass as an afterSwap hook without the return delta flag, where the return value is ignored (Hooks.sol:163). A failed hook call reverts the whole swap, so a side effect in the callee does not survive. Such a pool is one that somebody chose to create with that address as hook, and pools without a hook never make these calls.",
+   "source": "src/libraries/Hooks.sol:131-168, 248-315"
+  },
+  {
+   "chainIds": [
+    42220,
+    137,
+    5042
+   ],
+   "lens": "L3",
+   "check": "A native asset that also answers as an ERC-20 at some address: can sync, settle and take, in any order, credit one payment twice or credit more than was paid. Exhaustive search over a model of src/PoolManager.sol:279-297 and 349-364.",
+   "result": "I modelled the PoolManager balance, the synced currency, the synced reserves, the two deltas and the attacker's wallet, with operations sync(0), sync(face), settle with value, settle without value, take in each currency, a transfer through the face and a native transfer that reaches the PoolManager without a call. I searched every sequence of up to 6 operations with amounts 1, 2 and 3. When the face reports the native balance one to one, no sequence left the attacker better off. The guard at PoolManager.sol:356 blocks the only order that would count a value twice. When the face reports floor(native / S) for S above 1, the best sequence gained S - 1 base units per round of sync and settle, and it needs native value to arrive without a call while the face is synced. On Arc the USDC contract at 0x3600000000000000000000000000000000000000 returns decimals 6 and its balanceOf for the PoolManager equalled floor(eth_getBalance / 1e12) at blocks 0x1f14a00, 0x1f14a63 and 0x1f14a79, with remainders of 930109466545, 178438878313 and 971982015932 base units. S is therefore 1e12 there and one round can gain less than 0.000001 USDC. I did not test whether native USDC can reach the PoolManager without a call on Arc, and I did not query the one to one property on Celo and Polygon again. For those two I rely on the earlier findings F-023 and F-008.",
+   "source": "src/PoolManager.sol:279-297, 349-364; https://rpc.mainnet.arc.io eth_call decimals() and balanceOf(PoolManager) on 0x3600000000000000000000000000000000000000 and eth_getBalance at blocks 0x1f14a00, 0x1f14a63, 0x1f14a79"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L3",
+   "question": "With the deployed PoolManager bytecode on HyperEVM, what do debug_traceCall or eth_estimateGas report for one empty bitmap word and for one initialized tick crossing in Pool.swap, and which price limit do the Universal Router and the other routers deployed there pass to swap?",
+   "why": "The finding of this unit gives upper bounds of about 59 to 200 crossings and about 1,283 empty words per 3,000,000 gas, derived from repository snapshots and gas constants. Measured values decide how small a price move an attacker can force into several transactions, and a router that always passes the extreme limit turns a swap that exceeds the liquidity on its side into an out of gas failure.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "question": "Does a swap in a pool with tick spacing 1 that runs from tick 0 to the extreme price limit through empty words (3,468 loop iterations in my transcription, at least 7,775,256 gas from the bitmap reads alone) fit under the 16,777,216 gas cap per transaction of EIP-7825, if that cap is active, and how many initialized spacing 1 pools sit more than that many words away from the nearest position?",
+   "why": "A pool created by a third party at an extreme price has to be walked to the market price with swaps that take no tokens. If one transaction cannot cover the distance the walk needs several, and a pool id that people expect to use stays unusable until somebody pays for them.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "Can native USDC reach the Arc PoolManager without a call into it, for example as the beneficiary of SELFDESTRUCT, as a block reward recipient or through a system credit, while 0x3600000000000000000000000000000000000000 is the synced currency?",
+   "why": "The ERC-20 face reports floor(native / 1e12). In my model of sync and settle a native amount that arrives without a call between sync(0x3600...) and settle is rounded up to one whole unit of the face, which gains up to 1e12 - 1 base units per round at the cost of other holders of native claims. The gain is below 0.000001 USDC per round, so it matters only if a round can be repeated at almost no gas cost. This adds the mechanism to lead L-114.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-026",
+   "outcome": "finding",
+   "answer": "From the repository snapshots and the gas constants of EIP-2929 and EIP-2200, one loop iteration of Pool.swap costs at least 2,242 gas for the bitmap read, a crossing about 14,342 gas when both fee growth slots change and about 48,542 gas when both are written for the first time, all before the swap step and TickMath. A 3,000,000 gas small block transaction therefore fits at most about 200 crossings, about 59 first time crossings, or about 1,283 empty bitmap words. The values are upper bounds and were not measured on HyperEVM. A swap from tick 0 to the extreme limit in a spacing 1 pool needs 3,468 iterations and cannot fit. I did not read the routers and hooks deployed on HyperEVM, so the second half of the question stays open and is repeated as a lead."
+  },
+  {
+   "leadId": "L-118",
+   "outcome": "inconclusive",
+   "answer": "I replayed the parts that belong to the swap path in a transcription of the source and found no expectation that the source text fails. Covered: the 19 fixed cases and both fuzz properties of test/libraries/TickBitmap.t.sol; the fixed values and fuzz identities of test/libraries/LPFeeLibrary.t.sol and test/libraries/ProtocolFeeLibrary.t.sol; the swap section of test/CustomAccounting.t.sol (lines 73-266), including the constants maxPossibleIn -6018336102428409 and maxPossibleOut 5981737760509662 and the revert conditions for HookDeltaExceedsSwapAmount and SwapAmountCannotBeZero; the swap cases of test/DynamicReturnFees.t.sol; the Swap event values and the protocol fee fuzz of test/DynamicFees.t.sol and test/PoolManager.t.sol (lines 496-506, 589-611, 779-818); and the bit index functions of BitMath for every single bit value and random values, which is a property check and does not replay test/libraries/BitMath.t.sol. Not covered by this unit: test/libraries/Hooks.t.sol, Position.t.sol, SafeCast.t.sol, LiquidityMath.t.sol and FullMath.t.sol, the liquidity section of CustomAccounting.t.sol, ERC6909Claims.t.sol, ModifyLiquidity.t.sol, PoolManager.clear.t.sol, PoolManagerInitialize.t.sol, NoDelegateCall.t.sol and the remaining expectRevert cases of PoolManager.t.sol."
+  }
+ ]
+}
