@@ -1,0 +1,400 @@
+{
+ "unit": "ethereum-reference",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 1,
+   "lens": "L1",
+   "summary": "The queried node (reth v2.11.0) still reports fork id 0x07c9462e with no next fork, so the opcode set is the one cycle 1 recorded. This cycle read the Osaka execution specification for the call patterns the PoolManager uses and found each one matches what the source assumes. Every external call in the non-test source reverts the whole operation when the callee fails, so no network rule about failed calls can leave a half-applied state on mainnet.",
+   "deltas": [
+    {
+     "delta": "Reference semantics for other units to compare against. The Osaka specification creates a new TransientStorage object for every transaction (fork.py line 932) and a separate one for every system call (fork.py line 622). process_message takes a snapshot that includes transient storage before the value transfer and before code runs (interpreter.py lines 263 to 268) and rolls it back when the frame ends with an error (lines 299 to 303). A CALL with value in a static context raises WriteInStaticContext, and a CALL whose sender balance is below the value pushes 0 with empty return data (system.py lines 403 to 411). The gas given to a callee is capped at all but one 64th of the remaining gas (gas.py line 266). A precompile is selected by the code address of the message (interpreter.py lines 271 to 275).",
+     "source": "https://raw.githubusercontent.com/ethereum/execution-specs/mainnet/src/ethereum/forks/osaka/fork.py; https://raw.githubusercontent.com/ethereum/execution-specs/mainnet/src/ethereum/forks/osaka/vm/interpreter.py; https://raw.githubusercontent.com/ethereum/execution-specs/mainnet/src/ethereum/forks/osaka/vm/instructions/system.py; https://raw.githubusercontent.com/ethereum/execution-specs/mainnet/src/ethereum/forks/osaka/vm/gas.py",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7702 states that when a delegation points at a precompile address the code is treated as empty, so a call to that account succeeds with no execution. A delegated account therefore cannot borrow the identity precompile to answer hook calls with the caller's selector.",
+     "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md (section Precompiles, lines 161 to 166)",
+     "relevance": "none"
+    },
+    {
+     "delta": "EIP-7702 also states that it breaks the rule that msg.sender == tx.origin implies the caller runs no code. The Ampleforth Orchestrator deployed on mainnet uses exactly that check to keep contracts from calling rebase(). This is the mainnet opcode level change that feeds the finding in this file.",
+     "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md (lines 299 to 310); https://sourcify.dev/server/v2/contract/1/0x6fb00a180781e75f87e2b690af0196baa77c7e7c?fields=sources,compilation",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Glamsterdam list of scheduled EIPs has grown since cycle 1. It now also names EIP-2780 (intrinsic gas split into primitives, base cost 12,000 plus recipient and value charges), EIP-7778 (block gas accounting without refunds), EIP-7843 (SLOTNUM opcode), EIP-7976 and EIP-7981 (calldata floor and access list cost), EIP-7997 (a deterministic CREATE2 factory), EIP-8246 (removal of the remaining SELFDESTRUCT burn) and EIP-8282. Sepolia activated on 2026-10-06 and the mainnet row is still empty. None of the ones I read changes TSTORE, TLOAD, CALL value semantics or return data handling. I read EIP-2780 in part and the others by title and abstract only.",
+     "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7773.md; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-2780.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_config at block 26471525 lists the same 18 precompiles and five system contracts as in cycle 1. A scan of addresses 0x00 to 0x1ff found no code at any of them and found a reaction to input only at 0x02 to 0x11, so there is no undocumented precompile in that range on the queried node.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26471525 (2026-11-22) (eth_config, batched eth_getCode and eth_call)",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 1,
+   "lens": "L2",
+   "summary": "No new way was found for state to change outside a user transaction in a manner that reaches the PoolManager. System calls run with their own empty transient storage and the system address as origin. The one account model change that matters is that a delegated EOA now passes origin checks while running code, which lets an ordinary account call guarded public rebase functions from inside its own unlock callback.",
+   "deltas": [
+    {
+     "delta": "System calls to the beacon roots, history, withdrawal request and consolidation request contracts are built with origin SYSTEM_ADDRESS and a new TransientStorage object, so nothing a user transaction stored transiently is visible to them and nothing they store is visible to a user transaction.",
+     "source": "https://raw.githubusercontent.com/ethereum/execution-specs/mainnet/src/ethereum/forks/osaka/fork.py (lines 616 to 626)",
+     "relevance": "none"
+    },
+    {
+     "delta": "The Ampleforth Orchestrator at 0x6fb00a180781e75f87e2b690af0196baa77c7e7c, which AMPL's monetary policy names as its orchestrator, starts rebase() with require(msg.sender == tx.origin). The source comment says the purpose is to guard liquidity providers against flash loan attacks. Since Pectra an EOA with delegated code satisfies the check while executing arbitrary logic.",
+     "source": "https://sourcify.dev/server/v2/contract/1/0x6fb00a180781e75f87e2b690af0196baa77c7e7c?fields=sources,compilation; on-chain query via https://ethereum-rpc.publicnode.com at block 26471525 (monetaryPolicy(), orchestrator())",
+     "relevance": "low"
+    },
+    {
+     "delta": "The public endpoint accepts eth_simulateV1 with traceTransfers and state overrides and refuses debug_traceCall. A plain eth_call with from set to the PoolManager makes tx.origin equal to the PoolManager, which hides origin checks and deposit aliasing: in that mode the OP Mainnet L1StandardBridge accepted 1 ETH and the OptimismPortal logged the unaliased address. With a 34 byte forwarder placed at the PoolManager address by state override and an unrelated account as sender, the bridge reverted and the portal logged the aliased sender. Sweeps on other networks that use plain eth_call share this blind spot for targets that read tx.origin.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26471525 (2026-11-22) (eth_call and eth_simulateV1 with stateOverrides)",
+     "relevance": "low"
+    },
+    {
+     "delta": "Client incidents on mainnet in the last two years were stalls and wrong rejections of valid blocks: Reth 1.6.0 and 1.4.8 stopped at block 23272427 on 2025-09-02 with a state root mismatch, and some Nethermind nodes marked a canonical block invalid at the Fusaka fork on 2025-12-03. The Fusaka retrospective lists client fixes for a Geth MODEXP calculation bug and a Besu P256VERIFY point check; I did not confirm on which networks those bugs were live. None of these changes what a successful transaction does to contract state.",
+     "source": "https://github.com/paradigmxyz/reth/issues/18205; https://research.lido.fi/t/post-mortem-develp-fleet-fusaka-fork-downtime-2025-12-03/10967; https://notes.ethereum.org/@parithosh/fusaka-retro",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 1,
+   "lens": "L3",
+   "summary": "ETH still has no second face on mainnet. A native payout to WETH9, Lido, the frxETH minter or an ERC-4337 EntryPoint is booked by those contracts to the PoolManager's own address, and the caller stays debited for the full amount. The existing PoolManager holds more issuer-controlled value than cycle 1 listed, and it holds small balances of rebasing and reward-bearing tokens whose increases any caller who can trigger them can book as a payment.",
+   "deltas": [
+    {
+     "delta": "Balances of the existing PoolManager read on chain at block 26471602: 54,043.46 ETH, 79.06M USDT, 63.00M PYUSD, 56.25M USDS, 32.36M RLUSD, 31.32M USDC, 404.31 WBTC, 369.89 cbBTC, 35.17M WLFI, 2.80M USDG, 2.47M GHO, 1.66M EURC, 1,496.10 XAUT and 1,145.51 PAXG. A view that reports a block or freeze flag for the PoolManager address exists and returns false on USDT (isBlackListed), PYUSD, PAXG and USDG (isFrozen), USDC, cbBTC, EURC and WLFI (isBlacklisted) and XAUT (isBlocked). A paused() view exists on those tokens and on RLUSD, WBTC and LBTC. I did not read the source of the tokens added here, so who can set the flags is unconfirmed for them.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26471602 (2026-11-22) (balanceOf, isBlacklisted, isBlackListed, isFrozen, isBlocked, paused)",
+     "relevance": "high"
+    },
+    {
+     "delta": "Rebasing or reward-bearing balances of the existing PoolManager: 80.47 stETH, 20,053 OUSD, 3,410 aEthUSDC, 2,268 aEthUSDT, 468 aEthDAI, 2.05 aEthWETH, 1,174,038 cUSDT, 4,065 cDAI, 249.39 sOHM, 59.57 stkAAVE, 2.76 eETH, 0.615 cUSDCv3 and 16 base units of AMPL. The explorer lists 66,554 token rows for the address, so this is a sample chosen by me and the long tail is unchecked.",
+     "source": "https://eth.blockscout.com/api/v2/addresses/0x000000000004444c5dc75cB358380D2e3dE08A90/token-balances (fetched 2026-11-22); on-chain query via https://ethereum-rpc.publicnode.com at block 26471525",
+     "relevance": "low"
+    },
+    {
+     "delta": "Public triggers measured at block 26471590. Comptroller.claimComp(PoolManager) succeeds for any caller and moved 0 COMP. CometRewards.claim(cUSDCv3, PoolManager, true) reverted because the rewards contract lacks COMP. Olympus staking rebase() succeeds for any caller and left the sOHM balance unchanged. The OUSD and OETH vault rebase() calls reverted with Caller not authorized, and OUSD reports rebaseState 1 and a fixed credits per token of 1e18 for the PoolManager, which I read as the non-rebasing state without fetching the OUSD source. The Ampleforth rebase() call reverted in simulation because the policy reports inRebaseWindow() = 0 at block 26471631; the window is 1,200 seconds in every 86,400, and AMPL total supply is 1.53M.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26471590 (2026-11-22) (eth_simulateV1)",
+     "relevance": "low"
+    },
+    {
+     "delta": "Tokens reachable at two addresses that the existing PoolManager holds: 258.6 TUSD and 4,089 SNX. I did not test the second entry point of either token on chain.",
+     "source": "https://eth.blockscout.com/api/v2/addresses/0x000000000004444c5dc75cB358380D2e3dE08A90/token-balances (fetched 2026-11-22)",
+     "relevance": "none"
+    },
+    {
+     "delta": "A 1 ETH transfer with empty calldata from the PoolManager address raises WETH9.balanceOf(PoolManager) by exactly 1e18, raises stETH.balanceOf(PoolManager) by 1e18 minus 1 wei, mints 1e18 frxETH to the PoolManager, and raises balanceOf(PoolManager) in the EntryPoint v0.6, v0.7 and v0.8 deposit ledgers by 1e18. Sent to the OptimismPortal of OP Mainnet or Base it produces a deposit from the alias 0x111100000004444c5dc75cb358380d2e3de09ba1 to the PoolManager address on the L2. The OP Mainnet L1StandardBridge reverts with the message that it can only be called from an EOA, and the Arbitrum Inbox, the Arbitrum Bridge, the Rocket Pool deposit pool and Permit2 revert. A zero value empty call changes none of these ledgers, and Lido reverts on it.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26471525 (2026-11-22) (eth_simulateV1 with traceTransfers; the PoolManager made the call through a code override so that tx.origin differed from msg.sender)",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 1,
+   "lens": "L4",
+   "summary": "The sweep assigned for this cycle ran against all 18 precompiles, the five system contracts, the system address, WETH9 and the PoolManager itself, with 15 call shapes each and the PoolManager as sender. No target lets the caller end with a credit it did not pay for, and no target moves value out of the PoolManager without the caller being debited the same amount. Two precompile addresses and three contract addresses pass the hook address check, and none of them answers a hook call in a way the PoolManager accepts.",
+   "deltas": [
+    {
+     "delta": "Sweep at block 26471525 with from set to the PoolManager. ECRECOVER and P256VERIFY return empty data for every shape, like an address with no code. SHA256 and RIPEMD160 return one 32 byte digest per input. IDENTITY returns its input. MODEXP, the BN254 and BLS12 precompiles, BLAKE2F and KZG fail on the 36, 68 and 228 or more byte inputs the PoolManager can send; BN254 add, mul and pairing and MODEXP succeed on empty input. A 1 ETH value call with empty calldata succeeds at 0x01 to 0x08 and 0x100 and leaves the ETH at the precompile address.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26471525 (2026-11-22) (eth_call with from, 18 targets, 15 shapes)",
+     "relevance": "none"
+    },
+    {
+     "delta": "The withdrawal request contract (0x00000961Ef480Eb55e80D19ad83579A64c007002) and the consolidation request contract (0x0000BBdDc7CE488642fb579F8B00f3a590007251) answer an empty call without value with the current fee, 1 wei, and revert on an empty call that carries value and on every other shape. EIP-7002 defines a request as a 56 byte input, and the consolidation contract reads 96 bytes. The beacon roots, history storage and deposit contracts revert on all 15 shapes.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26471525; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7002.md (lines 76 to 79 and the bytecode listing at lines 299 to 320)",
+     "relevance": "none"
+    },
+    {
+     "delta": "Hook address check applied to special addresses (src/libraries/Hooks.sol:109-127). Among the precompiles only 0x10 (after donate flag) and 0x100 (after remove liquidity flag) are valid hook addresses; 0x01 to 0x0f and 0x11 carry a returns-delta bit without the matching action bit and are rejected. The beacon roots contract, the deposit contract, WETH9, the system address and the PoolManager's own address are valid hook addresses. The identity precompile is the only target that returns the caller's selector, and its address is rejected.",
+     "source": "src/libraries/Hooks.sol:109-127; on-chain query via https://ethereum-rpc.publicnode.com at block 26471525",
+     "relevance": "low"
+    },
+    {
+     "delta": "The ERC-4337 EntryPoint contracts expose balanceOf(address) for their deposit ledger and have no transfer(address,uint256) function, so sync accepts them as a currency and take does not.",
+     "source": "on-chain query via https://ethereum-rpc.publicnode.com at block 26471525 (eth_call balanceOf and transfer on 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789, 0x0000000071727De22E5E9d8BAf0edAc6f37da032, 0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108)",
+     "relevance": "none"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Any account can book a balance increase it triggers at the PoolManager as its own payment, and EIP-7702 removes the origin check that guards Ampleforth's public rebase",
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A1"
+   ],
+   "effect": "siphon",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "difference": "Mainnet is the reference chain, so the difference is one that arrived after the Dencun rules the build targets. Since Pectra (EIP-7702) an EOA can run code and still satisfy msg.sender == tx.origin. The Ampleforth Orchestrator on mainnet uses that check as its only guard on the public rebase() function, and its source says the guard exists to protect liquidity providers from flash loan attacks. Mainnet also has reward contracts that pay a holder when any third party asks, such as Compound's claimComp(holder).",
+   "mechanism": "sync has no lock check and records balanceOf(PoolManager) for any currency (src/PoolManager.sol:279-288). _settle credits the named recipient with the whole rise in that balance since the sync (src/PoolManager.sol:349-364). Pool accounting never reads balances, so a rise that comes from a rebase or a reward payment belongs to no pool, position or claim until someone settles it. The steps for AMPL are these. The attacker is an EOA that has delegated to its own contract code and sends a transaction to itself. Its code calls unlock, and the PoolManager calls unlockCallback on the same EOA (src/PoolManager.sol:104-114). Inside the callback the code calls sync(AMPL), then Orchestrator.rebase(), which passes the origin check because the caller is the transaction sender. When the day's supply change is positive, the AMPL balance of every holder grows, including the PoolManager's. The code then calls settle, which credits the attacker with the growth on the PoolManager's entire AMPL balance, and take(AMPL, attacker, growth), which pays it out (src/PoolManager.sol:291-297). All deltas are zero and unlock returns. The attacker paid gas only. The same bracket works for any token where an ordinary account can cause a transfer or a balance increase to the PoolManager: a reward claim on behalf of a holder, an airdrop claim that pays a named account, or a rebase with a public trigger. A negative rebase is never bracketed, so liquidity providers keep the losses and lose the gains. This is the unprivileged form of the stETH finding from cycle 1, where the trigger needs an oracle member.",
+   "impact": "The gain of each positive rebase or reward payment on the full balance the PoolManager holds in that token, across all pools, claims and accrued protocol fees. The existing mainnet PoolManager holds 16 base units of AMPL, and the public triggers I simulated moved nothing at block 26471590 (0 COMP from claimComp, no sOHM change), so the amount at risk today is close to zero. The new deployment starts empty. The exposure grows with any pool that lists a token of this kind. Without an attacker the same increase stays in the PoolManager as a surplus that core has no function to pay out, so liquidity providers do not receive it in either case; the attacker turns a stranded amount into a taken one.",
+   "preconditions": "A pool or claim balance in a token whose balanceOf(PoolManager) an ordinary account can raise without paying the same amount: AMPL when a positive rebase is due and the attacker is first in the rebase window, or a token with a public reward or airdrop push to holders. For AMPL the attacker needs an EIP-7702 delegation, which any EOA can set. The rebase window is 1,200 seconds per day (offset 7,200 seconds into each 86,400), and the policy reported inRebaseWindow() = 0 at block 26471631, so my simulated rebase() call reverted. I did not execute the full sequence and did not simulate a delegated EOA; the origin check claim rests on the EIP text and the verified source. I checked 12 rebasing or reward-bearing tokens out of 66,554 token rows the explorer lists for the PoolManager.",
+   "mitigations": "Liquidity providers and interfaces can avoid or flag pools in elastic supply and reward-pushing tokens and use wrapped, non-rebasing forms. A keeper or a hook can run the same bracket first and pass the proceeds to the pool with donate (src/PoolManager.sol:256-276), which returns the increase to in-range liquidity providers. Token projects cannot rely on msg.sender == tx.origin to keep contracts out. The deployer cannot close this in core without tracking reserves per currency.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:104-114",
+    "src/PoolManager.sol:256-276"
+   ],
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x6fb00a180781e75f87e2b690af0196baa77c7e7c?fields=sources,compilation",
+     "supports": "verified source of the Orchestrator at 0x6fb00a180781e75f87e2b690af0196baa77c7e7c: rebase() is external, begins with require(msg.sender == tx.origin) and then calls policy.rebase(); the comment says contracts are guarded from calling to avoid flash loan attacks on liquidity providers"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md",
+     "supports": "a delegated EOA may originate transactions and run its delegated code, and the EIP breaks the invariant that msg.sender == tx.origin implies an account without code (lines 299 to 310)"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call at block 26471525: AMPL.monetaryPolicy() = 0x1b228a749077b8e307c5856ce62ef35d96dca2ea, policy.orchestrator() = 0x6fb00a180781e75f87e2b690af0196baa77c7e7c, AMPL.balanceOf(PoolManager) = 16. eth_call at block 26471631 on the policy: inRebaseWindow() = 0, minRebaseTimeIntervalSec() = 86400, rebaseWindowOffsetSec() = 7200, rebaseWindowLengthSec() = 1200, lastRebaseTimestampSec() = 1795312800; AMPL.totalSupply() = 1,527,834. eth_simulateV1 at blocks 26471565 and 26471590: Comptroller.claimComp(PoolManager) from an unrelated address succeeds and leaves COMP.balanceOf(PoolManager) unchanged; Olympus staking rebase() succeeds and leaves the sOHM balance unchanged; CometRewards.claim for the PoolManager reverts for lack of COMP in the rewards contract; eth_config reports fork id 0x07c9462e, a fork later than Pectra"
+    },
+    {
+     "url": "https://eth.blockscout.com/api/v2/addresses/0x000000000004444c5dc75cB358380D2e3dE08A90/token-balances",
+     "supports": "token rows for the PoolManager address fetched 2026-11-22: 66,554 rows, including the stETH, OUSD, aToken, cToken, sOHM and AMPL balances quoted in the profile"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L4",
+   "check": "Sweep of all 18 precompiles with the PoolManager as sender: empty calldata with zero value and with 1 ETH (P1), transfer(address,uint256) with zero and 1e18 (P2), balanceOf(PoolManager) (P3) and all ten IHooks selectors with well-formed arguments (P5). Follow-up on each target that did not revert.",
+   "result": "No precompile yields a credit or an unpaid outflow. ECRECOVER and P256VERIFY return empty data: take succeeds and moves nothing while the caller is debited, and sync reverts because the Solidity decoder needs 32 bytes, so no credit can arise. SHA256, RIPEMD160 and IDENTITY return 32 bytes or more that depend only on the input, so the value read at sync equals the value read at settle and paid is zero; their answer to transfer is a digest or the echoed calldata, never the word 1, so take reverts. The other precompiles fail on the input lengths the PoolManager can produce. ETH sent to a precompile address with a native take stays there and the caller owes it. The sync results on the existing mainnet deployment (reverts for 0x01, 0x100 and an empty address, succeeds for 0x02, 0x03, 0x04) agree with this reading of the source; I used them as a behavioural reference and did not compare code.",
+   "source": "src/types/Currency.sol:44-52, 60-75, 90-96; src/PoolManager.sol:279-297, 349-364; on-chain eth_call via https://ethereum-rpc.publicnode.com at block 26471525 (2026-11-22)"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L4",
+   "check": "Same 15 call shapes against the beacon roots, history storage, deposit, withdrawal request and consolidation request contracts, and whether the PoolManager can be made to file a withdrawal or consolidation request.",
+   "result": "Three contracts revert on every shape. The two request contracts answer only the empty call without value, with the fee. A request needs a call of exactly 56 or 96 bytes that carries the fee. The PoolManager sends to a caller-chosen address only empty calldata (native take), 36 bytes by STATICCALL (sync), 68 bytes without value (token take) or at least 228 bytes without value (hook calls), so it cannot file a request. A request with the PoolManager as source would in any case only act on a validator whose withdrawal credentials already point at the PoolManager.",
+   "source": "src/types/Currency.sol:48, 73, 94; src/libraries/Hooks.sol:134, 180; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7002.md; on-chain eth_call via https://ethereum-rpc.publicnode.com at block 26471525 (2026-11-22)"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L4",
+   "check": "Whether any special address on mainnet can serve as a hook that the PoolManager accepts, so that a hook call has a lasting side effect made with the PoolManager as sender.",
+   "result": "A hook call is kept only if the return data is at least 32 bytes and starts with the called selector. Of all swept targets only the identity precompile does that, and 0x04 fails the address check because it sets the after-swap returns-delta bit without the after-swap bit. An EIP-7702 delegation to a precompile runs empty code, so it cannot proxy the identity precompile. The valid special addresses (0x10, 0x100, beacon roots, deposit contract, WETH9, system address, the PoolManager itself) return empty data or revert, which makes the PoolManager revert. A pool whose hook is 0x100 or any empty address with bit 8 or 9 set accepts deposits and reverts every removal; that is the hook finding of cycle 1 with actor pool-creator and needs no new entry.",
+   "source": "src/libraries/Hooks.sol:109-127, 131-155, 232-243; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md; on-chain eth_call via https://ethereum-rpc.publicnode.com at block 26471525 (2026-11-22)"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Native payout (P1) to contracts that book incoming ETH to the sender: WETH9, Lido stETH, frxETHMinter, EntryPoint v0.6, v0.7 and v0.8, the OptimismPortal of OP Mainnet and Base, and the TokenJar. The call was made by the PoolManager address with an unrelated transaction origin. Does the caller end up owing less than what left, with or without a sync and settle around the payout?",
+   "result": "take debits the caller the full amount of currency address(0) before the transfer. With sync(WETH9) before and settle after, the caller is credited exactly the 1e18 WETH that the PoolManager received for 1 ETH, so the PoolManager converts 1:1 and both legs are booked. For stETH the credit is 1 wei less than the debit. EntryPoint credits its deposit ledger, which sync can read, but EntryPoint has no transfer function, so that credit can only become an ERC-6909 claim nobody can redeem. A portal deposit is sent from the aliased PoolManager address to the PoolManager's own address on the L2, where no one can sign for either. The OP Mainnet L1StandardBridge refuses a contract caller. In every case the value is booked to the PoolManager and the caller owes the full native amount. Without the sync bracket the received tokens are an unbooked surplus. This is a loss for a caller who names such a recipient and gives an attacker nothing. The op-stack units recorded the same behaviour for L2 predeploys.",
+   "source": "src/PoolManager.sol:291-297, 349-364; on-chain eth_simulateV1 with traceTransfers and a code override at the PoolManager address via https://ethereum-rpc.publicnode.com at block 26471525 (2026-11-22)"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Whether a zero amount call made by the PoolManager, either take(address(0), X, 0) with empty calldata or take(X, to, 0) as X.transfer(to, 0), changes a balance the PoolManager holds on the targets swept.",
+   "result": "Nothing is owed for a zero amount, so these calls are free pokes with the PoolManager as sender. On the swept targets they do nothing: WETH9 deposits zero, Lido reverts on a zero value submit, the EntryPoint ledger is unchanged, stETH.transfer(to, 0) from the PoolManager leaves its balance unchanged in simulation, and precompiles and system contracts return data or revert. The PoolManager has no fallback or receive function and none of its own functions matches the transfer(address,uint256) selector or an IHooks selector, so it cannot be made to call itself successfully. A token that pays or rebases its holder on such a poke would fall under the finding in this file.",
+   "source": "src/PoolManager.sol:291-297, 368-369; src/types/Currency.sol:44-75; on-chain eth_simulateV1 via https://ethereum-rpc.publicnode.com at blocks 26471525 and 26471590"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Faces on mainnet: can one balance be reached under two currency ids so that a payment is credited twice or one id drains the other. Checked ETH against WETH9, tokens with two entry points (the PoolManager holds 258.6 TUSD and 4,089 SNX), and a ledger credited by a value transfer (EntryPoint).",
+   "result": "ETH and WETH9 are separate balances. There is one sync slot, each sync overwrites both transient values, and a credit is the measured rise since the latest sync, so one transfer in is credited once under one id. Each take sends at most what it debits under the id named. Over all ids that share a balance, credits minus debits equal the real change. A native payment cannot be counted under an ERC-20 id because settle rejects msg.value while an ERC-20 is synced, settle and settleFor are the only payable functions, and sync(address(0)) followed by a later sync re-reads the balance. I did not call the second entry point of TUSD or SNX on chain.",
+   "source": "src/PoolManager.sol:279-307, 349-364; src/libraries/CurrencyReserves.sol:21-32; on-chain eth_call via https://ethereum-rpc.publicnode.com at block 26471525 (2026-11-22)"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "check": "Opcode and call semantics the PoolManager relies on, read in the Osaka execution specification: transient storage lifetime and rollback, value transfer order, static context, return data after failed calls, gas forwarding and precompile dispatch.",
+   "result": "Transient storage is created per transaction and rolled back with the frame, value moves before callee code runs and is undone on failure, a failed or underfunded call returns 0 with empty return data, and the callee receives at most 63/64 of the gas. The source handles each case by reverting: a failed native or token transfer reverts with a wrapped error, a failed hook call reverts, and a failed balanceOf reverts through the decoder. No path continues after a failed external call, so the gas rule can make an operation fail and cannot make it half succeed.",
+   "source": "https://raw.githubusercontent.com/ethereum/execution-specs/mainnet/src/ethereum/forks/osaka/vm/interpreter.py (lines 263 to 303); https://raw.githubusercontent.com/ethereum/execution-specs/mainnet/src/ethereum/forks/osaka/fork.py (lines 622, 932); src/types/Currency.sol:48-53, 64-86; src/libraries/Hooks.sol:134-137"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L2",
+   "check": "Known weaknesses of mainnet execution clients, precompiles and system contracts from the last two years: could an ordinary account use any of them against funds in the PoolManager.",
+   "result": "The incidents I found are liveness and consensus faults: the Reth state root stall of 2025-09-02, Nethermind nodes rejecting a canonical block at the Fusaka fork, and client fixes for MODEXP in Geth and P256VERIFY in Besu that the Fusaka retrospective lists. A node that stalls or rejects a block does not execute a different result for an included transaction, and settlement in core is atomic inside one transaction. The PoolManager calls a precompile only when a caller names one as currency, hook or recipient, and the sweep shows those calls give the caller nothing. I did not search vendor advisory databases one by one, and I did not find a published mainnet bug in TSTORE, TLOAD or CALL handling.",
+   "source": "https://github.com/paradigmxyz/reth/issues/18205; https://research.lido.fi/t/post-mortem-develp-fleet-fusaka-fork-downtime-2025-12-03/10967; https://notes.ethereum.org/@parithosh/fusaka-retro; src/PoolManager.sol:104-114"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Whether the public reward and rebase triggers that exist today for tokens the PoolManager holds move value that a caller could book: Compound v2 claimComp, Compound v3 CometRewards.claim, Olympus staking rebase, OUSD and OETH vault rebase, Aave aToken growth.",
+   "result": "At block 26471590 claimComp(PoolManager) paid 0 COMP, the Comet claim reverted, the Olympus rebase changed nothing, and the Origin vault calls are restricted. aToken balances grow with time and with flash loan premiums; a caller who pays a premium to move the index receives only the PoolManager's small share of it back, which is less than the premium. No value can be taken through these today. The mechanism stays open for tokens with a paying trigger and is recorded as the finding.",
+   "source": "on-chain eth_simulateV1 via https://ethereum-rpc.publicnode.com at blocks 26471565 and 26471590 (2026-11-22); src/PoolManager.sol:279-288, 349-364"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L4",
+   "check": "Whether an undocumented precompile or system contract exists in the low address range on the queried mainnet node.",
+   "result": "For all 512 addresses from 0x00 to 0x1ff eth_getCode is empty, and a 36 byte call from the PoolManager returns empty data everywhere except 0x02 to 0x11, which are the documented precompiles. 0x01 and 0x100 return empty data for that input, as specified.",
+   "source": "on-chain batched eth_getCode and eth_call via https://ethereum-rpc.publicnode.com at block 26471525 (2026-11-22); https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7951.md"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "question": "Among the 66,554 token rows of the mainnet PoolManager, which tokens other than the 12 sampled have a rebase, reward claim or airdrop claim that any account can trigger for a holder, and what does one trigger pay to the PoolManager?",
+   "why": "Each such token lets the first caller book the payment through sync and settle. The sample found no paying trigger today, and the long tail is unchecked.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L4",
+   "question": "On each other network, is there an address that answers balanceOf(PoolManager) from a ledger which a plain value transfer or a zero amount call from the PoolManager raises, as EntryPoint.balanceOf and WETH9 do on mainnet, and that also answers transfer(address,uint256) from the PoolManager by releasing native value or a pooled token, at a rate, unit or fee other than 1:1?",
+   "why": "On mainnet the two halves meet only in WETH9, where the rate is 1:1 and both legs are booked, and in EntryPoint, which cannot pay out. A predeploy with a deposit ledger, a transfer function and a different rate or unit would turn take(address(0), X, amount) with sync(X) and settle around it into a credit larger than the native debit.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "question": "On which other networks can an account run code while msg.sender == tx.origin holds (EIP-7702 or a native batch or account abstraction transaction type), and which pooled tokens there guard a public rebase, reward push or mint with that check?",
+   "why": "The finding in this file needs only that check to fall. Networks with native account abstraction may have had this property since launch, and a rebasing or reward token with real liquidity there would make the amount material.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L4",
+   "question": "Do the sweep results of the other units change when the call is made by the PoolManager address with a different transaction origin, using a small forwarder placed at the PoolManager address by state override, for every target that did not revert under plain eth_call and for every target that reverted with an origin or EOA message?",
+   "why": "With from set to the PoolManager a plain eth_call makes tx.origin equal to msg.sender. On mainnet that mode showed the OP Mainnet L1StandardBridge accepting a payout that it refuses in the real call shape, and it hid the aliased sender of portal deposits. A predeploy that treats an origin caller differently could be misfiled as safe or as unsafe.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "question": "Do the second entry points of TUSD (0x8dd5fbCe2F6a956C3022bA3663759011Dd51e73E) and SNX (0xC011A72400E58ecD99Ee497CF89E3775d4bd732F) still forward transfer and balanceOf for the PoolManager's balance, and does a self transfer of any pooled token, take(X, PoolManager, amount), raise balanceOf(PoolManager)?",
+   "why": "The double entry clearance rests on the accounting argument and was not exercised on chain. A token whose self transfer credits the recipient without debiting the sender would give a free credit between sync and settle.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-051",
+   "outcome": "finding",
+   "answer": "Recorded as the finding in this file. Public triggers exist (Ampleforth rebase behind an origin check that EIP-7702 defeats, Compound claimComp for any holder, Olympus rebase). None paid the PoolManager at block 26471590, and AMPL holdings are 16 base units."
+  },
+  {
+   "leadId": "L-044",
+   "outcome": "cleared",
+   "answer": "My own reading of src/PoolManager.sol:279-288 and 349-364 and src/ProtocolFees.sol:44-57 agrees with cycle 1. A sync outside an unlock only overwrites two transient slots, and the later credit is the checked rise since the latest sync. Fee collection of the synced ERC-20 reverts in both lock states, collection of another id can only lower the settler's credit, and the amount paid is subtracted from protocolFeesAccrued with checked arithmetic. I could not compile, so this is a source reading."
+  },
+  {
+   "leadId": "L-048",
+   "outcome": "cleared",
+   "answer": "lib/solmate is checked out now. Owned.sol declares one storage variable (owner, line 17), onlyOwner is require(msg.sender == owner) (lines 19 to 23), and transferOwnership is a one step assignment guarded by onlyOwner (lines 39 to 43). A transfer to a wrong address is final."
+  },
+  {
+   "leadId": "L-049",
+   "outcome": "inconclusive",
+   "answer": "On-chain balances at block 26471602 add 56.25M USDS, 32.36M RLUSD, 404.31 WBTC, 369.89 cbBTC, 35.17M WLFI, 2.80M USDG, 2.47M GHO, 1.66M EURC, 1,496 XAUT and 1,145 PAXG to the list. Block or freeze views exist on cbBTC, EURC, WLFI, USDG, PAXG and XAUT and a pause view on RLUSD, WBTC and LBTC. I did not read these tokens' sources, so the roles and any seize function are unconfirmed, and I did not total a dollar value."
+  },
+  {
+   "leadId": "L-052",
+   "outcome": "inconclusive",
+   "answer": "USDC reports pauser 0x4914f61d25e5c567143774b76edbf4d5109a8566, blacklister 0x0a06be16275b95a7d2567fbdae118b36c7da78f9 and owner 0xfcb19e6a322b27c06842a71e8c725399f049ae3a, so the pauser is a separate account. USDT reports owner 0xc6cde7c39eb2f0f0095f41570af89efc2c1ea828, the same account as XAUT's owner. PYUSD reports owner 0x3af3e85f4f97de7ad0f000b724fb77fe5ffc024b. I did not read the proxy admin of USDC or the role members of PYUSD."
+  }
+ ]
+}
