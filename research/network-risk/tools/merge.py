@@ -69,6 +69,12 @@ def main():
                 cell = L["cells"].get(f"{cid}:{lens}")
                 if cell is None: continue
                 cell["depth"] = min(3, cell["depth"] + (2 if os.path.exists(vp) and cell["depth"] == 0 else 1)); cell["lastCycle"] = cycle
+    tp = f"{R}/state/themes.json"
+    if os.path.exists(tp):
+        T = load(tp)
+        for t in T["themes"]:
+            if t["status"] == "open" and t["id"] in units_done: t["status"] = "done"; t["cycle"] = cycle
+        dump(tp, T)
     cp = f"{cdir}/critic.json"
     if os.path.exists(cp):
         c = load(cp); add_leads(c.get("leads"), "critic")

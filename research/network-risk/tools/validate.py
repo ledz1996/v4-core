@@ -33,7 +33,7 @@ def main():
     ledger = json.load(open(f"{R}/state/ledger.json"))
     if kind == "research":
         unit = need(d, "unit", str, "root")
-        if unit and unit not in ledger["units"] and not unit.startswith("core-code"): errs.append(f"unknown unit {unit}")
+        if unit and unit not in ledger["units"] and not unit.startswith(("core-code", "theme-")): errs.append(f"unknown unit {unit}")
         seen = set()
         for i, p in enumerate(need(d, "profiles", list, "root", True) or []):
             w = f"profiles[{i}]"; cid = need(p, "chainId", int, w); enum(p, "lens", LENS, w); need(p, "summary", str, w)

@@ -17,6 +17,7 @@ The review runs in cycles. Each cycle reads the state left by the one before it,
 | `state/networks.json` | The 21 networks, their PoolManager addresses and facts read from chain. |
 | `state/ledger.json` | Coverage per network and lens, the lead queue, cycle history. |
 | `state/findings.json` | Every finding ever raised, including refuted ones. |
+| `state/themes.json` | Cross-network questions queued by hand from the high priority leads. Up to three open ones run per cycle. |
 | `state/cleared.json` | Differences that were checked and found safe, with the reason. |
 | `cycles/NNN/` | Raw output of cycle NNN: the plan, one research file and one verdict file per unit, and the critic's notes. |
 | `workflow/cycle.js` | The workflow script for one cycle. |

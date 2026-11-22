@@ -63,12 +63,13 @@ Output: write ${DIR}/${u.id}.research.json in the "research" format from SCHEMA.
 
 function codePrompt(c) {
   return `${COMMON}
-Your unit: "${c.id}". You work on the source itself, looking for any path by which an ordinary account takes or locks other users' funds, on any of the 21 networks or on all of them.
+Your unit: "${c.id}". It is either a reading of the source itself (ids starting with core-code) or a question that cuts across networks (ids starting with theme). Either way the goal is a path by which an ordinary account takes or locks other users\' funds, on any of the 21 networks or on all of them.
 
 Task: open ${DIR}/plan.json, find your unit under "code" and do what its "task" says.
 
 How to work
 - Read the actual lines, including assembly, constants, masks, casts, unchecked blocks and comparison operators. Recompute constants and do the arithmetic by hand or with python3 where a number matters.
+- For a theme, work network by network through all 21 entries of networks.json, read node client source where documentation is not decisive, test on chain with read-only calls where a test exists, and say for each network whether the answer is yes, no or unknown and on what evidence.
 - The tests in test/ show intended behaviour; use them to learn intent and note where source and tests disagree.
 - For anything that looks wrong, work out whether it lets an ordinary account take or lock funds, on which networks, and whether a network property is needed (see ASSUMPTIONS.md and networks.json).
 - Report only what the text supports. Something that looks unusual but is safe goes in "cleared" with the reason.
