@@ -1,0 +1,72 @@
+{
+ "unit": "core-code-math",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Second independent line by line read of the 18 files of this unit: sign and direction of every delta, rounding direction of every math step, comparison operators, bounds on ticks, prices, fees and liquidity, unchecked blocks, casts and assembly.",
+   "agrees": true,
+   "note": "I read the 18 files myself and traced how src/PoolManager.sol uses their results. Amounts owed by the caller are negative and rounded up, and amounts paid are rounded down (src/libraries/SqrtPriceMath.sol:261-288, src/libraries/Pool.sol:209-236). For computeSwapStep I checked by algebra that amountIn plus feeAmount never exceeds the remaining input in both exact input branches (src/libraries/SwapMath.sol:63-83). The protocol share at src/libraries/Pool.sol:391-393 is at most the step fee, because calculateSwapFee returns at least the protocol fee (src/libraries/ProtocolFeeLibrary.sol:38-46), so line 395 cannot wrap. The three cases of getFeeGrowthInside (Pool.sol:498-509) follow from the rule at line 535 and the flip in crossTick (608-609). The exact output test is amountSpecified > 0 at lines 313, 371 and 453, and the delta order at 453-461 matches the input currency chosen at src/PoolManager.sol:216. The unchecked product at Pool.sol:404-405 stays below 2^256 in any swap that completes, because the casts at 455-459 limit the summed amounts to 2^127. The price limit checks (323-337), the tick clamp (351-356), the per tick cap (165-173) and LiquidityMath.addDelta (src/libraries/LiquidityMath.sol:10-19) contain the comparisons the result states. I found no operator, sign or constant that contradicts the clearance. I had no compiler either, so this covers the source text only."
+  },
+  {
+   "check": "Solvency of the pool math under random use: can any sequence of liquidity adds, removals, swaps and donations leave a pool owing more than it received.",
+   "agrees": true,
+   "note": "I wrote a separate Python transcription from the source text, with the TickMath and BitMath constants read from the files by a script, and ran 16,400 random sequences of 5 to 50 operations. The run attempted 143,834 liquidity adds, 56,194 removals, 180,475 swaps and 45,286 donations, with tick spacings 1, 10, 60, 200 and 32767, start prices over the whole range including 2,000 ticks at each end, LP fees from 0 to 1,000,000, protocol fees from 0 to 1000 per direction, exact input and exact output swaps up to 2^120 units, and reverted operations rolled back. After every operation the price was inside [MIN_SQRT_PRICE, MAX_SQRT_PRICE), slot0.tick matched the price or was one below with the price exactly on the tick, pool liquidity equalled the sum of the in range positions, swap deltas had the expected signs and the reserves covered the accrued protocol fees. After each sequence every position was withdrawn, the bitmap was empty, and tokens received minus tokens paid minus protocol fees was zero or positive in both currencies. No sequence failed. Two final removals reverted in toInt128 and succeeded after the liquidity delta was halved. My run did not include a tick spacing above the allowed maximum. It tests a transcription, as the researcher's run does, and says nothing about compiled code."
+  },
+  {
+   "check": "Whether the int128 casts on liquidity amounts and fees can stop a withdrawal for an ordinary token, and whether the fee cast revert reported by the accounting unit can be reached without paying 2^127 base units.",
+   "agrees": true,
+   "note": "The casts are at src/libraries/Pool.sol:192 and 212-234 and src/libraries/SafeCast.sol:56-59. A principal amount scales with liquidityDelta, and the two final removals that reverted for this reason in my fuzz run went through after one halving. A zero delta call returns fees only (src/libraries/Position.sol:82-96), so the sum at src/PoolManager.sol:171 can be split into two calls. For the fee cast I looked for a way to raise the fee growth of one position without paying for it. Growth is added only as floor(amount * 2^128 / in range liquidity) at Pool.sol:404-405 and 474-477, and every reader takes modular differences (Pool.sol:498-509, 608-609, Position.sol:93-96), so a wrapped or self inflated global value changes no difference. A donor who is alone in range gets the whole donation back. With other positions in range the donor loses exactly their share. The two ticks of a position cannot be cleared and initialized again while it holds liquidity, because liquidityGross stays above zero (Pool.sol:526-538, 196-203). The fee cast revert therefore needs 2^127 base units actually given up, as the result says. This is the same condition as finding 1 of the core-code-accounting unit, where the payer is the issuer of one of the pool's tokens."
+  },
+  {
+   "check": "TickMath over the complete tick range, BitMath lookup tables and FullMath, computed from the constants as they stand in the source files.",
+   "agrees": true,
+   "note": "A script of my own read the constants from src/libraries/TickMath.sol and src/libraries/BitMath.sol. Each of the 20 multipliers at TickMath.sol:80-100 is the nearest integer to 2^128 / sqrt(1.0001)^(2^i), tested with exact integer inequalities. For every tick from MIN_TICK to MAX_TICK getSqrtPriceAtTick is strictly increasing, getTickAtSqrtPrice returns the tick at its own price and the tick below at one unit less, and 20,000 random prices inside tick intervals map to the right tick. The two end prices equal the declared bounds, MIN_SQRT_PRICE - 1 and MAX_SQRT_PRICE are rejected, and MAX_SQRT_PRICE - 1 gives 887271. mostSignificantBit and leastSignificantBit matched a reference on every single bit value, on edge patterns for every bit index and on 200,000 random values. A literal transcription of FullMath.mulDiv and mulDivRoundingUp (src/libraries/FullMath.sol:14-116) matched exact integer division on 300,000 random triples, including the revert conditions."
+  },
+  {
+   "check": "A10, arithmetic opcode semantics on each network: do MULMOD, SDIV, SMOD, SIGNEXTEND, SAR, SHL, SHR, BYTE, the signed comparisons, KECCAK256, TSTORE, TLOAD, MCOPY and PUSH0 return what the math libraries assume.",
+   "agrees": true,
+   "note": "I built separate init code of 4,272 bytes with 60 vectors of my own choice and sent it with eth_call and no to address to the RPC URL of each of the 21 networks in networks.json. Such a call writes nothing. The vectors cover mulmod by 2^256 - 1, by a 200 bit modulus and by zero, div and mod by zero, sdiv and smod of -887272 by 60, 32767 and -1, signextend at bytes 0, 2, 15 and 31 with dirty upper bits, sar by 1, 8, 128, 255 and 256, shl and shr up to 256, byte, the signed and unsigned comparisons, wrapping add, sub and mul, keccak256 over 58 bytes at an unaligned offset and over 64 bytes, tstore, tload and overwrite of the Lock slot, tload of an unset slot, mcopy and push0. All 21 endpoints returned the 60 words a reference computed, for example Ethereum at block 26471100, Unichain at 64607489, Arbitrum One at 526533406, Monad at 124452054, MegaETH at 32558845, Tempo at 50278239, Arc at 32574372 and HyperEVM at 51950489. The limits the researcher states still apply: one RPC node per network, one block, no gas costs and no transient storage across calls."
+  },
+  {
+   "check": "StateLibrary and TransientStateLibrary: do the slots they compute match the storage the core writes, and can either library move funds.",
+   "agrees": true,
+   "note": "The link the researcher could not confirm is now confirmed. lib/solmate is present in this checkout and lib/solmate/src/auth/Owned.sol:17 declares one storage variable, owner. With protocolFeesAccrued and protocolFeeController (src/ProtocolFees.sol:21-24) and the three ERC6909 mappings (src/ERC6909.sol:15-19) the pools mapping is slot 6, as src/libraries/StateLibrary.sol assumes. On chain, eth_getStorageAt for slot 0 and slot 2 of each of the 21 PoolManagers returns the owner and the fee controller recorded in networks.json. On Ethereum (block 26471122), Unichain (block 64607756) and Arbitrum One (block 526534284) I took the pool id of the latest Swap event, read the slot keccak256(poolId, 6) and the slot three above it at that block, and got the sqrtPriceX96, tick and liquidity of the event with the offsets of src/types/Slot0.sol:36-38. This answers the researcher's lead about POOLS_SLOT for these three networks, including the Unichain predeploy. HyperEVM had no Swap event in the last 500 blocks, so I did not repeat the event check there."
+  },
+  {
+   "check": "Constants against their stated derivations: error selectors written as literals in assembly, transient slot constants read by TransientStateLibrary, masks, Slot0 offsets, the position hash layout and the fee constants.",
+   "agrees": true,
+   "note": "With a keccak256 implementation written for this check and tested against the SHA3 function of the Python standard library through the shared permutation, the six error selectors written as literals in assembly equal the first four bytes of the hash of their signatures (src/libraries/SqrtPriceMath.sol:66, 111, 140, 199, src/libraries/TickBitmap.sol:59, src/libraries/LiquidityMath.sol:15). The four transient slot constants equal keccak256 of 'ReservesOf', 'Currency', 'Unlocked' and 'NonzeroDeltaCount' minus one. I read the Slot0 offsets and masks (src/types/Slot0.sol:33-93), the fee flags (src/libraries/LPFeeLibrary.sol:15-25) and the protocol fee thresholds (src/libraries/ProtocolFeeLibrary.sol:8-32) and they are as the result states."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L5",
+   "priority": "medium",
+   "question": "Does the PoolManager bytecode change when the sources are rebuilt with a solc 0.8.26 that carries the fix for the Yul optimizer bug YulOptimizerKnowledgeBaseStaleBookkeeping (checks 1 to 3 in the Solidity team's post of 2026-10-22), and does the 24,050 byte Unichain predeploy pass the same comparison?",
+   "why": "The Solidity bug list marks 0.8.26 as affected. The bug is present from 0.8.19 to 0.8.37 whenever the Yul optimizer runs: a load can be replaced with an outdated value, or a needed store can be removed, when two addresses derived from a reassigned variable coincide at run time (https://raw.githubusercontent.com/ethereum/solidity/develop/docs/bugs_by_version.json, https://raw.githubusercontent.com/ethereum/solidity/develop/docs/bugs.json, https://blog.soliditylang.org/2026/10/22/yul-optimizer-knowledge-base-stale-bookkeeping-bug/). foundry.toml sets solc 0.8.26, via_ir and optimizer_runs 44444444, and eth_getCode on all 21 networks returns code whose metadata trailer names solc 0.8.26. The post says the conditions cannot be checked from the Solidity source, so the two source reading units, which worked from the text and from transcriptions, cannot exclude it. Pool.swap reads and writes storage and memory through computed addresses inside a loop (src/libraries/Pool.sol:344-437), and Extsload reassigns a memory pointer inside a loop (src/Extsload.sol:20-36). An effect is unlikely: the post reports that rebuilding about 283,000 via-IR compilations from Sourcify with and without the fix gave identical bytecode, and Sourcify lists the Ethereum PoolManager as verified with solc 0.8.26, viaIR and the optimizer enabled (https://sourcify.dev/server/v2/contract/1/0x000000000004444c5dc75cB358380D2e3dE08A90?fields=compilation). That scan used a development compiler, and Sourcify has no entry for the Unichain address (https://sourcify.dev/server/v2/contract/130/0x1f98400000000000000000000000000000000004 returns 404), so the question stays open until someone with a compiler runs the comparison. I did not compare the Unichain bytecode with the other deployments. The other bug list entries for 0.8.26 need a recursive storage struct with a dynamic array, mutual recursion, named arguments in a require with a custom error, the legacy pipeline or an array at the end of storage. I saw none of these in the files I read."
+  }
+ ]
+}

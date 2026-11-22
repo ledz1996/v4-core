@@ -1,0 +1,866 @@
+{
+ "unit": "op-stack-eth",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 10,
+   "lens": "L1",
+   "summary": "The opcode and precompile surface that the PoolManager touches on OP Mainnet matches Ethereum. The public endpoint does not name its client build, so the source reading for this chain rests on the op-reth commit that Unichain, Ink and Soneium report.",
+   "deltas": [
+    {
+     "delta": "web3_clientVersion on 22 November 2026 reports op-reth/v0.0.0-dev-unknown. The commit behind the OP Mainnet endpoint could not be read from chain.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "Calls from the PoolManager address to the precompile range behave as on Ethereum. ecrecover (0x01) and P256VERIFY (0x0100) return empty data for transfer and balanceOf calldata, so a take of those currency ids records a debt and moves nothing, and sync reverts. sha256 (0x02), ripemd160 (0x03) and identity (0x04) return 32 or more bytes that are a fixed function of the calldata, so sync succeeds with a constant value, settle credits zero, and take reverts because the first returned word is never 1. modexp, the bn254 and BLS precompiles, blake2f and the KZG precompile revert on both calldata shapes.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "none"
+    },
+    {
+     "delta": "The OP Stack specification lists one precompile beyond Ethereum's set, P256VERIFY at 0x0100, added in Fjord.",
+     "source": "https://specs.optimism.io/protocol/precompiles.html",
+     "relevance": "none"
+    },
+    {
+     "delta": "The upgrade registry shows Karst active since 8 July 2026 and Lagoon in development with no activation scheduled.",
+     "source": "https://docs.optimism.io/op-stack/protocol/network-upgrades",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 10,
+   "lens": "L2",
+   "summary": "The execution client clears transient storage at the end of every transaction type, including failed deposits. This closes the cycle 1 lead that asked for the client source.",
+   "deltas": [
+    {
+     "delta": "Client source read for the transaction boundary. op-revm at commit 72fcf947 handles a failed or halted deposit by reverting to the first journal checkpoint, bumping the caller nonce, adding the mint and calling commit_tx. Any other error calls discard_tx. In revm, commit_tx, discard_tx and finalize each call transient_storage.clear(), and checkpoint_revert restores transient entries. A transaction that succeeds, reverts, is rejected as invalid, or is a failed deposit therefore ends with empty transient storage.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/72fcf9479ea7ee1105b823d23da8bf58ba58136d/rust/op-revm/src/handler.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 10,
+   "lens": "L3",
+   "summary": "Two addresses on OP Mainnet show a balance of the PoolManager that already belongs to another currency id and cannot be paid out under their own id: the legacy ETH view and the Synthetix SNX implementation contract. Neither gives credit without an equal payment.",
+   "deltas": [
+    {
+     "delta": "SNX has two entry points. The token address 0x8700dAec35aF8Ff88c16BdF0418774CB3D7599B4 is a proxy whose target() is 0x3f2a1f997ef089798d19473d96be484aeb3e4ecf. balanceOf(PoolManager) returns 30,337.07 SNX at both addresses. transfer called by the PoolManager succeeds at the proxy and reverts at the target with 'Only the proxy can call'.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "LegacyERC20ETH.sol is no longer present on the develop branch of the Optimism repository (HTTP 404), while the contract code remains at 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000 on OP Mainnet and Zora. On chain it still answers balanceOf with the native balance and reverts on transfer and on empty calldata.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 10,
+   "lens": "L4",
+   "summary": "No predeploy, precompile or preinstalled contract on OP Mainnet lets a caller of the PoolManager move value without owing the same amount. Three targets strand a native payout under the PoolManager's own identity.",
+   "deltas": [
+    {
+     "delta": "Sweep of the predeploy range with msg.sender set to the PoolManager and a separate tx.origin (eth_call with the PoolManager code overridden by a forwarding stub). Only these targets do not revert. WETH at 0x4200000000000000000000000000000000000006 accepts ETH with any calldata and mints WETH to the PoolManager. L2ToL1MessagePasser at 0x4200000000000000000000000000000000000016 accepts ETH with empty calldata and starts an L1 withdrawal for the PoolManager. SequencerFeeVault, BaseFeeVault, L1FeeVault and OperatorFeeVault accept ETH with empty calldata. L1BlockNumber at 0x4200000000000000000000000000000000000013 accepts ETH and answers every selector, including transfer, balanceOf and all ten hook selectors, with one 32 byte word that holds the L1 block number. L2StandardBridge rejects the PoolManager with 'function can only be called from an EOA'. Every other predeploy slot reverts on empty calldata, transfer, balanceOf and the hook selectors. The governance token at 0x4200000000000000000000000000000000000042 is an ordinary ERC-20 for transfer and balanceOf.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "Preinstalled contracts answer the same way as on Ethereum. The ERC-4337 EntryPoint v0.6, v0.7 and v0.8 accept ETH with empty calldata and return a 32 byte value for balanceOf(PoolManager), which is the PoolManager's deposit and is 0 today. They revert on transfer. The Safe singletons return empty data for every shape. The two CREATE2 factory stubs return 20 bytes for transfer calldata, which the success test at src/types/Currency.sol:68 rejects.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "L2ToL1MessagePasser.receive() calls initiateWithdrawal(msg.sender, 100000, '') and the withdrawal target is msg.sender. For a payout made by the PoolManager the L1 target is 0x9a13f98cb987694c9f086b1f5eb990eea8264ec3, which has no code on Ethereum.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L2/L2ToL1MessagePasser.sol",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L1",
+   "summary": "Base runs its own node, and its B20 token and registry precompiles were read at the release tag the chain reports. They reject DELEGATECALL, CALLCODE and attached value, and they write state through the revm journal, so the call patterns the PoolManager uses behave as they would for a contract token.",
+   "deltas": [
+    {
+     "delta": "web3_clientVersion reports reth/v2.5.2-9e380dd with base/v1.5.6. The v1.5.6 workspace pins revm 42.0.1 and the base/reth tag base-v2.5.2.11.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/Cargo.toml",
+     "relevance": "low"
+    },
+    {
+     "delta": "Every stateful Base precompile is wrapped by a macro that returns DelegateCallNotAllowed when the call is not a direct call. On chain, a B20 token called through DELEGATECALL or CALLCODE from a stub, with the PoolManager as the outer caller, reverts with selector 0x0d89438e for balanceOf, transfer and name. A plain CALL from the stub sees the stub as the token sender.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/macros.rs",
+     "relevance": "high"
+    },
+    {
+     "delta": "B20 precompile storage writes go through alloy-evm EvmInternals into the revm journal (sstore, tstore, log), and revm reverts the frame checkpoint when a precompile returns an error. A B20 transfer made inside a call frame that later reverts is rolled back together with the PoolManager's delta.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompile-storage/src/evm.rs",
+     "relevance": "high"
+    },
+    {
+     "delta": "Since Cobalt the node installs two more precompiles for EIP-8130: NonceManager at 0x813000000000000000000000000000000000aa01 and TxContext at 0x813000000000000000000000000000000000aa02. Both answer view calls on mainnet today (getTransactionSender returns tx.origin) and revert on empty calldata, transfer, balanceOf and the hook selectors.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/provider.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "A B20 address is recognised by first byte 0xb2, nine zero bytes and a variant byte of 0 or 1. An address with the prefix and any other variant byte is an ordinary account without code: every call shape from the PoolManager returns success with empty data. An address with a valid variant that was never created reverts on every shape.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_factory/variant.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "Calls from the PoolManager address to the precompile range behave as on Ethereum. ecrecover (0x01) and P256VERIFY (0x0100) return empty data for transfer and balanceOf calldata, so a take of those currency ids records a debt and moves nothing, and sync reverts. sha256 (0x02), ripemd160 (0x03) and identity (0x04) return 32 or more bytes that are a fixed function of the calldata, so sync succeeds with a constant value, settle credits zero, and take reverts because the first returned word is never 1. modexp, the bn254 and BLS precompiles, blake2f and the KZG precompile revert on both calldata shapes.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L2",
+   "summary": "The Base handler clears transient storage for every transaction outcome. The planned Base Transactions run each call phase under a journal checkpoint and keep transient storage across committed phases of one sender. They are not active.",
+   "deltas": [
+    {
+     "delta": "Client source read for the transaction boundary. The Base handler at v1.5.6 handles a failed or halted deposit by reverting to the first journal checkpoint, bumping the caller nonce, adding the mint and calling commit_tx. Any other error calls discard_tx. In revm, commit_tx, discard_tx and finalize each call transient_storage.clear(), and checkpoint_revert restores transient entries. A transaction that succeeds, reverts, is rejected as invalid, or is a failed deposit therefore ends with empty transient storage.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/handler.rs",
+     "relevance": "none"
+    },
+    {
+     "delta": "Source for the planned 0x79 transaction type: each phase of calls runs between journal.checkpoint() and checkpoint_commit(), a reverting phase is undone with checkpoint_revert and later phases are skipped. Every call is dispatched with the sender as msg.sender. Transient storage written in a committed phase stays visible to later phases of the same transaction. The system accounts are set up only when Everest is active, and the upgrades page lists Everest with no date.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/eip8130.rs",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L3",
+   "summary": "The PoolManager's B20 balances can leave only through its own transfer call or through issuer functions. No allowance, permit or factory path lets a third party move them, and the Activation Registry cannot stop transfers of an existing token.",
+   "deltas": [
+    {
+     "delta": "OUSD (OpenUSD) at 0xB2000000000000000000002fEb517dFeC7415344: the PoolManager holds 5,340,589 of a total supply of 93,187,316. TRANSFER_SENDER_POLICY is policy 122 with admin 0x251d2711ebeb0a09fdb8992f5506f3d949175246, and the PoolManager is authorised under it. The receiver, executor, mint receiver, seize exempt and seize receiver scopes are 0 (always allow). pausedFeatures() returns an empty list.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "high"
+    },
+    {
+     "delta": "B20 permit recovers an ECDSA signer and requires it to equal the owner. It has no contract signature path, so no permit can be produced for the PoolManager address. approve is keyed on the caller, and the PoolManager never calls approve.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_stablecoin/logic/v3.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Denim logic rejects the zero address and the token's own address as transfer recipient with InvalidReceiver, and a transfer from an account to itself leaves the balance unchanged.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_stablecoin/logic/v3.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L4",
+   "summary": "The Base system precompiles revert on every call shape the PoolManager can be made to send. The Activation Registry gates token creation and Policy Registry writes only. The predeploy sweep matches the other chains.",
+   "deltas": [
+    {
+     "delta": "Sweep of the predeploy range with msg.sender set to the PoolManager and a separate tx.origin (eth_call with the PoolManager code overridden by a forwarding stub). Only these targets do not revert. WETH at 0x4200000000000000000000000000000000000006 accepts ETH with any calldata and mints WETH to the PoolManager. L2ToL1MessagePasser at 0x4200000000000000000000000000000000000016 accepts ETH with empty calldata and starts an L1 withdrawal for the PoolManager. SequencerFeeVault, BaseFeeVault, L1FeeVault and OperatorFeeVault accept ETH with empty calldata. L1BlockNumber at 0x4200000000000000000000000000000000000013 accepts ETH and answers every selector, including transfer, balanceOf and all ten hook selectors, with one 32 byte word that holds the L1 block number. L2StandardBridge rejects the PoolManager with 'function can only be called from an EOA'. Every other predeploy slot reverts on empty calldata, transfer, balanceOf and the hook selectors. The slot 0x4200000000000000000000000000000000000030 (BaseTime) reverts on all shapes.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "low"
+    },
+    {
+     "delta": "Preinstalled contracts answer the same way as on Ethereum. The ERC-4337 EntryPoint v0.6, v0.7 and v0.8 accept ETH with empty calldata and return a 32 byte value for balanceOf(PoolManager), which is the PoolManager's deposit and is 0 today. They revert on transfer. The Safe singletons return empty data for every shape. The two CREATE2 factory stubs return 20 bytes for transfer calldata, which the success test at src/types/Currency.sol:68 rejects.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "low"
+    },
+    {
+     "delta": "The B20 factory, the Activation Registry, the Policy Registry, NonceManager and TxContext revert on empty calldata with and without value, on transfer with zero and nonzero amount, on balanceOf and on all ten hook selectors. A value call to a B20 token or to any of these addresses reverts with NonPayable (0x6fb1b0e9).",
+     "source": "https://mainnet.base.org/",
+     "relevance": "low"
+    },
+    {
+     "delta": "ensure_activated is called in two places only: the factory before it creates a token of a variant, and the Policy Registry before a state changing call. The B20 token dispatcher checks only that the token address has code. Deactivating a feature therefore does not stop transfers of existing tokens, and it stops policy admins from changing lists.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_stablecoin/dispatch.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "The factory runs initCalls with the factory as caller and a privileged flag that skips role and policy checks. It derives the token address from variant, sender and salt and reverts with TokenAlreadyExists when the address already has code, so the privileged path reaches only a token created in the same call.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_factory/logic/v1.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "A Cantina review of the precompile storage layer (June 2026) reports five medium findings: a missing EIP-2200 stipend guard on precompile SSTORE (fixed), dropped SSTORE refunds (fixed), set_code allowed in a static call (fixed), stale tail slots after shrinking dynamic values, and unmetered slot hashing. None of them changes who can move a token balance.",
+     "source": "https://cantina.xyz/portfolio/5502e6ed-c371-43f3-9a13-738e3c800906",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L1",
+   "summary": "Unichain reports the op-reth build whose source was read for this cycle. The opcode and precompile surface that the PoolManager touches matches Ethereum.",
+   "deltas": [
+    {
+     "delta": "web3_clientVersion on 22 November 2026 reports op-reth/v2.9.0-rc.1-72fcf947. The short commit 72fcf947 matches ethereum-optimism/optimism commit 72fcf9479ea7ee1105b823d23da8bf58ba58136d, whose rust workspace pins reth tag op-v2.7.0-0 and revm 43.0.3. op-revm at that commit maps Karst and Lagoon to the Osaka instruction set and defines a post-execution transaction type that is used only from Lagoon.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "Calls from the PoolManager address to the precompile range behave as on Ethereum. ecrecover (0x01) and P256VERIFY (0x0100) return empty data for transfer and balanceOf calldata, so a take of those currency ids records a debt and moves nothing, and sync reverts. sha256 (0x02), ripemd160 (0x03) and identity (0x04) return 32 or more bytes that are a fixed function of the calldata, so sync succeeds with a constant value, settle credits zero, and take reverts because the first returned word is never 1. modexp, the bn254 and BLS precompiles, blake2f and the KZG precompile revert on both calldata shapes.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "none"
+    },
+    {
+     "delta": "The reth trie iterator bug fixed in paradigmxyz/reth pull request 28264 (wrong incremental state root, fixed in reth v2.10.0) is absent from this build: node_iter.rs at tag op-v2.7.0-0 contains the corrected comparison.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/reth/op-v2.7.0-0/crates/trie/trie/src/node_iter.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L2",
+   "summary": "The execution client on Unichain clears transient storage at the end of every transaction type, including failed deposits.",
+   "deltas": [
+    {
+     "delta": "Client source read for the transaction boundary. op-revm at commit 72fcf947 handles a failed or halted deposit by reverting to the first journal checkpoint, bumping the caller nonce, adding the mint and calling commit_tx. Any other error calls discard_tx. In revm, commit_tx, discard_tx and finalize each call transient_storage.clear(), and checkpoint_revert restores transient entries. A transaction that succeeds, reverts, is rejected as invalid, or is a failed deposit therefore ends with empty transient storage.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/72fcf9479ea7ee1105b823d23da8bf58ba58136d/rust/op-revm/src/handler.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L3",
+   "summary": "On Unichain the only second view of the native asset is the WETH predeploy, which holds a separate balance. A native payout to it wraps ETH for the PoolManager one for one.",
+   "deltas": [
+    {
+     "delta": "The WETH predeploy has 2,865 bytes of code and reports name 'Wrapped Ether'. It is the WETH98 contract: receive() and fallback() both call deposit(), so a call with any unknown selector and zero value succeeds with empty return data, and a value call mints WETH to msg.sender.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/WETH98.sol",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L4",
+   "summary": "No predeploy, precompile or preinstalled contract on Unichain lets a caller of the PoolManager move value without owing the same amount.",
+   "deltas": [
+    {
+     "delta": "Sweep of the predeploy range with msg.sender set to the PoolManager and a separate tx.origin (eth_call with the PoolManager code overridden by a forwarding stub). Only these targets do not revert. WETH at 0x4200000000000000000000000000000000000006 accepts ETH with any calldata and mints WETH to the PoolManager. L2ToL1MessagePasser at 0x4200000000000000000000000000000000000016 accepts ETH with empty calldata and starts an L1 withdrawal for the PoolManager. SequencerFeeVault, BaseFeeVault, L1FeeVault and OperatorFeeVault accept ETH with empty calldata. L1BlockNumber at 0x4200000000000000000000000000000000000013 accepts ETH and answers every selector, including transfer, balanceOf and all ten hook selectors, with one 32 byte word that holds the L1 block number. L2StandardBridge rejects the PoolManager with 'function can only be called from an EOA'. Every other predeploy slot reverts on empty calldata, transfer, balanceOf and the hook selectors. The governance token slot 0x4200000000000000000000000000000000000042 has no code.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "Preinstalled contracts answer the same way as on Ethereum. The ERC-4337 EntryPoint v0.6, v0.7 and v0.8 accept ETH with empty calldata and return a 32 byte value for balanceOf(PoolManager), which is the PoolManager's deposit and is 0 today. They revert on transfer. The Safe singletons return empty data for every shape. The two CREATE2 factory stubs return 20 bytes for transfer calldata, which the success test at src/types/Currency.sol:68 rejects.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "The vanity range that holds the PoolManager has code at three addresses only: 0x1f98400000000000000000000000000000000002 (13,859 bytes), 0x1f98400000000000000000000000000000000003 (24,535 bytes) and the PoolManager at 0x1f98400000000000000000000000000000000004. The first two revert on empty calldata, transfer and balanceOf from the PoolManager.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L1",
+   "summary": "Ink reports the op-reth build whose source was read for this cycle. The opcode and precompile surface that the PoolManager touches matches Ethereum.",
+   "deltas": [
+    {
+     "delta": "web3_clientVersion on 22 November 2026 reports op-reth/v2.9.0-rc.1-72fcf947. The short commit 72fcf947 matches ethereum-optimism/optimism commit 72fcf9479ea7ee1105b823d23da8bf58ba58136d, whose rust workspace pins reth tag op-v2.7.0-0 and revm 43.0.3. op-revm at that commit maps Karst and Lagoon to the Osaka instruction set and defines a post-execution transaction type that is used only from Lagoon.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "low"
+    },
+    {
+     "delta": "Calls from the PoolManager address to the precompile range behave as on Ethereum. ecrecover (0x01) and P256VERIFY (0x0100) return empty data for transfer and balanceOf calldata, so a take of those currency ids records a debt and moves nothing, and sync reverts. sha256 (0x02), ripemd160 (0x03) and identity (0x04) return 32 or more bytes that are a fixed function of the calldata, so sync succeeds with a constant value, settle credits zero, and take reverts because the first returned word is never 1. modexp, the bn254 and BLS precompiles, blake2f and the KZG precompile revert on both calldata shapes.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "none"
+    },
+    {
+     "delta": "The reth trie iterator bug fixed in paradigmxyz/reth pull request 28264 (wrong incremental state root, fixed in reth v2.10.0) is absent from this build: node_iter.rs at tag op-v2.7.0-0 contains the corrected comparison.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/reth/op-v2.7.0-0/crates/trie/trie/src/node_iter.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L2",
+   "summary": "The execution client on Ink clears transient storage at the end of every transaction type, including failed deposits.",
+   "deltas": [
+    {
+     "delta": "Client source read for the transaction boundary. op-revm at commit 72fcf947 handles a failed or halted deposit by reverting to the first journal checkpoint, bumping the caller nonce, adding the mint and calling commit_tx. Any other error calls discard_tx. In revm, commit_tx, discard_tx and finalize each call transient_storage.clear(), and checkpoint_revert restores transient entries. A transaction that succeeds, reverts, is rejected as invalid, or is a failed deposit therefore ends with empty transient storage.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/72fcf9479ea7ee1105b823d23da8bf58ba58136d/rust/op-revm/src/handler.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L3",
+   "summary": "On Ink the only second view of the native asset is the WETH predeploy, which holds a separate balance. A native payout to it wraps ETH for the PoolManager one for one.",
+   "deltas": [
+    {
+     "delta": "The WETH predeploy has 2,865 bytes of code and reports name 'Wrapped Ether'. It is the WETH98 contract: receive() and fallback() both call deposit(), so a call with any unknown selector and zero value succeeds with empty return data, and a value call mints WETH to msg.sender.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/WETH98.sol",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L4",
+   "summary": "No predeploy, precompile or preinstalled contract on Ink lets a caller of the PoolManager move value without owing the same amount.",
+   "deltas": [
+    {
+     "delta": "Sweep of the predeploy range with msg.sender set to the PoolManager and a separate tx.origin (eth_call with the PoolManager code overridden by a forwarding stub). Only these targets do not revert. WETH at 0x4200000000000000000000000000000000000006 accepts ETH with any calldata and mints WETH to the PoolManager. L2ToL1MessagePasser at 0x4200000000000000000000000000000000000016 accepts ETH with empty calldata and starts an L1 withdrawal for the PoolManager. SequencerFeeVault, BaseFeeVault, L1FeeVault and OperatorFeeVault accept ETH with empty calldata. L1BlockNumber at 0x4200000000000000000000000000000000000013 accepts ETH and answers every selector, including transfer, balanceOf and all ten hook selectors, with one 32 byte word that holds the L1 block number. L2StandardBridge rejects the PoolManager with 'function can only be called from an EOA'. Every other predeploy slot reverts on empty calldata, transfer, balanceOf and the hook selectors. The slot 0x4200000000000000000000000000000000000042 holds a 10,346 byte ERC-20 that answers transfer of zero and balanceOf for the PoolManager.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "low"
+    },
+    {
+     "delta": "Preinstalled contracts answer the same way as on Ethereum. The ERC-4337 EntryPoint v0.6, v0.7 and v0.8 accept ETH with empty calldata and return a 32 byte value for balanceOf(PoolManager), which is the PoolManager's deposit and is 0 today. They revert on transfer. The Safe singletons return empty data for every shape. The two CREATE2 factory stubs return 20 bytes for transfer calldata, which the success test at src/types/Currency.sol:68 rejects.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L1",
+   "summary": "Soneium reports the op-reth build whose source was read for this cycle. The opcode and precompile surface that the PoolManager touches matches Ethereum.",
+   "deltas": [
+    {
+     "delta": "web3_clientVersion on 22 November 2026 reports op-reth/v2.9.0-rc.1-72fcf947. The short commit 72fcf947 matches ethereum-optimism/optimism commit 72fcf9479ea7ee1105b823d23da8bf58ba58136d, whose rust workspace pins reth tag op-v2.7.0-0 and revm 43.0.3. op-revm at that commit maps Karst and Lagoon to the Osaka instruction set and defines a post-execution transaction type that is used only from Lagoon.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "Calls from the PoolManager address to the precompile range behave as on Ethereum. ecrecover (0x01) and P256VERIFY (0x0100) return empty data for transfer and balanceOf calldata, so a take of those currency ids records a debt and moves nothing, and sync reverts. sha256 (0x02), ripemd160 (0x03) and identity (0x04) return 32 or more bytes that are a fixed function of the calldata, so sync succeeds with a constant value, settle credits zero, and take reverts because the first returned word is never 1. modexp, the bn254 and BLS precompiles, blake2f and the KZG precompile revert on both calldata shapes.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "none"
+    },
+    {
+     "delta": "The reth trie iterator bug fixed in paradigmxyz/reth pull request 28264 (wrong incremental state root, fixed in reth v2.10.0) is absent from this build: node_iter.rs at tag op-v2.7.0-0 contains the corrected comparison.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/reth/op-v2.7.0-0/crates/trie/trie/src/node_iter.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L2",
+   "summary": "The execution client on Soneium clears transient storage at the end of every transaction type, including failed deposits.",
+   "deltas": [
+    {
+     "delta": "Client source read for the transaction boundary. op-revm at commit 72fcf947 handles a failed or halted deposit by reverting to the first journal checkpoint, bumping the caller nonce, adding the mint and calling commit_tx. Any other error calls discard_tx. In revm, commit_tx, discard_tx and finalize each call transient_storage.clear(), and checkpoint_revert restores transient entries. A transaction that succeeds, reverts, is rejected as invalid, or is a failed deposit therefore ends with empty transient storage.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/72fcf9479ea7ee1105b823d23da8bf58ba58136d/rust/op-revm/src/handler.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L3",
+   "summary": "On Soneium the only second view of the native asset is the WETH predeploy, which holds a separate balance. A native payout to it wraps ETH for the PoolManager one for one.",
+   "deltas": [
+    {
+     "delta": "The WETH predeploy has 2,865 bytes of code and reports name 'Wrapped Ether'. It is the WETH98 contract: receive() and fallback() both call deposit(), so a call with any unknown selector and zero value succeeds with empty return data, and a value call mints WETH to msg.sender.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/WETH98.sol",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L4",
+   "summary": "No predeploy, precompile or preinstalled contract on Soneium lets a caller of the PoolManager move value without owing the same amount.",
+   "deltas": [
+    {
+     "delta": "Sweep of the predeploy range with msg.sender set to the PoolManager and a separate tx.origin (eth_call with the PoolManager code overridden by a forwarding stub). Only these targets do not revert. WETH at 0x4200000000000000000000000000000000000006 accepts ETH with any calldata and mints WETH to the PoolManager. L2ToL1MessagePasser at 0x4200000000000000000000000000000000000016 accepts ETH with empty calldata and starts an L1 withdrawal for the PoolManager. SequencerFeeVault, BaseFeeVault, L1FeeVault and OperatorFeeVault accept ETH with empty calldata. L1BlockNumber at 0x4200000000000000000000000000000000000013 accepts ETH and answers every selector, including transfer, balanceOf and all ten hook selectors, with one 32 byte word that holds the L1 block number. L2StandardBridge rejects the PoolManager with 'function can only be called from an EOA'. Every other predeploy slot reverts on empty calldata, transfer, balanceOf and the hook selectors. The slot 0x4200000000000000000000000000000000000042 holds a 10,346 byte ERC-20 that answers transfer of zero and balanceOf for the PoolManager.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "Preinstalled contracts answer the same way as on Ethereum. The ERC-4337 EntryPoint v0.6, v0.7 and v0.8 accept ETH with empty calldata and return a 32 byte value for balanceOf(PoolManager), which is the PoolManager's deposit and is 0 today. They revert on transfer. The Safe singletons return empty data for every shape. The two CREATE2 factory stubs return 20 bytes for transfer calldata, which the success test at src/types/Currency.sol:68 rejects.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L1",
+   "summary": "Zora runs a Conduit build of op-reth. Its pins were read from the release tag the chain reports, and they include the November 2026 reth trie fix.",
+   "deltas": [
+    {
+     "delta": "web3_clientVersion reports conduit-op-reth/v2.5.1-8f0ccac. The v2.5.1 manifest pins reth tag op-v2.6.0-2 and op-revm from the tag op-reth/v2.8.0. The release notes for v2.5.1 (5 November 2026) list one change, 'bump reth to op-v2.6.0-2'.",
+     "source": "https://raw.githubusercontent.com/conduitxyz/conduit-op-reth/v2.5.1/Cargo.toml",
+     "relevance": "low"
+    },
+    {
+     "delta": "node_iter.rs at reth tag op-v2.6.0-2 contains the corrected seek comparison from paradigmxyz/reth pull request 28264, so the wrong state root bug is fixed in the build Zora reports.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/reth/op-v2.6.0-2/crates/trie/trie/src/node_iter.rs",
+     "relevance": "none"
+    },
+    {
+     "delta": "Calls from the PoolManager address to the precompile range behave as on Ethereum. ecrecover (0x01) and P256VERIFY (0x0100) return empty data for transfer and balanceOf calldata, so a take of those currency ids records a debt and moves nothing, and sync reverts. sha256 (0x02), ripemd160 (0x03) and identity (0x04) return 32 or more bytes that are a fixed function of the calldata, so sync succeeds with a constant value, settle credits zero, and take reverts because the first returned word is never 1. modexp, the bn254 and BLS precompiles, blake2f and the KZG precompile revert on both calldata shapes.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L2",
+   "summary": "The op-revm version that Zora's client pins clears transient storage for every transaction outcome.",
+   "deltas": [
+    {
+     "delta": "Client source read for the transaction boundary. op-revm at the tag op-reth/v2.8.0 contains the same failed deposit path (revert to the first checkpoint, nonce bump, mint, commit_tx) and calls discard_tx for other errors. In revm, commit_tx, discard_tx and finalize each call transient_storage.clear(), and checkpoint_revert restores transient entries. A transaction that succeeds, reverts, is rejected as invalid, or is a failed deposit therefore ends with empty transient storage.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.8.0/rust/op-revm/src/handler.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L3",
+   "summary": "Zora keeps the legacy ETH view with the same behaviour as OP Mainnet. Nothing new was found under this lens.",
+   "deltas": [
+    {
+     "delta": "sync(LegacyERC20ETH) on the deployed PoolManager succeeds, and transfer and empty calldata from the PoolManager revert at the legacy contract, the same as on OP Mainnet.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L4",
+   "summary": "The predeploy sweep on Zora gives the same result as on OP Mainnet.",
+   "deltas": [
+    {
+     "delta": "Sweep of the predeploy range with msg.sender set to the PoolManager and a separate tx.origin (eth_call with the PoolManager code overridden by a forwarding stub). Only these targets do not revert. WETH at 0x4200000000000000000000000000000000000006 accepts ETH with any calldata and mints WETH to the PoolManager. L2ToL1MessagePasser at 0x4200000000000000000000000000000000000016 accepts ETH with empty calldata and starts an L1 withdrawal for the PoolManager. SequencerFeeVault, BaseFeeVault, L1FeeVault and OperatorFeeVault accept ETH with empty calldata. L1BlockNumber at 0x4200000000000000000000000000000000000013 accepts ETH and answers every selector, including transfer, balanceOf and all ten hook selectors, with one 32 byte word that holds the L1 block number. L2StandardBridge rejects the PoolManager with 'function can only be called from an EOA'. Every other predeploy slot reverts on empty calldata, transfer, balanceOf and the hook selectors. The slot 0x4200000000000000000000000000000000000042 holds a 10,346 byte ERC-20 that answers transfer of zero and balanceOf for the PoolManager.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    },
+    {
+     "delta": "Preinstalled contracts answer the same way as on Ethereum. The ERC-4337 EntryPoint v0.6, v0.7 and v0.8 accept ETH with empty calldata and return a 32 byte value for balanceOf(PoolManager), which is the PoolManager's deposit and is 0 today. They revert on transfer. The Safe singletons return empty data for every shape. The two CREATE2 factory stubs return 20 bytes for transfer calldata, which the success test at src/types/Currency.sol:68 rejects.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L1",
+   "summary": "World Chain runs its own node on top of the OP Stack crates. The pins of the reported release were read. Karst is active there since 21 September 2026, which answers the cycle 1 lead about the Osaka opcodes and the transaction gas cap.",
+   "deltas": [
+    {
+     "delta": "web3_clientVersion reports world-chain/v2.8.2-9596311. The v2.8.2 manifest pins reth tag op-v2.6.0-2, revm 43.0.2 and op-revm at ethereum-optimism/optimism commit 722072949ce583f361424a160082186ee14cac71.",
+     "source": "https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/Cargo.toml",
+     "relevance": "low"
+    },
+    {
+     "delta": "op-reth v2.4.3 added the World Chain Karst activation time 1789992000 (21 September 2026, 12:00 UTC) for mainnet. Karst carries the Osaka subset, so CLZ and the EIP-7825 cap of 16,777,216 gas per transaction apply on World Chain from that time.",
+     "source": "https://github.com/ethereum-optimism/optimism/releases/tag/op-reth/v2.4.3",
+     "relevance": "low"
+    },
+    {
+     "delta": "node_iter.rs at reth tag op-v2.6.0-2 contains the corrected seek comparison from paradigmxyz/reth pull request 28264.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/reth/op-v2.6.0-2/crates/trie/trie/src/node_iter.rs",
+     "relevance": "none"
+    },
+    {
+     "delta": "Calls from the PoolManager address to the precompile range behave as on Ethereum. ecrecover (0x01) and P256VERIFY (0x0100) return empty data for transfer and balanceOf calldata, so a take of those currency ids records a debt and moves nothing, and sync reverts. sha256 (0x02), ripemd160 (0x03) and identity (0x04) return 32 or more bytes that are a fixed function of the calldata, so sync succeeds with a constant value, settle credits zero, and take reverts because the first returned word is never 1. modexp, the bn254 and BLS precompiles, blake2f and the KZG precompile revert on both calldata shapes.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L2",
+   "summary": "The op-revm commit that World Chain pins clears transient storage for every transaction outcome. The World Chain EVM crate wraps the OP executor and adds a block access list builder for flashblocks. Its parallel validation path was not read to the end.",
+   "deltas": [
+    {
+     "delta": "Client source read for the transaction boundary. op-revm at commit 7220729 contains the same failed deposit path (revert to the first checkpoint, nonce bump, mint, commit_tx) and calls discard_tx for other errors. In revm, commit_tx, discard_tx and finalize each call transient_storage.clear(), and checkpoint_revert restores transient entries. A transaction that succeeds, reverts, is rejected as invalid, or is a failed deposit therefore ends with empty transient storage.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/722072949ce583f361424a160082186ee14cac71/rust/op-revm/src/handler.rs",
+     "relevance": "none"
+    },
+    {
+     "delta": "The main branch of worldcoin/world-chain has a block executor for flashblocks that builds a block access list and delegates each transaction to the inner OP executor through execute_transaction_with_commit_condition. This file is from the main branch (version 2.9.0), which is newer than the deployed 2.8.2.",
+     "source": "https://raw.githubusercontent.com/worldcoin/world-chain/main/crates/evm/src/execution/bal.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "A published review of World Chain describes an execute_transaction function in a parallel validation path of the node. Only the search extract of that report was read.",
+     "source": "https://audited.xyz/report/world-chain",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L3",
+   "summary": "Nothing new under this lens on World Chain. The legacy ETH view has no code and WETH holds a separate balance.",
+   "deltas": []
+  },
+  {
+   "chainId": 480,
+   "lens": "L4",
+   "summary": "The predeploy sweep on World Chain gives the same result as on the other chains. The published reviews of the PBH contracts and builder describe nullifier and block building issues that do not touch balances held by other contracts.",
+   "deltas": [
+    {
+     "delta": "Sweep of the predeploy range with msg.sender set to the PoolManager and a separate tx.origin (eth_call with the PoolManager code overridden by a forwarding stub). Only these targets do not revert. WETH at 0x4200000000000000000000000000000000000006 accepts ETH with any calldata and mints WETH to the PoolManager. L2ToL1MessagePasser at 0x4200000000000000000000000000000000000016 accepts ETH with empty calldata and starts an L1 withdrawal for the PoolManager. SequencerFeeVault, BaseFeeVault, L1FeeVault and OperatorFeeVault accept ETH with empty calldata. L1BlockNumber at 0x4200000000000000000000000000000000000013 accepts ETH and answers every selector, including transfer, balanceOf and all ten hook selectors, with one 32 byte word that holds the L1 block number. L2StandardBridge rejects the PoolManager with 'function can only be called from an EOA'. Every other predeploy slot reverts on empty calldata, transfer, balanceOf and the hook selectors. The slot 0x4200000000000000000000000000000000000042 holds a 10,346 byte ERC-20 that answers transfer of zero and balanceOf for the PoolManager.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "low"
+    },
+    {
+     "delta": "Preinstalled contracts answer the same way as on Ethereum. The ERC-4337 EntryPoint v0.6, v0.7 and v0.8 accept ETH with empty calldata and return a 32 byte value for balanceOf(PoolManager), which is the PoolManager's deposit and is 0 today. They revert on transfer. The Safe singletons return empty data for every shape. The two CREATE2 factory stubs return 20 bytes for transfer calldata, which the success test at src/types/Currency.sol:68 rejects.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "low"
+    },
+    {
+     "delta": "Nethermind's review of the PBH contracts reports that nullifier hashes could be consumed without a valid proof and that the builder now refuses calls into PBHEntryPoint that do not come from the transaction target. Its builder review reports gas accounting and stale limit issues in block building. None of the findings moves or blocks funds held by another contract.",
+     "source": "https://www.nethermind.io/audits/world-chain-pbh",
+     "relevance": "none"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "A native payout sent to L2ToL1MessagePasser, an ERC-4337 EntryPoint or the L1BlockNumber predeploy is booked to the PoolManager's own address and is lost to the caller",
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L4",
+   "assumptions": [
+    "A3",
+    "A8",
+    "A13"
+   ],
+   "effect": "freeze",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "OP Stack chains have a withdrawal contract, L2ToL1MessagePasser at 0x4200000000000000000000000000000000000016, whose receive() starts a withdrawal to L1 for msg.sender and uses msg.sender as the L1 target. Ethereum has no contract with that behaviour. The legacy L1BlockNumber predeploy at 0x4200000000000000000000000000000000000013 accepts ETH with any calldata and has no function that pays it out. The ERC-4337 EntryPoint, which also exists on Ethereum, credits a plain ETH transfer as a deposit of msg.sender.",
+   "mechanism": "1. take(address(0), to, amount) debits the caller by amount and then makes the PoolManager send amount of ETH to the recipient with empty calldata and all gas (src/PoolManager.sol:291-297, src/types/Currency.sol:44-52). The recipient sees the PoolManager as msg.sender. 2. If the recipient is L2ToL1MessagePasser, its receive() calls initiateWithdrawal(msg.sender, 100000, empty data). The ETH is taken off the L2 and a withdrawal is recorded with the PoolManager as sender and the PoolManager's address as the L1 target. The PoolManager addresses of all seven chains have no code on Ethereum. If the withdrawal is proven and finalised on L1, the ETH is delivered to that address, where nothing can move it. The value call returned success in eth_call on OP Mainnet, Base and Unichain. 3. If the recipient is an EntryPoint, receive() calls depositTo(msg.sender) and the amount becomes a deposit of the PoolManager. withdrawTo pays out only the deposit of its own caller, and the PoolManager cannot call it. The EntryPoint spends a deposit only after the account answers validateUserOp or validatePaymasterUserOp, and src/ has neither function, so the deposit cannot be spent. 4. If the recipient is L1BlockNumber, the fallback keeps the ETH and returns the L1 block number. 5. In each case the caller still owes amount in currency address(0) and must pay it with msg.value before unlock returns (src/PoolManager.sol:112, 349-364). Pool reserves are unchanged in total: amount left and amount came back in. The caller has paid for a payout that reached nobody. 6. A caller who first calls sync(EntryPoint), then takes native ETH to the EntryPoint and then calls settle is credited amount under the currency id of the EntryPoint, because balanceOf(PoolManager) on the EntryPoint is the deposit (src/PoolManager.sol:279-288, 358-360). That credit can be minted as an ERC-6909 claim and can never be paid out, because the EntryPoint has no transfer function and take reverts (src/types/Currency.sol:60-86). The native debt from step 1 remains and must still be paid in full.",
+   "impact": "The loss is the amount of one payout and falls on the account that chose the recipient. No pool reserve, no other user's claim and no protocol fee is reduced, and an attacker gains nothing by doing this on purpose. One sign that the L1 twin addresses do receive stray value: the Base PoolManager address holds 0.0588 ETH and no code on Ethereum. How that ETH arrived was not traced.",
+   "preconditions": "A user, a router or a front end passes one of these addresses as the recipient of a native take, for example in the belief that sending ETH to the message passer bridges it to the user's own L1 address. No third party can choose the recipient of someone else's payout through core. Whether the deployed Universal Router or PositionManager filter recipients was not read.",
+   "mitigations": "Routers and front ends can refuse the predeploy range 0x4200000000000000000000000000000000000000 to 0x42000000000000000000000000000000000007ff and the EntryPoint addresses as recipients of native payouts. Users who want ETH on L1 should take to their own account and withdraw from there. Nothing in core can be configured to prevent it.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:44-52",
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364",
+    "src/types/Currency.sol:60-86"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L2/L2ToL1MessagePasser.sol",
+     "supports": "receive() calls initiateWithdrawal(msg.sender, RECEIVE_DEFAULT_GAS_LIMIT, bytes('')) with RECEIVE_DEFAULT_GAS_LIMIT = 100000"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/eth-infinitism/account-abstraction/v0.7.0/contracts/core/StakeManager.sol",
+     "supports": "EntryPoint receive() calls depositTo(msg.sender), balanceOf(account) returns deposits[account].deposit, and withdrawTo debits deposits[msg.sender]"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/eth-infinitism/account-abstraction/v0.7.0/contracts/core/EntryPoint.sol",
+     "supports": "the EntryPoint debits a sender or paymaster deposit only in the validation step that calls validateUserOp or validatePaymasterUserOp on that address"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/legacy/L1BlockNumber.sol",
+     "supports": "L1BlockNumber receive() and fallback() are payable and return the L1 block number as one 32 byte word"
+    },
+    {
+     "url": "https://mainnet.optimism.io",
+     "supports": "eth_call with the PoolManager as msg.sender and a separate tx.origin: a 0.001 ETH value call with empty calldata succeeds at L2ToL1MessagePasser, at the EntryPoint v0.6, v0.7 and v0.8, at L1BlockNumber and at the fee vaults, and reverts at L2StandardBridge. The same results were read on Base and Unichain."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_getCode at the seven L2 PoolManager addresses returns empty code on Ethereum, and eth_getBalance at 0x498581ff718922c3f8e6a244956af099b2652b2b returns 58773641109313318 wei"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "check": "Cycle 1 lead: does the execution client source reset transient storage at the start of every transaction, including user deposits, failed deposits and rejected transactions (assumption A1).",
+   "result": "Yes for every client build the chains report. revm's JournalInner clears transient_storage in commit_tx, discard_tx and finalize, and checkpoint_revert restores transient entries. op-revm (commit 72fcf947 for Unichain, Ink and Soneium, commit 7220729 for World Chain, tag op-reth/v2.8.0 for Zora) and the Base handler (v1.5.6) end a successful or reverted transaction with commit_tx, treat a failed or halted deposit by reverting to the first checkpoint and then calling commit_tx, and call discard_tx for every other error. An unlock flag, a delta or a synced currency cannot reach the next transaction. OP Mainnet's endpoint does not report its commit, so for that chain this rests on the shared op-reth code line.",
+   "source": "https://raw.githubusercontent.com/bluealloy/revm/main/crates/context/src/journal/inner.rs"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L1",
+   "check": "Whether a contract that the PoolManager calls (an unlock callback, a hook or a native payout recipient) can DELEGATECALL or CALLCODE a B20 token precompile and act on the token with the PoolManager as msg.sender.",
+   "result": "No. The wrapper around every Base stateful precompile returns DelegateCallNotAllowed unless the call is a direct call. On chain, with the PoolManager as outer caller and a stub that forwards by DELEGATECALL or CALLCODE to OUSD, balanceOf and transfer revert with 0x0d89438e. With a plain CALL the token sees the stub as sender and the transfer fails for lack of balance.",
+   "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/macros.rs"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L1",
+   "check": "Whether a B20 transfer made by a take survives when the surrounding call frame reverts, which would let a caller keep tokens while the PoolManager's delta is rolled back.",
+   "result": "No. The precompile writes balances with EvmInternals.sstore into the revm journal, and revm commits the frame checkpoint only when the precompile result is ok and reverts it otherwise. Journal entries of an inner frame are undone when any outer frame reverts, the same as contract storage.",
+   "source": "https://raw.githubusercontent.com/bluealloy/revm/main/crates/handler/src/frame.rs"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "check": "Whether anyone other than the token issuer can move the PoolManager's B20 balance: allowance, permit, factory privilege, or the shared Policy Registry.",
+   "result": "No path found. transferFrom needs an allowance that only approve by the owner or a permit signed by the owner can set, and permit accepts an ECDSA signature only. The factory's privileged calls run only against a token created in the same call, guarded by TokenAlreadyExists. updatePolicy reverts with PolicyNotFound for an id that does not exist, so a token cannot point at a policy id that a stranger could later create and administer. Seize and burnBlocked need issuer roles and are covered by the cycle 1 issuer finding.",
+   "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_stablecoin/logic/v3.rs"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L4",
+   "check": "Whether the Base operated Activation Registry can freeze B20 tokens that the PoolManager already holds.",
+   "result": "No. Activation is checked when the factory creates a token and when the Policy Registry is written. The token dispatcher checks only that the token address has code and then routes the call. Turning a feature off stops new tokens and stops list updates. It does not stop transfer or balanceOf on existing tokens.",
+   "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/policy/dispatch.rs"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "check": "Whether a currency id inside the B20 address prefix that has no token behind it (a variant byte that Base has not defined, or a valid variant that was never created) can collect credit that later becomes a claim on a real token (assumption A4).",
+   "result": "No. For an undefined variant the address is a plain account without code: take succeeds and records a debt (src/types/Currency.sol:60-75), and sync reverts because balanceOf returns no data (src/types/Currency.sol:94). For an uncreated token every call reverts. A positive delta in such an id can come only from settle, which needs sync, or from a pool that already holds the id, which needs an earlier payment. No credit can exist before the token does.",
+   "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_factory/variant.rs"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L4",
+   "check": "Sweep of the Base only system addresses with msg.sender set to the PoolManager: B20 factory, Activation Registry, Policy Registry, NonceManager, TxContext, BaseTime, for empty calldata with and without value, transfer with zero and nonzero amount, balanceOf and the ten hook selectors.",
+   "result": "All six revert on every shape. A take, a sync or a hook call that names one of them reverts as a whole, so nothing they do can persist. OUSD and AMDC, two live B20 tokens, answer transfer of zero with true and balanceOf with the PoolManager balance, and revert on empty calldata, on value and on the hook selectors.",
+   "source": "https://mainnet.base.org/"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L4",
+   "check": "Sweep of 38 predeploy slots, 20 precompile addresses and 26 preinstalled or reserved addresses with msg.sender set to the PoolManager and a separate tx.origin, for the call shapes P1, P2, P3 and P5: does any target accept a token style call and move value that the caller does not owe.",
+   "result": "No. For P2 (transfer) the only targets that return true or empty data are real ERC-20 tokens (WETH, the governance token), addresses without code, the Safe singletons, ecrecover and P256VERIFY. The last four move nothing and the caller is still debited. For P1 (value with empty calldata) the caller is debited the full amount whatever the recipient does with it (src/PoolManager.sol:294). For P3 the targets that return 32 bytes are WETH, the governance token, LegacyERC20ETH on OP Mainnet and Zora, L1BlockNumber, the EntryPoints, sha256, ripemd160 and identity. L1BlockNumber and the three precompiles return a value that cannot change inside a transaction, so settle credits zero. The EntryPoint case is in the finding of this cycle.",
+   "source": "https://mainnet.optimism.io"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L3",
+   "check": "Faces of the native asset, wrapped native: walk sync, take, settle, mint and burn across address(0) and the WETH predeploy in both orders, including a native take whose recipient is WETH.",
+   "result": "Value is conserved in every order. A native take to WETH debits the caller amount in currency address(0) and mints the same amount of WETH to the PoolManager. If WETH was synced before, settle credits the caller that amount of WETH. The caller then holds a native debt and an equal WETH credit, takes the WETH, unwraps it and pays the native debt. If WETH was not synced the minted WETH stays in the PoolManager as surplus that no one can claim, and the caller still owes the ETH. A native settle while WETH is synced reverts at src/PoolManager.sol:356. Mint and burn of claims under either id need a matching credit or burn of the same id (src/PoolManager.sol:322-336).",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/WETH98.sol"
+  },
+  {
+   "chainIds": [
+    10
+   ],
+   "lens": "L3",
+   "check": "Faces, tokens with more than one entry point: SNX on OP Mainnet is reachable at the proxy 0x8700dAec35aF8Ff88c16BdF0418774CB3D7599B4 and at its target 0x3f2a1f997ef089798d19473d96be484aeb3e4ecf, and the PoolManager holds 30,337 SNX. Walk sync, settle, take, mint and burn across the two ids in every order.",
+   "result": "No gain in any order. The target is read only for the PoolManager: balanceOf works and transfer reverts with 'Only the proxy can call', so take under the target id always reverts and no debt in that id can be created by take. sync(target), an SNX transfer to the PoolManager and settle credit the payer under the target id for tokens it really paid. That credit can be cleared or minted as a claim and can never be paid out. The single synced currency slot is overwritten by the next sync and reset by settle (src/libraries/CurrencyReserves.sol:21-32, src/PoolManager.sol:361), so one transfer is never credited under both ids. A real pair of working entry points would also conserve value, because each credit needs its own balance increase between a sync and a settle and each take moves the same number of units that it debits.",
+   "source": "https://mainnet.optimism.io"
+  },
+  {
+   "chainIds": [
+    10,
+    7777777
+   ],
+   "lens": "L3",
+   "check": "Faces, native asset with the read only LegacyERC20ETH view: orders not listed in cycle 1, namely a native take before sync(LegacyERC20ETH), and inflows that the PoolManager itself can be made to cause.",
+   "result": "No gain. If the caller takes ETH first, then syncs the legacy id, forces the ETH back with SELFDESTRUCT and settles, it holds a native debt and an equal legacy credit. The legacy credit cannot leave, so the caller pays the native debt a second time. No call shape that the PoolManager can be made to send brings ETH back into it, and the PoolManager has no receive function. collectProtocolFees only lowers the balance, which makes settle revert at src/PoolManager.sol:360.",
+   "source": "https://mainnet.optimism.io"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L4",
+   "check": "Whether any predeploy or precompile address can serve as a hook that returns a valid response, or that leaves a side effect after a hook call.",
+   "result": "No. Of the special addresses, these have a valid flag combination under src/libraries/Hooks.sol:109-126: 0x10, the BLS map to G1 precompile (afterDonate), 0x0100 P256VERIFY (afterRemoveLiquidity), L2StandardBridge 0x4200000000000000000000000000000000000010 (afterDonate), SchemaRegistry 0x4200000000000000000000000000000000000020 (beforeDonate) and slot 0x4200000000000000000000000000000000000030 (both donate hooks). None returns 32 bytes that start with the hook selector, so the call reverts with InvalidHookResponse or HookCallFailed (src/libraries/Hooks.sol:137, 152-154) and the whole operation reverts. The identity precompile would echo the selector, and its address 0x04 fails the flag check. A pool created with P256VERIFY as hook accepts liquidity and reverts on every removal. That needs LPs to pick such a pool. The Base precompile page states that P256VERIFY pricing follows EIP-7951 for equivalence with L1, so Ethereum has the same address. The case falls under the cycle 1 hook finding.",
+   "source": "https://mainnet.optimism.io"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "check": "Whether an L1 account can act on L2 as the PoolManager, or whether code can appear at the PoolManager's address on Ethereum and use the withdrawal path.",
+   "result": "No. eth_getCode on Ethereum returns empty code at all seven PoolManager addresses and their nonce is 0. A deposit from an L1 contract carries the aliased sender, and an unaliased sender needs a signature made for that address. A withdrawal that the PoolManager is made to start through L2ToL1MessagePasser carries empty data and the PoolManager's own address as target, so it gives no authority on L1.",
+   "source": "https://ethereum-rpc.publicnode.com"
+  },
+  {
+   "chainIds": [
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L1",
+   "check": "Known weakness: the reth trie iterator bug fixed in November 2026 (pull request 28264). The reth v2.10.0 notes list the fix with high update priority, and the Base v1.5.3 notes say it prevents a state root mismatch. Secondary reports say a crafted transaction could trigger it and stall unpatched nodes. Do the builds these chains report contain the fix.",
+   "result": "Yes. The corrected comparison (walker position equal to the seek prefix) is present at base/reth tag base-v2.5.2.11 (Base v1.5.6), at ethereum-optimism/reth tag op-v2.7.0-0 (op-reth v2.9.0-rc.1 on Unichain, Ink and Soneium) and at tag op-v2.6.0-2 (World Chain v2.8.2 and conduit-op-reth v2.5.1 on Zora). Upstream reth v2.9.0 and v2.5.1 still have the old comparison. The bug is a liveness and proof correctness issue and gives no way to move PoolManager funds. OP Mainnet is left out because its endpoint does not report a commit.",
+   "source": "https://github.com/paradigmxyz/reth/pull/28264"
+  },
+  {
+   "chainIds": [
+    480
+   ],
+   "lens": "L1",
+   "check": "Cycle 1 lead: which upgrade activated the Osaka opcodes on World Chain and whether the EIP-7825 gas cap applies there.",
+   "result": "Karst. op-reth v2.4.3 added the World Chain mainnet Karst time 1789992000 (21 September 2026). World Chain v2.8.2 pins an op-revm commit in which Karst maps to the Osaka instruction set. The gas cap clearance that cycle 1 gave for the other six chains therefore applies to World Chain as well: liquidity removal has no loop (src/libraries/Pool.sol:146-238) and a swap stops at the caller's price limit.",
+   "source": "https://github.com/ethereum-optimism/optimism/releases/tag/op-reth/v2.4.3"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L2",
+   "check": "Cycle 1 lead on Base Transactions (type 0x79, planned for Everest): is transient storage cleared between call phases and can a failed phase leave state behind.",
+   "result": "Read from source at v1.5.6. A reverting phase is undone with checkpoint_revert, which also restores transient storage, and later phases are skipped. Committed phases share transient storage with later phases. All calls in the transaction have the same msg.sender, and unlock re-locks and requires zero open deltas before it returns (src/PoolManager.sol:104-114), so the only PoolManager state that can pass from one phase to the next is a synced currency set by the same sender. Everest has no activation date, and this must be read again at the release that activates it.",
+   "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/eip8130.rs"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "check": "Whether the transient slot constants in src/ are the values their comments state, so that the lock flag, the delta counter, the synced currency and the synced reserves cannot collide with each other or with a delta slot.",
+   "result": "They are. keccak256('Unlocked') - 1, keccak256('NonzeroDeltaCount') - 1, keccak256('ReservesOf') - 1 and keccak256('Currency') - 1 were recomputed and equal the constants at src/libraries/Lock.sol:8, src/libraries/NonzeroDeltaCount.sol:9-10 and src/libraries/CurrencyReserves.sol:11-13. Delta slots are keccak256 of a 64 byte preimage (src/libraries/CurrencyDelta.sol:10-16).",
+   "source": "src/libraries/CurrencyReserves.sol:11-13"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    10
+   ],
+   "lens": "L1",
+   "question": "Which op-reth commit does the OP Mainnet sequencer run, given that the public endpoint reports op-reth/v0.0.0-dev-unknown, and does it include the reth trie fix from pull request 28264 and the op-revm error path that discards a failed transaction's journal?",
+   "why": "Every source based clearance for OP Mainnet in this cycle rests on the commit that Unichain, Ink and Soneium report. The largest OP Stack balances outside Base sit on this chain.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    480
+   ],
+   "lens": "L2",
+   "question": "In the World Chain node, does the parallel validation path for flashblocks with block access lists execute each transaction on its own journal, and is a transaction whose result disagrees with the access list re-executed from clean transient storage?",
+   "why": "Assumption A1 names parallel execution with speculative state as a way for an unlock flag or a delta to reach another execution. The sequential path was read and is safe. The parallel path was not read to the end.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    8453,
+    10,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L1",
+   "question": "reth v2.10.0 names a new execution engine, evm2, in its SDK changes, and the Base workspace has a crate base-common-evm2. When a chain in this unit moves block execution from revm to that engine, do TSTORE rollback on revert, clearing at transaction end, rollback of precompile state on a failed frame, and calls to addresses without code keep the behaviour read in this cycle?",
+   "why": "All opcode and transient storage clearances of this cycle were read from revm. A second engine needs the same reading before it produces blocks.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "question": "Does Base plan a third B20 variant byte, and at the fork that defines it, can any address that was a plain account without code before the fork already hold ERC-6909 claims or pool state in the PoolManager under its currency id?",
+   "why": "Before a variant is defined its addresses accept transfer calls silently. This cycle found no way to hold credit in such an id, and the check should be repeated against the fork's token logic.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    8453,
+    10
+   ],
+   "lens": "L3",
+   "question": "Which tokens held by the PoolManager on Base and OP Mainnet raise a holder's balance through a call that any account can make, such as a rebase payout or a claim on behalf of the holder? The PoolManager holds 112.55 USD+ on Base, a token that rebases for every holder, and the caller of its payout function was not read.",
+   "why": "A caller who runs sync, the trigger and settle in one transaction is credited the whole increase on the PoolManager balance (src/PoolManager.sol:279-288 and 349-364). Cycle 1 raised this for stETH on Ethereum. The balances found here are small, and a larger rebasing or reward token would make it a loss of yield for LPs.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L4",
+   "question": "Do the deployed Universal Router and PositionManager on these chains accept a predeploy such as L2ToL1MessagePasser or an EntryPoint as the recipient of a native payout, and how did 0.0588 ETH reach the Base PoolManager address on Ethereum?",
+   "why": "The stranding finding of this cycle needs a user facing path to matter. A router that filters recipients would close it, and the L1 balance may show that it has already happened.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": []
+}

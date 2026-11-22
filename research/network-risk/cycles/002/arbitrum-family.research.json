@@ -1,0 +1,596 @@
+{
+ "unit": "arbitrum-family",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 42161,
+   "lens": "L1",
+   "summary": "This cycle read the execution client at the commit that Nitro v3.11.3 pins and ran read-only opcode probes against the public RPC. Every opcode and call pattern the PoolManager relies on behaved as on Ethereum. The one difference that reaches PoolManager calls is the ArbOS precompile dispatcher, which fails and burns all forwarded gas on any calldata it does not recognise.",
+   "deltas": [
+    {
+     "delta": "Nitro v3.11.3 pins the Offchain Labs go-ethereum fork at commit f3a966e. Cycle 1 read the fork on its master branch. The files cited in this cycle are read at the pinned commit.",
+     "source": "https://github.com/OffchainLabs/nitro/tree/v3.11.3",
+     "relevance": "none"
+    },
+    {
+     "delta": "opTstore and opTload at the pinned commit use the address of the executing contract and the StateDB transient map, and opTstore returns a write protection error under STATICCALL. The fork does not change them.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/core/vm/eips.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "evm.Call at the pinned commit returns success with empty return data for an address without code, moves the value before running a precompile, and reverts to the snapshot on any error. The Arbitrum additions in this function are gas accounting only.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/core/vm/evm.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "Eight eth_call probes with state overrides returned the same words as on Ethereum: a TSTORE made in a reverted subcall is rolled back, TSTORE inside STATICCALL fails, the callee sees CALLVALUE 3 and SELFBALANCE 10 after a 3 wei call to an account holding 7, a 5 wei call to an address without code succeeds with RETURNDATASIZE 0, MCOPY and PUSH0 execute, and a child call made with all gas received 2,929,477 of 2,978,590.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call with state overrides, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "A call to ArbSys with empty calldata failed and left 46,527 of 2,978,606 gas, which is the retained one sixty-fourth. The dispatcher returns ErrExecutionReverted with zero gas left when the input is shorter than 4 bytes, when the selector is unknown, when the arguments do not decode, and when value is sent to a method that is not payable.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/precompiles/precompile.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "None of the 202 functions declared in the 18 ArbOS precompile interface files has a selector equal to transfer(address,uint256), balanceOf(address), unlockCallback(bytes) or any of the ten IHooks selectors. I computed the selectors from the interface files with a keccak implementation written for this review.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro-precompile-interfaces/main/ArbSys.sol",
+     "relevance": "none"
+    },
+    {
+     "delta": "Address 0xc8 holds the single byte 0xfe on Arbitrum One, so a call to it from a contract fails. On Robinhood Chain and Elysium the same address has no code and a call from a contract succeeds with empty return data.",
+     "source": "https://arb1.arbitrum.io/rpc eth_getCode and eth_call with state overrides, queried 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 42161,
+   "lens": "L2",
+   "summary": "The transient storage reset and the transaction types were re-read at the pinned client commit and checked with a two-transaction simulation. Nothing new was found. The Ethereum PoolManager cannot be used to send a deposit or a message into Arbitrum One.",
+   "deltas": [
+    {
+     "delta": "At the pinned commit the state transition calls StartTxHook, returns at once when the hook ends the transaction, and otherwise calls StateDB.Prepare before any contract code runs. Prepare replaces the transient storage map at statedb.go line 1599.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/core/state_transition.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "arbos/tx_processor.go at v3.11.3 contains no call to evm.Call, evm.Create or a contract run inside StartTxHook, GasChargingHook or EndTxHook. The only contract execution entry in the file is ExecuteWASM, which the interpreter calls for Stylus programs.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/tx_processor.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "eth_simulateV1 with two calls to a contract placed by state override returned zero for TLOAD in the second call after TSTORE in the first.",
+     "source": "https://arb1.arbitrum.io/rpc eth_simulateV1, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "The Arbitrum One Inbox 0x4Dbd4fc535Ac27206064B68FfCf827b0A60BAB3f and Bridge 0x8315177aB297bA92A06054cE80a67Ed4DBd7ed3a on Ethereum revert on empty calldata with value, on transfer(address,uint256) and on balanceOf(address) when the caller is the Ethereum PoolManager 0x000000000004444c5dc75cB358380D2e3dE08A90.",
+     "source": "https://ethereum-rpc.publicnode.com eth_call, queried 2026-11-22",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 42161,
+   "lens": "L3",
+   "summary": "ETH has no second face in the protocol. The wrapped ETH token mints to whoever sends it ETH, which the PoolManager can be made to do, and the exchange is one for one. Priority fee collection is now switched on.",
+   "deltas": [
+    {
+     "delta": "ArbOwnerPublic.getCollectTips() returns 1. The ArbOS 61 release page says the switch was off at activation on 2026-08-20. The PoolManager does not read the gas price.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call to 0x6b, queried 2026-11-22; https://docs.arbitrum.io/run-a-node/arbos-releases/arbos61",
+     "relevance": "none"
+    },
+    {
+     "delta": "A simulated transfer of 1 ETH with empty calldata from the PoolManager to WETH 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1 raised WETH.balanceOf(PoolManager) by exactly 1e18. The same transfer to the L2 WETH gateway 0x6c411aD3E74De3E7Bd422b94A27770f5B86C623B succeeded and credited nothing.",
+     "source": "https://arb1.arbitrum.io/rpc eth_simulateV1, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "The PoolManager held 4,521.6 ETH, 8.99M USDC, 0.98M USDT0, 49.07 WETH and 2.78M ARB.",
+     "source": "https://arb1.arbitrum.io/rpc eth_getBalance and eth_call balanceOf, queried 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 42161,
+   "lens": "L4",
+   "summary": "A sweep of about 60 addresses with the PoolManager as caller found no special address that accepts a PoolManager call and moves value without an equal debit. The addresses that do not revert are the Ethereum precompiles, addresses without code, the wrapped ETH token and the WETH gateway.",
+   "deltas": [
+    {
+     "delta": "Swept with empty calldata at zero value and at 1 ETH, transfer with zero and 1e18, balanceOf(PoolManager), the ten IHooks selectors and unlockCallback: addresses 0x01 to 0x12, 0x100, 0x101, 0x64 to 0x76, 0xc8, 0xc9, 0xff, 0xa4b05, the L1 pricer funds address, the sequencer coinbase address, WETH, USDC, USDT0, ARB, the gateway router, the three token gateways and the protocol fee controller. Every ArbOS precompile reverted on every shape. ArbOwner answered with an authorisation error.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call with from set to the PoolManager, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "Address 0x65 holds 442 bytes of Solidity code in addition to being the ArbInfo precompile address. Calls to it are dispatched to the precompile and revert on the PoolManager selectors.",
+     "source": "https://arb1.arbitrum.io/rpc eth_getCode and eth_call, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "On 2026-10-02 the Security Council installed a guard that lets anyone pause settlement of Arbitrum One on Ethereum by showing two conflicting one-step proofs that both pass. While paused, the chain keeps processing transactions and unconfirmed withdrawals to Ethereum wait. PoolManager calls are not affected.",
+     "source": "https://forum.arbitrum.foundation/t/security-council-emergency-action-2-10-2026/31530",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Trail of Bits review of ArbOS 60 and 61 lists nine findings. The one rated high is a map iteration with random order in ArbGasInfo.GetMultiGasPricingConstraints, which could split consensus when a contract uses the result. The others are informational and concern gas pricing constraints and the transaction filter error path. None concerns balances or precompile dispatch. I read the report through the search excerpt and did not open the full file.",
+     "source": "https://docs.arbitrum.io/audit-reports/2026_07_10_trail_of_bits_arbitrum_arbos_60_61_code_review_final_comprehensive_report.pdf",
+     "relevance": "low"
+    },
+    {
+     "delta": "Nitro pull request 4498 fixed a double refund of donated gas in manual retryable redeems under ArbOS 60, which let a caller drain the network fee account. ArbOS 60 was never activated on a production chain and the fix is part of ArbOS 61. I read the pull request through the search excerpt.",
+     "source": "https://github.com/OffchainLabs/nitro/pull/4498",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L1",
+   "summary": "Robinhood Chain reports the same client build as Arbitrum One and returned the same probe results. The address screening that the chain uses is implemented inside the EVM of this client: every call target, created address and selfdestruct beneficiary is reported to an address checker.",
+   "deltas": [
+    {
+     "delta": "The eight opcode probes returned the same words as on Arbitrum One and Ethereum, except that a nested call to 0xc8 succeeds with empty return data because the address has no code here.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call with state overrides, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "opCall, opCallCode, opDelegateCall and opStaticCall report the target address to StateDB.TouchAddress before the call runs, with reason call target. Create reports the new address and SELFDESTRUCT reports the beneficiary. The record carries an optional event rule match, so log based rules exist as well. I did not read the rule definitions.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/core/vm/instructions.go",
+     "relevance": "high"
+    },
+    {
+     "delta": "The documentation states a maximum code size of 96 KB and init code size of 192 KB. No PoolManager path reads code size.",
+     "source": "https://docs.robinhood.com/chain/differences-from-ethereum",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L2",
+   "summary": "Transient storage and transaction types match Arbitrum One. Screening before inclusion applies only to transactions the sequencer receives directly. Delayed inbox messages are exempt from it by a dedicated run mode and can be stopped only by the hash list. ERC-4337 entry points are deployed, so several users' operations can share one transaction as on Ethereum.",
+   "deltas": [
+    {
+     "delta": "The client has a separate run mode for blocks built from delayed inbox messages. Its comment says such messages cannot be filtered after commitment and that the address filter must treat the mode as exempt. The hash list checked in RevertedTxHook is the only filter that reaches them.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/core/state_transition.go",
+     "relevance": "high"
+    },
+    {
+     "delta": "eth_simulateV1 with two calls returned zero for TLOAD in the second call after TSTORE in the first.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_simulateV1, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "The Delayed Inbox 0x1A07cc4BD17E0118BdB54D70990D2158AbAD7a2D and Bridge 0xDf8755334ce7A73cCF6b581C02eA649AE3E864b3 on Ethereum revert on empty calldata with value, on transfer and on balanceOf when the caller is the Ethereum PoolManager.",
+     "source": "https://ethereum-rpc.publicnode.com eth_call, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "EntryPoint versions 0.6, 0.7 and 0.8 are listed as deployed. EntryPoint 0.7 at 0x0000000071727De22E5E9d8BAf0edAc6f37da032 accepts ETH with empty calldata from the PoolManager and answers balanceOf(PoolManager) with 0. It reverts on transfer.",
+     "source": "https://docs.robinhood.com/chain/account-abstraction and https://rpc.mainnet.chain.robinhood.com eth_call, queried 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L3",
+   "summary": "No new face of ETH and no token that credits the PoolManager without a transfer was found. USDG routes freeze and signature functions to facets and none of 20 reward or claim selectors I tried is routed. Stock token mint and burn functions reject an arbitrary caller.",
+   "deltas": [
+    {
+     "delta": "The USDG logic 0x68184c449e1a8f34fa18d289737129fd27b66f8f carries getFacet(bytes4). It routes freeze, wipeFrozenAddress and reclaimToken to 0x58cab81e3d8468a0e90df8cbfacb34535e1de942 and permit, transferWithAuthorization and receiveWithAuthorization to 0x780d30b6a89bc9eef953a543aa288c3b05b01309. It returns the zero address for 20 candidate names such as claim(), claimRewards(address), claimFor(address), rebase() and distribute(). The facet table cannot be listed from a view, so other names may exist.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call getFacet(bytes4), selector names from https://api.openchain.xyz/signature-database/v1/lookup, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "USDG globalTransferSettings() returns 1771891200 (2026-02-24 00:00 UTC), 86400 and three zero words. I did not find what the values govern.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "On the stock token ANT, burn(address,uint256), adminBurn(address,uint256) and mint(address,uint256) sent from an arbitrary address revert with error selector 0xe2517d3f and a role id. transferFrom without allowance reverts. The logic exposes balanceOfUI and totalSupplyUI as separate views next to balanceOf.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call from 0x00000000000000000000000000000000000a11ce, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "WETH 0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73 is a proxy with admin 0xa3Acd31AFb851B4eB9DAD00F5204c01D924267dF, the L2 proxy admin of the token bridge. A simulated 1 ETH transfer with empty calldata from the PoolManager raised its WETH balance by 1e18. The L2 WETH gateway 0x1D187C3E2dA52D72BC9C41e3AbA0fdFa6a7bF055 accepts ETH and credits nothing.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_getStorageAt and eth_simulateV1, queried 2026-11-22; https://docs.robinhood.com/chain/protocol-contracts",
+     "relevance": "low"
+    },
+    {
+     "delta": "The PoolManager held 21,400.3 ETH, 16.82M USDG, 1,319 WETH and 3,173 ANT. ArbOwnerPublic.getCollectTips() returns 0.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_getBalance and eth_call, queried 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L4",
+   "summary": "The sweep gave the same results as on Arbitrum One for every precompile address. The token bridge contracts revert on all PoolManager call shapes except the WETH gateway, which accepts ETH. The filter settings are unchanged since cycle 1.",
+   "deltas": [
+    {
+     "delta": "Swept the same common address set as on Arbitrum One plus WETH, USDG, the ANT stock token, the stock token beacon, the L2 gateway router, the ERC-20, custom and WETH gateways, the L2 multicall, the filtered funds recipient, the protocol fee controller and EntryPoint 0.7. The filtered funds recipient 0xbbbd433db8700d8927faaaaf482e007e293ed568 behaves as an address without code.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call with from set to the PoolManager, queried 2026-11-22; https://docs.robinhood.com/chain/protocol-contracts",
+     "relevance": "low"
+    },
+    {
+     "delta": "getAllTransactionFilterers() still returns the single address 0xebdc18a1f5c42fc25552ea233facf4054df224b7 and getTransactionFilteringFrom() still returns 1782295200. No ArbOS upgrade is scheduled and no native token owner exists.",
+     "source": "https://rpc.mainnet.chain.robinhood.com eth_call to 0x6b, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "The notices page lists only node software and feed changes since launch, the latest dated 2026-09-22. It announces no consensus change.",
+     "source": "https://docs.robinhood.com/chain/notices-and-upgrades",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L1",
+   "summary": "The Elysium RPC node, which reports a locally built Nitro binary, returned the same results as Arbitrum One on every opcode probe and on the precompile sweep. No custom precompile or HyperEVM style system address answers yet. The sequencer is run on a separate stack by Conduit, and I could only test the RPC node.",
+   "deltas": [
+    {
+     "delta": "The eight opcode probes returned the same words as on Arbitrum One: transient rollback on revert, write protection under STATICCALL, CALLVALUE and SELFBALANCE, success with empty return data for an address without code, 2,929,863 of 2,978,982 gas forwarded, and 46,533 gas left after a failed call to ArbSys with empty calldata.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_call with state overrides, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "Addresses 0x0800, 0x0801, 0x080f, 0x2222222222222222222222222222222222222222, 0x3333333333333333333333333333333333333333 and 0x5555555555555555555555555555555555555555 have no code and return success with empty data on every PoolManager call shape. The HyperEVM read precompiles, CoreWriter and WHYPE addresses mean nothing on Elysium today.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_call with from set to the PoolManager, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "The ecosystem list in the documentation says Conduit runs the Elysium sequencer on its G2 rollup stack. The public RPC reports nitro/vlocal. Whether block production uses the same execution code as the RPC node could not be checked from outside.",
+     "source": "https://elysium.kinetiq.xyz/docs/building-on-elysium",
+     "relevance": "low"
+    },
+    {
+     "delta": "A precompile that is registered for a later ArbOS version is treated as an address without code until that version activates: the dispatcher returns success with empty data. The announced read precompile will therefore change an address from succeeding silently to reverting on unknown selectors when the upgrade activates.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/precompiles/precompile.go",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L2",
+   "summary": "Transient storage is cleared between simulated transactions. The rollup contracts on HyperEVM use the native asset bridge design and their inbox rejects every PoolManager call shape, so the HyperEVM PoolManager cannot send value or messages into Elysium.",
+   "deltas": [
+    {
+     "delta": "eth_simulateV1 with two calls returned zero for TLOAD in the second call after TSTORE in the first.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_simulateV1, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "The Bridge 0x503D572157113fAaaD4DbeD2647Bb10b949216B6 on HyperEVM reverts on nativeToken(), which marks the native asset variant of the bridge, and held 298,480 HYPE. It had recorded 2,647,725 delayed messages and 1,110 sequencer batches.",
+     "source": "https://rpc.hyperliquid.xyz/evm eth_call and eth_getBalance, queried 2026-11-22; https://elysium.kinetiq.xyz/docs/contract-addresses",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Inbox 0xce59f8B65ad41C9DAE4c07A0571a39824bD92cff has allowListEnabled false and paused false. Inbox and Bridge revert on empty calldata with value and on transfer when the caller is the HyperEVM PoolManager 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F.",
+     "source": "https://rpc.hyperliquid.xyz/evm eth_call, queried 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "SequencerInbox.maxTimeVariation() returns 69,120 delay blocks, 48 future blocks, 86,400 delay seconds and 3,600 future seconds, and isDelayBufferable() returns true. A message forced through HyperEVM can wait up to about one day.",
+     "source": "https://rpc.hyperliquid.xyz/evm eth_call to 0x7f3Ff53aecB87261206ad3bDc27A88b6D8420fa6, queried 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L3",
+   "summary": "HYPE has one wrapped form, WHYPE, which is the stock wrapped native token of the Arbitrum token bridge and is backed one for one. USDC is a gateway representation whose backing sits in one contract on HyperEVM. More than 10,000 pools have been initialized since launch.",
+   "deltas": [
+    {
+     "delta": "WHYPE 0xbA876237B0F021A6c6D852d6c26E107997cC5E81 is a proxy with implementation 0xf098387f303b6bbfe9da7cb16f70639b76430542 and admin 0xdeae688c60778379f98f3e29c7e94d6e3934a30a. The implementation selectors are deposit, withdraw, depositTo, withdrawTo, bridgeMint, bridgeBurn, transferAndCall, permit and the ERC-20 set. l1Address() is 0x5555555555555555555555555555555555555555 and l2Gateway() is the WHYPE gateway 0xb916e67307ad52955d37B6C123CF1A79c10855B6.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_getCode, eth_getStorageAt and eth_call, selector names from https://api.openchain.xyz/signature-database/v1/lookup, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "WHYPE totalSupply() and the native balance of the WHYPE contract are both 54,767.347824512705480237. A simulated 1 HYPE transfer with empty calldata from the PoolManager raised WHYPE.balanceOf(PoolManager) by 1e18.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_call, eth_getBalance and eth_simulateV1, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "USDC 0xb47c4C8F73F009CC0C0d3f92B388d13E293F0B65 reports l1Address() 0xb88339CB7199b77E23DB6E890353E22632Ba630f and l2Gateway() 0x5DC84e4Cb0F9082246E92a5585C5395592B1aF1f, has a total supply of 4.03M and reverts on isBlacklisted(address). The HyperEVM gateway 0xd97B30dE0bA0C2eAeE942afce77530e06c5F122c holds 4.26M of the HyperEVM token, which answers blacklister() with 0x33aa4e959132e49552cb754fb6585bdcdf874beb and isBlacklisted(gateway) with false.",
+     "source": "https://rpc.elysium.kinetiq.xyz and https://rpc.hyperliquid.xyz/evm eth_call, queried 2026-11-22; https://elysium.kinetiq.xyz/docs/bridging-hyperevm-tokens-to-elysium",
+     "relevance": "low"
+    },
+    {
+     "delta": "The PoolManager held 9,751.3 HYPE, 14,793 WHYPE and 174,155 USDC. ArbOwnerPublic.getCollectTips() returns 1, which matches the documentation statement that priority fees are collected by the network.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_getBalance and eth_call, queried 2026-11-22; https://elysium.kinetiq.xyz/docs/blocks-fees-and-ordering",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_getLogs for the Initialize event of the PoolManager over the whole chain fails with a limit of 10,000 logs, so more than 10,000 pools exist 13 days after launch. I did not list their currencies or hooks.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_getLogs, queried 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L4",
+   "summary": "The bridge contracts on Elysium revert on every PoolManager call shape except the WHYPE gateway, which accepts HYPE and credits nothing. The mirror bridge moves a token only with an approval from its holder, and the PoolManager never approves. Chain owner settings are unchanged and the announced upgrade is not scheduled on chain.",
+   "deltas": [
+    {
+     "delta": "Swept WHYPE, USDC, the gateway router, the ERC-20 gateway, the WHYPE gateway, the bridge factory, the bridge wallet gateway, the Wormhole core, the PoolManager owner, Multicall3 and Permit2. Only the two tokens answer transfer and balanceOf. The WHYPE gateway implementation 0x78a2206ba6280ef9cf457becca514f3b950f1c81 carries finalizeInboundTransfer, outboundTransfer, l1Weth and l2Weth.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_call with from set to the PoolManager, queried 2026-11-22; https://elysium.kinetiq.xyz/docs/contract-addresses",
+     "relevance": "low"
+    },
+    {
+     "delta": "The bridge wallet of an Elysium token pulls the token from the user with transferFrom after the user approves the wallet, and releases it only on a call from the gateway. It has no ERC-20 surface.",
+     "source": "https://elysium.kinetiq.xyz/docs/token-bridging-architecture",
+     "relevance": "none"
+    },
+    {
+     "delta": "getScheduledUpgrade() returns version 0 and timestamp 0, the filterer and native token owner lists are empty, and ArbWasm.activationGas() is 2^64-1. The documentation still dates the HyperCore precompile and the ElysiumCoreWriter predeploy to about four weeks after the 2026-11-09 launch.",
+     "source": "https://rpc.elysium.kinetiq.xyz eth_call to 0x6b and 0x71, queried 2026-11-22; https://elysium.kinetiq.xyz/docs",
+     "relevance": "low"
+    },
+    {
+     "delta": "The planned ElysiumCoreWriter lets a contract prefund a HYPE gas escrow on the predeploy and receive result callbacks. The page does not say whether the escrow is funded by a plain value transfer or by a named function.",
+     "source": "https://elysium.kinetiq.xyz/docs/trading-on-hypercore-from-elysium",
+     "relevance": "low"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Elysium USDC is a bridge representation whose backing on HyperEVM sits at one address that the issuer can block",
+   "chainIds": [
+    99901
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A6"
+   ],
+   "effect": "degrade",
+   "actor": "issuer",
+   "severity": "low",
+   "difference": "On Ethereum the PoolManager holds USDC issued by Circle directly. On Elysium the token called USDC is a standard gateway representation minted by the Arbitrum token bridge. Its backing is HyperEVM USDC held by one gateway contract on HyperEVM, and HyperEVM USDC has a blacklister role. The Elysium token itself has no block list.",
+   "mechanism": "Step 1: the PoolManager on Elysium holds about 174,155 USDC at 0xb47c4C8F73F009CC0C0d3f92B388d13E293F0B65. The token reports the HyperEVM token 0xb88339CB7199b77E23DB6E890353E22632Ba630f as its parent and the ERC-20 gateway as its minter. Step 2: all 4.03M Elysium USDC are backed by 4.26M HyperEVM USDC held by the gateway 0xd97B30dE0bA0C2eAeE942afce77530e06c5F122c. Step 3: if the blacklister of HyperEVM USDC lists that gateway, every withdrawal from Elysium fails when the gateway tries to pay out, and deposits fail when it tries to pull tokens in. Step 4: on Elysium nothing reverts. sync, settle and take keep working for the representation because its transfer and balanceOf are unaffected, so pools keep quoting a token that can no longer be redeemed. Holders sell it into the pools and liquidity providers end up holding it. The PoolManager code treats the representation as any other ERC-20 and has no way to notice the change.",
+   "impact": "All pools on Elysium that use USDC, and ERC-6909 claims in it. The PoolManager balance was about 174,155 USDC. Liquidity providers on the other side of USDC pairs lose the assets that are sold to them for the impaired token. No funds are moved out of the PoolManager by this path.",
+   "preconditions": "The blacklister of HyperEVM USDC, 0x33aa4e959132e49552cb754fb6585bdcdf874beb, must list the gateway. isBlacklisted(gateway) is false today. No unprivileged party can cause it. The same structure applies to every token bridged through the standard gateway whose parent chain contract has a block list.",
+   "mitigations": "Liquidity providers should treat Elysium USDC as bridge exposure to one HyperEVM address and watch isBlacklisted for the gateway. Interfaces can label the token as a bridged representation. Nothing in the PoolManager can be configured against it.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364",
+    "src/types/Currency.sol:53-75"
+   ],
+   "sources": [
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz eth_call l1Address(), l2Gateway(), totalSupply(), isBlacklisted(address) on 0xb47c4C8F73F009CC0C0d3f92B388d13E293F0B65 and balanceOf(PoolManager), queried 2026-11-22",
+     "supports": "The Elysium token is a gateway representation of the HyperEVM token, has a supply of 4.03M, has no isBlacklisted function, and the PoolManager holds about 174,155."
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_call balanceOf(gateway), blacklister(), isBlacklisted(gateway) on 0xb88339CB7199b77E23DB6E890353E22632Ba630f, queried 2026-11-22",
+     "supports": "The gateway holds 4.26M HyperEVM USDC, the token has a blacklister, and the gateway is not listed today."
+    },
+    {
+     "url": "https://elysium.kinetiq.xyz/docs/bridging-hyperevm-tokens-to-elysium",
+     "supports": "The canonical bridge locks the token in the standard gateway on HyperEVM and mints a representation on Elysium, and lists the two USDC addresses."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L4",
+   "check": "P1, native take to a special address: does any precompile, predeploy or bridge contract accept value with empty calldata from the PoolManager and return more than the caller is debited.",
+   "result": "take debits the caller the full amount before the call (PoolManager.sol:294-295, Currency.sol:44-52). Every ArbOS precompile from 0x64 to 0x74, 0xff and 0xa4b05 rejects calldata shorter than 4 bytes, so the take reverts. The Ethereum precompiles 0x02 to 0x08 accept the value and keep it. The wrapped native token mints the same amount to the PoolManager, which is credited to the caller only after a sync of that token and a settle, and the caller still owes the native amount. The WETH and WHYPE gateways accept the value and credit nothing. EntryPoint 0.7 on Robinhood Chain books the value as a deposit of the PoolManager, which a sync and settle can turn into a credit under the EntryPoint address as currency, and that currency can never be taken because the EntryPoint has no transfer function. In each case the caller pays the full value that left.",
+   "source": "eth_call and eth_simulateV1 on https://arb1.arbitrum.io/rpc, https://rpc.mainnet.chain.robinhood.com and https://rpc.elysium.kinetiq.xyz, queried 2026-11-22; https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/precompiles/precompile.go"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L4",
+   "check": "P2, P3 and P4 with a special address as currency: can transfer succeed while moving something the caller is not debited for, or can balanceOf rise between sync and settle without a payment.",
+   "result": "No ArbOS precompile has a function with the transfer or balanceOf selector, and all of them revert on both calls. sha256, ripemd and identity return 32 or more bytes for balanceOf, so sync succeeds with a constant and settle pays zero (PoolManager.sol:358-360). Their transfer result is not the value 1, so take reverts (Currency.sol:64-74). ecrecover and P256VERIFY return empty data on the transfer calldata, so take succeeds and moves nothing, the caller is debited, and the debt cannot be repaid because sync reverts on empty return data (Currency.sol:94). The remaining Ethereum precompiles fail on the input.",
+   "source": "eth_call with from set to the PoolManager on the three RPC endpoints, queried 2026-11-22; https://raw.githubusercontent.com/OffchainLabs/nitro-precompile-interfaces/main/ArbSys.sol and the 17 other interface files"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L4",
+   "check": "P5, a special address as hook: which special addresses pass isValidHookAddress, and what do they return to the IHooks calls.",
+   "result": "Of the swept addresses only 0x10, 0x64, 0x70, 0x74, 0xc8, 0x100 and 0x800 have a valid flag combination (Hooks.sol:109-127). 0x10 fails with invalid input length on every call shape, 0x64, 0x70 and 0x74 revert on the unknown selector, and 0xc8, 0x100 and 0x800 return empty data or fail, which callHook rejects (Hooks.sol:152-154). A pool with such a hook has the flagged action blocked for good. For 0x100 the flagged action is liquidity removal, which is the case already recorded for hook addresses without code in the accounting unit of cycle 1. The identity precompile echoes the selector but 0x04 has an invalid flag combination (Hooks.sol:112). No special address returns a delta.",
+   "source": "eth_call with from set to the PoolManager on the three RPC endpoints, queried 2026-11-22; src/libraries/Hooks.sol:109-160"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "A10 and the opcode differential: TSTORE and TLOAD with rollback, CALL with value, CALLVALUE, SELFBALANCE, STATICCALL, RETURNDATASIZE, MCOPY, PUSH0, gas forwarding, calls to addresses without code and precompile dispatch.",
+   "result": "The pinned client implements TSTORE, TLOAD and Call as upstream go-ethereum does, with gas accounting additions only. Eight probes run with eth_call and state overrides returned the same words on Arbitrum One, Robinhood Chain, Elysium and Ethereum, apart from the ArbOS precompile address, which exists only on the three Nitro chains and fails there. For Elysium this covers the RPC node, which runs a locally built binary. The sequencer could not be probed.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/core/vm/eips.go, https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/core/vm/evm.go and eth_call on the three RPC endpoints and https://ethereum-rpc.publicnode.com, queried 2026-11-22"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L2",
+   "check": "A1 at the pinned commit: does any Nitro transaction type run contract code before the transient storage reset, and does a simulated second transaction see the first one's transient storage.",
+   "result": "StartTxHook runs first and contains no contract call. Transactions that end in the hook run no contract code. For all others StateDB.Prepare replaces the transient map before the call (state_transition.go:636-647 and 737, statedb.go:1599). eth_simulateV1 with a TSTORE in one call and a TLOAD in the next returned zero on all three chains. This confirms the cycle 1 item at the commit the release pins and extends it to Elysium's RPC node.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/core/state_transition.go, https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/arbos/tx_processor.go and eth_simulateV1 on the three RPC endpoints, queried 2026-11-22"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L3",
+   "check": "A3 faces: every way one balance at the PoolManager can be reached under two currency ids, walked through sync, settle, take, mint and burn in both orders.",
+   "result": "The only second form of the native asset on each chain is the wrapped token of the Arbitrum token bridge (WETH, WETH, WHYPE). Its balanceOf reads its own storage and its transfer moves no native value, so the two balances are separate. The one cross path the PoolManager can be driven through is a native take to the wrapper, which converts PoolManager native balance into PoolManager wrapped balance one for one. With a prior sync of the wrapper the caller receives a wrapper credit of the amount and owes the same native amount. Without a sync the wrapped tokens become an unaccounted surplus and the caller still owes the native amount. A native settle while the wrapper is synced reverts (PoolManager.sol:356). mint and burn only move claims under the id that was debited or credited. No order yields a credit without an equal payment.",
+   "source": "eth_simulateV1 and eth_call on the three RPC endpoints, queried 2026-11-22; src/PoolManager.sol:279-364"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L2",
+   "check": "A8 and cross-chain senders: can the PoolManager of the parent chain be driven to send a deposit or a message into the child chain, which would act there under its alias.",
+   "result": "The parent chain PoolManager can only make calls with empty calldata, transfer, balanceOf, the IHooks selectors and unlockCallback. The Inbox and Bridge of Arbitrum One and Robinhood Chain on Ethereum and of Elysium on HyperEVM revert on empty calldata with value and on transfer from the PoolManager address of that chain. They reject plain value, so the path that exists on chains whose deposit contract accepts a bare transfer does not exist here.",
+   "source": "eth_call on https://ethereum-rpc.publicnode.com and https://rpc.hyperliquid.xyz/evm with from set to the PoolManager of that chain, queried 2026-11-22"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L2",
+   "check": "Whether an ordinary account can turn the Robinhood Chain address screening against other users of a pool that has no attacker-made hook or token.",
+   "result": "The client reports call targets, created addresses and selfdestruct beneficiaries of the transaction being screened. In a swap or liquidity change on such a pool the addresses reached are the router, Permit2, the PoolManager, the two tokens and the recipient the user named. None is chosen by a third party, and the PoolManager makes no call that depends on earlier callers (PoolManager.sol:145-297). An attacker who makes the PoolManager call a restricted address through take only gets the attacker's own transaction rejected. I did not read the event rule definitions or the configured list, so this holds for the address rules only.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/core/vm/instructions.go and https://docs.robinhood.com/chain/differences-from-ethereum"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "check": "A2 on Robinhood Chain: can an ordinary account raise or lower the PoolManager balance of USDG or a stock token without a transfer.",
+   "result": "mint, burn and adminBurn on the stock token revert for an arbitrary caller with an access control error, and transferFrom needs an allowance that the PoolManager never gives (no approve call exists in src outside the ERC-6909 claims). USDG routes none of 20 reward or claim selectors I tried, and its supply functions sit behind a supply control contract. EIP-3009 transfers need a signature from the holder, which a contract without signature validation cannot give. The USDG facet table could not be listed in full.",
+   "source": "eth_call on https://rpc.mainnet.chain.robinhood.com, queried 2026-11-22; src/ERC6909.sol:35-56"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L3",
+   "check": "WHYPE on Elysium: is it a face of HYPE with different units or backing, and can its balance at the PoolManager change without a transfer.",
+   "result": "The implementation selectors are those of the stock wrapped native token of the Arbitrum token bridge. Total supply equals the native balance of the contract to the wei. bridgeMint and bridgeBurn exist and are tied to the WHYPE gateway reported by l2Gateway(). I did not read verified source, so the gateway restriction rests on the selector set and the documentation.",
+   "source": "eth_call and eth_getBalance on https://rpc.elysium.kinetiq.xyz, queried 2026-11-22; https://elysium.kinetiq.xyz/docs/contract-addresses"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L4",
+   "check": "Elysium mirror bridge: can a bridge wallet or gateway pull tokens out of the PoolManager.",
+   "result": "The bridge wallet locks a token with transferFrom after the holder approves the wallet. The PoolManager has no function that approves a token spender, so no wallet can pull from it. The bridge factory, bridge wallet gateway, gateway router and ERC-20 gateway revert on every PoolManager call shape.",
+   "source": "https://elysium.kinetiq.xyz/docs/token-bridging-architecture and eth_call on https://rpc.elysium.kinetiq.xyz, queried 2026-11-22"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "Known weaknesses of the last two years in the Nitro client, ArbOS precompiles and Stylus: can an ordinary account use any of them against funds in the PoolManager.",
+   "result": "The Security Council report of 2026-10-02 says the known Stylus bugs affect chain liveness and none permits theft, and that they need hand-crafted WASM programs. Activation is closed on all three chains (activationGas is 2^64-1), so no new program can be activated. The one-step proof guard on Arbitrum One delays withdrawals to Ethereum and leaves child chain execution running. The ArbOS 60 double refund in retryable redeems took from the network fee account and never reached a production chain. The Trail of Bits findings for ArbOS 60 and 61 concern consensus determinism and gas pricing. None of these moves a contract's balance or changes call semantics for EVM contracts. A program activated before the pause could still be used for a liveness attack, which I could not rule out.",
+   "source": "https://forum.arbitrum.foundation/t/security-council-emergency-action-2-10-2026/31530, https://docs.arbitrum.io/notices/stylus-activation-pause-notice, https://github.com/OffchainLabs/nitro/pull/4498 and eth_call ArbWasm.activationGas() on the three RPC endpoints, queried 2026-11-22"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L3",
+   "check": "Whether a chain owner switched on native token management, added a transaction filterer or scheduled an ArbOS upgrade since cycle 1.",
+   "result": "All values are unchanged: no native token owners and management time 0 on all three chains, no filterers on Arbitrum One and Elysium, one filterer on Robinhood Chain, and getScheduledUpgrade() returns zeros everywhere.",
+   "source": "eth_call to ArbOwnerPublic 0x6b on the three RPC endpoints, queried 2026-11-22"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L4",
+   "question": "Once the announced ArbOS upgrade activates on Elysium, what do the HyperCore read precompile and the ElysiumCoreWriter predeploy return to the PoolManager call shapes: does the predeploy accept HYPE with empty calldata and credit a gas escrow to msg.sender, does it answer balanceOf(address) or transfer(address,uint256), and are result callbacks delivered as ordinary transactions?",
+   "why": "A predeploy that credits an escrow on plain value and reports it through balanceOf would be a new face of HYPE reachable through take, sync and settle. A callback made outside an ordinary transaction would change the transient storage boundary. The upgrade is expected around 2026-12-07 and getScheduledUpgrade() will show it first.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L1",
+   "question": "Does the Conduit G2 sequencer that produces Elysium blocks execute transactions with the Nitro state transition code, and which commit is the locally built RPC binary?",
+   "why": "All opcode and precompile results for Elysium come from the RPC node. The documentation names a separate sequencer stack. A sequencer that differs in transient storage or call handling would produce blocks that the probes of this cycle do not describe.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L2",
+   "question": "The Elysium Outbox on HyperEVM executes child chain messages as calls made by the Bridge contract, which holds 298,480 HYPE. What happens when such a call targets a HyperCore system address or the HyperEVM CoreWriter: is the Bridge credited a HyperCore balance, and can a later message move it?",
+   "why": "The Bridge balance backs all HYPE on Elysium, including the 9,751 HYPE in the PoolManager. HyperEVM gives every address a HyperCore account that system contracts act on by msg.sender, which the stock Nitro bridge was not designed around. I did not fetch HyperEVM sources for this in this cycle.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L3",
+   "question": "Which currencies and hooks do the more than 10,000 pools on Elysium use, and do any of the larger PoolManager balances belong to tokens with rebasing, fee on transfer or issuer controls?",
+   "why": "The pool count after 13 days points to launchpad tokens and hook based pools. This cycle looked only at HYPE, WHYPE and USDC.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L4",
+   "question": "Which event rules does the Robinhood Chain address filter apply, and is the PoolManager, a router or Permit2 on the restricted list or exempt from it?",
+   "why": "The client attaches event rule matches to filtered addresses. If a Transfer log naming a restricted address is enough to reject a transaction, tokens or hooks that emit such logs make their pools unusable through the sequencer. The rule definitions and the configured list were not read.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "question": "What is the full facet table of USDG at 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168, and what do the values returned by globalTransferSettings() restrict?",
+   "why": "A facet that credits balances without a transfer, or a global transfer limit that applies to the PoolManager, would touch the balance assumptions for 16.8M USDG. Twenty candidate names were tried and the setting semantics are unknown.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "question": "Were any hand-crafted Stylus programs activated before the pause on 2026-10-02, and can new contracts with the same code hash still be deployed and called?",
+   "why": "The Security Council report ties the known liveness bugs to hand-crafted programs. Activation is closed, but an activation covers every contract with the same code. A liveness attack would stop exits from the PoolManager for its duration.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": []
+}

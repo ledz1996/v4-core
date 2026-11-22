@@ -1,0 +1,194 @@
+{
+ "unit": "core-code-accounting",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "The finding claims no network difference, so the chain facts to check are its remark that code behind a hook address can change after pool creation and whether the repository expects the behaviour. I fetched EIP-7702, status Final. It says each authorization writes the delegation indicator 0xef0100 || address into the authorizing account's code, that a later authorization can point elsewhere or clear the code, and that code executing operations load the code the delegation points to. An externally owned account whose low 14 bits carry hook flags can therefore act as a hook, and its owner can replace or remove the logic later. I fetched EIP-6780, which limits account deletion by SELFDESTRUCT to the transaction that created the contract. On chain, eth_getCode on Arbitrum One for 0xa853180523bd16fa6a9c449ab050e108da642488 returned 0xef01001947e2c7b5ca44f2db6236cf5ac3e23457e8a488, which is a delegation indicator at an address whose low bits set beforeInitialize, afterAddLiquidity, beforeSwap and beforeSwapReturnsDelta. I did not confirm that an initialized pool uses that address, and it does not carry the removal bits 9 or 8. The repository's own tests expect the behaviour the finding describes. test/PoolManager.t.sol:272-287 expects a removal to revert with InvalidHookResponse when the hook returns a wrong selector. test/CustomAccounting.t.sol:297-322 expects a hook to receive 5.43 percent of a withdrawal through the afterRemoveLiquidity return delta.",
+   "codeCheck": "modifyLiquidity is the only function that changes a position (src/PoolManager.sol:145-184). It calls beforeModifyLiquidity before the pool update (src/PoolManager.sol:156). For liquidityDelta <= 0 with bit 9 set the library calls beforeRemoveLiquidity (src/libraries/Hooks.sol:203-204). callHook reverts when the call fails (src/libraries/Hooks.sol:134-137) and when the return data is shorter than 32 bytes or the selector differs (src/libraries/Hooks.sol:152-154). A call to an address without code succeeds with empty return data and then fails the length check. After the pool update, afterModifyLiquidity calls afterRemoveLiquidity when bit 8 is set (src/libraries/Hooks.sol:233-241), requires exactly 64 bytes of return data when bit 0 is set (src/libraries/Hooks.sol:166) and subtracts the returned delta from the caller's delta (src/libraries/Hooks.sol:242). The subtraction is bounded only by the int128 range (src/types/BalanceDelta.sol:34-46). The hook delta is credited to the hook address and the remainder to the caller (src/PoolManager.sol:181-183). The only bypass is a call where msg.sender is the hook (src/libraries/Hooks.sol:171-175, 217). I looked for a guard the finding missed and found none: there is no removal path without the hook call and no cap on the return delta. The caller delta and the hook delta always sum to the pool delta, and unlock reverts unless every delta is zero (src/PoolManager.sol:112), so funds of other pools are out of reach, and a return delta larger than the payout succeeds only when the LP's own unlock callback pays the shortfall. The swap path matches the description (src/libraries/Hooks.sol:248-315), and updateDynamicLPFee accepts any fee up to 1,000,000 from the hook of a dynamic fee pool (src/PoolManager.sol:339-346, src/libraries/LPFeeLibrary.sol:25, 37-45).",
+   "corrections": "The difference field presents changing code as a property of some networks. EIP-7702 delegation and upgradeable proxy hooks make it possible on every network that has activated EIP-7702, Ethereum included, so the exposure does not depend on the network. The freeze case needs nothing from the LP. The taking case needs the LP's router to accept the reduced amount, as the finding says. The add liquidity path has the same shape through bits 11, 10 and 1, which can block or surcharge deposits and cannot hold existing funds. Severity stays medium because the loss is limited to pools whose LPs chose that hook address, and the tests show this is the intended trust model.",
+   "sources": [
+    {
+     "url": "https://eips.ethereum.org/EIPS/eip-7702",
+     "supports": "an authorization writes 0xef0100 || address into the account's code, a later authorization can change or clear it, and calls execute the delegated code"
+    },
+    {
+     "url": "https://eips.ethereum.org/EIPS/eip-6780",
+     "supports": "SELFDESTRUCT deletes an account only in the transaction that created it"
+    },
+    {
+     "url": "rpc: eth_getCode 0xa853180523bd16fa6a9c449ab050e108da642488 at latest on https://arb1.arbitrum.io/rpc, run 2026-11-22",
+     "supports": "an address with hook flag bits holds an EIP-7702 delegation indicator as code"
+    },
+    {
+     "url": "src/libraries/Hooks.sol:131-155",
+     "supports": "a failed hook call, a short return or a wrong selector reverts the caller's operation"
+    },
+    {
+     "url": "src/libraries/Hooks.sol:232-243",
+     "supports": "the afterRemoveLiquidity return delta is subtracted from the caller's delta without a cap"
+    },
+    {
+     "url": "test/PoolManager.t.sol:272-287",
+     "supports": "the test suite expects removal to revert when the hook answers with a wrong selector"
+    },
+    {
+     "url": "test/CustomAccounting.t.sol:297-322",
+     "supports": "the test suite expects a hook to take a share of withdrawn liquidity"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "The finding states no network difference and I found none, because the path uses no chain feature. No external source applies, so the facts are in the repository. I recomputed the arithmetic on my own. Two donations of 2^126 + 10 base units into a range with one position give a fee growth for which Position.update returns 2^127 + 19 or 2^127 + 20 for position liquidity of 1, 1e6, 1e18 and about 2^100. Each value is at or above the bound where SafeCast.toInt128 reverts. No test covers the case. test/PoolManager.t.sol:908-915 bounds a single donation to the int128 maximum, and test/libraries/Position.t.sol:26-70 fuzzes Position.update without the cast that follows it in Pool. Two links are unconfirmed. I could not confirm whether any token held by a deployed PoolManager has a base unit supply above 2^127 - 1, which is the researcher's open lead. I did not exercise the path on the deployed contracts, because it needs an unlock callback and a read only call cannot reach it.",
+   "codeCheck": "Pool.modifyLiquidity calls Position.update for every liquidityDelta, including zero and negative values, and then casts both fee amounts with toInt128 (src/libraries/Pool.sol:183-193). Position.update computes fees on the full liquidity held before the update (src/libraries/Position.sol:82, 92-97). SafeCast.toInt128(uint256) reverts at 2^127 (src/libraries/SafeCast.sol:56-59). The revert undoes the checkpoint write at src/libraries/Position.sol:100-101, so the amount owed can stay or grow and cannot shrink. The ticks of a position that holds liquidity keep a nonzero liquidityGross, so their feeGrowthOutside values are set once and are cleared only when the last position leaves (src/libraries/Pool.sol:533-539, 196-203). Fee growth inside the range can therefore not be lowered by anyone. Wrapping the growth difference past 2^256 would take further real payments of roughly 2^128 times the position liquidity less the amount already owed, which for any realistic liquidity is far more than a uint128 supply. Pool.donate caps one donation below 2^127 (src/libraries/Pool.sol:471) and the casts on the swap delta cap one swap (src/libraries/Pool.sol:454-460), so the bound is crossed over two or more payments. The owed fees are backed by tokens: a donor who shares the range receives only its own pro rata share back, so the victim's share has to be paid in. There is no partial fee collection and no other exit, so the principal of that position in both currencies stays in the PoolManager.",
+   "corrections": "Severity raised from low to medium. The scale reserves low for hazards with no direct loss path, and this is a direct and permanent freeze of a position, limited to pools with a token whose base unit supply exceeds 2^127 - 1. The actor is any holder of 2^127 base units who gives them up as a donation or as swap fees, or ordinary swap volume against a passive position that never collects. The bound is 2^127, half of the uint128 supply that the comment at src/libraries/Pool.sol:403 names as the assumption, so a token inside the stated assumption with a supply between 2^127 and 2^128 can still reach it. The finding's point that an issuer with unlimited supply can already empty the pool by selling holds, and it does not cover a third party token with a large fixed supply, where the attacker gains nothing and the LP still loses access to both currencies of the position.",
+   "sources": [
+    {
+     "url": "src/libraries/Pool.sol:183-193",
+     "supports": "both fee amounts are cast to int128 on every position update, whatever the liquidity delta"
+    },
+    {
+     "url": "src/libraries/Position.sol:92-101",
+     "supports": "fees are computed for the whole position and the checkpoint is written only if the call completes"
+    },
+    {
+     "url": "src/libraries/SafeCast.sol:56-59",
+     "supports": "toInt128(uint256) reverts for values of 2^127 or more"
+    },
+    {
+     "url": "src/libraries/Pool.sol:466-480",
+     "supports": "a single donation is capped below 2^127 and adds to fee growth with unchecked arithmetic"
+    },
+    {
+     "url": "test/PoolManager.t.sol:908-915",
+     "supports": "the donate fuzz test stays within one donation of at most the int128 maximum"
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "On chain I called sync(address(0)) from an unrelated address, with no unlock, on all 21 PoolManagers, and every call returned success. take from the same address reverted with ManagerLocked (0x54e3ca0d) on all 21. collectProtocolFees from that address reverted with InvalidCaller (0x48f5c3ed) on all 21. With the stored fee controller as sender and the manager locked it returned an amount on the eight networks that have a nonzero controller. These calls show that the deployed contracts accept sync while locked, which is what the code does and what the comment at src/interfaces/IPoolManager.sol:111 denies. They do not show what collectProtocolFees does while unlocked, since a read only call cannot open an unlock with the controller as caller. That part rests on the source and the tests. Inside the repository the four mismatches are as the finding states, with the one correction below.",
+   "codeCheck": "src/interfaces/IProtocolFees.sol:40 says collectProtocolFees reverts if the contract is unlocked. src/ProtocolFees.sol:48-52 checks only the caller and the synced ERC-20. _isUnlocked is declared at src/ProtocolFees.sol:60, implemented at src/PoolManager.sol:391-394 and in two test contracts, and nothing calls it. test/PoolManager.t.sol:1010-1039 attempts collection inside an unlock and expects ProtocolFeeCurrencySynced, so the tests agree with the code. src/interfaces/IPoolManager.sol:111 names initialize and updateDynamicLPFee as the only functions callable without unlocking, while sync has no modifier (src/PoolManager.sol:279) and test/Sync.t.sol:36-41 calls it directly. test/libraries/Pool.t.sol:129 expects InvalidFeeForExactOut for amountSpecified >= 0, while src/libraries/Pool.sol:311-316 reverts only for a positive amount and line 320 returns a zero delta. test/libraries/Pool.t.sol:143 compares with < MIN_SQRT_PRICE and src/libraries/Pool.sol:328 with <=. I traced each for a fund effect. Collection lowers protocolFeesAccrued and the balance by the same amount (src/ProtocolFees.sol:54-56), touches no delta and cannot run between sync and settle of the same ERC-20 in either lock state. Fees accrued by a swap that is not yet paid can be collected inside the same unlock, and the unlock reverts as a whole unless the swapper settles (src/PoolManager.sol:112). PoolManager.swap rejects a zero amount (src/PoolManager.sol:193), so Pool.swap sees zero only when a beforeSwap hook delta cancels the amount (src/libraries/Hooks.sol:273-279), and then it changes no state. The stricter price limit stops a swap from ending at MIN_SQRT_PRICE and blocks no withdrawal.",
+   "corrections": "The fourth item cannot make the test fail. When the limit equals MIN_SQRT_PRICE the test takes neither branch and makes no swap call (test/libraries/Pool.t.sol:135-146), and test/utils/Deployers.sol:43 defines MIN_PRICE_LIMIT as MIN_SQRT_PRICE + 1, which matches the source. The third item is a failing input for the fuzz test whenever the fuzzer picks an LP fee of 1,000,000 together with amountSpecified 0. The setter setIsUnlocked in src/test/ProtocolFeesImplementation.sol:27-29 is also unused by any test, which is a further sign that a lock check on fee collection was planned or removed. ASSUMPTIONS.md A12 words the guard as unlocked and synced. The code applies it whenever the ERC-20 is synced, in both lock states.",
+   "sources": [
+    {
+     "url": "rpc: eth_call and eth_getCode against the PoolManager address on each of the 21 rpc URLs in research/network-risk/state/networks.json, run 2026-11-22",
+     "supports": "sync succeeds while locked, take reverts with ManagerLocked, collectProtocolFees reverts with InvalidCaller for a non controller and succeeds for the controller while locked"
+    },
+    {
+     "url": "src/ProtocolFees.sol:44-60",
+     "supports": "collectProtocolFees checks the caller and the synced ERC-20 and never reads the lock"
+    },
+    {
+     "url": "test/PoolManager.t.sol:1010-1039",
+     "supports": "tests expect ProtocolFeeCurrencySynced when collection is attempted inside an unlock"
+    },
+    {
+     "url": "test/libraries/Pool.t.sol:129-146",
+     "supports": "the fuzz test conditions for the 100 percent fee case and the lower price limit"
+    },
+    {
+     "url": "src/libraries/Pool.sol:311-330",
+     "supports": "the source conditions for the same two cases"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Sign and direction of every delta, which account is credited or debited, and whether unlock can return with an open delta.",
+   "agrees": true,
+   "note": "I read every writer of a delta. take and mint debit msg.sender before the transfer or the claim mint (src/PoolManager.sol:291-297, 322-329). settle credits the named recipient with msg.value when no ERC-20 is synced, and otherwise with the checked increase of balanceOf since sync, and it rejects msg.value in that branch (src/PoolManager.sol:349-364). burn credits msg.sender and _burnFrom lowers the allowance unless the caller is the owner or an operator, then burns with a checked subtraction (src/PoolManager.sol:332-336, src/ERC6909Claims.sol:13-22, src/ERC6909.sol:85-89). clear accepts only an amount equal to the current positive delta (src/PoolManager.sol:310-319). Swap, liquidity and donate deltas come from the pool and are split between caller and hook so that the two parts sum to the pool delta (src/PoolManager.sol:177-183, 220-226, 268-270). _accountDelta uses checked int256 addition and moves the counter only on a change to or from zero (src/PoolManager.sol:368-378, src/libraries/CurrencyDelta.sol:28-41), and unlock reverts unless the counter is zero (src/PoolManager.sol:112). settle and settleFor are the only payable functions and there is no receive or fallback. I found no path to a positive delta without a payment, a burned claim or a matching pool obligation."
+  },
+  {
+   "check": "Access control on every external function of the PoolManager, and what the owner and the fee controller can reach.",
+   "agrees": true,
+   "note": "The gates in src are as described (src/PoolManager.sol:96-99, 339-346; src/ProtocolFees.sol:29-57). The gap in this item is now closed. lib/solmate was populated during this cycle, its HEAD equals the pinned gitlink 4b47a19038b798b4a33d9749d25e570443520647, its working tree is clean and the blob hash of src/auth/Owned.sol (e82b44d8) equals the entry in that commit's tree. onlyOwner is require(msg.sender == owner, \"UNAUTHORIZED\") (lib/solmate/src/auth/Owned.sol:19-23). transferOwnership is the only other state changing function and carries onlyOwner (lib/solmate/src/auth/Owned.sol:39-43). owner is the only storage variable, so it sits at slot 0 and the fee controller at slot 2. This answers the researcher's lead on Owned.sol. On chain, owner() and protocolFeeController() equal the values in networks.json on all 21 networks, setProtocolFeeController and transferOwnership from an unrelated address revert with Error(string) on all 21, and the string decoded on Ethereum is UNAUTHORIZED. lib/forge-std and lib/openzeppelin-contracts are still empty, so the test suite cannot be built yet."
+  },
+  {
+   "check": "Whether sync, which runs while the manager is locked and whose result survives after unlock returns, lets one party collect a credit for tokens another party paid, under the rule that transient storage is cleared at the end of each transaction.",
+   "agrees": true,
+   "note": "sync has no lock check and writes the currency and the balance together (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32). An ERC-20 settle credits the checked difference between the balance now and the synced reserves and then resets the synced currency (src/PoolManager.sol:356-361). A later sync by anyone overwrites both slots, so a party that syncs right before its transfer cannot have its payment credited to an earlier syncer. A stale ERC-20 sync makes a later native settle with value revert (src/PoolManager.sol:356), which only affects a transaction the stale syncer already controls. A take after sync lowers the credit or makes the subtraction revert. I fetched EIP-1153, which says all values in transient storage are discarded at the end of the transaction and that writes are reverted with the frame. Under that rule the stale sync cannot reach another transaction. On chain, sync(address(0)) from an unrelated address succeeds while locked on all 21 deployments, which matches the code. Whether each network keeps the EIP-1153 lifetime is for the network units."
+  },
+  {
+   "check": "Whether calling collectProtocolFees while the manager is unlocked, at a moment chosen by an unprivileged party through a permissionless fee controller, can move funds to that party or strand another party's payment. This answers the leads raised by the ethereum-reference, established-l1, arbitrum-family and high-throughput units.",
+   "agrees": true,
+   "note": "collectProtocolFees never reads the lock (src/ProtocolFees.sol:44-57). I traced the sequences that a caller of a permissionless controller could build inside an unlock. Collection of the synced ERC-20 reverts in both lock states, so the balance cannot drop between sync and settle of that currency. Native settlement uses msg.value and no balance (src/PoolManager.sol:353-354). A swap raises protocolFeesAccrued before the swapper pays (src/PoolManager.sol:238) and the fee can leave the PoolManager in the same unlock, yet the swapper's negative delta must be settled before unlock returns (src/PoolManager.sol:112), so the collected amount is always paid in by the end of the transaction. The accrued amount falls by what is sent, with a checked subtraction, and no delta changes. I found no gain for the caller. The same result holds for the high priority lead of the established-l1 unit on this question. The case of an ERC-20 that mirrors the native balance only lowers the next settler's credit, as the item says."
+  },
+  {
+   "check": "Rounding direction in every swap and liquidity step, and whether the unchecked protocol fee subtraction at Pool.sol:395 can underflow.",
+   "agrees": true,
+   "note": "I read the rounding flags at every call site. Exact input rounds amountIn up and amountOut down, exact output rounds amountOut down and amountIn up, and both fee formulas round up (src/libraries/SwapMath.sol:63-105). Liquidity amounts round up when owed to the pool and down when paid out (src/libraries/SqrtPriceMath.sol:261-288). The next price rounds up for currency0 and down for currency1 (src/libraries/SqrtPriceMath.sol:31-120, 146-148, 175-177). The protocol share is at most the step fee in both branches because the step fee is at least the swap fee share of the total input and the swap fee is at least the protocol fee, so src/libraries/Pool.sol:395 cannot underflow. I wrote my own transcription of computeSwapStep and the SqrtPriceMath functions and compared 187,481 random steps with exact rational arithmetic: the new price stayed between the start and the target, amountIn was never below the exact input for the price move, amountOut never above the exact output, and input plus fee never exceeded the remaining amount. This covers single steps. I did not rerun the researcher's multi step sequences and could not run forge."
+  },
+  {
+   "check": "Whether the four fixed transient slots match their stated derivations and whether a per account delta slot can collide with them.",
+   "agrees": true,
+   "note": "With a keccak256 implementation I wrote for this check, keccak256 of ReservesOf, Currency, NonzeroDeltaCount and Unlocked minus one equals the four constants in src/libraries/CurrencyReserves.sol:11-13, src/libraries/NonzeroDeltaCount.sol:9-10 and src/libraries/Lock.sol:8. The implementation reproduces the known hash of the empty string and the transfer selector 0xa9059cbb. getDelta and applyDelta pass (target, currency) to _computeSlot in the same order (src/libraries/CurrencyDelta.sol:18-32)."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "question": "On each network other than Ethereum that has EIP-7702 active, which initialized pools use a hook address whose code is a delegation indicator, an upgradeable proxy or empty, which of those addresses carry bits 9, 8 or 0, and how much liquidity do the pools hold?",
+   "why": "Core calls the hook on every removal and has no path around it (src/libraries/Hooks.sol:195-245, src/PoolManager.sol:156-183). An account that can change its code can turn a harmless hook into one that blocks or reprices removal. The ethereum-reference unit asks this for mainnet and the arbitrum-family verifier for one pool. The address 0xa853180523bd16fa6a9c449ab050e108da642488 on Arbitrum One holds a delegation indicator today.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "question": "For pools that hold a token with a base unit supply above 2^127 - 1, how close are the largest positions to 2^127 uncollected fee units, and do the PositionManager or common vault contracts collect fees often enough to stay below it?",
+   "why": "A position whose uncollected fees in one currency reach 2^127 can never be updated again, and the principal in both currencies stays in the PoolManager (src/libraries/Pool.sol:192, src/libraries/SafeCast.sol:56-59). Ordinary swap volume against a passive position can reach the bound without an attacker. This extends the researcher's lead on such tokens from supply to accrued fees.",
+   "priority": "low"
+  }
+ ]
+}

@@ -1,0 +1,179 @@
+{
+ "unit": "hyperevm",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "All cited facts were re-read or re-queried. On-chain reads at block 51,949,175: USDC 0xb88339CB7199b77E23DB6E890353E22632Ba630f returns blacklister 0x33aa4e959132e49552cb754fb6585bdcdf874beb, pauser 0xebf40e28db4c373d1d73f11fd1926574f618bc9e, owner 0xb5653bf26797d3271dabf31c616fa2b7b216a053, paused false, isBlacklisted(PoolManager) false and balanceOf(PoolManager) 997.75 USDC. The token is a 1,798 byte proxy whose legacy admin slot holds 0x178d71a698e96f26dd0336a624b7c37a120b5080, so an upgrade is a third route. Circle's token design document states that the blacklister can prevent all transfers to or from an address and that the pauser prevents all transfers. USDT0 0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb returns owner 0xb64a89ad247a2d691a728bb6822a85eedd7fc541 and isBlocked(PoolManager) false. Simulated calls to addToBlockedList and destroyBlockedFunds from a non owner revert with Ownable: caller is not the owner. Its ERC-1967 admin slot holds a ProxyAdmin at 0x779ded0c9e1022225f8e0630b35a9b54be713736 whose owner is the same address. The USDT0 docs confirm the owner blocklist and the upgradeable proxy. The OpenZeppelin audit confirms that the owner can block accounts and burn tokens from blocked accounts, and that blocked accounts can still receive transfers. A simulated USDC transfer with the PoolManager as sender returns true today, so the payout path is open at present.",
+   "codeCheck": "take debits the caller and then calls Currency.transfer (src/PoolManager.sol:291-297). For an ERC-20 the transfer is a raw call that must succeed and return nothing or a 32 byte 1, and any other outcome reverts with ERC20TransferFailed (src/types/Currency.sol:55-86). collectProtocolFees ends in the same transfer (src/ProtocolFees.sol:56). Nothing in src/ offers a second way to move a token out, so a block on the PoolManager address stops take for every pool in that currency. _settle credits only the balance increase since sync (src/PoolManager.sol:358-360), so a token that rejects inbound transfers cannot be paid in. The partial exit holds: modifyLiquidity and swap only write deltas (src/PoolManager.sol:181-183 and 224-226), and mint debits the delta and writes an ERC-6909 balance without calling the token (src/PoolManager.sol:322-329, src/ERC6909.sol:79-83). No guard was missed. No test models a blocking token. test_take_failsWithInvalidTokensThatDoNotReturnTrueOnTransfer (test/PoolManager.t.sol:924) covers the revert when the token call does not return true.",
+   "corrections": "The exposure today is small: the PoolManager holds 997.75 USDC and 0.000002 USDT0, so the impact text describes the structure and not a large current balance. The hazard exists in the same form on Ethereum, as the finding says, so it is a property of the pooled assets and not of the HyperEVM execution layer. The severity stays high because the scale assigns that level to loss or freeze by a token issuer. The suggested monitoring should also watch Upgraded events on both proxies and the Pause event on USDC, since a block is one of three routes.",
+   "sources": [
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_call blacklister(), pauser(), owner(), paused(), isBlacklisted(address), balanceOf(address), transfer(address,uint256) with from set to the PoolManager, on USDC; eth_getStorageAt legacy admin and implementation slots",
+     "supports": "USDC role holders, pause and blacklist state, PoolManager balance of 997.75 USDC, proxy admin 0x178d71a698e96f26dd0336a624b7c37a120b5080, and a working transfer from the PoolManager at block 51,949,175."
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_call owner(), isBlocked(address), balanceOf(address), addToBlockedList(address), destroyBlockedFunds(address) on USDT0; eth_getStorageAt ERC-1967 admin and implementation slots; owner() on the admin",
+     "supports": "USDT0 owner, owner gated block and destroy functions, PoolManager not blocked, PoolManager balance of 2 base units, ProxyAdmin owned by the token owner."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/stablecoin-evm/master/doc/tokendesign.md",
+     "supports": "The blacklister prevents all transfers to or from a listed address and the pauser prevents all transfers, minting and burning."
+    },
+    {
+     "url": "https://docs.usdt0.to/technical-documentation/token-features/additional-behavior",
+     "supports": "The contract owner maintains the isBlocked list, blocked addresses cannot send, and the token sits behind an upgradeable proxy."
+    },
+    {
+     "url": "https://www.openzeppelin.com/news/usdt0-audit",
+     "supports": "The owner can block accounts and burn tokens from blocked accounts. Blocked accounts can still receive transfers."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "plausible",
+   "severity": "low",
+   "factCheck": "The chain fact holds. eth_getSystemTxsByBlockNumber over blocks 51,949,165 to 51,949,225 returned 33 system transactions, all legacy type with gasPrice 0 and r and s equal to 0. Eleven were sent from 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24 (2,175 bytes of code, account nonce 0x238e86) and eleven from 0xc20699185c15d0a2fd65779bb5d69f5b0b113c00 (no code), each calling transfer on the USDC token with the other address as recipient. Eleven were sent from 0x2000000000000000000000000000000000000000 to the CoreDepositWallet. None named the PoolManager as sender, target or argument. The USDC balances of the two AQAv2 addresses were 557.58 million and 5,018.26 million, a ratio of 9.0. The Telegram announcement, the AQAv2 article and the docs page say what the finding reports. The explorer record shows a transfer from the treasury address with gas price 0 and a Transfer log emitted by USDC. The replay client sets disable_eip3607 for system transactions (run.rs 123 to 125) and takes the sender from the node and not from a signature (run.rs 223 to 227). The link that could not be confirmed is the one the finding names: whether HyperCore can bind an address that never consented. The official exchange API lists the action authorizeAqav2Role with only two fields, token and role (technical or treasury), signed by the account that takes the role. The CoreWriter action table (ids 1 to 17) has no AQAv2 action. If the treasury address is the account that signs this authorization, the PoolManager can never hold the role, because it cannot sign and cannot call CoreWriter. The docs also say the treasury deployer designates a treasury address, and no source read states that the designated address must be the signer. That point stays open.",
+   "codeCheck": "The code side is as described. sync stores balanceOf and _settle credits the difference inside one transaction (src/PoolManager.sol:279-288 and 349-365). take pays out through Currency.transfer (src/PoolManager.sol:291-297, src/types/Currency.sol:55-86). Pool state is never reconciled with the token balance, so a debit of the PoolManager balance by a system transaction would leave pools short and the last withdrawals would revert in transfer. No code in src/ can prevent a call that the token sees as coming from the PoolManager address. The path needs the PoolManager address to be bound as an AQAv2 treasury address or linked contract, and no step in src/ or on chain was found that lets an unprivileged account do that. Storage slot 0 of the PoolManager holds the owner 0x2d09d0c2f82c59b19b3c65a48ce2c550bf0921f9 and slot keccak256(HyperCore deployer) is zero, so a link by the storage slot route needs an action from the owner contract.",
+   "corrections": "The replay client does not model the AQAv2 transactions. Its sender rule looks the sender up from the target contract in a map of linked contracts (run.rs 223 to 227) and has no branch for a sender that is the CoreDepositWallet or the treasury address with the USDC token as target. It supports the statement that senders are assigned without a signature and that senders with code are allowed. It does not show how the node picks these two senders. The public RPC returns no receipt for system transaction hashes through eth_getTransactionReceipt, so the success of the transfers rests on the 9.0 balance ratio and the explorer record. The severity stays low because no loss path was established. If a later cycle shows that a treasury deployer can name an arbitrary address, the finding becomes a drain by staked deployers plus a validator vote and should be rated high. If the role is tied to the signer, it should drop to info.",
+   "sources": [
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_getSystemTxsByBlockNumber for blocks 51,949,165 to 51,949,225; eth_getCode and eth_getTransactionCount on both AQAv2 addresses; eth_call balanceOf on USDC",
+     "supports": "System transactions with gasPrice 0 and zero signature fields are sent from a contract address and from a codeless address outside the system range and call USDC transfer. The two balances stand at 1:9. The PoolManager appears in none of them."
+    },
+    {
+     "url": "https://t.me/s/hyperliquid_announcements?before=579",
+     "supports": "USDC between the linked contract and the treasury address is balanced 1:9 by system transactions on every HyperEVM block, with Circle as technical deployer and Coinbase as treasury deployer."
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets",
+     "supports": "The treasury deployer designates a treasury address. Activation is by validator vote after both deployers have staked 500,000 HYPE and sent authorization transactions from the staking accounts."
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint",
+     "supports": "The action authorizeAqav2Role carries a token index and a role of technical or treasury, and is signed like any other exchange action."
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/interacting-with-hypercore",
+     "supports": "The CoreWriter action table has no AQAv2 action, and CoreWriter actions are attributed to the calling contract."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hyperliquid-dex/hyper-evm-sync/main/src/run.rs",
+     "supports": "System transactions run with disable_eip3607 and a sender supplied by the client. The sender rule covers the HYPE bridge address and token system addresses only."
+    },
+    {
+     "url": "https://hyperevmscan.io/tx/0x0a8798da6f8ba568b0da4682dec626ddcd3d66a084cbbb99d658eede54277ce5",
+     "supports": "A successful transfer of 62.72 USDC from the treasury address to the CoreDepositWallet with gas price 0 and a Transfer log from the USDC token."
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_getStorageAt PoolManager slot 0 and slot 0x8c306a6a12fff1951878e8621be6674add1102cd359dd968efbbe797629ef84f",
+     "supports": "Slot 0 holds the owner and the custom HyperCore deployer slot is zero."
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "The code at 0x2222222222222222222222222222222222222222 is 122 bytes. It jumps to a revert when calldatasize is nonzero and otherwise emits one log with topic 0x88a5966d370b9919b20f3e2c13ff65706f196a4e32cc2c12bf57088f88525874, which is keccak256 of Received(address,uint256), with the caller as indexed argument and the call value as data. The docs state that user is msg.sender and that this lets contracts as well as EOAs move HYPE to HyperCore. The CoreWriter code at 0x3333333333333333333333333333333333333333 reverts on any call value, on calldata shorter than 4 bytes and on every selector other than 0x17938e13. The docs state that a linked token sent to its system address is credited on HyperCore from the Transfer log of the linked contract. spotMeta shows USDT0 at index 268 linked to the token contract, which gives system address 0x200000000000000000000000000000000000010c. spotClearinghouseState for the PoolManager address returns an empty balance list. One detail of the ERC-20 half is unconfirmed. For USDC the linked contract is the CoreDepositWallet and not the token, so a USDC payout sent to 0x2000000000000000000000000000000000000000 emits its Transfer log from the token and not from the linked contract. What HyperCore does with that log was not found in the docs. The payout is lost to the caller in either case.",
+   "codeCheck": "take debits the caller before it pays (src/PoolManager.sol:294-295), so the caller must settle the full amount and pool reserves stay whole. A native payout is call(gas(), to, amount, 0, 0, 0, 0) with empty calldata (src/types/Currency.sol:48), which is the one shape the bridge code accepts, and the bridge sees the PoolManager as caller. An ERC-20 payout is a transfer call made by the PoolManager (src/types/Currency.sol:60-74), so the token logs the PoolManager as sender. The PoolManager cannot reach sendRawAction: its outbound calls are unlockCallback on msg.sender (src/PoolManager.sol:110), hook selectors on a hook address (src/libraries/Hooks.sol:131-135), transfer and balanceOf on a currency (src/types/Currency.sol:60-74 and 94) and empty calldata value calls (src/types/Currency.sol:48). Neither system address passes isValidHookAddress, because 0x2222 and 0x3333 set bit 1 without bit 10 (src/libraries/Hooks.sol:113-116), so initialize reverts (src/PoolManager.sol:126). collectProtocolFees pays a recipient chosen by the controller through the same transfer (src/ProtocolFees.sol:54-56). No guard in src/ rejects a recipient. No test covers a recipient with these semantics.",
+   "corrections": "The statement that a linked ERC-20 is credited to the from address of the Transfer log goes one step beyond the docs page, which says the credit is based on the emitted Transfer log. It is the natural reading and it was not tested. The USDC case differs from USDT0 as described above. The loss falls on the caller who chose the recipient and gives an attacker nothing, so low is the right level.",
+   "sources": [
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_getCode 0x2222222222222222222222222222222222222222 and 0x3333333333333333333333333333333333333333",
+     "supports": "The bridge accepts only empty calldata and logs Received with the caller and the value. CoreWriter is non payable and dispatches only selector 0x17938e13."
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers",
+     "supports": "The user in the Received event is msg.sender. Linked tokens sent to their system address are credited on HyperCore based on the Transfer log of the linked contract. System addresses are 0x20 followed by the token index."
+    },
+    {
+     "url": "https://api.hyperliquid.xyz/info (POST type spotMeta and type spotClearinghouseState for the PoolManager address)",
+     "supports": "USDT0 has index 268 and is linked to the token contract, USDC is linked to 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24, HYPE has no linked contract, and the PoolManager holds no HyperCore spot balance."
+    }
+   ]
+  },
+  {
+   "findingIndex": 3,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "owner() on the PoolManager returns 0x2d09d0c2f82c59b19b3c65a48ce2c550bf0921f9 and protocolFeeController() returns zero at block 51,949,175. The owner has 7,310 bytes of code and NAME() returns Uniswap Wormhole Message Receiver. Its getters return message sender 0xf5f4496219f31cdcba6130b5402873624585615a, sender chain 2 and own Wormhole chain id 47, and selector 0xe9fa3162 returns 172,800. Its bytecode embeds 0x7c0fafc4384551f063e05aee704ab943b8b53ab3 and the strings Invalid Emitter Address, Message no longer valid and Sub-call failed. That core contract returns chainId 47, evmChainId 999, guardian set index 7 and a set of 19 addresses with expiration 0. The Wormhole docs state that every VAA is a 13 of 19 multisignature and that a VAA has no destination and can be delivered by anyone. On Ethereum the sender contract at 0xf5f4496219f31cdcba6130b5402873624585615a has 5,060 bytes of code, the name Uniswap Wormhole Message Sender and owner 0x1a9C8182C09F50C8318d769245beA52c32BE35BC, the governance timelock. Simulated calls to setProtocolFeeController and transferOwnership on the HyperEVM PoolManager revert with UNAUTHORIZED from a random address and succeed from the owner address.",
+   "codeCheck": "setProtocolFeeController is owner only (src/ProtocolFees.sol:29-32). The controller sets a fee that isValidProtocolFee limits to 1000 pips per direction (src/ProtocolFees.sol:35-41, src/libraries/ProtocolFeeLibrary.sol:25-32) and withdraws through collectProtocolFees, where a checked subtraction caps the amount at protocolFeesAccrued (src/ProtocolFees.sol:54-55). That counter is written only by _updateProtocolFees (src/ProtocolFees.sol:66-70), called from _swap (src/PoolManager.sol:238) with the amount computed in Pool.swap (src/libraries/Pool.sol:385-398). The amount per step is at most the step fee, because the swap fee is at least the protocol fee (src/libraries/ProtocolFeeLibrary.sol:38-46) and the step fee is computed from the swap fee (src/libraries/SwapMath.sol:72-74, 82 and 104). The owner and the controller therefore reach protocol fees and nothing else. Owned.sol was read at the commit pinned for lib/solmate (4b47a19038b798b4a33d9749d25e570443520647). It gives the owner transferOwnership and the onlyOwner modifier and no other power. collectProtocolFees has no lock check. It reverts only when the currency is the synced one (src/ProtocolFees.sol:49-52), which the tests at test/PoolManager.t.sol:1001-1038 cover.",
+   "corrections": "The finding says the ownership transfer function could not be read. The pinned solmate file shows that the owner can also hand ownership to any address, so a forged message can make the takeover permanent until governance notices, though the reach stays limited to protocol fees. The effect is a diversion of fees and matches what other units label siphon. The protocol fee is charged on top of the LP fee, so swappers pay most of it and LPs lose the small part of their fee that applies to the protocol share. Severity low is kept, in line with the scale for a privileged actor whose reach is capped at 0.1 percent per direction.",
+   "sources": [
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_call owner(), protocolFeeController(), setProtocolFeeController(address), transferOwnership(address) on the PoolManager; NAME(), 0xd67bdd25, 0x1dac56d3, 0x9a8a0592, 0xe9fa3162 and eth_getCode on the owner",
+     "supports": "The owner is the Uniswap Wormhole Message Receiver with sender 0xf5f4496219f31cdcba6130b5402873624585615a on chain 2, the controller is zero, and both owner functions are gated on the owner address."
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_call chainId(), evmChainId(), getCurrentGuardianSetIndex(), getGuardianSet(7) on 0x7c0fafc4384551f063e05aee704ab943b8b53ab3",
+     "supports": "Wormhole core with chainId 47, evmChainId 999, guardian set index 7 and 19 guardians."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com eth_getCode, owner() and NAME() on 0xf5f4496219f31cdcba6130b5402873624585615a",
+     "supports": "The Ethereum side sender is owned by the timelock 0x1a9C8182C09F50C8318d769245beA52c32BE35BC."
+    },
+    {
+     "url": "https://wormhole.com/docs/protocol/infrastructure/guardians/",
+     "supports": "19 guardians, and every VAA is a 13 of 19 multisignature attestation."
+    },
+    {
+     "url": "https://wormhole.com/docs/protocol/infrastructure/vaas/",
+     "supports": "A VAA is signed once a two thirds supermajority agrees, has no destination and is verified by any core contract."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/transmissions11/solmate/4b47a19038b798b4a33d9749d25e570443520647/src/auth/Owned.sol",
+     "supports": "The dependency at the pinned commit defines onlyOwner and transferOwnership and nothing else."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Does transient storage (unlock flag, deltas, synced currency and reserves) leak between a system transaction and a user transaction, or between two user transactions in one block (A1)?",
+   "agrees": true,
+   "note": "run.rs builds a new Evm and calls transact once per system transaction (lines 217 to 238) and once per signed transaction (lines 243 to 258), and commits state after each (line 168). No execution state held in memory is carried from one transaction to the next, and only what db.commit writes persists. Lock, CurrencyDelta, CurrencyReserves and NonzeroDeltaCount (src/libraries/Lock.sol:10-27, CurrencyDelta.sol:28-41, CurrencyReserves.sol:21-38, NonzeroDeltaCount.sol:12-34) therefore start every transaction at zero. One caveat applies. The client's sender rule (lines 223 to 227) has no branch for the AQAv2 senders now seen on chain, so the client as published may not replay current blocks, and the production node is closed source. The receipt equality check is evidence for the blocks the client can replay. It says nothing about the newest execution path. No source contradicts the clearance."
+  },
+  {
+   "check": "Can a HyperCore to HyperEVM credit raise the PoolManager token balance between sync and settle and be claimed by the settler (A2, src/PoolManager.sol:279-288 and 349-365)?",
+   "agrees": true,
+   "note": "The synced currency and reserves are transient (src/libraries/CurrencyReserves.sol:27-32), so a sync is only usable by a settle in the same transaction, and no system transaction can run inside a user transaction. The 33 system transactions sampled in blocks 51,949,165 to 51,949,225 are separate legacy transactions that run before the signed ones, and none names the PoolManager. The docs state that a credit goes to the sender of the HyperCore action. A token credit that reaches the PoolManager in an earlier transaction is already part of the balance that sync records and is credited to nobody."
+  },
+  {
+   "check": "Do the 3,000,000 gas fast blocks or the 30,000,000 gas slow blocks freeze liquidity removal or swaps (A9)?",
+   "agrees": true,
+   "note": "Of 70 consecutive blocks from 51,949,689 to 51,949,758, 69 had gasLimit 3,000,000 and one had 30,000,000, as the docs describe. modifyLiquidity has no loop: two updateTick calls, at most two bitmap flips and one position update (src/libraries/Pool.sol:146-238). The swap loop ends when the price reaches sqrtPriceLimitX96 (src/libraries/Pool.sol:344) and the reached price and tick are stored (src/libraries/Pool.sol:439), so a long swap can be split across transactions. Two limits on the clearance should be recorded. It covers core only, since a hook that needs more than 3,000,000 gas forces every user of that pool into slow blocks. The slow block opt in is a HyperCore action by the transaction sender, who must already be a HyperCore user."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L3",
+   "priority": "medium",
+   "question": "Can the USDT0 OFT contract on HyperEVM, 0x904861a24f30ec96ea7cfc3be9ea4b476d237e98 as returned by oftContract(), burn tokens from an arbitrary holder such as the PoolManager without a prior blocklist entry, and who can change that contract through the owner gated setOFTContract?",
+   "why": "The OpenZeppelin audit says the authorized sender in the OFT extension can burn any amount from any account. On HyperEVM the OFT contract and the token share the owner 0xb64a89ad247a2d691a728bb6822a85eedd7fc541. A simulated burn(address,uint256) from the OFT address reverted without a message, so the entry point is unconfirmed. If such a path exists, the PoolManager balance of USDT0 can be removed without a BlockPlaced event, which defeats the monitoring proposed in the issuer finding and adds the cross-chain message configuration to the trusted set."
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L5",
+   "priority": "low",
+   "question": "Was the PoolManager at 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F created by an EOA through CREATE or by a factory contract, and does HyperCore accept the create variant of finalizeEvmContract for it?",
+   "why": "The docs give three finalizer variants. In the create variant the EOA that deployed the contract finalizes a link with its deployment nonce, without the owner in storage slot 0. If the PoolManager was created by an EOA, that deployer account alone can link a HyperCore spot token to the PoolManager address, which lowers the bar assumed in the AQAv2 finding and in the clearance on linking from Uniswap governance to one deployer account."
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "priority": "medium",
+   "question": "Is the AQAv2 treasury address always the account that signed authorizeAqav2Role with role treasury, or can the treasury deployer name a different EVM address afterwards?",
+   "why": "The exchange API action has only the fields token and role, which suggests the role attaches to the signer. If that is the rule, the PoolManager can never be a treasury address and the system transaction finding drops to info. If a separate designation exists, staked deployers plus a validator vote could point per block transfer calls at the PoolManager balance."
+  }
+ ]
+}

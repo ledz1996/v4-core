@@ -29,7 +29,7 @@ The review runs in cycles. Each cycle reads the state left by the one before it,
 1. Plan. `python3 research/network-risk/tools/plan.py <date>` writes `cycles/NNN/plan.json` and prints a compact JSON object. Options: `--all` takes every network family instead of the top four, `--angles 0,1,2,3` forces specific work items, `--readings N` sets how many code readings run.
 2. Run. Start the workflow `workflow/cycle.js` with the printed JSON as `args`. It runs one research agent per chosen network family, one or two agents that re-read the source itself, an independent verifier behind each of them, and a critic at the end. Agents write their output into `cycles/NNN/` and validate it with `tools/validate.py`.
 3. Merge. `python3 research/network-risk/tools/merge.py research/network-risk/cycles/NNN <date>` folds the cycle into `state/` and regenerates `STATUS.md`.
-4. Report. Update `REPORT.md` for every finding that is new or changed status. Follow `style/humanizer-SKILL.md`.
+4. Report. Rewrite `report/front.md` by hand (the answer so far, what was tested, what is open), following `style/humanizer-SKILL.md`, then run `python3 research/network-risk/tools/report.py`. It renders `REPORT.md`, `FINDINGS.md` and `CLEARED.md` from the ledger and lints the prose.
 5. Commit and push `research/network-risk/`.
 
 Every fourth cycle, before planning, re-run the chain probe to catch drift:
