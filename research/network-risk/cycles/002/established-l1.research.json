@@ -1,0 +1,572 @@
+{
+ "unit": "established-l1",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 137,
+   "lens": "L1",
+   "summary": "This cycle read the Bor v2.11.0 interpreter and precompile tables. The bodies of CALL, TLOAD and TSTORE and the Call routine follow the go-ethereum pattern, and the Polygon-only gates in core/vm concern storage gas and code size. The active precompile set has no entry at 0x0a.",
+   "deltas": [
+    {
+     "delta": "The Chicago precompile set that Bor uses on mainnet holds 0x01 to 0x09, 0x0b to 0x11 and 0x0100. It has no KZG precompile at 0x0a. A call from the PoolManager to 0x0a with any of the tested calldata returns success with empty return data, as a call to an account without code does.",
+     "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/vm/contracts.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "opCall pops the arguments, adds the 2300 gas stipend when value is nonzero, calls EVM.Call and writes the return data to memory only up to its own length. EVM.Call returns success with no data for an address that has no code and is no precompile. opTload and opTstore read and write the transient map of the executing address. None of these bodies has a Polygon fork gate.",
+     "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/vm/instructions.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "The only Polygon fork gates in evm.go, interpreter.go, instructions.go, jump_table.go, eips.go and operations_acl.go select the precompile set (Chicago, LisovoPro, Lisovo), apply the PIP-88 storage prices and apply the Ahmedabad code size limit.",
+     "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/vm/evm.go",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 137,
+   "lens": "L2",
+   "summary": "Every user transaction and, since Austin, every state sync record starts with StateDB.Prepare, which replaces the transient storage map. Bor credits the base fee to a burn contract and the tip to a fixed coinbase address by direct balance writes. Neither address is the PoolManager.",
+   "deltas": [
+    {
+     "delta": "TransitionDb calls st.state.Prepare at line 550 for every message, and Prepare assigns a new transient storage map at core/state/statedb.go line 3051. The parallel processor gives each task its own state database and applies the same message path. The merge step of the BlockSTM executor was not read line by line.",
+     "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/state_transition.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "The base fee of each transaction is added to the configured burn contract (0x3ef57def668054dd750bd260526105c4eeef104f since block 83756500) and the tip to the coinbase (0x7Ee41D8A25641000661B1EF5E6AE8A00400466B0 since Rio) with AddBalance, outside EVM execution. These are balance increases without a call. They go to two fixed addresses.",
+     "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/state_transition.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "Polygon described Austin as a security release that added a per-block gas bound for state sync events and removed the TxDependency field from blocks. Both were denial of service fixes. The post does not mention the transient storage reset that the same fork gates in the source.",
+     "source": "https://forum.polygon.technology/t/security-releases-review-bor-v2-10-0-austin-hf-and-heimdall-v0-11-0-kyoto-hf/22138",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 137,
+   "lens": "L3",
+   "summary": "The native token contract at 0x1010 was swept with every PoolManager call shape and its selector table was read from the deployed bytecode. It answers a zero amount transfer with true, any other transfer without value with false, and rejects plain value. WPOL credits the sender of a plain value transfer with the same amount of WPOL.",
+   "deltas": [
+    {
+     "delta": "0x0000000000000000000000000000000000001010 called from the PoolManager: empty calldata reverts with value 0, 1 wei and 1 POL. transfer(0xdead, 0) returns a 32 byte one. transfer(0xdead, 1) and transfer(0xdead, 1e18) return a 32 byte zero. balanceOf(PoolManager) returns the native balance. All ten hook selectors revert.",
+     "source": "rpc https://polygon.drpc.org, eth_call with from set to the PoolManager, blocks 97768181 to 97768920 on 2026-11-22",
+     "relevance": "high"
+    },
+    {
+     "delta": "The dispatcher of the 5315 byte code at 0x1010 holds 28 selectors. They include transfer, balanceOf, deposit(address,uint256), withdraw(uint256), transferWithSig, initialize(address,address) and setParent. It holds no approve, transferFrom, allowance or permit selector, so no third party can be given spending rights over the native balance of the PoolManager through this contract. One selector, 0xed9ef524, was not identified.",
+     "source": "rpc https://polygon.drpc.org, eth_call with from set to the PoolManager, blocks 97768181 to 97768920 on 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "WPOL at 0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270 accepts empty calldata with value from the PoolManager. An eth_simulateV1 run that sends 1 POL from the PoolManager and then reads balanceOf(PoolManager) shows the WPOL balance rising by exactly 1e18 at block 97768920.",
+     "source": "rpc https://polygon.drpc.org, eth_call with from set to the PoolManager, blocks 97768181 to 97768920 on 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 137,
+   "lens": "L4",
+   "summary": "A sweep of 35 addresses found no precompile, genesis contract, burn contract or bridge contract that returns true or empty data to a nonzero transfer from the PoolManager while moving value, and none whose balanceOf answer an outsider can raise without paying. The validator set and state receiver contracts revert on every tested call shape.",
+   "deltas": [
+    {
+     "delta": "0x1000 (validator set) and 0x1001 (state receiver) revert on empty calldata with and without value, on transfer with zero and nonzero amount, on balanceOf and on all ten hook selectors. FxChild 0x8397259c983751DAf40400790063935a11afa28a and the ChildChainManager proxy 0xA6FA4fB5f76172d178d61B04b0ecd319C5d1C0aa do the same.",
+     "source": "rpc https://polygon.drpc.org, eth_call with from set to the PoolManager, blocks 97768181 to 97768920 on 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "The three burn contracts named in the Bor chain config and the coinbase contract accept plain value from the PoolManager and return nothing. They revert on transfer and balanceOf. POL sent there by a native take is debited to the caller in full.",
+     "source": "rpc https://polygon.drpc.org, eth_call with from set to the PoolManager, blocks 97768181 to 97768920 on 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "Precompile answers that do not revert: 0x02 and 0x03 return a 32 byte hash for any calldata, 0x04 echoes its calldata, 0x08 returns a 32 byte one for empty calldata only, and 0x01, 0x0a and 0x0100 return empty data. 0x05 runs out of gas and 0x06, 0x07, 0x09 and 0x0b to 0x11 revert on the transfer and balanceOf calldata.",
+     "source": "rpc https://polygon.drpc.org, eth_call with from set to the PoolManager, blocks 97768181 to 97768920 on 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 56,
+   "lens": "L1",
+   "summary": "This cycle read the BSC client on master, which is the Jenner code. CALL, TLOAD and TSTORE follow the go-ethereum pattern. Today the precompile set is the Pasteur one with the BSC light client precompiles at 0x64 to 0x69. The changelog records an opcode fusion feature with two later consensus fixes.",
+   "deltas": [
+    {
+     "delta": "The Pasteur precompile set holds 0x01 to 0x11, 0x64 to 0x69 and 0x0100. Called from the PoolManager, 0x64 to 0x69 revert on empty calldata, on transfer, on balanceOf and on every hook selector.",
+     "source": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/contracts.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "The Jenner set adds a millisecond timestamp precompile at 0x70 and routes every address with the CAS20 prefix, plus three singleton addresses, to native code. Today 0x70, 0xCA5F000000000000000000000000000000000000, 0x7020000000000000000000000000000000000001 and 0x7020000000000000000000000000000000000002 answer every tested call with success and empty data, as accounts without code do.",
+     "source": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/evm.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "The changelog lists 'EVM execution opcode level optimization' (pull 3395) for v1.6.2 and, for v1.7.1, the fixes 'superinstruction bad block' (pull 3582) and 'align super-instruction minStack and maxStack bounds' (pull 3584). An interpreter optimisation therefore produced at least one block that nodes disagreed on. The five core/vm files read on master contain no super-instruction code. Where the feature lives now, and which opcode sequences it fuses, was not found.",
+     "source": "https://raw.githubusercontent.com/bnb-chain/bsc/master/CHANGELOG.md",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 56,
+   "lens": "L2",
+   "summary": "Each transaction starts with StateDB.Prepare, which replaces the transient storage map, and Parlia does the same before each system message. Gas fees are credited to the system address 0xffff...fffe by a direct balance write. A call whose caller is that address skips the value transfer.",
+   "deltas": [
+    {
+     "delta": "TransitionDb calls st.state.Prepare at line 623 and credits the fee to consensus.SystemAddress with AddBalance at line 702. Prepare assigns a new transient storage map at core/state/statedb.go line 1532.",
+     "source": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/state_transition.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "EVM.Call sets syscall when the caller is the system address and then skips both the balance check and the value transfer. Only a frame whose caller is 0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE takes this path. No account holds a signature for that address, and the validator system transactions are sent from the coinbase.",
+     "source": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/evm.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "Parlia applyMessage calls state.Prepare for system messages once Cancun is active, at lines 2535 to 2537.",
+     "source": "https://raw.githubusercontent.com/bnb-chain/bsc/master/consensus/parlia/parlia.go",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 56,
+   "lens": "L3",
+   "summary": "The client source of CAS20 shows a token ledger that is separate from BNB. Every CAS20 entry point rejects value, an address in the reserved range without a created token reverts, and transfer returns a 32 byte true. WBNB credits the sender of a plain value transfer with the same amount of WBNB.",
+   "deltas": [
+    {
+     "delta": "cas20EnterCall rejects CALLCODE and DELEGATECALL frames and reverts with NonPayable when value is attached. runCAS20Token reverts when the account at the address does not carry the CAS20 marker code. After Jenner a native take to an address in the 0xCA52 range reverts, and a transfer call to a reserved address without a token reverts where today it succeeds with empty data.",
+     "source": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "The token dispatcher handles name, symbol, decimals, totalSupply, balanceOf, allowance, approve, transfer and transferFrom plus admin, metadata, permit and memo groups. balanceOf reads the token's own storage. No entry reads or moves the BNB balance of an account, so CAS20 gives BNB no second face.",
+     "source": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_token.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "WBNB at 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c accepts empty calldata with value from the PoolManager. An eth_simulateV1 run that sends 1 BNB from the PoolManager and then reads balanceOf(PoolManager) shows the WBNB balance rising by exactly 1e18 at block 135097639.",
+     "source": "rpc https://bsc-dataseed1.bnbchain.org, eth_call with from set to the PoolManager, blocks 135095182 to 135097639 on 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 56,
+   "lens": "L4",
+   "summary": "A sweep of 53 addresses found six system contracts that accept plain value from the PoolManager and keep it, two that answer balanceOf with zero, and none that answers a transfer call. The Pasteur fork fixed a signature counting flaw in the bridge light client precompile.",
+   "deltas": [
+    {
+     "delta": "ValidatorSet 0x1000, SystemReward 0x1002, TokenHub 0x1004, RelayerIncentivize 0x1005, Staking 0x2001 and Timelock 0x2006 accept empty calldata with 0, 1 wei and 1 BNB from the PoolManager and return nothing. Each reverts on transfer, on balanceOf and on every hook selector.",
+     "source": "rpc https://bsc-dataseed1.bnbchain.org, eth_call with from set to the PoolManager, blocks 135095182 to 135097639 on 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "StakeCredit 0x2003 and GovToken 0x2005 return zero for balanceOf(PoolManager) and revert on transfer. Slash 0x1001, LightClient 0x1003, RelayerHub 0x1006, GovHub 0x1007, TokenManager 0x1008, CrossChain 0x2000, StakeHub 0x2002, Governor 0x2004 and TokenRecoverPortal 0x3000 revert on every tested shape. PaymentLane 0x2007 has no code yet.",
+     "source": "rpc https://bsc-dataseed1.bnbchain.org, eth_call with from set to the PoolManager, blocks 135095182 to 135097639 on 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "BEP-682 in Pasteur made the CometBFT light block precompile at 0x67 reject validator sets that list one validator several times. Before the fork a crafted set could reach the signing threshold with fewer real signers. The flaw concerned bridge message verification.",
+     "source": "https://www.bnbchain.org/en/blog/pasteur-hardfork-arrives-on-bsc-mainnet-on-august-25",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 43114,
+   "lens": "L1",
+   "summary": "The C-Chain executes with libevm at commit d398bc4dbe41 behind hooks registered by AvalancheGo v1.15.3. Opcode bodies are unchanged. One hook rewrites every persistent storage slot index by clearing the lowest bit of its first byte, so two indexes share one slot. Transient storage is not rewritten.",
+   "deltas": [
+    {
+     "delta": "partitionStateKeysHook.TransformStateKey returns the slot index with bit 0 of byte 0 cleared. libevm applies it in GetState, GetCommittedState and SetState (core/state/statedb.go lines 349, 359 and 422). The set bit marks balances of imported X-Chain assets, which live in the same account trie.",
+     "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/libevm/extstate/statedb.go",
+     "relevance": "high"
+    },
+    {
+     "delta": "On the live PoolManager, eth_getStorageAt for slot 0x0100000000000000000000000000000000000000000000000000000000000000 returns the owner 0x47eb0cf11a1626462da3c830bcde64c3f582b5a6, the same word as slot 0. An eth_call of extsload(bytes32) with that slot returns the owner too. The same read returns zero on Polygon and on BNB Smart Chain.",
+     "source": "rpc https://api.avax.network/ext/bc/C/rpc, eth_getStorageAt and eth_call extsload on 0x06380c0e0912312b5150364b9dc4542ba0dbbc85, block 101078679 on 2026-11-22",
+     "relevance": "high"
+    },
+    {
+     "delta": "opTload and opTstore call GetTransientState and SetTransientState with the unmodified slot index.",
+     "source": "https://raw.githubusercontent.com/ava-labs/libevm/d398bc4dbe41/core/vm/eips.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "Precompiles added by the C-Chain rules: 0x0100000000000000000000000000000000000000, ...01 and ...02 map to a contract that always reverts, 0x0100 is P256 verification since Granite, and 0x0200000000000000000000000000000000000005 is Warp since Durango. A precompile reached by DELEGATECALL or CALLCODE reverts since Granite. The sweep shows 0x0b to 0x11 answering as accounts without code, so the Prague BLS precompiles are absent.",
+     "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/graft/coreth/params/hooks_libevm.go",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 43114,
+   "lens": "L2",
+   "summary": "The source of the Continuous Execution engine was read. Each block runs on a newly opened state database, each transaction goes through core.ApplyTransaction and therefore through StateDB.Prepare, and the operations after the last transaction only change balances and nonces. No step runs contract code with a caller that an outsider chooses.",
+   "deltas": [
+    {
+     "delta": "Execute opens the loop over transactions with stateDB.SetTxContext and core.ApplyTransaction for each one. Afterwards it applies the end of block operations with Op.ApplyTo and calls the FinishExecutingBlock hook.",
+     "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/saexec/execution.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "libevm calls st.state.Prepare at line 436 of core/state_transition.go for every message, and Prepare assigns a new transient storage map at core/state/statedb.go line 1335.",
+     "source": "https://raw.githubusercontent.com/ava-labs/libevm/d398bc4dbe41/core/state_transition.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "Op.ApplyTo checks minimum balances, raises the nonce and subtracts the amount for each account in Burn, and adds the amount for each account in Mint. It makes no EVM call.",
+     "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/hook/hook.go",
+     "relevance": "low"
+    },
+    {
+     "delta": "An export transaction is valid only when each input carries one signature whose recovered address equals the debited address (verifyCredentials). A contract address such as the PoolManager cannot be debited this way.",
+     "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/tx/export.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "Before the transactions the engine applies the EIP-4788 system call from 0xffff...fffe to the beacon roots address. That address has no code on the C-Chain (eth_getCode is empty), so the call does nothing.",
+     "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/saexec/execution.go",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 43114,
+   "lens": "L3",
+   "summary": "The whole transaction fee is credited to the blackhole address, which is itself a precompile that reverts every call, so AVAX cannot be sent there by a native take. WAVAX accepts plain value from the PoolManager. No precompile in the client source presents AVAX as a token.",
+   "deltas": [
+    {
+     "delta": "ShouldCreditBaseFeeToCoinbase returns true, so base fee and tip are added to the coinbase 0x0100000000000000000000000000000000000000. MinimumGasConsumption returns half the gas limit, rounded up, once Helicon is active.",
+     "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/graft/coreth/params/hooks_libevm.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "0x0100000000000000000000000000000000000000 called from the PoolManager reverts on empty calldata with 0, 1 wei and 1 AVAX, on transfer, on balanceOf and on every hook selector. The same holds for ...01, ...02 and the Warp address.",
+     "source": "rpc https://api.avax.network/ext/bc/C/rpc, eth_call with from set to the PoolManager, blocks 101077659 to 101078834 on 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "WAVAX at 0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7 accepts empty calldata with value from the PoolManager and returns nothing. The public endpoint has no eth_simulateV1, so the resulting WAVAX credit to the PoolManager was not observed and is assumed from the WETH9 design.",
+     "source": "rpc https://api.avax.network/ext/bc/C/rpc, eth_call with from set to the PoolManager, blocks 101077659 to 101078834 on 2026-11-22",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 43114,
+   "lens": "L4",
+   "summary": "A sweep of 34 addresses found that every precompile specific to the C-Chain reverts on all PoolManager call shapes. The only non-reverting answers come from the Ethereum precompiles, from addresses without code and from WAVAX.",
+   "deltas": [
+    {
+     "delta": "NativeAssetBalance and NativeAssetCall are bound to DeprecatedContract in the Banff and Granite sets. Its Run method returns ErrExecutionReverted for any input.",
+     "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/graft/coreth/nativeasset/contract.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "The addresses 0x0200000000000000000000000000000000000000 to ...04 and ...06, which hold precompiles on other Avalanche chains or in proposals, answer every tested call with success and empty data on the C-Chain. They have no code and no precompile behind them.",
+     "source": "rpc https://api.avax.network/ext/bc/C/rpc, eth_call with from set to the PoolManager, blocks 101077659 to 101078834 on 2026-11-22",
+     "relevance": "none"
+    },
+    {
+     "delta": "FinishExecutingBlock still calls TransferNonAVAX for each cross-chain transaction of a block. Balances of non-AVAX assets are written under slot indexes with the partition bit set, which contract code cannot address.",
+     "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/hooks.go",
+     "relevance": "low"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Avalanche C-Chain folds two storage slot indexes into one, which lets a hook author hide a write path that Ethereum does not have",
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A7",
+    "A10",
+    "A11"
+   ],
+   "effect": "siphon",
+   "actor": "pool-creator",
+   "severity": "low",
+   "difference": "On the Avalanche C-Chain the node clears the lowest bit of the first byte of every storage slot index before SLOAD and SSTORE touch the account trie. Slot S and slot S with bit 248 flipped are therefore one slot. The set bit is reserved for balances of imported X-Chain assets. Ethereum, Polygon and BNB Smart Chain treat the two indexes as different slots.",
+   "mechanism": "1. The rule is in the client: partitionStateKeysHook.TransformStateKey clears bit 0 of byte 0, and libevm applies it in GetState, GetCommittedState and SetState. Transient storage is not rewritten. 2. The live PoolManager shows it. eth_getStorageAt for slot 0x01 followed by 31 zero bytes returns the owner address stored in slot 0, and extsload(bytes32) for that index returns the same word (src/Extsload.sol:10-15). 3. The PoolManager itself is not harmed. Its fixed slots are 0 to 6 (owner, protocolFeesAccrued, protocolFeeController, isOperator, balanceOf, allowance, _pools; src/libraries/StateLibrary.sol:11), all with a zero first byte. Every other slot is a keccak256 output or a keccak256 output plus an offset below 7 (src/libraries/Pool.sol:83-91, src/libraries/TickBitmap.sol:66-73, src/libraries/StateLibrary.sol:324-326). Two such slots collide only if two hashes agree in 255 bits, which costs about 2^127 hash evaluations to find even for a party that controls both inputs. Raw writes in src use slots derived this way (src/libraries/Pool.sol:544-557, src/libraries/TickBitmap.sol:73), and extsload only reads. 4. A hook or token is different, because its author picks constants. A contract can keep a guarded value, for example an admin or a fee recipient, at a hand-picked slot C and expose an innocent looking setter that writes slot C with bit 248 flipped. On Ethereum, and in any audit or fork test that runs standard EVM rules, the two slots are unrelated. On the C-Chain the setter overwrites the guarded value. 5. The PoolManager calls hooks with all gas and accepts their deltas (src/libraries/Hooks.sol:131-155), so a hook that gains control this way can do whatever its privileged path allows with the liquidity of its own pools.",
+   "impact": "No funds of pools without a hook are reachable. Liquidity in pools whose hook or token was reviewed on Ethereum semantics can be exposed to a storage alias that exists only on Avalanche. The size of the loss is whatever the aliased slot controls in that hook.",
+   "preconditions": "The attacker must be the author of a hook or token that victims choose to use, and must place two constants that differ only in bit 248. No such contract was searched for on chain in this cycle. Honest contracts that use EIP-1967 or ERC-7201 slots are affected only if two of their constants differ in exactly that bit, which was not checked for deployed periphery.",
+   "mitigations": "Reviewers of hooks and tokens for Avalanche should compare every constant storage slot after clearing bit 248 and should run fork tests against a C-Chain node. Interfaces can warn when a hook uses assembly sstore with constant slots. Core needs no change.",
+   "coreRefs": [
+    "src/Extsload.sol:10-15",
+    "src/libraries/StateLibrary.sol:11",
+    "src/libraries/StateLibrary.sol:324-326",
+    "src/libraries/Pool.sol:83-91",
+    "src/libraries/Pool.sol:544-557",
+    "src/libraries/TickBitmap.sol:66-73",
+    "src/libraries/Hooks.sol:131-155"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/libevm/extstate/statedb.go",
+     "supports": "TransformStateKey calls storageKey, which clears bit 0 of byte 0. assetBalanceKey sets the same bit for imported asset balances."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/libevm/d398bc4dbe41/core/state/statedb.go",
+     "supports": "GetState, GetCommittedState and SetState pass the slot index through transformStateKey at lines 349, 359 and 422."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/libevm/d398bc4dbe41/core/vm/eips.go",
+     "supports": "opTload and opTstore use the slot index unchanged."
+    },
+    {
+     "url": "rpc https://api.avax.network/ext/bc/C/rpc, eth_getStorageAt and eth_call extsload(bytes32) on 0x06380c0e0912312b5150364b9dc4542ba0dbbc85, block 101078679 on 2026-11-22",
+     "supports": "Slot 0x0100...00 returns 0x47eb0cf11a1626462da3c830bcde64c3f582b5a6, the value of slot 0."
+    },
+    {
+     "url": "rpc https://polygon.drpc.org and https://bsc-dataseed1.bnbchain.org, eth_getStorageAt on the PoolManager for slot 0x0100...00 on 2026-11-22",
+     "supports": "Both return zero while slot 0 holds the owner, so the alias is specific to Avalanche within this unit."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    137,
+    56,
+    43114
+   ],
+   "lens": "L4",
+   "check": "P1, native take to a special address: does any precompile, system contract, burn or fee address, bridge contract or wrapped native token accept value with empty calldata from the PoolManager and leave the caller owing less than what left.",
+   "result": "No. take debits the caller the full amount before the call (src/PoolManager.sol:294-295, src/types/Currency.sol:44-52). Value is accepted by: on Polygon the three burn contracts, the coinbase contract, WPOL, the precompiles 0x01 to 0x08 and 0x0100 and the empty address 0x0a; on BNB Smart Chain ValidatorSet 0x1000, SystemReward 0x1002, TokenHub 0x1004, RelayerIncentivize 0x1005, Staking 0x2001, Timelock 0x2006, WBNB and the precompiles 0x01 to 0x08 and 0x0100; on Avalanche WAVAX, the precompiles 0x01 to 0x08 and 0x0100 and the empty addresses 0x0b to 0x11. None of them returns value to the PoolManager, which has no receive function. Polygon 0x1000, 0x1001 and 0x1010, the BNB Smart Chain precompiles 0x64 to 0x69 and the Avalanche blackhole, native asset and Warp addresses revert, so a take to them fails as a whole.",
+   "source": "rpc https://polygon.drpc.org, eth_call with from set to the PoolManager, blocks 97768181 to 97768920 on 2026-11-22; rpc https://bsc-dataseed1.bnbchain.org, eth_call with from set to the PoolManager, blocks 135095182 to 135097639 on 2026-11-22; rpc https://api.avax.network/ext/bc/C/rpc, eth_call with from set to the PoolManager, blocks 101077659 to 101078834 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114
+   ],
+   "lens": "L3",
+   "check": "P1 into the wrapped native token: sync(WPOL, WBNB or WAVAX), take native to the wrapper, settle, in every order, to see whether the wrapped tokens that the wrapper credits to the PoolManager can be claimed for less than their value.",
+   "result": "Zero sum. A simulation on Polygon and on BNB Smart Chain shows the wrapper crediting the PoolManager with exactly the value sent. If the caller synced the wrapper first, settle credits that amount of wrapped currency to the caller (src/PoolManager.sol:358-360) and the native debit of the same amount from take remains (src/PoolManager.sol:294). The caller must pay it with msg.value before unlock returns (src/PoolManager.sol:112). Without a prior sync the wrapped tokens stay in the PoolManager as an unaccounted surplus and the caller still owes the native amount. The PoolManager cannot be made to call withdraw, so the reverse direction does not exist.",
+   "source": "rpc eth_simulateV1 on https://polygon.drpc.org (block 97768920) and https://bsc-dataseed1.bnbchain.org (block 135097639), two calls from the PoolManager: 1e18 value to the wrapper, then balanceOf(PoolManager)"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114
+   ],
+   "lens": "L4",
+   "check": "P2, token take on a special address: does any swept address answer transfer(address,uint256) from the PoolManager with nothing or a 32 byte true while moving value that pools hold.",
+   "result": "No. Only WPOL, WBNB and WAVAX return true, and they are ordinary pooled tokens whose take is debited in full. Addresses that return empty data (the zero address, 0x01, 0x0100, Polygon 0x0a and 0x1002, Avalanche 0x0b to 0x11, the system address 0xffff...fffe, the not yet active Jenner addresses) move nothing, and the caller is left with a debt in a currency whose balanceOf call cannot be decoded, so it cannot be settled and the unlock reverts for a nonzero amount (src/PoolManager.sol:112). 0x02 and 0x03 return a hash and 0x04 echoes the calldata, which fails the success test at src/types/Currency.sol:68. Polygon 0x1010 returns false for every nonzero amount.",
+   "source": "rpc https://polygon.drpc.org, eth_call with from set to the PoolManager, blocks 97768181 to 97768920 on 2026-11-22; rpc https://bsc-dataseed1.bnbchain.org, eth_call with from set to the PoolManager, blocks 135095182 to 135097639 on 2026-11-22; rpc https://api.avax.network/ext/bc/C/rpc, eth_call with from set to the PoolManager, blocks 101077659 to 101078834 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114
+   ],
+   "lens": "L4",
+   "check": "P3, sync on a special address: does any swept address answer balanceOf(PoolManager) with a number that an outsider can raise between sync and settle without paying it in.",
+   "result": "No. 0x02, 0x03 and 0x04 return a constant derived from the calldata, so settle credits zero. StakeCredit 0x2003 and GovToken 0x2005 on BNB Smart Chain return zero and their tokens cannot be transferred to the PoolManager by a third party. Polygon 0x1010 returns the native balance, which rises only through a forced transfer that the sender pays. The wrapped native tokens return real balances. Every other address reverts or returns data too short to decode, which makes sync revert (src/PoolManager.sol:285).",
+   "source": "rpc https://polygon.drpc.org, eth_call with from set to the PoolManager, blocks 97768181 to 97768920 on 2026-11-22; rpc https://bsc-dataseed1.bnbchain.org, eth_call with from set to the PoolManager, blocks 135095182 to 135097639 on 2026-11-22; rpc https://api.avax.network/ext/bc/C/rpc, eth_call with from set to the PoolManager, blocks 101077659 to 101078834 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114
+   ],
+   "lens": "L4",
+   "check": "P5, hook calls to special addresses: does any swept address accept an IHooks selector from the PoolManager and return at least 32 bytes that start with the same selector.",
+   "result": "Only the identity precompile 0x04 echoes the selector, and its address has the afterSwapReturnDelta bit without the afterSwap bit, which isValidHookAddress rejects (src/libraries/Hooks.sol:111-112). The special addresses whose low 14 bits form a valid combination are Polygon 0x1000 and 0x1010, BNB Smart Chain 0x64, 0x70, 0x1000, 0x2000 and 0x3000, the P256 precompile 0x0100 and the address 0x10 on all three chains, WPOL, and a few addresses without code. Each of them reverts or returns fewer than 32 bytes, so callHook reverts with InvalidHookResponse (src/libraries/Hooks.sol:152-154). A pool created with such a hook address fails on the flagged operations for good, for example every liquidity removal with hook 0x0100. That is the hook finding of cycle 1 with actor pool-creator and needs a victim who joins such a pool.",
+   "source": "rpc https://polygon.drpc.org, eth_call with from set to the PoolManager, blocks 97768181 to 97768920 on 2026-11-22; rpc https://bsc-dataseed1.bnbchain.org, eth_call with from set to the PoolManager, blocks 135095182 to 135097639 on 2026-11-22; rpc https://api.avax.network/ext/bc/C/rpc, eth_call with from set to the PoolManager, blocks 101077659 to 101078834 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L3",
+   "check": "Faces of POL: sync, settle, settleFor, take, mint, burn and fee collection across address(0) and 0x1010 in every order, with the call results of this cycle's sweep.",
+   "result": "No order credits more than what entered. A native credit is always msg.value (src/PoolManager.sol:353-354). A 0x1010 credit is the rise of the native balance between sync(0x1010) and settle (src/PoolManager.sol:358-360). In that window msg.value is refused (src/PoolManager.sol:356), sync(address(0)) clears the synced currency (src/PoolManager.sol:281-283) and a new sync(0x1010) reads the balance again, so only a forced transfer raises the balance, and a native take or fee collection lowers it. A 0x1010 credit can never leave: transfer returns false for any nonzero amount without value and the PoolManager always calls with zero value (src/types/Currency.sol:73). take(0x1010, to, 0) succeeds, records no delta (src/PoolManager.sol:369) and only makes 0x1010 emit events. The contract has no approve, transferFrom or permit entry, and its deposit and withdraw paths send POL with a 2300 gas transfer that the PoolManager cannot receive.",
+   "source": "rpc https://polygon.drpc.org, eth_call with from set to the PoolManager, blocks 97768181 to 97768920 on 2026-11-22"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "check": "Whether Jenner gives BNB an ERC-20 face through CAS20 or another reserved address (critic lead from cycle 1).",
+   "result": "Not in the client source. The CAS20 token dispatcher keeps balances in the token's own storage and has no entry that reads or moves an account's BNB balance. Every CAS20 entry point reverts when value is attached. The factory, policy registry and activation registry are the only other routed addresses. The millisecond timestamp precompile at 0x70 was found in the precompile table only. Its source file was not located, so its answers to transfer and balanceOf calldata are open. To be re-run on chain after 2026-12-08.",
+   "source": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20.go"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "check": "Whether the storage slot alias of the C-Chain (bit 248 cleared) lets anyone make two slots of the PoolManager collide.",
+   "result": "No. The fixed slots 0 to 6 have a zero first byte. All other slots are keccak256 outputs or such an output plus an offset below 7 (src/libraries/StateLibrary.sol:324-326, src/libraries/Pool.sol:83-91, src/libraries/TickBitmap.sol:66-73, src/ERC6909.sol:15-19). A collision needs two hashes that agree in 255 bits. extsload exposes the alias for reads only (src/Extsload.sol:10-15). The transient slots are not rewritten. Hooks and tokens with hand-picked slots are covered by the finding of this cycle.",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/libevm/extstate/statedb.go"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Where the Continuous Execution engine discards transient storage between two transactions of one block, and whether end of block operations run contract code (critic lead and unit lead from cycle 1).",
+   "result": "saexec.Execute opens a new state database for each block and applies each transaction with core.ApplyTransaction. libevm's TransitionDb calls StateDB.Prepare for every message (core/state_transition.go line 436) and Prepare assigns a new transient storage map (core/state/statedb.go line 1335). End of block operations are balance and nonce writes (hook.Op.ApplyTo). FinishExecutingBlock moves non-AVAX asset balances. Neither makes an EVM call. A stale sync therefore cannot survive into another transaction. The public endpoint has no eth_simulateV1, so this rests on the source at tag v1.15.3 and the pinned libevm commit.",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/saexec/execution.go"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Whether any execution path on the C-Chain gives msg.sender the zero address, which is the stored protocolFeeController there (src/ProtocolFees.sol:36, src/ProtocolFees.sol:48).",
+   "result": "None in the engine source. The only call that is not a signed transaction is the EIP-4788 system call, whose caller is 0xffff...fffe and whose target has no code on the C-Chain. Cross-chain transactions never run contract code. A signed transaction needs a signature that recovers to its sender. This replaces the documentation-only basis of the cycle 1 item.",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/saexec/execution.go"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Whether a cross-chain export can debit the PoolManager, and whether an import that credits it gives anyone a delta.",
+   "result": "An export input must carry a signature whose recovered address equals the debited address (verifyCredentials), which no one can produce for a contract. An import adds AVAX to the named address with AddBalance and runs no code, so the PoolManager balance rises and nobody is credited, because native credit is msg.value only (src/PoolManager.sol:353-354).",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/tx/export.go"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "check": "Whether the protocol-level balance credits of Bor (base fee to the burn contract, tip to the coinbase) can reach the PoolManager balance between sync(0x1010) and settle.",
+   "result": "No. Both credits go to addresses fixed in the chain config (params/config.go, BurntContract and Coinbase maps) and are applied after the transaction's execution ends (core/state_transition.go lines 634 to 644). The PoolManager is neither address.",
+   "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/state_transition.go"
+  },
+  {
+   "chainIds": [
+    137,
+    56
+   ],
+   "lens": "L2",
+   "check": "Whether transient storage of one user transaction is visible to the next under the client source read this cycle.",
+   "result": "No. Bor calls StateDB.Prepare at core/state_transition.go line 550 and resets the map at core/state/statedb.go line 3051. BSC calls it at core/state_transition.go line 623 and resets at core/state/statedb.go line 1532. Bor state sync records get the same reset through PrepareStateSyncContext since Austin, and Parlia system messages through applyMessage. This agrees with the two transaction simulation the critic ran on both endpoints in cycle 1.",
+   "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/state_transition.go"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114
+   ],
+   "lens": "L1",
+   "check": "Opcode differential for the call patterns of the PoolManager: CALL with and without value, the copy of return data into memory, calls to addresses without code, TLOAD and TSTORE, in the three clients.",
+   "result": "The bodies of opCall, EVM.Call, opTload and opTstore in Bor v2.11.0, BSC master and libevm d398bc4dbe41 follow the go-ethereum pattern. A call to an address without code that is no precompile returns success with empty data, and return data shorter than the output area leaves the rest of the area untouched, which is what the success test at src/types/Currency.sol:64-74 expects. BSC adds a branch that skips the value transfer when the caller is the system address and a prefix route to CAS20 native code after Jenner. Avalanche adds the precompile override hook and the storage slot rewrite. MCOPY, PUSH0, SELFBALANCE and gas forwarding were not re-read in source and rest on the cycle 1 probes.",
+   "source": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/instructions.go"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L4",
+   "check": "Known weakness: the validator counting flaw in the light client precompile 0x67 fixed by BEP-682 in Pasteur, and the staking and governance fixes of BEP-695.",
+   "result": "They concern the BNB Chain bridge and validator administration. The PoolManager never calls 0x67, and a call from it with any tested calldata reverts. A forged bridge message would affect bridged BNB supply and token issuers, which is outside what an ordinary account can turn against pool funds directly.",
+   "source": "https://www.bnbchain.org/en/blog/pasteur-hardfork-arrives-on-bsc-mainnet-on-august-25"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "check": "Known weaknesses disclosed for Bor in 2026: the Austin fixes (unbounded state sync gas, unbounded TxDependency field) and the Uburu and v2.11.x security releases.",
+   "result": "The disclosed Austin issues are denial of service paths in block processing that a block producer or a sender of many bridge events could use. They delay all transactions and do not change PoolManager state. The v2.11.0 and v2.11.1 notes list state sync fetching, span lookup, witness and header checks. None changes how a transaction executes against a contract. The notes give no detail on what Uburu changed inside the StateReceiver, which stays an open lead from cycle 1.",
+   "source": "https://forum.polygon.technology/t/security-releases-review-bor-v2-10-0-austin-hf-and-heimdall-v0-11-0-kyoto-hf/22138"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L3",
+   "check": "Known weaknesses around Helicon: the gas floor of ACP-194 and the worst-case balance bounds.",
+   "result": "The floor charges a sender at least half of the gas limit and closes a queue flooding path. The bounds decide whether a transaction may be included. Both act on the fee payer of a transaction. The PoolManager never pays gas, and a revert inside a transaction still rolls back all PoolManager state, transient storage included.",
+   "source": "https://docs.avax.network/docs/acps/194-continuous-execution"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L1",
+   "priority": "medium",
+   "question": "Where does the opcode fusion feature of pull 3395 (super-instructions) live in the BSC client that validators run today, which opcode sequences does it fuse, and does the deployed PoolManager bytecode at 0x28e2ea090877bf75740558f6bfb36a5ffee9e9df give the same results with the feature on and off for unlock, sync, settle, take, swap and modifyLiquidity?",
+   "why": "The changelog records a bad block and a stack bound fix for this feature in v1.7.1. A fused sequence that mishandles one opcode pattern in the PoolManager would change deltas or the lock for every caller. The interpreter files read on master show no such code, so the feature was not reviewed."
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L4",
+   "priority": "low",
+   "question": "After Jenner activates on 2026-12-08, what do the millisecond timestamp precompile 0x70 and an uncreated address in the 0xCA52 range return to transfer(address,uint256), balanceOf(address) and the afterSwap, beforeDonate and afterDonate selectors when the PoolManager is the caller?",
+   "why": "0x70 has a valid hook flag combination and will answer calls with a changing number. If it ignores its input, sync(0x70) stores a timestamp. The value is constant inside a block, so no credit should arise, and this needs one on-chain run to close."
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "priority": "medium",
+   "question": "Do the PositionManager, Permit2, the Universal Router or any hook with liquidity on Avalanche use constant storage slots (EIP-1967, ERC-7201 or hand-written assembly) of which two differ only in bit 248?",
+   "why": "The C-Chain treats such a pair as one slot. Core is unaffected, and a periphery contract or hook with such a pair would have a write path on Avalanche that does not exist on other chains."
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114
+   ],
+   "lens": "L3",
+   "priority": "medium",
+   "question": "Among the tokens the PoolManager holds on these three chains, which have a balanceOf(PoolManager) that any account can raise inside one transaction without transferring to it, for example through a public rebase, a reward claim paid to the holder or a reflection mechanism?",
+   "why": "settle credits the whole rise since sync to the caller (src/PoolManager.sol:358-360). The sweep of this cycle covered protocol addresses only. Reflection and rebasing tokens are common on BNB Smart Chain, and yield that accrues to the PoolManager balance could be claimed by whoever triggers it between sync and settle."
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "priority": "low",
+   "question": "In Bor's BlockSTM executor and its serial fallback, is the transient storage of a task ever copied into the state database that the next task reads, for example when results are merged in transaction order?",
+   "why": "This cycle confirmed the reset in StateDB.Prepare for every message. The merge step in core/blockstm was not read line by line, and a copy of the journal there would break A1."
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L3",
+   "priority": "low",
+   "question": "What is the function behind selector 0xed9ef524 in the code at 0x0000000000000000000000000000000000001010, and can an ordinary account call it?",
+   "why": "It is the only entry of the native token contract that this cycle could not name. The contract holds 6.9 billion POL and mirrors the native balance of every account."
+  }
+ ],
+ "leadResults": []
+}

@@ -79,7 +79,7 @@
   {
    "chainId": 42161,
    "lens": "L3",
-   "summary": "ETH has no second face in the protocol. The wrapped ETH token mints to whoever sends it ETH, which the PoolManager can be made to do, and the exchange is one for one. Priority fee collection is now switched on.",
+   "summary": "ETH has no second face in the protocol. The wrapped ETH token mints to whoever sends it ETH, which the PoolManager can be made to do, and the exchange is one for one. The PoolManager holds four tokens with issuer block lists and four rebasing Aave aTokens, which cycle 1 did not list. Priority fee collection is now switched on.",
    "deltas": [
     {
      "delta": "ArbOwnerPublic.getCollectTips() returns 1. The ArbOS 61 release page says the switch was off at activation on 2026-08-20. The PoolManager does not read the gas price.",
@@ -94,6 +94,21 @@
     {
      "delta": "The PoolManager held 4,521.6 ETH, 8.99M USDC, 0.98M USDT0, 49.07 WETH and 2.78M ARB.",
      "source": "https://arb1.arbitrum.io/rpc eth_getBalance and eth_call balanceOf, queried 2026-11-22",
+     "relevance": "low"
+    },
+    {
+     "delta": "Issuer controlled tokens at the PoolManager: USDC answers blacklister() with 0xac5b4946a8c29eafb42e1742b3ab82e6d5771329 and isBlacklisted(PoolManager) with false. USDT0 answers isBlocked(PoolManager) with false, and addToBlockedList and destroyBlockedFunds revert for an arbitrary caller with an owner check, owner 0x4dff9b5b0143e642a3f63a5bcf2d1c328e600bf8. PYUSD (28,236 held) answers isFrozen(PoolManager) with false and freeze is role gated. cbBTC (14.8 held) has a blacklister.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call, queried 2026-11-22",
+     "relevance": "high"
+    },
+    {
+     "delta": "Rebasing tokens at the PoolManager: Aave aTokens aArbUSDT (1,504.6), aArbUSDCn (443.3), aArbUSDC (34.9) and aArbWETH (0.41). For aArbUSDT scaledBalanceOf(PoolManager) is 1,214.98 and balanceOf is 1,504.61. The Aave pool 0x794a61358D6845594F94dc1DB02A252b5b4814aD reports FLASHLOAN_PREMIUM_TO_PROTOCOL 10000, so a flash loan adds nothing to the supplier index inside a transaction. A token reporting symbol xUSD at 0xe80772Eaf6e2E18B651F160Bc9158b2A5caFCA65 (62.4 held) was not classified.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call, queried 2026-11-22; https://aave.com/docs/aave-v3/smart-contracts/tokenization",
+     "relevance": "low"
+    },
+    {
+     "delta": "Other balances read by address: 173,692 PENDLE, 54,030 syrupUSDC, 26,439 bridged USDC, 18,100 DAI, 13,479 LINK, 1,130 GMX, 47.1 wstETH, 31.55 WBTC, 18.5 rETH, 14.2 weETH. The list comes from 29 addresses I tried and is not a ranking of the largest balances. The Blockscout token list for the address was not reachable.",
+     "source": "https://arb1.arbitrum.io/rpc eth_call balanceOf and symbol, queried 2026-11-22",
      "relevance": "low"
     }
    ]
@@ -155,7 +170,7 @@
   {
    "chainId": 4663,
    "lens": "L2",
-   "summary": "Transient storage and transaction types match Arbitrum One. Screening before inclusion applies only to transactions the sequencer receives directly. Delayed inbox messages are exempt from it by a dedicated run mode and can be stopped only by the hash list. ERC-4337 entry points are deployed, so several users' operations can share one transaction as on Ethereum.",
+   "summary": "Transient storage and transaction types match Arbitrum One. The client source now shows how the filter works: the sequencer rejects directly received transactions that touch an address on an off-chain hash list, and for delayed inbox messages it stops, has the transaction hash written to the on-chain filter by an automated service, and then executes the transaction as failed. An ordinary account cannot add to the list and cannot make another user's transaction on an ordinary pool touch a listed address. ERC-4337 entry points are deployed, so several users' operations can share one transaction as on Ethereum.",
    "deltas": [
     {
      "delta": "The client has a separate run mode for blocks built from delayed inbox messages. Its comment says such messages cannot be filtered after commitment and that the address filter must treat the mode as exempt. The hash list checked in RevertedTxHook is the only filter that reaches them.",
@@ -176,6 +191,31 @@
      "delta": "EntryPoint versions 0.6, 0.7 and 0.8 are listed as deployed. EntryPoint 0.7 at 0x0000000071727De22E5E9d8BAf0edAc6f37da032 accepts ETH with empty calldata from the PoolManager and answers balanceOf(PoolManager) with 0. It reverts on transfer.",
      "source": "https://docs.robinhood.com/chain/account-abstraction and https://rpc.mainnet.chain.robinhood.com eth_call, queried 2026-11-22",
      "relevance": "low"
+    },
+    {
+     "delta": "The entries in the on-chain filter are transaction hashes. ArbFilteredTransactionsManager.addFilteredTransaction takes one hash and requires the caller to be a registered filterer.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/precompiles/ArbFilteredTransactionsManager.go",
+     "relevance": "high"
+    },
+    {
+     "delta": "The entries are produced by an automated loop. When the sequencer executes a delayed inbox message and a transaction in it touches a restricted address without being in the on-chain filter, block production for that message stops with ErrFilteredDelayedMessage, the sequencer calls transactionfilterer_filter with the hash on a configured service, and the message is retried once the hash is on chain.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/execution/gethexec/executionengine.go",
+     "relevance": "high"
+    },
+    {
+     "delta": "The restricted addresses are a hash list that the node downloads from an S3 bucket and polls for updates. Nothing on chain feeds it.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/execution/gethexec/addressfilter/service.go",
+     "relevance": "high"
+    },
+    {
+     "delta": "The reasons an address counts as touched are: transaction sender, recipient, the sender with the parent chain alias removed, retryable beneficiary, fee refund address and destination, call target, created address, selfdestruct beneficiary, child to parent message destination, and an event rule match.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/arbitrum/filter/filter_report.go",
+     "relevance": "high"
+    },
+    {
+     "delta": "An event rule is selected by the first 4 bytes of topic 0 of a log from any emitting contract, and the configured topic positions 1 to 3 are read as addresses. The rules come from a node configuration file and the default is no rules. None of the PoolManager event signatures shares its first 4 bytes with the ERC-20 Transfer or Approval events or the ERC-1155 transfer events.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/execution/gethexec/eventfilter/eventfilter.go",
+     "relevance": "high"
     }
    ]
   },
@@ -387,6 +427,86 @@
     }
    ],
    "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Issuer block lists on USDC, USDT0, PYUSD and cbBTC cover the single PoolManager address on Arbitrum One",
+   "chainIds": [
+    42161
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A4",
+    "A6"
+   ],
+   "effect": "both",
+   "actor": "issuer",
+   "severity": "high",
+   "difference": "This is the same issuer power that exists on Ethereum, and cycle 1 did not record it for Arbitrum One. Native USDC, USDT0, PYUSD and cbBTC on Arbitrum One each have a role that can block an address, and USDT0 has an owner function that destroys the balance of a blocked address. The PoolManager holds every pool's balance of each token at one address.",
+   "mechanism": "Step 1: the role holder lists the PoolManager address. Step 2: the token's transfer then fails when the PoolManager is the sender. Currency.transfer reverts on a failed call, so every take and every protocol fee collection in that token reverts. Where the token also rejects a listed recipient, a settle cannot be funded either. I did not test which of the four tokens check the recipient. Step 3: liquidity providers can still remove liquidity and keep the blocked side as ERC-6909 claims through mint, which moves no tokens, but the claims cannot be turned into tokens while the block stands. Step 4, USDT0 only: the owner calls destroyBlockedFunds for the PoolManager, which lowers balanceOf(PoolManager) with no matching delta. Pool reserves, claims and accrued fees then exceed the balance and the last withdrawers bear the shortfall.",
+   "impact": "All pools and claims in the listed token. At the time of the queries the PoolManager held 8.99M USDC, 0.98M USDT0, 28,236 PYUSD and 14.8 cbBTC.",
+   "preconditions": "The blacklister of USDC (0xac5b4946a8c29eafb42e1742b3ab82e6d5771329), the owner of USDT0 (0x4dff9b5b0143e642a3f63a5bcf2d1c328e600bf8), the PYUSD role holder or the cbBTC blacklister must act. All four tokens report the PoolManager as not blocked today. An arbitrary caller is rejected by each of these functions.",
+   "mitigations": "None in the PoolManager. Liquidity providers can watch the block list views for the PoolManager address. A blocked side can be held as claims until the block is lifted.",
+   "coreRefs": [
+    "src/types/Currency.sol:53-87",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:322-329",
+    "src/PoolManager.sol:349-364"
+   ],
+   "sources": [
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_call blacklister(), isBlacklisted(PoolManager), blacklist(PoolManager) from an arbitrary sender on USDC 0xaf88d065e77c8cC2239327C5EDb3A432268e5831, queried 2026-11-22",
+     "supports": "USDC has a blacklister, the PoolManager is not listed, and only the blacklister can list it."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_call isBlocked(PoolManager), owner(), addToBlockedList(PoolManager) and destroyBlockedFunds(PoolManager) from an arbitrary sender on USDT0 0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9, queried 2026-11-22",
+     "supports": "USDT0 has an owner gated block list and an owner gated function that destroys a blocked balance, and the PoolManager is not blocked."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_call isFrozen(PoolManager) and freeze(PoolManager) on PYUSD 0x46850aD61C2B7d64d08c9C754F45254596696984, isBlacklisted(PoolManager) and blacklister() on cbBTC 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf, and balanceOf(PoolManager) on all four, queried 2026-11-22",
+     "supports": "PYUSD freeze is role gated, cbBTC has a blacklister, the PoolManager is not listed on either, and the balances are as stated."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Aave aTokens held by the Arbitrum One PoolManager grow outside pool accounting and the growth cannot be claimed",
+   "chainIds": [
+    42161
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2"
+   ],
+   "effect": "degrade",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "This is the rebasing token case that the Ethereum unit recorded for stETH, found here for Aave aTokens. No chain rule is involved. An aToken balance is a stored scaled amount multiplied by the reserve's liquidity index, so balanceOf(PoolManager) rises with time without any transfer.",
+   "mechanism": "Step 1: a liquidity provider adds liquidity in a pool whose currency is an aToken. The pool records a fixed amount and the PoolManager receives the aTokens. Step 2: the index grows with time and balanceOf(PoolManager) grows with it. For aArbUSDT the PoolManager has a scaled balance of 1,214.98 and a balance of 1,504.61. Step 3: a credit exists only for a balance increase between a sync and a settle in the same transaction (PoolManager.sol:279-288 and 358-360). The index does not move inside a transaction as far as I could establish: interest accrues with time and the Aave pool sends the whole flash loan premium to the protocol. I checked the premium setting on chain and did not read the Aave pool code for other paths. A sync therefore always includes the interest accrued so far in the reserve figure, and no settle is ever credited for it. Step 4: take, burn and fee collection pay out only recorded amounts, so the accrued interest stays in the PoolManager balance and belongs to no pool, claim or fee. The provider gets back the recorded amount and the pool fees. I found no way for an ordinary account to collect the surplus, and none to reduce the balance below the recorded amounts.",
+   "impact": "Liquidity providers in aToken pools lose the lending interest on their deposit for as long as it stays in the pool. Balances today are small: 1,504.6 aArbUSDT, 443.3 aArbUSDCn, 34.9 aArbUSDC and 0.41 aArbWETH. Principal is not affected.",
+   "preconditions": "A pool must use an aToken or another token whose balance rises without transfers. Nobody has to act. If a future Aave version again added value to the supplier index inside a transaction, an account that calls sync before it and settle after it would be credited the PoolManager's share of that addition.",
+   "mitigations": "Use a non-rebasing wrapper of the aToken as the pool currency. Interfaces can warn when a pool currency reports a scaled balance that differs from its balance.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364"
+   ],
+   "sources": [
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_call scaledBalanceOf(PoolManager), balanceOf(PoolManager) and POOL() on aArbUSDT 0x6ab707Aca953eDAeFBc4fD23bA73294241490620 and aArbUSDCn 0x724dc807b04555b71ed48a6896b6F41593b8C637, and FLASHLOAN_PREMIUM_TOTAL() and FLASHLOAN_PREMIUM_TO_PROTOCOL() on 0x794a61358D6845594F94dc1DB02A252b5b4814aD, queried 2026-11-22",
+     "supports": "The PoolManager holds aTokens whose balance exceeds the scaled balance, and the Aave pool directs 100 percent of the flash loan premium to the protocol."
+    },
+    {
+     "url": "https://aave.com/docs/aave-v3/smart-contracts/tokenization",
+     "supports": "Yield is distributed to aToken holders by continuously increasing their balance, and balanceOf returns principal plus yield."
+    },
+    {
+     "url": "https://governance.aave.com/t/arfc-bgd-aave-v3-4/21572",
+     "supports": "Aave v3.4 removed the part of the flash loan fee that was added to the supplier index, which leaves time based accrual as the only way the index rises."
+    }
+   ],
+   "evidence": "primary"
   }
  ],
  "cleared": [
@@ -472,9 +592,9 @@
     4663
    ],
    "lens": "L2",
-   "check": "Whether an ordinary account can turn the Robinhood Chain address screening against other users of a pool that has no attacker-made hook or token.",
-   "result": "The client reports call targets, created addresses and selfdestruct beneficiaries of the transaction being screened. In a swap or liquidity change on such a pool the addresses reached are the router, Permit2, the PoolManager, the two tokens and the recipient the user named. None is chosen by a third party, and the PoolManager makes no call that depends on earlier callers (PoolManager.sol:145-297). An attacker who makes the PoolManager call a restricted address through take only gets the attacker's own transaction rejected. I did not read the event rule definitions or the configured list, so this holds for the address rules only.",
-   "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/core/vm/instructions.go and https://docs.robinhood.com/chain/differences-from-ethereum"
+   "check": "Critic lead from cycle 1: what a filter entry identifies, whether entries are added automatically, and whether an ordinary account can make an entry or a rule match another user's PoolManager transaction.",
+   "result": "An entry is one transaction hash. Entries are added by an automated loop for delayed inbox transactions that touch a restricted address, which is consistent with several thousand entries from one account. A transaction touches an address only as sender, recipient, retryable field, call target, created address, selfdestruct beneficiary, message destination, or as an address in a log topic that a configured event rule names. The restricted list is an off-chain hash list that only the operator's provider changes. In a swap or liquidity change on a pool without attacker-made hook or token, the call targets are the router, Permit2, the PoolManager, the two tokens and the recipient the user named, and the logs come from those contracts with the user, the router and the PoolManager as addresses (PoolManager.sol:145-297). No value in them is chosen by a third party. An attacker who makes the PoolManager call or pay a restricted address through take only gets the attacker's own transaction rejected or hash filtered. The finding therefore stays in the operator class. A pool whose hook or token calls or names a restricted address does block its users, which is the pool-creator class. I did not see the configured event rules or the list itself.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/execution/gethexec/executionengine.go, https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/execution/gethexec/eventfilter/eventfilter.go, https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f3a966e/arbitrum/filter/filter_report.go and https://raw.githubusercontent.com/OffchainLabs/nitro/v3.11.3/precompiles/ArbFilteredTransactionsManager.go"
   },
   {
    "chainIds": [
@@ -524,6 +644,15 @@
    "check": "Whether a chain owner switched on native token management, added a transaction filterer or scheduled an ArbOS upgrade since cycle 1.",
    "result": "All values are unchanged: no native token owners and management time 0 on all three chains, no filterers on Arbitrum One and Elysium, one filterer on Robinhood Chain, and getScheduledUpgrade() returns zeros everywhere.",
    "source": "eth_call to ArbOwnerPublic 0x6b on the three RPC endpoints, queried 2026-11-22"
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L3",
+   "check": "Critic lead from cycle 1, second half: does any function an ordinary account can call change balanceOf(PoolManager) on Arbitrum One without a transfer, so that a settle is credited for it.",
+   "result": "Of 29 token addresses tried, the ones whose balance moves without transfers are four Aave aTokens. Their balance depends on the block timestamp and on the reserve index, and the Aave pool reports that the whole flash loan premium goes to the protocol, so no call inside one transaction raises the index. A sync and a settle in the same transaction therefore see the same balance. The time based growth is recorded as a low finding. The sample is not the full token list of the PoolManager, which I could not obtain.",
+   "source": "eth_call on https://arb1.arbitrum.io/rpc, queried 2026-11-22; https://governance.aave.com/t/arfc-bgd-aave-v3-4/21572"
   }
  ],
  "leads": [
@@ -568,8 +697,17 @@
     4663
    ],
    "lens": "L4",
-   "question": "Which event rules does the Robinhood Chain address filter apply, and is the PoolManager, a router or Permit2 on the restricted list or exempt from it?",
-   "why": "The client attaches event rule matches to filtered addresses. If a Transfer log naming a restricted address is enough to reject a transaction, tokens or hooks that emit such logs make their pools unusable through the sequencer. The rule definitions and the configured list were not read.",
+   "question": "Which event rules and which restricted list does the Robinhood Chain sequencer run with, and does the list contain or exempt the PoolManager 0x8366a39cc670b4001a1121b8f6a443a643e40951, the routers and Permit2?",
+   "why": "The client source shows that a rule matches on 4 bytes of topic 0 from any contract and that the list is an off-chain hash file. Whether a widely used contract could be listed, by the provider or by a rule that reads a topic as an address, cannot be seen from the chain.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L3",
+   "question": "What are the twenty largest token balances of the Arbitrum One PoolManager from an indexer, and what is the token that reports symbol xUSD at 0xe80772Eaf6e2E18B651F160Bc9158b2A5caFCA65?",
+   "why": "This cycle classified 29 addresses chosen by hand because the Blockscout token list was not reachable. A rebasing or reflection token with a larger balance, or one whose rebase can be triggered by anyone inside a transaction, would change the low rating of the aToken finding.",
    "priority": "medium"
   },
   {
