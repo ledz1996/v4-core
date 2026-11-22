@@ -1,0 +1,396 @@
+{
+ "unit": "core-code-invariants-settlement",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Which invariants of flash accounting and custody does the code enforce, and where. This is the list that the other items of this unit try to break.",
+   "result": "I1, lock. Every function that writes a delta carries onlyWhenUnlocked (src/PoolManager.sol:96-99 and the modifiers at 147, 189, 258, 291, 300, 305, 310, 322, 332). The flag is set only at line 107, cleared only at line 113, and unlock reverts when it is already set (105). I2, closure. unlock returns only when NonzeroDeltaCount is zero (112). _accountDelta raises the counter when a slot leaves zero and lowers it when a slot returns to zero (368-378), so the counter equals the number of nonzero (account, currency) slots. I3, credits. A positive delta comes from four places only: settle, which adds msg.value when no ERC-20 is synced or the checked rise of balanceOf since sync (349-364); burn, which lowers an ERC-6909 balance by the same amount (332-336, src/ERC6909.sol:85-89); a pool action whose amounts Pool computes (159-183, 206-226, 268-270); and a hook delta that is subtracted from the caller in the same step (src/libraries/Hooks.sol:230, 242, 312). I4, debits. take and mint debit the nominal amount before any external call (294, 326). clear can only bring a positive delta to zero (310-319). I5, custody. The PoolManager sends assets only through Currency.transfer in take (295) and in collectProtocolFees (src/ProtocolFees.sol:56), each after an equal bookkeeping decrease (294 and ProtocolFees.sol:55). I6, one payment bracket. There is one synced currency slot. sync overwrites it (286) or resets it for the native asset (283), an ERC-20 settle resets it (361), and settle rejects msg.value while it is set (356). I7, claims. ERC-6909 balances change only in transfer, transferFrom, _mint and _burn with checked arithmetic (src/ERC6909.sol:25-48, 79-89). From I1 to I7 it follows that for every currency id the PoolManager balance stays at or above pool reserves plus claims plus accrued protocol fees, as long as four properties of the chain and the token hold: T1, balanceOf(PoolManager) of a currency changes only by transfers to or from the PoolManager and by the transferred amount; T2, no second currency id draws on the same balance in another unit; T3, msg.value arrives in full; T4, transient storage is one store per transaction that follows call and revert semantics. The code checks none of T1 to T4.",
+   "source": "src/PoolManager.sol:96-114; src/PoolManager.sol:279-378; src/libraries/CurrencyDelta.sol:10-41; src/libraries/NonzeroDeltaCount.sol:12-34; src/libraries/CurrencyReserves.sol:15-38; src/types/Currency.sol:40-96; src/ERC6909.sol:25-89; src/ERC6909Claims.sol:13-22; src/ProtocolFees.sol:44-57"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Exhaustive search for a sequence of unlock, sync, settle, settleFor, take, clear, mint, burn, ERC-6909 transfer and direct payment by one account that leaves the account richer or the PoolManager short, in seven currency settings.",
+   "result": "I wrote a state model of the settlement layer from the source lines and explored every reachable state, with claims per id capped at 2 and each delta capped at plus or minus 4, amounts 0, 1 and 2, and the whole sequence treated as one transaction so that a sync survives between unlocks. The search asserts in every state that the counter equals the number of nonzero delta slots and never goes below zero. Settings and results: native plus ERC-20, 35,859 states, no gain; native plus an ERC-20 face that mirrors the native balance one to one and can transfer (CELO token shape), with native sends that reach the PoolManager without a call, 31,628 states, no gain; the same face without a working transfer (Polygon 0x1010 and LegacyERC20ETH shape), 9,709 states, no gain; a face that reports floor(native / 3) and moves 3 base units per unit, without forced native sends, 48,488 states, no gain; a wrapper that credits the sender of native value (WETH9 shape), 214,118 states, no gain; a deposit ledger that credits the sender and has no transfer (EntryPoint shape), 10,872 states, no gain. In none of these did the PoolManager end below its obligations. The one setting with a gain is the scaled face together with forced native sends, which is recorded in the Arc item below.",
+   "source": "research/network-risk/cycles/002/core-code-invariants-settlement.model/settle_model.py (run: python3 settle_model.py 0 all A 2 4); src/PoolManager.sol:279-378; src/types/Currency.sol:40-96"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Two accounts that cooperate: one pays for the other through settleFor, one burns the other's claims as operator, claims move between them, and either may act while the other holds the lock.",
+   "result": "With two free accounts, every operation open to both while the lock is held by either, operator approval between them, amounts of 1, and caps of 1 claim per id and a delta of plus or minus 1 or 2, the full reachable set showed no gain and no shortfall: ERC-20 only, 34,560 states; native only, 3,844 states; native plus ERC-20, 1,243,296 states; native plus a one to one face with transfer and forced native sends, 254,548 states. settleFor can only add a positive amount that the payer delivered (src/PoolManager.sol:305-307, 349-364). burn credits msg.sender and takes the claim from an account only when msg.sender is that account, its operator or holds allowance (src/PoolManager.sol:332-336, src/ERC6909Claims.sol:13-22). The lock is global, so a second account can use an open lock, but unlock returns only when every slot of every account is zero (src/PoolManager.sol:112).",
+   "source": "research/network-risk/cycles/002/core-code-invariants-settlement.model/settle_model.py (run: SMALL=1 AMT1=1 python3 settle_model.py 0 <0..3> AB 1 <1|2>); src/PoolManager.sol:104-114; src/PoolManager.sol:300-336; src/ERC6909Claims.sol:13-22"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Re-entry into someone else's unlock: a recipient of a native payout, a token with callbacks or a hook gets control while a victim is between its pool action, sync, payment and settle. Can it take the victim's payment, make the victim pay twice, or leave the victim without what it paid for.",
+   "result": "The victim script is unlock, an action that leaves it owing 1 unit and holding a claim, sync of the currency, payment, settle, return. The attacker may run up to two operations of its own in each of the six gaps, which is more than any real callback allows. Five settings were searched to the end: ERC-20 payment (2,235,193 states, 157 completed runs), native payment (1,211,637 and 130), payment through a one to one native face (1,696,802 and 48), native payment on a chain that has such a face (943,455 and 50), payment through a scaled face (3,811,569 and 393). In every completed run the attacker's wallet did not grow, the victim paid exactly its amount and kept its claim. Runs in which the attacker booked the victim's payment with settleFor, re-synced, or reset the sync with sync(address(0)) all end with a nonzero slot and revert at src/PoolManager.sol:112. A callee can therefore make the surrounding unlock revert, which it could also do by reverting itself, and cannot change who is credited in a transaction that succeeds.",
+   "source": "research/network-risk/cycles/002/core-code-invariants-settlement.model/victim_model.py (run: python3 victim_model.py 2 <0..4>); src/PoolManager.sol:104-114; src/PoolManager.sol:279-307; src/PoolManager.sol:349-378"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "A stale sync: sync needs no lock, and its two slots are the only settlement state that can outlive an unlock. What can a party gain from a sync left behind inside one transaction, and what would follow if a network failed to wipe transient storage between transactions.",
+   "result": "unlock ends with the flag false and the counter zero or it reverts (src/PoolManager.sol:105-113), so after any successful call the lock flag and all deltas are zero and only the synced currency and reserves can remain (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:21-32). The model treats a whole sequence as one transaction and found no gain from a sync that survives between unlocks. The effects that remain are these. A later settle with msg.value reverts with NonzeroNativeValue until someone calls sync again (src/PoolManager.sol:356). collectProtocolFees for that ERC-20 reverts (src/ProtocolFees.sol:49-52). The next settle without a new sync credits the caller with every rise of that balance since the stale sync, which inside one transaction can only be the caller's own payment or an inflow it triggered. If a network kept transient storage across transactions, the same reading gives two consequences and no more: native payers who do not call sync first would revert until the slot is reset, and a party could leave a sync in one transaction and book unsolicited inflows, such as a positive rebase, in a later one. Deposits of other users are not exposed, because every ERC-20 settle resets the slot and every payer that follows the interface comment calls sync first (src/interfaces/IPoolManager.sol:165-171). A leak of the lock flag or of a delta across transactions would be a different and total failure, and the code gives no path to it under call and revert semantics.",
+   "source": "research/network-risk/cycles/002/core-code-invariants-settlement.model/settle_model.py; src/PoolManager.sol:104-114; src/PoolManager.sol:279-288; src/PoolManager.sol:349-364; src/libraries/CurrencyReserves.sol:15-38; src/ProtocolFees.sol:49-52"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L5",
+   "check": "Protocol fee collection at a moment chosen by an outsider, on networks where the controller is an adapter with a public collect function: before a sync, between sync and settle, inside an unlock, and on networks where the native asset has an ERC-20 face.",
+   "result": "I added a third party fee withdrawal of one unit, allowed at any point except for the ERC-20 that is currently synced, to the model and searched the native plus ERC-20 setting (75,072 states), the one to one face setting (67,659) and the scaled face setting (100,064). No sequence gave the attacker a gain or left the PoolManager below its remaining obligations. The reading agrees: collectProtocolFees lowers protocolFeesAccrued with a checked subtraction before it transfers (src/ProtocolFees.sol:54-56), writes no delta and no transient slot, and reverts for the synced ERC-20 in both lock states (src/ProtocolFees.sol:49-52), so it can neither raise a settle credit nor pay out more than was accrued. _isUnlocked is declared and never called (src/ProtocolFees.sol:60, src/PoolManager.sol:392-394). On a network with a native face, a withdrawal of native fees while the face is synced lowers the face balance, and the settle that follows credits less or reverts in the checked subtraction (src/PoolManager.sol:360). That can only happen inside the transaction of the party that holds the bracket.",
+   "source": "research/network-risk/cycles/002/core-code-invariants-settlement.model/settle_model_fees.py (run: python3 settle_model_fees.py 0 <0|1|4> A 2 3); src/ProtocolFees.sol:44-60; src/PoolManager.sol:349-364; src/PoolManager.sol:392-394"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "Arc: USDC is the native asset with 18 decimals and also answers at 0x3600000000000000000000000000000000000000 with 6 decimals. The face rounds down, so a settle bracket on the face can credit one face unit for less than 10^12 base units. How much can an ordinary account take that way.",
+   "result": "In the model, a face that reports floor(native / S) gives a gain only when native value can reach the PoolManager without a call while the face is synced. Each round is sync(face), a forced send of the missing base units, settle, and a native take that restores the remainder, and it turns a native debt of 1 base unit into a credit of 1 face unit, a gain of at most S - 1 base units. With S = 3 the search emptied the toy PoolManager in 13 rounds, so the mechanism is real and repeatable. Without forced sends the gain is zero, because settle rejects msg.value while the face is synced (src/PoolManager.sol:356), the PoolManager has no receive or fallback function, and the face moves whole units only. On Arc S is 10^12 base units, which is 0.000001 USDC. At block 32,594,756 the PoolManager held 2,444,955,282,313,718,484,324,471 base units and the face reported 2,444,955,282,313, which is the floor of that figure divided by 10^12. The base fee was 20 gwei in each of 21 consecutive blocks ending at 32,597,012 and eth_gasPrice returned 25 gwei. A call that carries value costs at least 9,000 gas, which is 1.8 * 10^14 base units at 20 gwei, about 180 times the largest possible gain of one round, before the cost of sync, settle, take and the forced send. An account that pays the base fee loses money on every round. I did not test whether a forced send by SELFDESTRUCT is accepted on Arc; the stablecoin unit reports that it is. This agrees with the earlier clearance by that unit and adds the per round bound and the fee figures.",
+   "source": "research/network-risk/cycles/002/core-code-invariants-settlement.model/settle_model.py (run: python3 settle_model.py 0 3 A 2 4 and python3 settle_model.py 0 4 A 2 4); rpc https://rpc.mainnet.arc.io eth_getBalance, eth_call balanceOf, eth_gasPrice and eth_feeHistory at blocks 32594756 to 32597012 on 2026-11-22; src/PoolManager.sol:279-288; src/PoolManager.sol:349-364"
+  },
+  {
+   "chainIds": [
+    42220,
+    137,
+    5042
+   ],
+   "lens": "L3",
+   "check": "Celo, Polygon and Arc: on-chain confirmation of the facts the face settings of the model rest on. Does the face report the PoolManager's native balance, can native value enter the PoolManager by a plain call, and do sync and settle behave as the source says while the manager is locked.",
+   "result": "Celo, block 83,465,421: eth_getBalance of the PoolManager and balanceOf(PoolManager) on the CELO token 0x471EcE3750Da237f93B8E339c536989b8978a438 both returned 6,166,951,836,241,617,055,206. Polygon, block 97,773,809: eth_getBalance and balanceOf on 0x0000000000000000000000000000000000001010 both returned 3,117,180,522,080,538,233,248,987. Arc: see the item above. On all three networks an eth_call that sends 1 base unit to the PoolManager with empty calldata reverts, sync(face) sent from an ordinary address outside any unlock succeeds, and settle() outside an unlock reverts with 0x54e3ca0d, which is the selector of ManagerLocked(). These match src/PoolManager.sol:96-99, 279-288 and 300-302 and the absence of a receive function. With these facts the one to one settings of the model apply to Celo and Polygon and the scaled setting applies to Arc.",
+   "source": "rpc https://forno.celo.org at block 83465421; rpc https://polygon.drpc.org at block 97773809; rpc https://rpc.mainnet.arc.io at blocks 32594756 and 32597012, all on 2026-11-22; src/PoolManager.sol:96-99; src/PoolManager.sol:279-307"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L4",
+   "check": "Can a caller make the PoolManager call itself through one of the call shapes it issues (transfer(address,uint256) in take, balanceOf(address) in sync and settle, unlockCallback(bytes), the ten IHooks selectors, or empty calldata with value) and reach one of its own functions, for example the ERC-6909 transfer or setOperator with the PoolManager as msg.sender.",
+   "result": "I computed the selectors of all 33 external functions of the PoolManager and of the 13 calls it issues with a keccak implementation checked against known digests. None of the 13 outgoing selectors (a9059cbb, 70a08231, 91dd7346, dc98354e, 6fe7e6eb, 259982e5, 9f063efc, 21d0ee70, 6c2bbe7e, 575e24b4, b47b2fb1, b6a8b0fa, e1b4af69) equals a selector of the PoolManager. Its own ERC-6909 functions take three arguments and have the selectors 095bcdb6 for transfer and 00fdd58e for balanceOf. The contract has no receive and no fallback function, so a take, sync or hook call aimed at the PoolManager address reverts, and a native take to the PoolManager reverts as well. The PoolManager therefore never acts as msg.sender on itself.",
+   "source": "research/network-risk/cycles/002/core-code-invariants-settlement.model/keccak.py; src/types/Currency.sol:48; src/types/Currency.sol:60-73; src/types/Currency.sol:94; src/PoolManager.sol:110; src/libraries/Hooks.sol:131-137; src/ERC6909.sol:25-64"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Width and sign at the settlement entry points: amounts of 2^127 or more, accumulation of many deltas in one slot, an id with high bits in mint and burn, and the three unchecked blocks in PoolManager.sol.",
+   "result": "take, mint, burn, clear and settle convert the amount with SafeCast.toInt128, which reverts for 2^127 or more (src/libraries/SafeCast.sol:56-59; src/PoolManager.sol:294, 313, 326, 334, 364). The unchecked blocks at lines 292, 316 and 323 cover only the negation of a value that is at most 2^127 - 1 and calls to functions whose own arithmetic stays checked, since a called function does not inherit the block. A delta slot holds an int256 and is updated with a checked addition (src/libraries/CurrencyDelta.sol:37), and each update is below 2^127 in size, so a slot cannot wrap. mint and burn truncate the id to 160 bits and use the truncated value for both the delta and the claim (src/PoolManager.sol:324-327, 333-335; src/types/Currency.sol:110-118). clear compares the int128 amount with the int256 slot, so it succeeds only for an exact positive match or for zero against zero (310-319), which is what test/PoolManager.clear.t.sol expects in its seven cases.",
+   "source": "src/PoolManager.sol:291-336; src/PoolManager.sol:349-378; src/libraries/SafeCast.sol:53-59; src/libraries/CurrencyDelta.sol:28-41; test/PoolManager.clear.t.sol:18-190"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Do the repository tests that state settlement behaviour hold against the source text. Covered: test/Sync.t.sol, test/PoolManager.clear.t.sol, test/ERC6909Claims.t.sol and the take, settle, mint, burn, fee collection and unlock cases of test/PoolManager.t.sol.",
+   "result": "I replayed each expectation by reading. Sync.t.sol: sync outside an unlock sets the synced currency (36-41, source 279-288); a settle after sync with no payment applies no delta (161-200, source 358-364); a settle without sync credits msg.value, here zero, and the tokens sent stay in the PoolManager (207-253, source 353-354); settle with value after a token sync reverts with NonzeroNativeValue (255-275 and PoolManager.t.sol:976-989, source 356); sync(address(0)) after a token sync allows a native settle (300-339, source 281-283); a second settle credits nothing (341 onward, source 361). PoolManager.t.sol: take, settle, mint and burn revert with ManagerLocked outside an unlock (962-999, source 96-99); a token that returns false makes take revert with the wrapped ERC20TransferFailed error (924-956, src/types/Currency.sol:64-86); collectProtocolFees reverts with ProtocolFeeCurrencySynced in both lock states (1001-1039, src/ProtocolFees.sol:49-52). ERC6909Claims.t.sol: burnFrom lowers a finite allowance and leaves an unlimited one, and transfers revert on underflow, overflow and missing approval (15-50, 145-208, src/ERC6909Claims.sol:13-22, src/ERC6909.sol:25-48). I found no test in these files that the source contradicts. No test was executed, because no compiler is installed.",
+   "source": "test/Sync.t.sol:36-370; test/PoolManager.t.sol:917-1039; test/PoolManager.clear.t.sol:18-190; test/ERC6909Claims.t.sol:15-208; src/PoolManager.sol:279-378; src/ProtocolFees.sol:44-57; src/ERC6909Claims.sol:13-22"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L2",
+   "check": "Arc: the CallFrom precompile at 0x1800000000000000000000000000000000000003 starts a call on behalf of Memo and Multicall3From. Does that inner call run with transient storage of its own, which would separate PoolManager deltas from payouts inside one unlock, and can a contract in the middle of a transaction use it to act as another account at the PoolManager.",
+   "result": "No to both, in the main branch of the client. The precompile builds an ordinary CALL input with the chosen sender as caller and zero value (call_from.rs, decode_child_call). ArcEvm::init_subcall rejects static context and value, rejects a substituted sender that is neither the calling helper nor the transaction signer, and then pushes the child through the same frame stack and the same journal as every other call, with a journal checkpoint taken from that journal (evm.rs, init_subcall and complete_subcall). A child frame on the same journal sees and writes the same transient storage as its parent, so the lock flag, the deltas and the counter of the PoolManager stay one consistent store (src/PoolManager.sol:104-114, src/libraries/NonzeroDeltaCount.sol:12-34). Memo passes msg.sender as the sender (Memo.sol, memo), which closes the part the stablecoin unit left unread. A contract that is not the signer therefore cannot reach the PoolManager as someone else, and the ERC-6909 functions that trust msg.sender (src/ERC6909.sol:25-64) keep their meaning. I read the main branch and did not confirm which release mainnet runs, and I did not read revm itself for where transient storage lives; the stablecoin unit did.",
+   "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/call_from.rs; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs; https://raw.githubusercontent.com/circlefin/arc-node/main/contracts/src/memo/Memo.sol; src/PoolManager.sol:104-114; src/ERC6909.sol:25-64"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "Tempo: from hardfork T5 three precompiles on the Implicit Approval List (FeeManager, StablecoinDEX, TIP20ChannelReserve) may move TIP-20 tokens out of any account without an allowance through system_transfer_from. Can an ordinary account make one of them pull tokens out of the PoolManager, which would lower a balance without a take.",
+   "result": "No path found in the client source at commit 697ea97. system_transfer_from is not part of the token ABI and accepts only a listed precompile as caller (tip20/mod.rs:939-980). Every call site passes the direct caller of the precompile as the account to pull from: the DEX in transfer_from and decrement_balance_or_transfer_from, which its dispatcher feeds with msg_sender for place, placeFlip, withdraw, cancel and both swaps (stablecoin_dex/mod.rs:299-352, stablecoin_dex/dispatch.rs:17-66); the fee AMM in two places with msg_sender (tip_fee_manager/amm.rs:239 and 360); the channel reserve in two places with msg_sender (tip20_channel_reserve/mod.rs:215 and 380). The PoolManager would have to be the direct caller, and it can send only transfer(address,uint256), balanceOf(address), unlockCallback, the IHooks selectors and empty calldata (src/types/Currency.sol:48-73, 94; src/PoolManager.sol:110; src/libraries/Hooks.sol:131-137), which the stablecoin unit found these precompiles reject. Fee collection before a transaction pulls from the fee payer, which is the signer or a sponsor that signed. Custody rule I5 of this unit therefore holds on Tempo apart from issuer roles, which are recorded elsewhere. The source comment says that pulling only from msg.sender is a guideline enforced at each call site and not inside system_transfer_from, so a precompile added to the list later needs the same reading.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/tip20/mod.rs; https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/address_registry/mod.rs; https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/stablecoin_dex/mod.rs; https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/stablecoin_dex/dispatch.rs; https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/tip_fee_manager/amm.rs; https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/tip20_channel_reserve/mod.rs; src/types/Currency.sol:40-96"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4217,
+    999,
+    42161,
+    4663,
+    99901,
+    143,
+    42220,
+    43114,
+    137,
+    56
+   ],
+   "lens": "L2",
+   "question": "Does any precompile, system contract or execution feature on these networks run code inside a call that is already in progress in a context whose transient storage is separate from the caller's, while its token transfers and storage writes are kept? Two shapes matter. In the first the inner context starts from a copy of the outer transient storage and its transient writes are dropped on return. In the second it starts empty and its final transient values are written back over the outer ones.",
+   "why": "unlock is one call frame, so no batching at transaction level can split it, and only a mechanism that acts inside a running call can separate deltas from payouts. In the first shape a take made in the inner context moves tokens and leaves no debit (src/PoolManager.sol:291-297). In the second shape an inner unlock ends by writing zero to the counter and the flag (src/PoolManager.sol:112-113, src/libraries/NonzeroDeltaCount.sol:28-34), which lets an outer unlock return with an open debit. Either would expose every token the PoolManager holds to any account. Two candidates are answered: the MegaETH KeylessDeploy sandbox runs only as a top level call, and the Arc CallFrom child is an ordinary frame on the parent journal. Candidates that no unit has read in client source for this exact property: Tempo precompiles that call out to contracts, Stylus programs on the Arbitrum family, HyperEVM system calls and CoreWriter, the Celo fee currency calls, and the parallel executors of Monad, Polygon and Avalanche.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "Is the 20 gwei base fee seen on Arc a protocol minimum, who receives it, and can it be changed without a hard fork? If the fee per gas could fall below about 0.03 gwei, or a block proposer recovered the base fee of its own transactions, how many rounds of sync on 0x3600, forced native send, settle and native take fit in one 30,000,000 gas block?",
+   "why": "Each round of the scaled face sequence nets less than 10^12 base units, which is 0.000001 USDC, and today a single value call costs about 180 times that. The loss to pools is bounded by the number of rounds times 0.000001 USDC, so the answer decides whether the item stays a rounding curiosity for a block proposer as well.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "question": "For each currency with a large balance at each PoolManager, does a second contract address exist whose balanceOf(PoolManager) is derived from the same underlying balance in a different unit or at a rate, and whose transfer(address,uint256) works when the PoolManager is the caller? For each such pair, what is the largest value of one unit of rounding and can the finer side be moved in amounts below one unit of the coarser side?",
+   "why": "The model shows that a second face is harmless when it is one to one or cannot transfer, and that a scaled face with a working transfer yields up to one coarse unit minus one fine unit per bracket whenever the fine side can be moved while the coarse side is synced (src/PoolManager.sol:279-288, 349-364). On Arc that unit is 0.000001 USDC. A pair with a valuable unit, such as a whole token face over an 18 decimal balance or a share face over an asset balance with a public rate change, would turn the same sequence into a real loss. The hyperevm unit found one share and asset pair (stHYPE and wstHYPE). The other networks have no survey.",
+   "priority": "medium"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-030",
+   "outcome": "cleared",
+   "answer": "No sequence profits. A model run with a third party fee withdrawal allowed at every point, except for the ERC-20 that is synced, found no gain and no shortfall in three currency settings (75,072, 67,659 and 100,064 states). collectProtocolFees writes no delta and no transient slot, subtracts from protocolFeesAccrued with a checked subtraction before the transfer, and reverts for the synced ERC-20 in both lock states (src/ProtocolFees.sol:44-57). Hook callbacks, token callbacks and ERC-6909 operations add nothing, because none of them can raise protocolFeesAccrued or change the recipient that the adapter fixes."
+  },
+  {
+   "leadId": "L-044",
+   "outcome": "cleared",
+   "answer": "A second reading and a state search agree. A sync outside an unlock sets two transient slots and nothing else (src/PoolManager.sol:279-288). The credit in _settle is the checked rise of the balance since the last sync of that currency, or msg.value when no ERC-20 is synced (src/PoolManager.sol:349-364). A fee collection can only lower a balance, cannot touch the synced ERC-20, and is bounded by protocolFeesAccrued (src/ProtocolFees.sol:49-56). So neither can raise a credit or pay out more than was accrued."
+  },
+  {
+   "leadId": "L-008",
+   "outcome": "cleared",
+   "answer": "No accounting gap. See the answer to L-030. The guard depends on the synced currency only, and the lock state is never read (src/ProtocolFees.sol:49-52, 60; src/PoolManager.sol:392-394)."
+  },
+  {
+   "leadId": "L-060",
+   "outcome": "cleared",
+   "answer": "The code reading is right. ASSUMPTIONS.md A12 in this checkout already says that collection reverts when the currency is an ERC-20 that is currently synced, whatever the lock state, and that _isUnlocked is declared and never called. That text matches src/ProtocolFees.sol:44-60 and the three tests at test/PoolManager.t.sol:1001-1039."
+  },
+  {
+   "leadId": "L-114",
+   "outcome": "inconclusive",
+   "answer": "The per round gain is bounded by 10^12 - 1 base units, 0.000001 USDC, in a model of the source, and each round needs one native send that reaches the PoolManager without a call, one sync, one settle and one native take. With the 20 gwei base fee read at blocks 32,596,992 to 32,597,012, a single 9,000 gas value call already costs 1.8 * 10^14 base units. I did not establish who receives the base fee or measure the gas of a full round, so the number of rounds per block for a proposer remains open. The loss per block cannot exceed the number of rounds times 0.000001 USDC."
+  },
+  {
+   "leadId": "L-118",
+   "outcome": "inconclusive",
+   "answer": "Partly answered. The settlement related tests agree with the source text: test/Sync.t.sol, test/PoolManager.clear.t.sol, test/ERC6909Claims.t.sol and the take, settle, mint, burn, fee collection and unlock cases at test/PoolManager.t.sol:917-1039 and 1173-1189. The other files named in the lead were not replayed by this unit."
+  }
+ ]
+}
