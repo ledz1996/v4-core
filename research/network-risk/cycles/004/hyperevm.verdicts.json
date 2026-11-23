@@ -1,0 +1,136 @@
+{
+ "unit": "hyperevm",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "plausible",
+   "severity": "medium",
+   "factCheck": "The chain facts hold under my own queries. On the archive endpoint the address 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00 has nonce 0 and 0 HYPE at block 37,597,802 and nonce 1 at block 37,597,803, and it has no code. Block 37,597,803 (timestamp 1781236756, 2026-06-12 03:59:16 UTC) lists as its first transaction a call from that address to the USDC token 0xb88339cb7199b77e23db6e890353e22632ba630f with nonce 0, gas price 0, gas 200,000 and input transfer(0x6b9e773128f453f5c2c60935ee2de2cbc5390a24, 2001000000). The receipt has status 1 and gas used 0. balanceOf for the address fell from 4,397,021,956.898190 to 4,397,019,955.898190 USDC across the block, which is 2,001 USDC. The official node returns the same transaction from eth_getSystemTxsByBlockNumber 0x23db26b with r 0, s 0 and the treasury address as sender. The second system transaction of that block is a coreReceiveWithData call on the CoreDepositWallet for the same 2,001 USDC, so the transfer out of the treasury address served a withdrawal by a HyperCore user. The info API returns role missing, userExists false, userHasSentTx false and delegated 0.0 for the treasury address, and role user, userHasSentTx true and 506,986.51 HYPE delegated for 0x4E5319dEb1072B01439EE674db5C321d11fd96F8. I ran the same preTransferCheck on the two staking accounts as a control and both report userHasSentTx true, so the false value for the treasury address carries information. In the last 1,000 blocks before block 52,006,426 I counted 477 system transactions, all placed before the signed ones: 169 USDC transfers sent in the name of the CoreDepositWallet, which is a contract, 99 in the name of the treasury address, and none with the PoolManager as sender or target. The aligned quote assets page states that the treasury deployer designates a treasury address, that both deployers stake 500k HYPE, that activation is by validator vote and that the HyperEVM balance is held 9 to 1 between the treasury address and the linked contract. The exchange endpoint page gives authorizeAqav2Role the fields token and role only. The Hyperliquid article names Coinbase as treasury deployer and Circle as technical deployer. Three news pages quote a Coinbase post of 2026-06-08 that names both addresses, and I did not open the post itself. One link is unconfirmed: no public source and no chain data shows whether HyperCore tests a designation, for example by a signature of the named address carried inside the deployer's action, by refusing an address with code, or by fixing the address after activation. The validator node is closed source. A HyperCore account that had sent an accepted action would show userHasSentTx true, so an action sent by the treasury address is excluded, and a signature embedded in another account's action is not.",
+   "codeCheck": "The code reading is correct. If a token moved the PoolManager's balance on a call that names the PoolManager as msg.sender and does not pass through the PoolManager, no line in src would see it. sync only reads balanceOf and stores it in transient storage (src/PoolManager.sol:279-288). _settle credits the checked difference between the balance now and the synced value (src/PoolManager.sol:358-360), so a fall of the balance between transactions gives no debit to anyone and a fall inside a sync window makes settle revert on the subtraction. Pool state and ERC-6909 claims are never compared with a token balance (src/PoolManager.sol:291-297, 322-336, 368-384). Once the balance is short, take and collectProtocolFees for that currency revert in the token call, because Currency.transfer treats a reverting transfer as failure (src/types/Currency.sol:64-86, src/ProtocolFees.sol:54-56). The PoolManager has no receive or fallback function and its only payable entry points are settle and settleFor (src/PoolManager.sol:300-307), so the system transaction shapes that exist today revert when aimed at it. I confirmed that by simulation: a value call from 0x2222222222222222222222222222222222222222 with 30,000 gas, and transfer and coreReceiveWithData calls from 0x2000000000000000000000000000000000000000, all revert at the PoolManager.",
+   "corrections": "The actor operator is right. The step needs a validator vote and two deployers with 500,000 staked HYPE each, and an ordinary account can only change the size and timing of transfers between the two addresses that are already fixed for USDC. The title states that a vote naming the PoolManager would need no act by it. The evidence supports a narrower statement: the named address sent no EVM transaction and no HyperCore action before transfers left it. A proof of control carried inside the deployer's action, or a rule against addresses with code, is not excluded, so the verdict stays plausible and medium. One more fact belongs with this finding. The official replay client derives the sender of a system transaction as 0x2222222222222222222222222222222222222222 for empty input and as the system address mapped to the target contract otherwise (hyper-evm-sync src/run.rs lines 223 to 227 on the main branch). It has no way to produce the treasury address or the CoreDepositWallet as sender. The archive client reads the sender from the synthetic signature field s and accepts any address there. The public evidence on how the validator node treats these senders is therefore the archive client and chain data only.",
+   "sources": [
+    {
+     "url": "https://rpc.purroofgroup.com eth_getTransactionCount, eth_getBalance, eth_getCode, eth_call balanceOf at blocks 0x23db26a and 0x23db26b; eth_getBlockByNumber 0x23db26b with full transactions; eth_getTransactionReceipt 0x01f391a92efbdff628ea8b24a09adaa08a215fca6f7b38cb3db7bbb8ed378b61",
+     "supports": "Nonce 0 and 0 HYPE before the block, nonce 1 after; first transaction of the block is an unsigned USDC transfer of 2,001 USDC from the treasury address to the CoreDepositWallet with gas price 0 and gas 200,000; status 1; balance fell by exactly 2,001 USDC"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_getSystemTxsByBlockNumber 0x23db26b",
+     "supports": "The official node lists the transfer as a system transaction with r 0, s 0 and from 0xc20699185c15d0a2fd65779bb5d69f5b0b113c00, followed by coreReceiveWithData on the CoreDepositWallet for the same amount"
+    },
+    {
+     "url": "https://api.hyperliquid.xyz/info userRole, preTransferCheck and delegatorSummary for 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00, 0x4E5319dEb1072B01439EE674db5C321d11fd96F8 and 0x1abd8168ea60b37a6a8cc149fa058910d89b0767",
+     "supports": "Treasury address: role missing, userExists false, userHasSentTx false, delegated 0.0. Both staking accounts: userExists true and userHasSentTx true. Coinbase staking account: 506,986.51 HYPE delegated"
+    },
+    {
+     "url": "https://rpc.purroofgroup.com eth_getBlockByNumber with full transactions for blocks 52,005,427 to 52,006,426",
+     "supports": "477 system transactions, none after a signed transaction; 169 USDC transfers with the CoreDepositWallet as sender and 99 with the treasury address as sender; none names the PoolManager"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md",
+     "supports": "The treasury deployer designates a treasury address; both deployers stake 500k HYPE; activation is by validator vote after the authorization transactions from the staking accounts; 9 to 1 ratio between the treasury address and the linked contract"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md",
+     "supports": "authorizeAqav2Role has the fields token and role and no address field"
+    },
+    {
+     "url": "https://hyperliquid.xyz/article/aqav2",
+     "supports": "Coinbase is the treasury deployer and Circle the technical deployer for USDC"
+    },
+    {
+     "url": "https://stablecoinnews.com/coinbase-and-circle-officially-deploy-hyperliquid-s-usdc/",
+     "supports": "Quotes the Coinbase post of 2026-06-08 that names 0x4E5319dEb1072B01439EE674db5C321d11fd96F8 and 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00, and the Circle post that names 0x1abd8168ea60b37a6a8cc149fa058910d89b0767. Secondary source"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hyperliquid-dex/hyper-evm-sync/main/src/run.rs",
+     "supports": "Lines 216 to 238: the sender of a system transaction is the HYPE system address for empty input and erc20_contract_to_system_address of the target otherwise"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/primitives/transaction.rs",
+     "supports": "The archive client decodes the sender of a system transaction from the signature field s"
+    },
+    {
+     "url": "https://rpc.purroofgroup.com debug_traceCall and eth_call from 0x2222222222222222222222222222222222222222 and 0x2000000000000000000000000000000000000000 to the PoolManager",
+     "supports": "A value call with 30,000 gas, transfer(address,uint256) and coreReceiveWithData all revert at the PoolManager"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I repeated the measurements on the archive endpoint at block 52,006,549. The Initialize logs since block 45,998,366 give 344 pools with tick spacing 200 in 165, 60 in 139, 10 in 31 and 1 in 9, and 103 pools without a hook. I called the deployed Quoter with 2^100 input units for the 10 hookless pools with spacing 1 or 10, in both directions, and read the gas of the PoolManager.swap frame with callTracer and the PoolManager storage slots with prestateTracer. The two spacing 10 pools used 1,080,157 and 1,080,189 gas with 186 slots read in one direction, the same two numbers the finding reports, and 1,711,372 gas with 295 slots in the other. The eight spacing 1 pools used 10.5 to 24.7 million gas for one direction. Two of them give the whole range: 21,919,151 gas for 4,104 slots downward plus 16,118,924 gas for 2,835 slots upward, 38.0 million in total, and 14,726,539 plus 23,572,512, 38.3 million in total. The cost per slot read is 5,340 to 5,700 gas on these long walks. A walk across the whole range at spacing 1 therefore costs about 38 million gas, which is more than the 30,000,000 of a big block, and one direction alone fits a big block only. In 1,000 recent blocks 984 had gas limit 3,000,000 and 16 had 30,000,000. The dual block page states a 3M limit for fast blocks, a 30M limit for slow blocks and the evmUserModify action. I counted 2,283 Swap and 842 ModifyLiquidity events since deployment. Traces of the three latest swaps of each frequent sender show that Universal Router 2.1.2 (0xeD270A1Bcdc63cf1356D695e7f40961d4819d6bF) and 25 other senders passed 4295128740 or 1461446703485210103287273052203988822378723970341 as price limit. Transaction 0xa17080717f in block 51,684,430 holds two removals that used 60,628 and 60,415 gas in the modifyLiquidity frame, and nine other recent removals used 31,574 to 75,899 gas. I did not measure the cost of a tick crossing again. That figure rests on the finding's traces and on the two storage writes in the code.",
+   "codeCheck": "The loop at src/libraries/Pool.sol:344-437 runs until the amount is used up or the price equals the limit. Each iteration reads one bitmap word (src/libraries/Pool.sol:347-348, src/libraries/TickBitmap.sol:85-121), computes the price of the next tick (line 359) and runs one swap step (lines 362-368). With zero liquidity in range, computeSwapStep finds amountIn 0, takes the branch at src/libraries/SwapMath.sol:69-74 and returns the target price with nothing consumed, so the loop moves one word per iteration until the limit. Nothing bounds the number of iterations. The limit must lie strictly inside MIN_SQRT_PRICE and MAX_SQRT_PRICE (src/libraries/Pool.sol:322-338), which is what the two router constants are. crossTick rewrites both fee growth slots of a crossed tick (src/libraries/Pool.sol:606-609). modifyLiquidity in PoolManager has no access control beyond the unlock (src/PoolManager.sol:145-184), so any account can place a position of one liquidity unit on any aligned tick pair of a hookless pool. initialize has no access control and accepts any price that TickMath accepts (src/PoolManager.sol:117-142, src/libraries/Pool.sol:100-107). Pool.modifyLiquidity has no loop (src/libraries/Pool.sol:146-238) and take, burn and settle have none (src/PoolManager.sol:291-336), so exits stay within a small block. No funds move to the attacker on any of these paths.",
+   "corrections": "The actor unprivileged and the severity low are right. Three figures need adjusting and none changes the conclusion. First, 5,871 gas per word is the slope of the short walks. On the long walks at spacing 1 the cost is 5,340 to 5,700 gas per word, so the whole range costs about 38 million gas, where the finding says 40.7 million, one direction from tick 0 about 19 million, and a small block holds about 500 to 550 empty words. Second, more than one caller passes its own price limit: 0xbaf9961ba462abee6d4f86d9509c0bdd15f9a044 and the hook 0x6227f0128935079abc6993f1166dc5d716032aec did so in each of three traced swaps and 0xfe6bace2e548fd06735a4242bbd46a3c842e02b1 in one of three. Third, the profile counts 53 hook addresses, and the logs hold 52 distinct hook addresses plus the zero address. The victims of the dust position and far price levers are swappers in hookless pools with spacing 1 or 10, of which 10 exist today.",
+   "sources": [
+    {
+     "url": "https://rpc.purroofgroup.com debug_traceCall with callTracer and prestateTracer, to Quoter 0x108Bfe38532C98f8Cd8D7Ab49c9dDAa3675a1c5e quoteExactInputSingle, block 52,006,549",
+     "supports": "Swap frame gas and slots read for 10 hookless pools in both directions: 1,080,157 and 1,080,189 gas at spacing 10; 10.5 to 24.7 million gas per direction and about 38 million for the whole range at spacing 1"
+    },
+    {
+     "url": "https://rpc.purroofgroup.com eth_getLogs on the PoolManager for the Initialize, Swap and ModifyLiquidity topics from block 45,998,366",
+     "supports": "344 pools with spacings 200, 60, 10 and 1 in 165, 139, 31 and 9 pools; 103 hookless pools; 2,283 swaps and 842 liquidity changes"
+    },
+    {
+     "url": "https://rpc.purroofgroup.com debug_traceTransaction with callTracer for the three latest swaps of 29 Swap event senders and for 11 recent liquidity removals in 10 transactions",
+     "supports": "Universal Router 2.1.2 and 25 other senders pass the extreme price limits; three senders pass their own; removals use 31,574 to 75,899 gas, among them 60,628 and 60,415 in transaction 0xa17080717f"
+    },
+    {
+     "url": "https://rpc.purroofgroup.com eth_getBlockByNumber for blocks 52,005,427 to 52,006,426",
+     "supports": "984 blocks with gas limit 3,000,000 and 16 with 30,000,000"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/dual-block-architecture.md",
+     "supports": "Fast blocks have a 3M gas limit and slow blocks a 30M gas limit; evmUserModify with usingBigBlocks directs a sender to big blocks; the mempool accepts the next 8 nonces and prunes after one day"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Which system transactions can an ordinary HyperCore account cause, which need a validator vote, and can any of them reach the PoolManager or carry it as sender (assumptions A2 and A8, the question the cycle 2 critic left with F-020 and F-044)?",
+   "agrees": true,
+   "note": "I counted 477 system transactions in blocks 52,005,427 to 52,006,426 on https://rpc.purroofgroup.com. Their shapes are the four the item lists: transfer on a linked contract from a 0x20 system address, transfer and coreReceiveWithData on the CoreDepositWallet from 0x2000000000000000000000000000000000000000, USDC transfers in the name of the CoreDepositWallet and the treasury address, and value transfers from 0x2222222222222222222222222222222222222222 with 30,000 gas. All sat before the signed transactions and none named the PoolManager. The transfers page states that the recipient of a HyperCore to HyperEVM credit is the sender of the sendAsset action, so an ordinary account cannot aim one at the PoolManager. Simulated calls of each shape to the PoolManager revert, which agrees with the source: the contract has no receive or fallback, its only payable functions are settle and settleFor (src/PoolManager.sol:300-307), and its only transfer function takes three arguments (src/ERC6909.sol:25). protocolFeeController is zero in slot 2 on chain."
+  },
+  {
+   "check": "Critic gap from cycles 2 and 3: do the special addresses answer the PoolManager differently when it is an inner frame with another transaction origin? Sixteen call shapes (P1 with value 1 wei and with zero value, P2 transfer of 0 and of 1, P3 balanceOf under STATICCALL, the ten IHooks selectors of P5 and unlockCallback of P7) against 45 targets: precompiles 0x05 to 0x0a, read precompiles 0x0800 to 0x0814, the HYPE bridge address, CoreWriter, WHYPE, the CoreDepositWallet, USDC, the AQAv2 treasury address, the USDC system address, the system interest address, three EntryPoints, Multicall3, Permit2, the deterministic deployer, CreateX, the PoolManager owner, PositionManager and the zero address.",
+   "agrees": true,
+   "note": "I wrote my own 38 byte forwarding stub and repeated eight call shapes (value 1 wei with empty calldata, zero value, transfer of 0 and of 1, balanceOf, beforeInitialize, beforeSwap, unlockCallback) against 21 targets on https://rpc.hyperliquid.xyz/evm at block 52,006,929, once as a direct call from the PoolManager address and once through the stub placed at that address with another account as sender. All 168 pairs agree in success and return data. The 46 pairs that differ in text are failing precompile calls, where the direct call reports PrecompileError and the stub reports a revert. The bridge address accepts only empty calldata, CoreWriter and the CoreDepositWallet revert on every shape, 0x0809 answers every shape with 32 bytes, WHYPE returns no data to hook selectors, and both EntryPoints answer balanceOf and accept value, as recorded. I used CALL for balanceOf where the PoolManager uses STATICCALL, and I tested 21 of the 45 targets."
+  },
+  {
+   "check": "Can an ordinary account link a HyperCore spot token to the PoolManager, so that HyperCore sends system transactions to it or reads its logs as token movements?",
+   "agrees": true,
+   "note": "The transfers page gives three ways to finalize a link: the EVM deployer sends the action with the CREATE nonce, or the finalizer is stored in the first storage slot, or in the slot keccak256(\"HyperCore deployer\"). I recomputed that hash as 0x8c306a6a12fff1951878e8621be6674add1102cd359dd968efbbe797629ef84f. On the official node slot 0 of the PoolManager holds the owner 0x2d09d0c2f82c59b19b3c65a48ce2c550bf0921f9 and the custom slot is zero. The trace of transaction 0x886b45bc662d93a4b74935513eb8dc8c1179c4a6c70056f4b4ba5b251c58e4c5 shows CREATE2 from 0x4e59b44847b379578588920ca78fbf26c0b4956c. Slot 0 is the owner field of solmate Owned (lib/solmate/src/auth/Owned.sol:17), and every other persistent write in src goes to a mapping or to pool state, so no caller can set the custom slot. Any spot deployer can still register the PoolManager as a pending link with requestEvmContract. Only the owner contract could finalize it."
+  },
+  {
+   "check": "Lead L-178 and the cycle 3 critic's method: list every currency of every pool, and compare the change of balanceOf(PoolManager) with the Transfer logs that name the PoolManager, to find tokens whose balance moves without a transfer or that have a second entry point.",
+   "agrees": true,
+   "note": "I ran the same reconciliation up to block 52,006,000 on https://rpc.purroofgroup.com. 307 ERC-20 currencies, 261 token contracts with Transfer logs that name the PoolManager, none outside the currency list. 306 balances equal the balance before deployment plus the logs. The one exception is 0x1c5a08a10c98475811d0c556eb39ad6cb244eb2e with a balance of 1.00005 tokens and no logs. USDC is 997.753680, WHYPE 14.782714 and the native balance 11.38 HYPE."
+  },
+  {
+   "check": "Assumption A1 once more, given the cycle 2 and 3 critic notes: is there new evidence about transient storage on the validator node, and how far does the archive client's block check reach?",
+   "agrees": true,
+   "note": "The conclusion stands and one sentence of the result is too strong. The archive client runs every transaction through one transact call (executor.rs lines 192 to 213) and leaves receipts with zero cumulative gas out of the receipts root check (reth_copy.rs lines 40 to 47), as cited. The item says both clients reproduce the chain to its head. The official replay client on the main branch cannot derive the sender of an AQAv2 system transaction: run.rs lines 223 to 227 set the sender to the HYPE system address for empty input and to the system address mapped to the target contract otherwise, and the file has no case for the treasury address or the CoreDepositWallet. Blocks since 2026-06-12 contain such transactions, so the clearance for those blocks rests on the archive client alone. The archive endpoints return system transactions with r 1 and the sender in s, which is the archive client's encoding."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "question": "Does a published revision of hyperliquid-dex/hyper-evm-sync replay blocks after 37,597,803, where system transactions carry the AQAv2 treasury address or the CoreDepositWallet as sender? The main branch read on 2026-11-23 sets the sender from the target contract only (src/run.rs lines 223 to 227).",
+   "why": "The clearance of assumption A1 for HyperEVM cites two replay clients. If the official one stops at the first AQAv2 block, the only public reproduction of current blocks is the third party archive client, whose header check leaves out the receipts of system transactions. That narrows the evidence for how the closed validator node resets transient storage around system transactions.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L3",
+   "question": "What is the gas of one tick crossing in the swap loop on HyperEVM when both fee growth slots of the tick are written for the first time, measured on a pool where an ordinary account placed dust positions on consecutive ticks?",
+   "why": "The verifier reproduced the cost per empty word and did not measure crossings again. The number of crossings a 3,000,000 gas block holds decides how far an attacker's dust positions can shorten the price move of one small block swap in the 10 hookless pools with tick spacing 1 or 10.",
+   "priority": "low"
+  }
+ ]
+}

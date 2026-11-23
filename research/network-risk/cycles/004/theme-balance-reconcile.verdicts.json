@@ -1,0 +1,211 @@
+{
+ "unit": "theme-balance-reconcile",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "I fetched the Sourcify records and ran the chain queries myself on 23 November 2026. Sourcify reports a creation and runtime match for Staking at 0x1964ca90474b11ffd08af387b110ba6c96251bfc on Polygon (solc 0.7.5), and likewise for sLGNS, KlimaStaking and the NovaBank StakingV2. rebase() at lines 672 to 693 is public, has no caller check, and calls sOHM.rebase(epoch.distribute, epoch.number) when epoch.endBlock <= block.number. The sLGNS source at 0x99a57e6c8558bc6689f894e068733adf83c19725 limits rebase to the staking contract, raises _totalSupply and recomputes _gonsPerFragment (lines 1068 to 1093), and balanceOf divides gons by that figure (lines 1121 to 1123). On chain sOHM() of the staking contract is the sLGNS address and stakingContract() of sLGNS points back. epoch() returned length 14,400, number 3019, endBlock 97,813,512 and distribute 1,626,667.27 at head 97,804,424. The receipt of 0xfe645530665d1f424807e4ef99fc8cd3569d3fbaab75af4dca893749098eae11 shows block 97,799,112, index 0, sender 0x49f17e41363c9e052695d9e8bd92665845c2182f, target 0xb4c4a159c507e5ed64039ba7773ee3edd29373e8 with 851 bytes of code, gas price 5,249.8 gwei and a fee of 3.389 POL. debug_traceTransaction with callTracer on polygon.drpc.org shows unlock (0x48c89491), unlockCallback (0x91dd7346), sync (0xa5841194) with a balance read of 0x2285798de07c, a call to Staking.rebase() (0xaf14052c), settle (0x11da60b4) with a balance read of 0x228792ec89e7 and return value 0x2195ea96b, then mint (0x156e29f6). The difference of the two balance reads is 9,015,568,747 base units, which is the settle return and the amount in the ERC-6909 Transfer log from the zero address. eth_getLogs on polygon.gateway.tenderly.co from block 66,980,384 to head for that topic with from zero and the sLGNS id returned 661 logs in 661 transactions, six recipients, 20,418.686400985 sLGNS, first block 87,258,312, last block 97,799,112, and all 661 blocks sit at a multiple of 14,400 from 97,813,512. The same query returned 150 logs and 328.85740475 sATH to two recipients, and 8 logs and 0.010203871 sKLIMA. A Multicall3 eth_call with balanceOf(PoolManager), KlimaStaking.rebase(), balanceOf(PoolManager) returned 247,670,486,325 and 247,671,762,854, a rise of 1,276,529, with epoch endBlock 83,607,730 far behind head. On BNB Smart Chain the same call for sNVB on two endpoints returned 38,313,740,210,271 and 38,313,822,698,402, a rise of 82,488,131, with epoch endBlock 135,135,655 against head 135,216,385. For sATH and sSAC the call succeeded with no change, and both staking contracts contain the rebase() selector. A direct eth_call of rebase() from an account without code succeeded on the sATH and sKLIMA staking contracts. DexScreener returned 0.1611 USD for the Uniswap sLGNS and DAI pool with 33,470 USD of liquidity. I traced one of the 661 transactions and checked the other 660 by log and block number only, as the finding did.",
+   "codeCheck": "sync has no modifier and stores balanceOf(PoolManager) for the named currency in transient storage (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32). settle requires the unlocked state (src/PoolManager.sol:300-302). _settle reads the synced currency, rejects msg.value for an ERC-20 (line 356), computes paid as the balance now minus the synced balance with a checked subtraction (lines 358-360), resets the synced currency (line 361) and credits the recipient (line 364). mint debits the caller by the same amount and writes the ERC-6909 balance (src/PoolManager.sol:322-329, src/ERC6909.sol:79-83). After settle and mint the caller's delta in that currency is zero, so the count check at src/PoolManager.sol:112 passes. I looked for a guard that would stop this and found none: nothing in src/ compares a token balance with pool accounting, and the only other balance read is the one in sync. The variant in step 4 also holds: take debits the caller and transfers first (src/PoolManager.sol:291-297), the rebase then grows the tokens while the caller holds them, and a sync followed by a transfer of the principal and a settle clears the debit. For sLGNS a transfer moves value times gonsPerFragment gons, so the PoolManager balance falls by exactly the amount that take debited, and the rebase only raises supply. The credited amount is the rise of the whole PoolManager balance, so it was never part of a pool's or a claim holder's accounted amount. The observed trace matches this path call for call.",
+   "corrections": "The actor value unprivileged is right: the sender needs no role, no hook and no token of its own, and the pools involved have no hook. Three details need correction. First, the preconditions say the sNVB staking source is not on Sourcify, while the sources list cites the verified StakingV2 record at 0x6bcd1273eba684ff62614e41eff87123113112d1; I fetched it, Sourcify reports a match, and rebase() is public at line 716. Only the sATH staking contract 0x98d21b8e6bf0c1d2dfb0e3fcb82035095dcdd7de and the sSAC staking contract 0x99954eb0b159514d608f64c89a2c5bbe9f42120b were read from bytecode. Second, the sATH epoch is counted in seconds: epoch() returned length 28,800 and an end value of 1795417200, which is a timestamp. Third, balanceOf(PoolManager) for sLGNS was 34,658.405133592 at block 97,804,424, below the 36,908.56 in the finding, so the next rebase adds about 8.24 sLGNS on today's balance. The finding states the scope limit correctly: the cause is the token design and would be the same on any network, the amount taken is unaccounted surplus, and no accounted balance of a liquidity provider or claim holder falls. This is a second and third token for the class in F-041 with live use, and it is unrelated to any difference between Polygon or BNB Smart Chain and Ethereum.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0x1964ca90474b11ffd08af387b110ba6c96251bfc?fields=sources,abi,compilation",
+     "supports": "Match for Staking; rebase() public with no caller check at lines 672 to 693."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0x99a57e6c8558bc6689f894e068733adf83c19725?fields=sources,abi,compilation",
+     "supports": "Match for sLGNS; rebase limited to the staking contract, balanceOf is gons divided by gons per fragment, transfer moves value times gons per fragment."
+    },
+    {
+     "url": "https://polygon.drpc.org",
+     "supports": "eth_getTransactionReceipt and debug_traceTransaction (callTracer) for 0xfe645530665d1f424807e4ef99fc8cd3569d3fbaab75af4dca893749098eae11; epoch(), sOHM(), stakingContract() and balanceOf(PoolManager) at block 97,804,424."
+    },
+    {
+     "url": "https://polygon.gateway.tenderly.co",
+     "supports": "eth_getLogs for ERC-6909 mints with the sLGNS, sATH and sKLIMA ids: 661, 150 and 8 logs; Multicall3 simulation of KlimaStaking.rebase() with a rise of 1,276,529 base units."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0x25d28a24ceb6f81015bb0b2007d795acac411b4d?fields=sources,abi,compilation",
+     "supports": "Match for KlimaStaking, whose rebase() I simulated."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/56/0x6bcd1273eba684ff62614e41eff87123113112d1?fields=sources,abi,compilation",
+     "supports": "Match for NovaBank StakingV2; rebase() public at line 716 with no caller check."
+    },
+    {
+     "url": "https://bsc-dataseed1.bnbchain.org",
+     "supports": "Multicall3 simulation of StakingV2.rebase(): sNVB balance of the PoolManager 38,313,740,210,271 before and 38,313,822,698,402 after; sSAC unchanged; same result on https://bsc-mainnet.public.blastapi.io."
+    },
+    {
+     "url": "https://api.dexscreener.com/latest/dex/tokens/0x99a57e6c8558bc6689f894e068733adf83c19725",
+     "supports": "sLGNS priced at 0.1611 USD in the Uniswap sLGNS and DAI pool with 33,470 USD of liquidity."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "The receipt of 0xad36440ffe69062fe8b57599f3d5e77ae69f38b81bf19667c2e39957464ebc4d on mainnet.gateway.tenderly.co shows block 26,469,396, sender 0x953c1ba7029c92741a1739dcd18a8a462109b618, target Multicall3 and 22 logs. The USDI log with topic 0x106aac37 names the VaultController and carries 874,691.1746 USDI and a new supply of 2,401,597.1992. One Transfer of 118,000 USDI reaches the PoolManager and one USDC Transfer of 9,043,076 base units leaves it for the sender. balanceOf(PoolManager) on USDI is 697,167.0307501495 at block 26,469,395 and 1,214,540.5607652152 at block 26,469,396 on two archive endpoints. A Multicall3 eth_call with balanceOf(PoolManager), calculateInterest() (selector 0xeb0c4955), balanceOf(PoolManager) at block 26,469,395 gives a rise of 399,373.0804 USDI. calculateInterest() also succeeds as a direct eth_call from an account without code, and paused() returns false. The VaultController proxy is verified on Sourcify and its implementation 0xffc8c49c5b38bc9bafd0bb0f5f189eecd35e35e2 is not, as the finding says, so the open access rests on these simulations and on two transactions sent through contracts. One figure is out of date. At block 26,475,328 transaction 0x4de2106ae44106e021453020b0aaa26a5f982d90e45d9b2fc53148e905be06ed from 0x4659362bb53d0d7c97c136753ba512dadfe2467b triggered a second donation of about 9,815 USDI. The same simulation one block earlier shows a rise of 4,664.15 USDI for the PoolManager. That transaction emitted no PoolManager log, so this amount also stayed in the PoolManager unclaimed. The balance is now 1,219,205.4956 USDI of a supply of 2,567,504.09, which is 47.5 percent, and the simulation at the latest block shows 366.76 USDI pending. eth_getLogs returned no ERC-6909 mint with the USDI id since block 21,688,329, so nobody has booked a USDI accrual as a claim so far.",
+   "codeCheck": "The path is the one in finding 0 and in F-041. sync stores the balance with no lock check (src/PoolManager.sol:279-288). _settle credits the rise since the sync after a checked subtraction and the msg.value check (src/PoolManager.sol:349-364). take pays out before anything is paid in (src/PoolManager.sol:291-297), and the delta count check at src/PoolManager.sol:112 is met when the credit is taken or minted. No line in src/ ties a balance rise to a pool, so the interest that calculateInterest() adds between a sync and a settle is credited to the settler. Without a bracket the rise stays in the balance and no function pays it out: take and burn debit accounted amounts, and collectProtocolFees is bounded by protocolFeesAccrued (src/ProtocolFees.sol:54-56).",
+   "corrections": "The actor value unprivileged is right. The amount an account can book today is 366.76 USDI, where the finding says 4,636.71, because a third party accrued the interest at block 26,475,328 after the researcher's read. The market value is close to nothing: the observed sale of 118,000 USDI returned 9.04 USDC, so 366.76 USDI is worth about 0.03 USD and the roughly 404,000 USDI of unaccounted surplus now in the PoolManager is worth about 31 USD. The six USDI pools carry fees of 18 to 90 percent according to the researcher's Initialize rows, which I did not recheck. The severity medium follows F-041 as a class rating; by value this instance is negligible. No accounted balance of a liquidity provider or claim holder is reduced.",
+   "sources": [
+    {
+     "url": "https://mainnet.gateway.tenderly.co",
+     "supports": "Receipt of 0xad36440ffe69062fe8b57599f3d5e77ae69f38b81bf19667c2e39957464ebc4d; balanceOf(PoolManager) at blocks 26,469,395 and 26,469,396; Multicall3 simulations of calculateInterest() at blocks 26,469,395 and 26,475,327; USDI logs from block 26,469,390 to head; ERC-6909 mint search for the USDI id."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "Latest balance 1,219,205.4956 USDI, totalSupply 2,567,504.09, simulation with a rise of 366.76 USDI, direct call of calculateInterest() from an account without code, paused() false, implementation slot of the VaultController, receipt of 0x4de2106ae44106e021453020b0aaa26a5f982d90e45d9b2fc53148e905be06ed."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0xffc8c49c5b38bc9bafd0bb0f5f189eecd35e35e2",
+     "supports": "No match for the VaultController implementation."
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "Sourcify reports an exact match for BackedAutoFeeTokenImplementation at 0x65c40d624af3b18c109fbf87b7deff34cdc5f19b on Ethereum (solc 0.8.9). balanceOf returns shares times getCurrentMultiplier() (lines 254 to 259). getCurrentMultiplier returns lastMultiplier while block.timestamp is below newMultiplierActivationTime and newMultiplier afterwards, reduced per period when feePerPeriod is above zero (lines 265 to 283). updateMultiplierValue is limited to the multiplier updater (lines 445 to 452) and updateFeePerPeriod to the owner (lines 392 to 397). _transfer converts the amount to shares with the same getCurrentMultiplier() (lines 543 to 554), so a transfer and a balance read agree inside one transaction. On X Layer the SNDKx proxy 0xb63efbc28860c8097e341de1fcf59456161e9d98 points to that implementation address, and the code there has the same hash as on Ethereum. Block 76,397,963 has timestamp 1795166999 and block 76,397,964 has 1795167000. balanceOf(PoolManager) is 137,059,273,049,122,723 at the first and 1,096,474,184,392,981,784 at the second, sharesOf(PoolManager) is 137,059,273,049,122,723 at both, and eth_getLogs for the token over the two blocks is empty. multiplierUpdates(1) returns 1e18, 8e18 and 1795167000 on X Layer and on Ethereum, and getCurrentMultiplier returns 8e18 on Ethereum, X Layer, BNB Smart Chain and Monad. feePerPeriod is 0 on X Layer. On Ethereum STRCx returns a multiplier of 1.1057749 and 26 stored updates. I did not recount the 42 tokens on BNB Smart Chain and did not look for a pool that kept liquidity through the activation.",
+   "codeCheck": "Pool accounting holds amounts and never reads a balance. The only balance reads are in sync and _settle (src/PoolManager.sol:285, 359), and both fall in one transaction with one timestamp, so the timestamp switch cannot fall between them. The tokens added by the multiplier therefore reach no delta and no function pays them out: take debits the full amount (src/PoolManager.sol:291-297) and fee collection is bounded by protocolFeesAccrued (src/ProtocolFees.sol:54-56). On a take the token moves floor(amount times 1e18 divided by multiplier) shares, so the PoolManager balance falls by at most the debited amount. I confirmed this by simulation on Monad for QQQx and NVDAx, where a transfer of a third of a holder's balance lowered that balance by the amount or by one base unit less. A multiplier that goes down would leave the balance below the accounted amounts and the last take would revert in Currency.transfer (src/types/Currency.sol:82-86).",
+   "corrections": "The actor value issuer is right: only the multiplier updater 0x5f7a4c11bde4f218f0025ef444c369d838ffa2ad or the owner can change the figure, and no ordinary account can place the change between a sync and a settle. Two details need correction. First, the sentence that one implementation sits behind every proxy does not hold on Monad: the SNDKx proxy there points to 0xd865ce1b07540b5ede20e8298f48da69770fe22e, 14,411 bytes, with no Sourcify match and no multiplierUpdates getter. I tested it from the PoolManager's own balance of 8 base units and 1 share: a transfer of 8 or 9 moves the one share, a transfer of 7 moves nothing and a transfer of 16 reverts, so its transfer uses the 8e18 multiplier as balanceOf does. SPYx, QQQx and NVDAx on Monad use the common implementation. Second, the downward case is wider than feePerPeriod. _updateMultiplier requires only a nonzero value (line 684), so the updater can lower the multiplier, for example for a reverse split, at once or at a set time, and the PoolManager would then hold less than pools record. The STRCx balance on Ethereum was 567.49 at my read. The arbitrage in step 4 remains unobserved, as the finding says.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x65c40d624af3b18c109fbf87b7deff34cdc5f19b?fields=sources,abi,compilation",
+     "supports": "Exact match for BackedAutoFeeTokenImplementation; balanceOf, getCurrentMultiplier, _transfer, updateMultiplierValue, updateFeePerPeriod and _updateMultiplier at the lines given."
+    },
+    {
+     "url": "https://rpc.xlayer.tech",
+     "supports": "Block timestamps, balanceOf and sharesOf of the PoolManager at blocks 76,397,963 and 76,397,964, empty log query, multiplierUpdates(1), implementation slot, multiplierUpdater, owner and feePerPeriod."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "SNDKx multiplier 8e18 and stored update, STRCx multiplier and update count, implementation code hash."
+    },
+    {
+     "url": "https://rpc.monad.xyz",
+     "supports": "Implementation slot of SNDKx is 0xd865ce1b07540b5ede20e8298f48da69770fe22e; transfer simulations for SNDKx, QQQx and NVDAx with Multicall3 code placed at the holder by state override."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/143/0xd865ce1b07540b5ede20e8298f48da69770fe22e",
+     "supports": "No match for the Monad implementation."
+    }
+   ]
+  },
+  {
+   "findingIndex": 3,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "On eth.drpc.org getDecayInfo(PoolManager) on 0x11fb7c5e6fe7e42fb9e28929b673d3eee20048d4 returns 999999999999999999999997062, 267590219702701977999999213, 263, 732409780297298021999997849 and 0, as the finding says. balanceOf(PoolManager) is 268,934,894.17 at block 26,467,827 and 267,590,219.70 at block 26,475,001 and at the latest block, so the balance steps down once a day by about 0.5 percent. totalSupply is 1,000,000,000 and the symbol is TURING. The bytecode contains checkIn(uint256,bytes), lastCheckIn(address), hook(), getDecayInfo(address), setExcluded(address,bool), enterSwap() and redeemForETH(uint256). hook() returns 0xc45750fd6fde1eda36ab3965ed88c187648cc0cc, a contract with the IHooks selectors whose turingToken() is this token. lastCheckIn(PoolManager) is 0. I looked for a call that would raise the PoolManager balance inside a transaction, because a caller could book such a rise with sync and settle. checkIn with a dummy signature reverts. enterSwap reverts for any caller except the hook, and a simulation with Multicall3 code placed at the hook address by state override shows the same balanceOf(PoolManager) before and after enterSwap. On Robinhood Chain PYRE at 0x614b3cbb1a00270fa3189bf43e5a840f7f8cb172 reads 9.886 at block 120,299,181, 9.336 at block 121,117,362 and 9.294 now, and stakeFor reverts for an ordinary caller. I could not read DDL at the two old blocks on the public Arbitrum endpoint; its balance is 3.327 now against 3.338 in the researcher's second read. I read one of the thirteen TURING tokens.",
+   "codeCheck": "take debits the amount and calls transfer (src/PoolManager.sol:291-297). Currency.transfer reverts with ERC20TransferFailed when the token call fails (src/types/Currency.sol:64-86). Pool accounting never reads balanceOf again after the deposit, so a balance that falls with time leaves recorded amounts above what the PoolManager holds, and the takes that come after the remaining balance is paid out revert. The decay needs no transaction, so no sync and settle pair is involved and no caller gains from it.",
+   "corrections": "The actor value pool-creator is acceptable: the hazard comes from the token and hook that the pool's creator wrote, and only pools in that token are affected. Nobody takes anything, so the effect is a freeze of the last withdrawals in that currency. One detail to add: isExcluded(PoolManager) returns true on the token I read while the balance still decays, so that flag does not exempt the PoolManager from decay. The statement that the liquidity is the deployer's own is inferred from the stored amount, as the finding says, and I did not check it either.",
+   "sources": [
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "getDecayInfo, balanceOf at three blocks, totalSupply, hook(), lastCheckIn, isExcluded, bytecode selectors of the token and the hook, eth_call of enterSwap from three senders, and the state override simulation of enterSwap from the hook address."
+    },
+    {
+     "url": "https://api.openchain.xyz/signature-database/v1/lookup",
+     "supports": "Names for the selectors found in the TURING, hook and PYRE bytecode."
+    },
+    {
+     "url": "https://robinhood.drpc.org",
+     "supports": "PYRE balanceOf(PoolManager) at blocks 120,299,181 and 121,117,362."
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com",
+     "supports": "PYRE balance, liquid and staked balance of the PoolManager at the latest block, stakeFor revert for an ordinary caller."
+    }
+   ]
+  },
+  {
+   "findingIndex": 4,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I sampled the class on five networks. Two Multicall3 reads 24 to 27 seconds apart, each stamped with the block timestamp, show balanceOf(PoolManager) growing with no transaction of mine in between: aEthUSDC 3,410.687144 to 3,410.687210, aEthUSDT by 51 base units and aDAI by 83,765,025,440 base units on Ethereum; aArbUSDT by 28 base units and rzRDNT by 19,962,354,109,229 base units on Arbitrum One; nWMON by 851,920,932,989,994 base units on Monad; aOptUSDC by 2 base units and exOptOP by 459,244,053,601 base units on Optimism. These balances follow the block timestamp at read time. On Robinhood Chain 666 grew by 54 tokens in 6 seconds, and index(), DAILY_GROWTH(), MAX_DAYS(), startTime() and totalSupply() return 3.53e18, 1.33e18, 200, 1795033136 and 7,017,240. EXPT and EXPT2 did not move in those 6 seconds. Their balance rose in steps over the last 800,000 blocks, their bytecode holds EPOCH(), currentEpoch(), rebaseIndex() and startTime() as views, and the only state changing functions are transfer, transferFrom and approve, so the step comes from the timestamp and no caller can trigger it. The PoolManager holds the whole EXPT supply of 713,731,483.6. The researcher's classification of the 177 lending rows is by symbol pattern (classify.py, the LEND expression), so only the tokens I sampled and those the researcher read one by one are confirmed as time indexed. One exception to the statement that nothing moves inside a transaction: the Aave v2 pool on Ethereum returns FLASHLOAN_PREMIUM_TOTAL 9 and is not paused, and in Aave v2 the flash loan premium is added to the supplier index. I did not read the Aave v2 pool source in this session; the on-chain setting is the evidence. I did not rerun the CometRewards simulation.",
+   "codeCheck": "sync records the balance at the time of the call and _settle credits the balance now minus that record (src/PoolManager.sol:279-288, 349-364). Both run in one transaction with one timestamp, so growth that depends only on the timestamp is inside the record and produces no credit. The growth between transactions belongs to no delta, and take, burn and collectProtocolFees pay accounted amounts only (src/PoolManager.sol:291-297, 332-336, src/ProtocolFees.sol:54-56). Where a caller can raise the index inside a transaction by paying a premium, the credit is the premium times the PoolManager's share of the token supply, which is 50.49 of 8,146,003 aDAI and 60,244 of 1,568,330 rzRDNT, so the caller pays more than the credit. A supply on behalf of the PoolManager is a payment by the caller and settle credits the real rise, whatever the Transfer log says.",
+   "corrections": "The actor value unprivileged is acceptable only in the sense that no privilege is needed. No account acts and no account gains, nothing leaves the PoolManager and nothing is frozen, so this is lost yield for providers who pool a rebasing receipt token and it lies outside the goal of the review. The title says the growth can be neither claimed nor captured. That holds for growth that comes from time. For Aave v2 and its forks a flash loan premium moves the index inside a transaction and a bracket would capture the PoolManager's share of it at a net loss to the caller; the finding says this in its preconditions and the title should be read with that limit. The 177 rows were classed by symbol, and a token with a stored index that a public call updates would belong to the class of finding 0. I found none in my sample.",
+   "sources": [
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "Two timed reads of aEthUSDC, aEthUSDT and aDAI; FLASHLOAN_PREMIUM_TOTAL 9 and paused false on the Aave v2 pool 0x7d2768dE32b0b80b7a3454c06BdAc94A69DDc7A9; aDAI totalSupply."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc",
+     "supports": "Two timed reads of aArbUSDT and rzRDNT; rzRDNT totalSupply 1,568,330.5."
+    },
+    {
+     "url": "https://rpc.monad.xyz",
+     "supports": "Two timed reads of nWMON."
+    },
+    {
+     "url": "https://mainnet.optimism.io",
+     "supports": "Two timed reads of aOptUSDC and exOptOP."
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com",
+     "supports": "Two reads of 666, EXPT, EXPT2, PYRE and SMK2 six seconds apart; 666 parameters."
+    },
+    {
+     "url": "https://robinhood.drpc.org",
+     "supports": "EXPT balance of the PoolManager at ten blocks over the last 800,000 blocks, EXPT bytecode selectors and totalSupply."
+    },
+    {
+     "url": "research/network-risk/cycles/004/theme-balance-reconcile.work/classify.py:53",
+     "supports": "The lending class is assigned by a symbol pattern."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Wrapped native tokens showed the largest unexplained rise: 298.98 WETH on Ethereum, 18,572.57 WMON on Monad, 13.85 WBNB, 5.77 WETH on Base, 1.05 on Unichain, 0.47 on Optimism and 0.02 on Ink in one day. Does the PoolManager gain wrapped native without paying?",
+   "agrees": true,
+   "note": "I traced two Ethereum transactions with a WETH Deposit log naming the PoolManager (0x26d17d11ab81aa1c7e01d9cfec2b144f537f3fd831e0235a6b110008199e1f52 and 0x01c25cda51d35c03010667ec3dae32c8a9391822892b2a09d68bdf4b57222c95). Each shows sync(WETH), then take(address(0), WETH, amount), inside which the PoolManager calls WETH with that value and empty calldata, then settle() returning the same amount. The caller is debited the native amount (src/PoolManager.sol:294, src/types/Currency.sol:48) and credited the same amount of WETH (src/PoolManager.sol:358-364). In the first trace the amount is 0.18473395807781634 on all three steps. Value is conserved one to one. I did not repeat the per chain sums of Deposit logs."
+  },
+  {
+   "check": "Reflection and fee tokens: KISHU on Ethereum, #GMM and HKU on Polygon, Share and BRTM on Base, PIT, ASS, DRP, CATE and GFH on BNB Smart Chain, and RISE on Ethereum. Any transfer by anyone raises the PoolManager balance of a reflection token. Can a caller profit by bracketing its own transfer with sync and settle, and does a payout cost the PoolManager more than the debited amount?",
+   "agrees": true,
+   "note": "This item carried the largest risk, because the researcher had no trace for RISE. I fetched it. Transaction 0x1c4eeb2d72d510a03dc3224e492f0a0294fd2fc6b34c3b3b2ccf2bad81709f47 in block 26,470,175 calls take(RISE, 0x8f10b468b06c6fd214b65f87778827f7d113f996, 1,231,670.267276023). balanceOf(PoolManager) is 6,827,799.649912104 before and 5,596,129.382636081 after, a fall of 1,231,670.267276023. The Transfer log shows 1,170,086.75 to the recipient. The PoolManager lost exactly the debited amount and the fee came out of what the recipient received. For PIT on BNB Smart Chain I found the one payout (0x684dd1095e662464e1f2df720e4702c952177a2b586873a822888e3152d4c000, block 135,136,608) and no endpoint gave a trace. The logged 463,801,452.36 divided by 0.96 is 483,126,512.88, which is 1,661 above the balance fall of 483,124,851.67, and that fits a 4 percent fee taken from the amount sent with a small reflection back to the PoolManager. This is an inference without the take argument. DRP shows a deposit whose log overstates what arrived by exactly 1 percent, and settle credits the real rise. The bracket argument holds from the code: the credit is the rise of the PoolManager balance, which is its share of the reflected fee, and the caller pays the whole fee. ASS, CATE and GFH remain unread."
+  },
+  {
+   "check": "Monerium EURe has two token addresses over one ledger: 0x3231cb76718cdef2155fc47b5286d82e6eda273f and 0x39b8b6385416f4ca36a20319f70d28621895279d on Ethereum, 0x18ec0a6e18e5bc3784fdd3a3634b31245ab704f6 and 0xe0aea583266584dafbb3f9c3211d5588c73fea8d on Polygon. Both are pool currencies (30 and 36 Initialize logs on Ethereum, 21 and 27 on Polygon) and balanceOf(PoolManager) is identical at both. Can one deposit be credited in both currency ids, or one face be paid from the other's pools?",
+   "agrees": true,
+   "note": "On chain both addresses return 4,188.473666019339 on Ethereum and 67,874.94093483072 on Polygon for the PoolManager, with equal total supply, and a transfer of 1 EURe simulated from the PoolManager succeeds through each address. From the code: one transient slot holds the synced currency (src/libraries/CurrencyReserves.sol:27-32), a second sync overwrites it and re-reads the balance, and _settle resets it (src/PoolManager.sol:361). One rise of the shared balance is therefore credited once, in one id. A take through the other id while one id is synced lowers the shared balance, and the next settle either reverts in the checked subtraction (src/PoolManager.sol:360) or credits only what came back. Deltas are stored per currency id (src/libraries/CurrencyDelta.sol:10-16) and unlock needs every one of them at zero (src/PoolManager.sol:112), so a credit in one id cannot cancel a debit in the other. The sum owed in both ids stays at or below the shared balance."
+  },
+  {
+   "check": "Arc: USDC at 0x3600000000000000000000000000000000000000 rose 415.53 beyond its Transfer logs in one day, and 0xfffffffffffffffffffffffffffffffffffffffe emitted 86,069 Transfer logs naming the PoolManager. Is any of this an unpaid gain or a shortfall?",
+   "agrees": true,
+   "note": "Brief check only. At the latest block eth_getBalance of the PoolManager is 2,446,577,939,613,904,230,700,814 and balanceOf at 0x3600000000000000000000000000000000000000 is 2,446,577,939,613, which is the native balance divided by 1e12 and rounded down. I did not recount the logs from 0xff..fe."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "question": "For the fee tokens PIT, ASS, CATE and GFH held by the BNB Smart Chain PoolManager, does a take lower the PoolManager balance by more than the amount it debits? Fetch a trace of 0x684dd1095e662464e1f2df720e4702c952177a2b586873a822888e3152d4c000 from an archive node with debug methods and compare the take argument with the balance fall of 483,124,851.67 PIT.",
+   "why": "A token that charges its fee on top of the amount sent would leave the PoolManager short on every payout, and the shortfall would fall on other pools and claim holders in that token. The RISE trace on Ethereum shows the safe behaviour. For PIT the same conclusion rests on arithmetic over one log, and three of the five tokens were not read at all.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    137,
+    43114,
+    42161,
+    143,
+    42220
+   ],
+   "lens": "L3",
+   "question": "Among the 177 rows classed as lending receipt tokens by symbol, is there one whose balanceOf uses a stored index that a public call updates? The sampled tokens compute the index from the timestamp at read time. Read balanceOf(PoolManager) before and after each protocol's public accrual call in one Multicall3 eth_call.",
+   "why": "Such a token would belong with sLGNS and USDI: any account could book the accrued interest on the PoolManager balance with sync and settle. The class was assigned by a symbol pattern, and the eight tokens I sampled are time indexed.",
+   "priority": "low"
+  }
+ ]
+}

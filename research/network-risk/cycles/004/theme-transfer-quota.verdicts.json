@@ -1,0 +1,179 @@
+{
+ "unit": "theme-transfer-quota",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "Every chain fact held under my own queries on 2026-11-23. Source: I fetched the Sourcify record of 0xf58fed40fba1ab7aa7ffc160b863bedd998386a7 (match, TransferLimitHybridPluginV04) and read checkTransfer at lines 438 to 489 of TransferLimitHybridPluginV04.sol. For a sender that is not exempt it computes dailyTotals[from][timestamp / timeBlockSize] minus the amount and reverts with TransferTooLarge when the result is below minus the user limit. For a recipient that is not exempt it adds the amount and reverts when the result is above the limit, unless the sender is the zero address. The header comment at lines 23 and 24 says DeFi contracts must be exemptions and that a Uniswap pool outside the exemptions makes the limit restrict total volume. TransferValidationHybridPlugin routes transfer, transferFrom and transferAndCall into checkTransfer. Chain, https://polygon.drpc.org at blocks 97,804,497 to 97,804,523: transferLimit() = 6e18, getTransferLimitForUser(PoolManager) = 6e18, masterTransferLimitOverride() = 0, transferLimitAmountUsed(PoolManager) = 125,605,912,695,548,320, transferLimitAmountRemaining(PoolManager) = 6,125,605,912,695,548,320, getExemptionCount() = 57, balanceOf(PoolManager) = 11,350,331,586,494,174,070, decimals 18. introspect(VCNT) on the plugin returns timeBlockSize 86,400, limit 6e18 and 57 exemptions. I read all 57 with getExemptionAtIndex. The PoolManager 0x67366782805870060151383f4bbff9dab53e5cd6, the v4 PositionManager, the three Universal Router addresses of networks.json and Permit2 are absent. The list holds the v3 routers and the v3 position manager. Behaviour, eth_call with from set to the PoolManager: transfer of 1 VCNT returns true, 7 VCNT reverts with 0x1b97a875, and a zero amount reverts with the string invalid transfer. I computed 0x1b97a875 locally as the selector of TransferTooLarge(). With the Multicall3 runtime code placed at the PoolManager address by state override, transfers of 6 VCNT and of the remaining 0.1256 VCNT to two fresh recipients succeeded, transferLimitAmountRemaining then returned 0 and transferLimitAmountUsed returned minus 6e18, and transfers of 0.01 VCNT and of 1 base unit reverted with 0x1b97a875. A transfer of 5 VCNT out and back in one call left both views at their starting values, so a repaid take does not consume the allowance. Victim side: eth_getLogs on https://polygon-bor-rpc.publicnode.com for blocks 97,364,523 to 97,804,523 shows 15 VCNT transfers that touch the PoolManager, each between 0.009 and 0.127 VCNT, 9 out and 6 in. Two receipts I opened carry a Swap event of the PoolManager for pool id 0x7d4853d263223b620af200c3b281036f267f9fc1b309660300df0ca274af4a3f. I recomputed that id locally as keccak256 of (WETH 0x7ceb23fd6bc0add59e62ac25578270cff1b9f619, VCNT, fee 3000, tick spacing 60, hooks address zero). The pool has no hook and pairs VCNT with WETH, so its liquidity providers match the victim definition. The same token address has no code on the other 20 networks. Not confirmed: the price of 18.12 USD and the DEX reserve figure. The GeckoTerminal API answered 429 on three attempts. The last sale in the v4 pool traded 0.1256 VCNT for 0.001324 WETH. I did not repeat the storage slot reads or the debug_traceCall of the finding. The view calls and the plugin introspection give the same values.",
+   "codeCheck": "take debits the caller and then calls currency.transfer (src/PoolManager.sol:291-297). CurrencyLibrary.transfer sends transfer(address,uint256) with all gas and treats a reverted call as failure (src/types/Currency.sol:55-75), then reverts through CustomRevert.bubbleUpAndRevertWith with the token address, the transfer selector, the bubbled reason and ERC20TransferFailed (src/types/Currency.sol:82-86, src/libraries/CustomRevert.sol:83-119). There is no try path and no alternative payout, so a TransferTooLarge revert in the token makes the whole take revert. burn credits the caller and take pays out, so a claim holder reaches the same transfer (src/PoolManager.sol:332-336). modifyLiquidity with a negative delta gives a positive delta that the provider collects by take (src/PoolManager.sol:145-184). On the way in, _settle credits only the rise of balanceOf since sync (src/PoolManager.sol:349-364), and the token transfer that produces the rise is made by the payer. When it reverts, no credit exists and the unlock ends with CurrencyNotSettled (src/PoolManager.sol:112). No guard in core changes this. The msg.value check at src/PoolManager.sol:356 and the delta count check at line 112 are unrelated, and the int128 cast at line 294 does not bind at these amounts. A user can still end an unlock with mint in place of take (src/PoolManager.sol:322-329), so a liquidity provider can leave the pool, take the WETH side and keep the VCNT side as an ERC-6909 claim. The freeze applies to the token payout, and the claim stays subject to the same daily allowance later.",
+   "corrections": "The actor value unprivileged stands. Any account can bring the allowance to zero, and the victims use a hookless WETH and VCNT pool that the attacker did not create. The cause is an issuer setting, and the issuer can end it with one exemption. Three refinements. First, at the start of a UTC day the running total is zero, so the amount needed is exactly 6 VCNT of net outflow. The figure 6.13 applies on a day that already had 0.1256 VCNT of inflow. Each recipient that is not exempt can receive at most 6 VCNT on that day, so an outflow above 6 VCNT needs two recipients or an exempt one. Second, the cost is not fixed at the value of 6 VCNT held overnight. An account can also buy the VCNT in the pool and sell it on a venue whose contracts are exempt, which costs fees and price impact. I did not measure the depth of either venue. Third, the limit binds without any hostile account. Net withdrawals of all v4 pools together cannot exceed 6 VCNT per UTC day plus the inflows of that day, and the same holds in the other direction for payments in. Blocked users can leave with ERC-6909 claims. This hazard is a token setting on Polygon. It does not come from a difference between Polygon and Ethereum, and it gives no path to take funds. The amount exposed today is 11.35 VCNT. The severity is medium on the scale because liquidity operations are blocked without loss.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0xf58fed40fba1ab7aa7ffc160b863bedd998386a7?fields=sources,proxyResolution,compilation",
+     "supports": "Verified source of TransferLimitHybridPluginV04: checkTransfer at lines 438 to 489, the exemption comment at lines 23 and 24, the views transferLimitAmountUsed and transferLimitAmountRemaining."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0x1C1d1aeb2428927c3bd3CFB9C413677BA2ac7C4A?fields=sources,proxyResolution,compilation",
+     "supports": "Verified source of HybridViciERC20, the implementation behind the VCNT proxy."
+    },
+    {
+     "url": "rpc https://polygon.drpc.org eth_call at blocks 97,804,497 to 97,804,523",
+     "supports": "Limit 6e18, used 0.1256e18, remaining 6.1256e18, 57 exemptions without the PoolManager, PositionManager, Universal Routers or Permit2, balance 11.35 VCNT, introspect returns period 86,400."
+    },
+    {
+     "url": "rpc https://polygon.drpc.org eth_call with state override (Multicall3 code at the PoolManager address) at blocks 97,804,512 and 97,804,523",
+     "supports": "Outflows of 6 and 0.1256 VCNT succeed, remaining becomes 0, the next transfers of 0.01 VCNT and 1 base unit revert with 0x1b97a875, and a round trip of 5 VCNT leaves used and remaining unchanged."
+    },
+    {
+     "url": "rpc https://polygon-bor-rpc.publicnode.com eth_getLogs and eth_getTransactionReceipt, blocks 97,364,523 to 97,804,523",
+     "supports": "15 VCNT transfers touching the PoolManager and Swap events for pool id 0x7d4853d2...4a3f in transactions 0x74ceedb9058944daba4df3f899259752197fc62a4728ce253a9545d1b421024d and 0xebe5e98c0d94baec28aac09b5c2bea376be6c4b6f156dc7738f0c53c8f4c6db9."
+    },
+    {
+     "url": "src/types/PoolId.sol:11-15",
+     "supports": "Pool id is keccak256 of the five words of the PoolKey struct, which I used to recompute the id with hooks set to the zero address."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "https://rpc.xlayer.tech at blocks 76,643,380 to 76,643,533: on USDG 0x4ae46a509f6b1d9056937ba4500cb143933d2dc8, payoutGroupIdOf(PoolManager) = 2, getPayoutGroupClaimer(2) and getPayoutGroupDestination(2) = 0xb1b3d51e4be3fe55006d1ae4bc252dc6aa00fa72, getPayoutGroupManager(2) = zero address, getPayoutGroupBalance(2) = 23,176,738.88 USDG, getPayoutGroupMultId(2) = 2, balanceOf(PoolManager) between 388,548 and 391,285 USDG, getPendingRegistration(PoolManager) empty, isPartnerSignedRegistrationsEnabled() = false. The account slot of the PoolManager (mapping slot 1) read 0x...6b03d23f 0002 000000596bf4ff58 0000005b1a686b80, which is time, group 2, shares and balance in the packing of BaseStorageV3. On Ethereum (0xe343167631d89b6ffc58b88d6b7fb0228795491d), Ink (same address) and Robinhood Chain (0x5fc5360d0400a0fd4f2af552add042d716f1d168) payoutGroupIdOf(PoolManager) returns 0. I did not find the USDG address on Arbitrum One and did not test it. I found the enrolment. A search over block heights for the first block where payoutGroupIdOf(PoolManager) is 2 gives block 76,356,242, timestamp 1795125278, 2026-11-19 21:54:38 UTC. That block holds the log AccountRegistered(PoolManager, 2, 0xb1b3d51e...fa72) in transaction 0xe22247f81654f1f438c3c24c9f35372ecf76441624009ad466aa82432569a621, sent by 0x55f78e37adb9d1f6931c1da7314b374558ae9684 to the token with selector 0x031d0a33. I computed that selector locally as registrarRegisterRewardAddressBatch(uint32,address[]). PayoutGroupFacet.sol restricts that function to the payout group registrar role, so a role holder enrolled the PoolManager four days before this review. Source, fetched from the Paxos repository: _transfer takes the two word path only when both group ids are 0 and otherwise runs _updateWalletWithPayoutGroup, which recomputes shares, writes the time and applies deltas to the group (ClaimableRewardsBase.sol lines 473 to 619). _getMultiplierAtTime reverts with MultiplierIndexNotFound when switchTimeMultiplier is 0 (lines 257 to 264). balanceOf reads the stored balance field, and rewards leave the claim source by claim functions. Round trip: with the Multicall3 code at the PoolManager address by state override, a transfer of the full balance out and back left balanceOf(PoolManager), getPayoutGroupBalance(2), getPayoutGroupAvailableRewards(2), availableRewardsOf(PoolManager) and the group id unchanged. Not confirmed: whether the deployed code equals the repository source (it answers the same selectors), and whether a multiplier in use can be deleted, which the finding also leaves open.",
+   "codeCheck": "take and the payment before settle reach the token only through transfer and balanceOf (src/PoolManager.sol:291-297, 349-364, src/types/Currency.sol:60-75, 90-96). Rewards do not raise balanceOf(PoolManager), so sync and settle have nothing to credit (src/PoolManager.sol:279-288, 358-360), and core has no call that could claim or register. The three registration paths in the token need the registrar role, a call of acceptRegisterRewardAddress by the account itself, or a signature checked with SignatureChecker. The PoolManager sends only transfer, balanceOf, the IHooks selectors, unlockCallback and empty calldata, and it has no isValidSignature function and no fallback, so it cannot consent. A revert in the group accounting would surface as ERC20TransferFailed on every take of USDG (src/types/Currency.sol:82-86).",
+   "corrections": "The actor value issuer and the severity low stand. Additions. The enrolment happened on 2026-11-19 through the registrar batch function, which confirms the inference in the finding. The reward amount is close to nothing at the time of my query: getPayoutGroupAvailableRewards(2) returned 2,797 base units, 0.002797 USDG, on a group balance of 23.18 million, and availableRewardsOf(PoolManager) returned 0. The shares of the PoolManager are lower than its balance, so the multiplier has grown since enrolment, and the low figure fits a recent claim for the whole group. I did not find the claim event because the public endpoints limit eth_getLogs to 100 blocks. The statement that _applyDelta saturates is right for subtraction only. The addition is a checked uint64 addition and would revert above 18.4 trillion USDG, which the total supply of 1.0987 billion cannot reach. The comparison with Arbitrum One was not reproduced by me.",
+   "sources": [
+    {
+     "url": "rpc https://rpc.xlayer.tech eth_call and eth_getStorageAt at blocks 76,643,380 to 76,643,533",
+     "supports": "Group 2 for the PoolManager, claimer and destination 0xb1b3d51e4be3fe55006d1ae4bc252dc6aa00fa72, group balance 23.18 million USDG, available rewards 2,797 base units, packed account slot."
+    },
+    {
+     "url": "rpc https://rpc.xlayer.tech eth_call at historical blocks, eth_getLogs and eth_getTransactionByHash for block 76,356,242",
+     "supports": "First block with group 2, the AccountRegistered log for the PoolManager and transaction 0xe22247f81654f1f438c3c24c9f35372ecf76441624009ad466aa82432569a621 with selector 0x031d0a33 from 0x55f78e37adb9d1f6931c1da7314b374558ae9684."
+    },
+    {
+     "url": "rpc eth_call payoutGroupIdOf on https://ethereum-rpc.publicnode.com, https://rpc-gel.inkonchain.com and https://rpc.mainnet.chain.robinhood.com, 2026-11-23",
+     "supports": "Group 0 for the PoolManager on Ethereum, Ink and Robinhood Chain."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/paxosglobal/paxos-token-contracts/master/contracts/ClaimableRewardsBase.sol",
+     "supports": "_transfer, _updateWalletWithPayoutGroup, _applyDelta and _getMultiplierAtTime."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/paxosglobal/paxos-token-contracts/master/contracts/facets/PayoutGroupFacet.sol",
+     "supports": "registrarRegisterRewardAddressBatch is limited to the registrar role; registerRewardAddress needs a signature and the partner switch; acceptRegisterRewardAddress must be called by the account."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/paxosglobal/paxos-token-contracts/master/contracts/ClaimableRewardsEvents.sol",
+     "supports": "Event AccountRegistered(address indexed account, uint32 indexed payoutGroupId, address indexed claimer)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/paxosglobal/paxos-token-contracts/master/contracts/lib/SharesLib.sol",
+     "supports": "calcShares, updateSharesWithRewardPreservation, handleClaimAllDetection and calcSharesDelta."
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "AGL: I fetched the verified sources of AGL and PoolAGL from Celo Blockscout. AGL._update calls pool.consumirEntrada when the recipient is the PoolManager and pool.consumirSaida when the sender is. PoolAGL keeps one signed value in transient storage, adds the negated AGL delta of each swap in afterSwap, and both consume functions revert with ForaDaCota(uint256,int256) outside that value. beforeInitialize and beforeAddLiquidity revert for every caller other than the hook itself. On the eight networks (chain ids 1, 10, 56, 137, 8453, 42161, 43114, 42220, latest blocks of 2026-11-23) eth_getCode of 0x0000000000109de411eabc9f04906d79f06fda0e has 15,125 bytes, poolManager() equals the PoolManager of networks.json, balanceOf(PoolManager) is between 99.99999999999 and 100 percent of the supply of 1e30 base units, and cota() on 0x0000000456b76bc801253ef2366664750f602840 returns 0. A transfer of 1e9 base units from the PoolManager address reverts on all eight with 0x7c467237 followed by 1e9 and 0, and a transfer of the same amount from the hook to the PoolManager reverts the same way. I computed 0x7c467237 locally from ForaDaCota(uint256,int256). PLAYR: the Sourcify record of 0x775fd5a987bf3ff5e205deabde6634ddcee3a3fc on chain id 4663 is an exact match. _enforceTradeGates reverts with V4NotAuthorized when the PoolManager is a party and a transient flag is not set. A transfer from the PoolManager address reverts with 0x19e7dcd0, which I computed as V4NotAuthorized(). INFX: the Routescan source of 0xda7ad1b3423713dc9b4275a00d59b82024b3eb0c shows that a transfer to the PoolManager must fit a transient allowance and otherwise reverts with NoHookAllowance(uint256,uint256). A transfer out of the PoolManager address returned true in my call, which agrees with the finding, since it describes a limit on transfers in. A3K: the verified IndexTokenV4 source declares error AccountIsLimited(), whose selector I computed as 0xb8b82b49, the value the finding reports for A3K, LFNX and FIN. Not reproduced: MOON on Elysium, LFNX, FIN, the four Securitize wrappers on X Layer and the on-chain behaviour of A3K and INFX on the return leg. The finding gives no address for these tokens.",
+   "codeCheck": "take ends in currency.transfer and a revert there reverts the take with ERC20TransferFailed (src/PoolManager.sol:291-297, src/types/Currency.sol:55-86). burn followed by take is the only way to turn an ERC-6909 claim into tokens (src/PoolManager.sol:332-336). A payment in is a token transfer by the payer before settle (src/PoolManager.sol:349-364). core has no bypass for a token that refuses these transfers, and it has no code size or allow list check that would keep such a token out of a pool (src/PoolManager.sol:117-142). The gates of these tokens open only inside their own hook operations in the same transaction, and their state is transient, so nothing carries over to a later transaction of another user. PoolAGL comments state the known limit that deltas netted inside one unlock and ERC-6909 claims move AGL between pools without a physical transfer, which matches mint and burn in core (src/PoolManager.sol:322-336).",
+   "corrections": "Actor pool-creator and severity low stand. The statement that no ordinary account can block other users holds across transactions, because every gate is transient. Inside one transaction the AGL value is shared: a buyer who ends an unlock with claims leaves a negative value, and a later sale of AGL in the same transaction then fails consumirEntrada, which requires a value that is at least the amount. The research file records this as a lead for the shared transaction unit. The entries for MOON, LFNX, FIN and the four X Layer wrappers rest on the researcher's calls alone.",
+   "sources": [
+    {
+     "url": "https://celo.blockscout.com/api/v2/smart-contracts/0x0000000000109de411eabc9f04906d79f06fda0e",
+     "supports": "Verified source of AGL with the _update gate on the PoolManager address."
+    },
+    {
+     "url": "https://celo.blockscout.com/api/v2/smart-contracts/0x0000000456b76bc801253ef2366664750f602840",
+     "supports": "Verified source of PoolAGL: transient signed value, afterSwap, consumirEntrada, consumirSaida, ForaDaCota(uint256,int256)."
+    },
+    {
+     "url": "rpc eth_getCode and eth_call on the endpoints of chain ids 1, 10, 56, 137, 8453, 42161, 43114 and 42220 in networks.json, 2026-11-23",
+     "supports": "15,125 bytes of code, PoolManager share of supply, cota() = 0, and the 0x7c467237 revert in both directions."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/4663/0x775fd5a987bf3ff5e205deabde6634ddcee3a3fc?fields=sources,proxyResolution,compilation",
+     "supports": "PlayrToken _enforceTradeGates and V4NotAuthorized."
+    },
+    {
+     "url": "rpc https://rpc.mainnet.chain.robinhood.com eth_call from the PoolManager address, 2026-11-23",
+     "supports": "PLAYR transfer reverts with 0x19e7dcd0."
+    },
+    {
+     "url": "https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api?module=contract&action=getsourcecode&address=0xda7ad1b3423713dc9b4275a00d59b82024b3eb0c",
+     "supports": "InferenceToken: transient allowance for transfers into the PoolManager, NoHookAllowance."
+    },
+    {
+     "url": "https://explorer.optimism.io/api/v2/smart-contracts/0x6F3852B4622497EEE563cBA022977B8162bFD3fa",
+     "supports": "IndexTokenV4 declares AccountIsLimited() and setAccountLimit."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "L-259 on the sixteen networks with a trace endpoint: does a take of the whole PoolManager balance that is repaid in the same transaction leave any storage changed, in the token or in any contract it calls.",
+   "agrees": true,
+   "note": "I did not repeat the sweep of 2,480 tokens. I tested the two cases where an error would cost most. ViciCoin on Polygon: a transfer of 5 VCNT out of the PoolManager address and back in one eth_call left transferLimitAmountUsed and transferLimitAmountRemaining unchanged, and the plugin source subtracts for the sender and adds for the recipient on the same per day total, so a repaid take nets to zero. USDG on X Layer: a full round trip left balance, group balance and available rewards unchanged. As a control for the method I ran eth_createAccessList for a one way VCNT transfer from the PoolManager address on https://polygon.drpc.org. It lists nine storage slots in the token and 42 slots in five further contracts, so a limiter of this build stands out against the two to seven slots of a plain token. The item rests on the researcher's traces for all other tokens."
+  },
+  {
+   "check": "L-259 on Zora, World Chain, Soneium, Celo and Arc, where no public endpoint served debug_traceCall: three and then 25 consecutive round trips of the full PoolManager balance in one eth_call with state override, with balances read after each step.",
+   "agrees": true,
+   "note": "The item states its own limit, and I narrowed it with a second method. eth_createAccessList accepts the PoolManager as sender on https://forno.celo.org, https://rpc.zora.energy/, https://arc.drpc.org, https://soneium.gateway.tenderly.co and https://480.rpc.thirdweb.com and returns every contract and storage slot that a one way transfer of half the balance reads or writes. Coverage on 2026-11-23: Zora 41 of 41 tokens with a balance, Soneium 70 of 70, Celo 92 of 92, Arc 298 of 298, World Chain 30 of the first 83 because the endpoint rate limits. Zora: every token touches its own storage only, at most six slots. Soneium: 58 tokens touch their own storage only, among them RSNC, which is non transferable. The other 12 are six Aave style tokens, three Solv tokens that read one slot of a second contract, nsASTR, sSuperUSD and WIIZZZAARDS. Celo: 72 touch their own storage only and three revert as already recorded (G$, rii and AGL). The other 17 are five Aave tokens, the two Moola tokens, stCELO, cNGN, SUSHI and seven low value tokens that read two slots of 0x796dff6d74f3e27060b71255fe517bfb23c93eed, which I did not identify. Arc: 212 touch their own storage only with at most seven slots. 64 are 45 byte clones of one launch platform whose transfer calls a reward tracker clone. I queried all 64 trackers: isExcluded(PoolManager) is 1 and shareOf and pending are 0, so they keep no state for the PoolManager. No token on these lists calls a module of the ViciCoin kind. An access list cannot tell a read from a write, so a counter held inside a token's own storage with a cap above 25 times the balance stays possible in principle. The World Chain list is covered to 4 percent by this method."
+  },
+  {
+   "check": "USDG (Paxos) on Robinhood Chain, Ink, Arbitrum One, Ethereum and X Layer: does the reward accounting count transfers or volume of the PoolManager, and can a repaid take make a later transfer revert.",
+   "agrees": true,
+   "note": "payoutGroupIdOf(PoolManager) returned 0 on Ethereum (3.21 million USDG held), Ink (0.79 million) and Robinhood Chain (17.07 million) and 2 on X Layer in my calls. Arbitrum One was not retested. In ClaimableRewardsBase.sol the path for two accounts without a group writes two balance words and nothing else. On X Layer my round trip left balance, group balance and rewards unchanged. One wording point: _applyDelta saturates when it subtracts, and its addition is a checked uint64 addition. With a supply of 1.0987 billion USDG the bound of 18.4 trillion cannot be reached, so the conclusion holds. The item depends on the registrar role not enrolling the PoolManager on the other chains. The role holder did so on X Layer on 2026-11-19, which shows the state can change without notice."
+  },
+  {
+   "check": "Network rules that could throttle the PoolManager address after another account used it: TIP-403 policies on Tempo, resource limits on MegaETH, the reserve balance on Monad.",
+   "agrees": true,
+   "note": "I fetched the three pages. The TIP-403 specification defines the policy types WHITELIST, BLACKLIST and COMPOUND and an isAuthorized view over set membership. It holds no amount, count or period. The same page describes receive policies, which any account sets for itself, and the ReceivePolicyGuard that holds a rejected inbound transfer. The cleared text says only the policy admin changes a policy and does not mention this layer. It is a rule per receiving account and no quota on the PoolManager, and the state already holds a finding about it. The MegaETH page lists limits per transaction and per block and budgets per call frame, none per account. The Monad page applies the reserve balance to the sender and to EOAs with an EIP-7702 delegation. The PoolManager is a contract and is neither."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    480,
+    42220,
+    1868,
+    5042,
+    7777777
+   ],
+   "lens": "L3",
+   "question": "Finish the access list sweep on World Chain (about 820 of 851 tokens remain) with an endpoint that does not rate limit eth_createAccessList, and identify the contract 0x796dff6d74f3e27060b71255fe517bfb23c93eed that seven Celo tokens read on every transfer.",
+   "why": "eth_createAccessList with the PoolManager as sender works on the five networks that refuse debug_traceCall and shows every contract and slot a transfer touches. A limiter of the ViciCoin kind shows as extra contracts with many slots. World Chain has the longest token list and the least coverage.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L3",
+   "question": "The registrar 0x55f78e37adb9d1f6931c1da7314b374558ae9684 enrolled the X Layer PoolManager in USDG payout group 2 on 2026-11-19 (transaction 0xe22247f81654f1f438c3c24c9f35372ecf76441624009ad466aa82432569a621, registrarRegisterRewardAddressBatch). Which other addresses were in that batch, who is the claimer 0xb1b3d51e4be3fe55006d1ae4bc252dc6aa00fa72, and has the same registrar address the role on Ethereum, Ink, Arbitrum One and Robinhood Chain?",
+   "why": "The enrolment changes the transfer path of 390,000 pooled USDG and routes its rewards to a third address. The same role could enrol the PoolManager on Robinhood Chain, where it holds 17 million USDG.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L1",
+   "question": "AKARII (0x643098f125e765081fec0b67384bfe5ca498f24a) on Arc: a transfer of half the PoolManager balance touches 1,914 storage slots of the token, and eth_estimateGas from the PoolManager address fails with gas required exceeds 16,777,216 for half and for the full balance. What is the largest take that fits in one transaction, and can every position be withdrawn in pieces of that size?",
+   "why": "A take that cannot fit under the transaction gas cap must be split. The research file raises the same question for uPEG on Ethereum only.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "64 pooled tokens on Arc are clones of one launch platform (implementation 0x1b74922c01ddfd9c77b37d02c0a236611e8fe500) that call setShare on a reward tracker clone (implementation 0x72ee4bf0445d4fc2acaff82e6a1b7bb45238fc06) on every transfer. The PoolManager is excluded. Does an account that takes the PoolManager balance of such a token for one unlock receive shares, and can it trigger deposit, syncDeposit, flushBank or distribute while it holds them?",
+   "why": "take lends the whole pooled balance for free inside one transaction (src/PoolManager.sol:291-297, 104-114). If shares follow the balance at once, the borrower could collect payouts in USDC that belong to the holders of the token. The victims would be token holders, and pool funds would not move.",
+   "priority": "low"
+  }
+ ]
+}

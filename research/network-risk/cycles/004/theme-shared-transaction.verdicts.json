@@ -1,0 +1,141 @@
+{
+ "unit": "theme-shared-transaction",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I reproduced the central claim with my own script. Method: eth_call at the parent block, the sender address given the runtime code of Simple7702Account by state override, executeBatch of [original call] as control, of [PoolManager.sync(token), original call] as test, and of [sync(token), sync(address(0)), original call] as a third run that the research did not make. Seven cited transactions gave control success, test revert, third run success: Avalanche 0x139f346f... to AvaxHookRouterV2 and 0x015c2a2a... to SwapHelper 0xde9d7290..., Soneium 0x3765e268... to LiFiDiamond, Arc 0xdc735f9e... to 0x944fe8be..., Robinhood Chain 0xdb558a1f... (on https://robinhood.drpc.org), Monad 0x230fc6a1..., and Ethereum 0xfd340225... (on https://mainnet.gateway.tenderly.co; the endpoint in networks.json refused the block as archive state). The revert data was ExecuteError(1, 0xb0ec849e) in six of them. On Soneium the payload is a router error 0x9eea691b that wraps 0xb0ec849e. My own Keccak gives 0xb0ec849e for NonzeroNativeValue(). The third run shows that the synced slot is the only cause and that a sync(address(0)) before the payment removes the revert. eth_simulateV1 on https://mainnet.base.org/ for the handleOps transactions 0xb5e34489... and 0x8e445f70... (EntryPoint v0.6, bundler code overridden in the same way): the control produced 1 and 5 PoolManager Swap events, the test with a preceding sync produced 0 and 4, and UserOperationEvent.success stayed true in all four runs. A Multicall3.aggregate3 probe that I ran on all 21 endpoints returned a zero currency slot, lock and delta count at the start, the token address in the currency slot after sync(token), a reserves slot equal to balanceOf(PoolManager), ManagerLocked (0x54e3ca0d) for a settle outside unlock, and a zero currency slot after sync(address(0)). eth_getCode shows code of equal length on all 21 networks for EntryPoint v0.6 (23,689 bytes), v0.7 (16,035), v0.8 (21,738), v0.9 (22,425), Multicall3 (3,808) and Simple7702Account (3,639). Verified sources fetched from Sourcify: EntryPoint v0.7 runs the validation loop at lines 182 to 194 and the execution loop at lines 199 to 201; v0.6 has handleOps at line 92 and the execution loop at 108; v0.8 calls _iterateValidationPhase at line 65 and executes at 71; v0.9 does the same at lines 85 and 91. Routescan returns AvaxHookRouterV2.sol with settle{value: paid}() at line 103 and no sync before it, and sync at line 106 before the token settle at 108. Sourcify returns NodeRouter (exact match, World Chain) with settle{value: amountToPay}() at line 1127 and sync at line 1132 before the token settle at 1138. My own sample of recent PoolManager Swap transactions: Soneium 61 of 120 were handleOps calls (EntryPoint v0.7), three bundles held more than one operation, the largest held three. World Chain 50 of 81, four bundles with more than one operation, the largest held four. Ethereum 1 of 120. The shares are of the same order as the ones in the finding. eth_estimateGas for sync(token) gave 27,891 on World Chain, 33,309 on Arc, about 35,400 to 35,500 on Ethereum, Base, Soneium and Avalanche, and 35,813 on Arbitrum One. Tempo answers an eth_call that carries value 1 with 'value transfer not allowed', which supports leaving Tempo out. Not repeated by me: the replays on BNB Smart Chain, Zora and Elysium, the third Base bundle, the sender shares of EisenDiamond and of the Robinhood Chain contract, the source lines of the Ethereum Bot and Router, the transaction count of 0x3e8282bd..., the count of EIP-7702 senders, and the CoW hooks page. I found no primary source that contradicts the claim.",
+   "codeCheck": "sync has no modifier and no caller check (src/PoolManager.sol:279-288). For a token it writes the currency and balanceOf(PoolManager) to two transient slots (src/libraries/CurrencyReserves.sol:27-32). For address(0) it writes zero to the currency slot only (src/PoolManager.sol:283, src/libraries/CurrencyReserves.sol:21-25). The currency slot is written at three places in src/: the two branches of sync and the reset in the token branch of _settle (src/PoolManager.sol:361). unlock does not touch it at entry or exit (src/PoolManager.sol:104-114), so a value set by one party stays for the next party in the same transaction. _settle reads the slot first (line 350). When it is nonzero and msg.value is above zero it reverts with NonzeroNativeValue at line 356, before any accounting. settle and settleFor are the only payable entry points and both end there (lines 300-307). The comment at line 348 asks integrators to sync before a native settle. Guards I looked for that could change the result: none clears the slot for the victim. The subtraction at line 360 is checked, so a balance below the stale reserves reverts and cannot credit. The credited currency (line 364) and the measured balance (line 359) come from the same slot, so a stale sync cannot turn a payment in one currency into a credit in another. The int128 cast at line 364 and the delta count check at line 112 work as usual. The only other reader of the slot is collectProtocolFees (src/ProtocolFees.sol:49-52), which reverts for the stale currency and concerns the fee controller alone. A caller that runs sync itself overwrites both slots (line 286) or zeroes the currency (line 283), which is why the canonical routers pass. A liquidity removal produces credits that leave through take (src/PoolManager.sol:291-297) and never calls settle with value, so this path cannot block a withdrawal. The code path is as the finding states: a repeatable revert for payers of native value that skip sync, and no movement of funds. Actor check: sync is open to any account, so unprivileged is right. The victims are users of third party routers that skip the sync asked for at line 348; users of the canonical routers are outside it. Severity check: no loss path and no blocked withdrawal, which is the low level of the scale.",
+   "corrections": "The mechanism and the actor stand. Six points need adjusting. 1. Ref: F-014 already records that a stale sync makes a later native settle revert at src/PoolManager.sol:356. This entry extends F-014 with carriers and exposed routers and should carry that id. 2. Soneium: the revert data is ExecuteError(1, 0x9eea691b(bytes)) with 0xb0ec849e inside the inner payload, where the finding quotes ExecuteError(1, 0xb0ec849e). 3. Carriers: the statement that handleOps accepts any caller holds for EntryPoint v0.6, v0.7 and v0.8. The verified v0.9 source requires tx.origin == msg.sender and a caller without code (lines 68 to 75), so on v0.9 a sync cannot be placed in front of handleOps inside one transaction, and the carrier must be an operation inside the bundle. 4. Carriers: a sync made in the validation step works only in a bundle that the attacker submits itself. ERC-7562 treats TSTORE like SSTORE (OP-070) and limits validation to the account's own or associated storage, so a bundler that follows it rejects such an operation. A sync in the execution step of an earlier operation is under no such rule. 5. Preconditions: top level value is not needed. The Monad and Robinhood Chain transactions carry zero value at the top level and still end in NonzeroNativeValue, so routers that pay native value from their own balance are exposed too. 6. Reach: an exposed router or account was shown on 11 of the 20 listed networks (Ethereum, Base, Zora, World Chain by source only, Soneium, Robinhood Chain, Elysium, BNB Smart Chain, Avalanche, Monad, Arc). On the other nine the path exists in the code and no exposed integration was shown. Also: every replay ran against the PoolManagers deployed today, which are other bytecode than a build of this checkout. For this build the finding rests on the source lines, which I read. The position of the attacker ahead of the victim inside a third party bundle remains unconfirmed, as the finding says. The finding is outside the review's stated goal: it takes no funds held by the PoolManager and blocks no withdrawal.",
+   "sources": [
+    {
+     "url": "eth_call with state override on https://api.avax.network/ext/bc/C/rpc at blocks 101128113 and 101120796",
+     "supports": "replays of 0x139f346f65a15250a39c546581d13470a10f141286921c5b4df21ee8ef8708cc and 0x015c2a2ae1f3f6e5ad55aa5e5df7049bf4b63f97be9934cdc906b072825cece4 succeed alone, revert with ExecuteError(1, 0xb0ec849e) after sync(token), and succeed again after sync(token) then sync(address(0))"
+    },
+    {
+     "url": "eth_call with state override on https://rpc.soneium.org at block 31130229",
+     "supports": "replay of 0x3765e268ca7659ef04123df27e32eb0e35928e7ec73466e2fdb9013a1b324a69 reverts after sync(token) with ExecuteError(1, 0x9eea691b(bytes)) that wraps 0xb0ec849e, and succeeds when sync(address(0)) follows the stale sync"
+    },
+    {
+     "url": "eth_call with state override on https://rpc.mainnet.arc.io at block 32679640, https://robinhood.drpc.org at block 121159490, https://rpc.monad.xyz at block 124630125 and https://mainnet.gateway.tenderly.co at block 26475525",
+     "supports": "replays of 0xdc735f9e320ac4e4a216b5c215bad0fc3d77f262813025034996a70eb16e81f5, 0xdb558a1f92f071bbd39512a3e813b8fe7862f98cc53e79812b7ed81c59dcb80b, 0x230fc6a1febbb8aa839d39856a79a64fdfc8ea4f0683278a94c6ea1bc6118cf4 and 0xfd340225507bac3d8a73fd5c41b7f9a4e57bc85f991f72af388293745f9d57e3 show the same three results; the Robinhood Chain and Monad transactions carry zero value at the top level"
+    },
+    {
+     "url": "eth_simulateV1 with state override on https://mainnet.base.org/ at blocks 61097274 and 61097399",
+     "supports": "handleOps transactions 0xb5e3448985965384067a993e3ea4d75db461a0f881ec4133957434ee556835d8 and 0x8e445f70c5fd9e9e5454a2898f1565c8e3d0d88ae5842d405c5a9fb53892858d go from 1 to 0 and from 5 to 4 PoolManager Swap events when a sync precedes handleOps, with UserOperationEvent.success true in every run"
+    },
+    {
+     "url": "eth_call to Multicall3.aggregate3 on the rpc URL of each of the 21 networks in state/networks.json",
+     "supports": "currency slot zero before sync, token address after sync(token), reserves slot equal to balanceOf(PoolManager), ManagerLocked for settle outside unlock, currency slot zero after sync(address(0))"
+    },
+    {
+     "url": "eth_getCode on the rpc URL of each of the 21 networks",
+     "supports": "EntryPoint v0.6, v0.7, v0.8 and v0.9, Multicall3 and Simple7702Account hold code of the same length on all 21 networks"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x0000000071727De22E5E9d8BAf0edAc6f37da032?fields=sources,compilation",
+     "supports": "EntryPoint v0.7 handleOps validates all operations (lines 182 to 194) and then executes them (lines 199 to 201) in one transaction"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789?fields=sources,compilation",
+     "supports": "EntryPoint v0.6 handleOps at line 92 with the execution loop at line 108"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108?fields=sources,compilation",
+     "supports": "EntryPoint v0.8 handleOps runs _iterateValidationPhase at line 65 before the execution loop at line 71 and uses the transient reentrancy guard with no caller rule"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x433709009B8330FDa32311DF1C2AFA402eD8D009?fields=sources,compilation",
+     "supports": "EntryPoint v0.9 nonReentrant requires tx.origin == msg.sender and msg.sender.code.length == 0 (lines 68 to 75)"
+    },
+    {
+     "url": "https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api?module=contract&action=getsourcecode&address=0xc8b2b67a1e286f74648a705617d54a0415fc651a",
+     "supports": "AvaxHookRouterV2.sol line 103 settles with value and no sync; lines 106 to 108 sync before the token settle"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/480/0x893f30424f8e6064b1d7284e5415be8413901c0d?fields=sources,compilation",
+     "supports": "NodeRouter.sol line 1127 settles with value and no sync; lines 1132 to 1138 sync before the token settle"
+    },
+    {
+     "url": "https://eips.ethereum.org/EIPS/eip-7562",
+     "supports": "OP-070 treats TLOAD and TSTORE like SLOAD and SSTORE, and the storage rules limit the validation phase to the account's own and associated storage"
+    },
+    {
+     "url": "eth_getLogs, eth_getTransactionByHash and eth_getTransactionReceipt on https://rpc.soneium.org, https://worldchain-mainnet.g.alchemy.com/public and https://ethereum-rpc.publicnode.com",
+     "supports": "handleOps share of recent PoolManager swap transactions: Soneium 61 of 120, World Chain 50 of 81, Ethereum 1 of 120; bundles of up to three and four operations on Soneium and World Chain"
+    },
+    {
+     "url": "eth_estimateGas on the rpc URLs of Ethereum, Base, World Chain, Soneium, Avalanche, Arc and Arbitrum One",
+     "supports": "a standalone sync(token) costs 27,891 to 35,813 gas"
+    },
+    {
+     "url": "eth_call on https://rpc.mainnet.tempo.xyz",
+     "supports": "a call that carries value 1 is refused with 'value transfer not allowed'"
+    },
+    {
+     "url": "src/PoolManager.sol:279-288, 300-307, 348-365; src/libraries/CurrencyReserves.sol:15-38; src/ProtocolFees.sol:49-52",
+     "supports": "sync leaves the currency slot set, _settle reverts at line 356 when the slot is nonzero and value is sent, and no other statement clears the slot"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Every state an ordinary account can leave in the PoolManager for the next party in the same transaction, and who is credited what when a later party pays. Walked in the source for the order: attacker calls sync(X) while the PoolManager holds R, then either sends d of X by plain transfer (balance R+d) or removes d inside an unlock of its own by burning claims and taking X (balance R-d); then the victim pays X or pays native.",
+   "agrees": true,
+   "note": "I walked it again in src/. Every function that moves a delta carries onlyWhenUnlocked (src/PoolManager.sol:147, 189, 258, 291, 300, 305, 310, 322, 332), unlock reverts unless the delta count is zero and then closes the lock (lines 112-113), and the count follows the deltas exactly because a zero delta returns early (lines 368-378). The pair of synced currency and reserves is the only leftover. A payer that syncs first overwrites it (lines 283, 286). A payer of value without sync reverts (line 356). A zero value settle without sync is credited the balance rise since the stale sync or reverts on the checked subtraction (line 360). The rise can hold only tokens that nobody settled, because every settled payment resets the slot (line 361), so it is a gift and never another user's payment. I also tried the two face case in the source (sync of an ERC-20 face of the native asset, then native value): the value check at line 356 stops it, and a canonical router resets the slot with sync(address(0)) first. One limit: the walk covers this source. The Multicall3 probe I ran on 21 networks agrees with it for the deployed contracts."
+  },
+  {
+   "check": "Can an attacker that runs later in the same transaction settle to itself a surplus that a victim's token payment left behind.",
+   "agrees": true,
+   "note": "A token settle credits the whole balance rise to the payer or its named recipient and resets the currency slot (src/PoolManager.sol:358-364). A later sync records the full balance (line 286), so tokens already inside the PoolManager can never appear as a rise for a later caller. A positive delta that a victim gives up through clear stays in the balance and is equally out of reach (lines 310-319). A capture needs the attacker's sync to come before a transfer that its sender never settles, and a payer that reverts takes its transfer back with it. I found no path in src/ that contradicts the item."
+  },
+  {
+   "check": "For each of the 21 networks: which carriers put calls of different users into one transaction, and does any of them run a user's calls anywhere other than in ordinary nested calls of that one transaction. Checked: code at the four EntryPoint addresses, Multicall3, Simple7702Account, CoW GPv2Settlement, 1inch AggregationRouterV6, Bebop JamSettlement and BebopSettlement, Across MulticallHandler, three UniswapX reactor addresses, GelatoRelay1BalanceERC2771, the World Chain PBHEntryPoint and the Arc CallFrom precompile; the top level target, the type and the sender code of up to 600 recent transactions with a PoolManager Swap event per network; the verified sources of the EntryPoints and of PBHEntryPointImplV1.",
+   "agrees": true,
+   "note": "I fetched the verified EntryPoint v0.6, v0.7, v0.8 and v0.9 sources and found the two loops at the lines the item names. PBHEntryPointImplV1 on World Chain (Sourcify, match) forwards to entryPoint.handleAggregatedOps at line 291. The Tempo transaction specification describes the calls of a type 0x76 transaction as one signer's batch executed atomically, and the Arc batch page says Multicall3From keeps the calling wallet as sender for every subcall. Code for the four EntryPoints, Multicall3 and Simple7702Account is present on all 21 networks by my own eth_getCode. One detail to add: EntryPoint v0.9 accepts handleOps only from an account without code that is also tx.origin (lines 68 to 75), so on v0.9 the shared transaction always starts at the bundler's own account. I did not repeat the per network transaction samples beyond Soneium, World Chain and Ethereum, and I did not test sequencer bundles, HyperEVM system transactions or the Celo fee currency calls, which the item leaves to earlier cycles."
+  },
+  {
+   "check": "Do calls that one contract makes one after another inside one transaction meet the same transient map of the PoolManager, and does sync leave its two values behind when the call ends. One eth_call per network to Multicall3.aggregate3 with the calls exttload(currency slot), sync(token), exttload(currency slot), exttload(reserves slot), token.balanceOf(PoolManager), sync(address(0)), exttload(currency slot), exttload(reserves slot).",
+   "agrees": true,
+   "note": "Repeated with my own encoder on all 21 endpoints, with three calls added (exttload of the lock slot, exttload of the delta count slot, settle outside unlock). All 21 passed: zero currency, lock and count at the start, the token in the currency slot after sync, reserves equal to balanceOf, ManagerLocked for settle, zero currency after sync(address(0)) with the reserves number kept. I recomputed the four slot constants with my own Keccak and they match src/libraries/Lock.sol:8, NonzeroDeltaCount.sol:10, CurrencyReserves.sol:11 and 13."
+  },
+  {
+   "check": "How the Universal Router and the v4 PositionManager at the addresses in state/networks.json pay the PoolManager, from their verified source: sync before a token settle, sync(address(0)) before a native settle, settle without a sync of their own, exttload of the reserves or currency slot, settleFor. 77 deployments on 21 networks.",
+   "agrees": true,
+   "note": "I read five of the 77 from Sourcify: Universal Router 2.1.2 on Celo, Arc, World Chain and Soneium, and the PositionManager on World Chain. DeltaResolver._settle at lines 38 to 48 is the same in all five: return on zero, sync(currency), then settle with value or pay and settle. No other source line calls settle or settleFor. The runtime code of those contracts and of the Tempo Universal Router 2.1.2 holds the sync and settle selectors and neither slot constant nor the settleFor selector. The Tempo router is not on Sourcify (HTTP 404), which fits the statement that it was matched by code; I did not repeat that match."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "question": "Which addresses appear as operator in OperatorSet logs and as spender in Approval logs of each PoolManager, and does any of them execute calls that an arbitrary caller supplies (Multicall3, Across MulticallHandler, aggregator executors, relay forwarders, settlement contracts with user defined hooks)? For each such address, do the owners that approved it hold ERC-6909 claims today?",
+   "why": "transferFrom and burn accept an operator or an approved spender as msg.sender (src/ERC6909.sol:35-48, src/ERC6909Claims.sol:13-22, src/PoolManager.sol:332-336). The shared carriers that this unit listed run calls for anyone, so a claim owner that approved one of them would let any account move the claims and take the tokens. No earlier lead or cleared item covers the approvals. A Blockscout log query for Unichain returned 69 OperatorSet logs with 58 distinct operators, none classified; the same query timed out or returned no data for Ethereum, Base, Arbitrum One, OP Mainnet and Polygon.",
+   "priority": "medium"
+  }
+ ]
+}

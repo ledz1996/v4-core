@@ -1,0 +1,144 @@
+{
+ "unit": "high-throughput",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "The chain facts hold. I fetched WrappedBackedTokenImplementation.sol from the Backed repository. _beforeTokenTransfer requires isPaused to be false and asks the sanctions list of the underlying token about the sender and the recipient (lines 178 to 194). setPause accepts only the pauser (lines 142 to 146). A withdraw or redeem by another account spends the owner's allowance (lines 265 to 274), and delegatedTransfer requires that ECDSA recovery returns the owner address (lines 112 to 132). On Monad at block 124,634,156 I read eight of the ten wrappers: wSPYx 0xe7e553cd128f0011777323a0b44a7b96ea1cb540, wTSLAx 0xc3fdbe3a68ee5de461d30415a8165cf9aefe1171, wSPCXx 0x8e2eed8b8b5e13ea7bf38e50d7821d2c57309072, wQQQx 0x4c1ae29c159838fc1b224636e28e086eb69101f7, wSMHx 0x23c4bddea5e7e284fb4027c6050bc5e6f7fae23f, wSKHYx 0x6215a58ed045d71f2561aaabe54f4c885c522998, wANTx 0xabec6aeab037b77c09a2a99264f9c81a35b02649 and wMUx 0xe2047ee3bddb5c99ae428ab83df63f8730698e30. Each has implementation slot 0x76c6851ea0b2741eedcbbed240715e8817e85583, owner 0x49754062e35f7591b93cc4f9915965be89643a65, pauser 0x8768cda7a463dae1baa6b2500efb025ebd7ffc50 and isPaused false. The PoolManager holds between 89.2 percent (wANTx) and 99.8 percent (wTSLAx) of the supply of each. For wSPYx and wMUx I also read the admin slot, which is 0x312063009e74142339edc92bcff6cfcfaa958bfa, and the owner of that contract is the same Safe 0x4975. The underlying token of wSPYx (0x90a2a4c76b5d8c0bc892a69ea28aa775a8f2dd48, SP500 xStock) names sanctions list 0x615dd3b9445a94334c1579f68115042d77cc7c44. The owner of the list is the Safe 0x4975 and isSanctioned(PoolManager) is false. getThreshold and getOwners give 2 of 3 for Safe 0x4975 and 2 of 4 for Safe 0x8768, both Safe version 1.3.0. The implementation bytecode (11,606 bytes) contains 46 function selectors. They equal the 46 selectors I derived from the source file and its OpenZeppelin parents, with none missing and none extra. Simulations with eth_call: setPause(true) from an arbitrary account reverts with Only pauser and succeeds from the pauser Safe. addToSanctionsList with the PoolManager address reverts for an arbitrary account with the Ownable message and succeeds from the owner Safe. A prestate trace of the simulated setPause shows that it writes slot 0x132 of the wrapper. With that slot set by state override, transfer from the PoolManager address reverts with token transfer while paused, and a transfer to the PoolManager reverts with the same message. With the code of the sanctions list replaced by a stub that answers true, transfer from the PoolManager reverts with sender is sanctioned. Without overrides a transfer from the PoolManager address succeeds for all eight wrappers. From an arbitrary account, redeem, withdraw and transferFrom with the PoolManager as owner revert with insufficient allowance, and delegatedTransfer and permit with an arbitrary signature revert with invalid signature. GeckoTerminal prices give 5.68 million dollars for the seven wrappers I priced, and each of the seven is within one percent of the figure in the research file. I could not find the addresses of wNVDAx and wEWYx, so 1.54 million dollars of the 7.92 million total were not read again. cbBTC (0xd18b7ec58cdf4876f6afebd3ed1730e4ce10414b) is a proxy over 0xd1611e6e93ec512bfbd2b6428a26c463c1dce6f9. The PoolManager holds 39.92 of 93.26 coins, which is 42.8 percent. paused() is false and isFrozen(PoolManager) is false. The implementation bytecode contains the selectors of freeze(address), unfreeze(address), pause(), burn(address,uint256), FREEZER_ROLE(), PAUSER_ROLE() and BURNER_ROLE(). freeze, burn and pause from an arbitrary account revert with error 0xe2517d3f, which carries the caller and the missing role. cWBTC and ceBTC both name market manager 0xbc4cd7bbd8d38027a88838b88ba04561fa778c35. A transfer of half the balance from the PoolManager address reverts with 0xf47323f4 for both, and I computed that value as the selector of MarketManager__Paused(). The PoolManager holds 0.00134 units of each.",
+   "codeCheck": "take is open to any caller inside an unlock. It debits the caller and then calls currency.transfer (src/PoolManager.sol:291-297). For an ERC-20 the library calls transfer on the token and reverts with ERC20TransferFailed when the call fails or returns anything other than no data or a 32 byte true (src/types/Currency.sol:55-86). CustomRevert.bubbleUpAndRevertWith always reverts (src/libraries/CustomRevert.sol:83-119). The code has no custody per pool, so one balance serves every pool of a currency, and a token that rejects transfers from the PoolManager address makes every take of that currency revert. collectProtocolFees uses the same transfer (src/ProtocolFees.sol:56). settle credits only the rise of balanceOf between sync and settle (src/PoolManager.sol:279-288, 349-364), so a token that rejects transfers to the PoolManager cannot be paid in. Actor check in the code: the PoolManager calls a currency address only with transfer and balanceOf (src/types/Currency.sol:60-73, 94), sends native value with empty calldata (src/types/Currency.sol:48), calls unlockCallback on the caller (src/PoolManager.sol:110) and calls hook addresses with the IHooks selectors (src/libraries/Hooks.sol:131-155). None of the ten hook selectors and not unlockCallback occurs in the wrapper or cbBTC implementation bytecode. No caller can therefore make the PoolManager approve, redeem, pause or sign anything on these tokens, and the issuer rights are the only way to the freeze. One guard the finding leaves out: mint, burn and clear do not call the token (src/PoolManager.sol:310-336, src/ERC6909.sol:79-89). While a token is paused, a caller who is owed that token can still close the delta by minting ERC-6909 claims for it, and can take the other currency of the pool as usual.",
+   "corrections": "The actor value issuer is right and the severity high fits the scale. The impact statement is too wide at one point. A pause or sanctions entry does not freeze the other side of those pools at the level of the PoolManager. A liquidity provider who can call the PoolManager directly can remove liquidity, take the other currency and mint ERC-6909 claims for the blocked wrapper (src/PoolManager.sol:322-329), and a swap that pays out the wrapper can be closed the same way. What is frozen is the wrapper itself: no take and no settle of it works until the issuer lifts the block. Whether providers who hold positions through the deployed PositionManager can use this route depends on that contract, which is outside this repository and was not read. Two of the ten wrappers (wNVDAx and wEWYx) were not located by me, so the statement that all ten share the roles rests on eight read here and on the research file for the other two. The burn right on cbBTC was confirmed as a selector and a role check only. I did not read which accounts hold the cbBTC roles.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/backed-fi/backed-token-contract/main/contracts/WrappedBackedTokenImplementation.sol",
+     "supports": "Pause and sanctions checks in _beforeTokenTransfer, setPause limited to the pauser, allowance spending in _withdraw, ECDSA recovery in delegatedTransfer"
+    },
+    {
+     "url": "rpc https://rpc.monad.xyz eth_call and eth_getStorageAt at block 124,634,156: symbol, totalSupply, balanceOf(PoolManager), owner, pauser, isPaused, asset, EIP-1967 implementation and admin slots for eight wrappers; sanctionsList, owner and isSanctioned(PoolManager) on 0x615dd3b9445a94334c1579f68115042d77cc7c44; getThreshold, getOwners and VERSION on both Safes",
+     "supports": "Roles, Safe thresholds 2 of 3 and 2 of 4, pause state false, PoolManager share of supply 89.2 to 99.8 percent for eight wrappers"
+    },
+    {
+     "url": "rpc https://rpc.monad.xyz eth_getCode of 0x76c6851ea0b2741eedcbbed240715e8817e85583",
+     "supports": "46 selectors in the deployed wrapper implementation equal the 46 selectors of the published source"
+    },
+    {
+     "url": "rpc https://rpc.monad.xyz debug_traceCall with prestateTracer in diff mode for setPause(true) from 0x8768cda7a463dae1baa6b2500efb025ebd7ffc50, then eth_call with state override of slot 0x132 and with stub code at the sanctions list",
+     "supports": "A pause or a sanctions entry makes transfer from and to the PoolManager address revert"
+    },
+    {
+     "url": "rpc https://rpc.monad.xyz eth_call from 0x1111111111111111111111111111111111111111: setPause, addToSanctionsList, redeem, withdraw, transferFrom, delegatedTransfer and permit against wSPYx with the PoolManager as owner",
+     "supports": "An ordinary account can neither set the pause or the sanctions entry nor move the PoolManager's wrapper balance"
+    },
+    {
+     "url": "rpc https://rpc.monad.xyz eth_call and eth_getCode on cbBTC 0xd18b7ec58cdf4876f6afebd3ed1730e4ce10414b and implementation 0xd1611e6e93ec512bfbd2b6428a26c463c1dce6f9",
+     "supports": "cbBTC balance share 42.8 percent, paused false, isFrozen(PoolManager) false, freeze, pause and burn selectors behind role checks"
+    },
+    {
+     "url": "rpc https://rpc.monad.xyz eth_call from the PoolManager address: transfer on cWBTC 0xdb3e888c3b50771821226d30ab6ec14eb5ba85ba and ceBTC 0x2840772e14ffbe337ab966727b7d1dd09bdc76e4",
+     "supports": "Both transfers revert with 0xf47323f4, the selector of MarketManager__Paused()"
+    },
+    {
+     "url": "https://api.geckoterminal.com/api/v2/simple/networks/monad/token_price/0xe7e553cd128f0011777323a0b44a7b96ea1cb540,0xc3fdbe3a68ee5de461d30415a8165cf9aefe1171,0x8e2eed8b8b5e13ea7bf38e50d7821d2c57309072,0x4c1ae29c159838fc1b224636e28e086eb69101f7,0x23c4bddea5e7e284fb4027c6050bc5e6f7fae23f,0x6215a58ed045d71f2561aaabe54f4c885c522998,0xabec6aeab037b77c09a2a99264f9c81a35b02649,0xd18b7ec58cdf4876f6afebd3ed1730e4ce10414b",
+     "supports": "Prices for seven wrappers (5.68 million dollars at the PoolManager) and cbBTC at 61,204 dollars"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "plausible",
+   "severity": "low",
+   "factCheck": "Confirmed parts. block/limit.rs of mega-evm at tag v1.7.3 is byte identical to the main branch. pre_execution_check returns StateGrowthLimit for every candidate once block_state_growth_used has reached block_state_growth_limit (lines 880 to 890), and post_execution_update_raw adds the usage of an executed transaction without a test, with the comment that the last transaction may exceed the limit (lines 940 to 943). block/executor.rs calls pre_execution_check for every transaction of a block, deposits included (lines 498 to 507), so a validating node rejects a block that carries a transaction after the limit was reached. constants.rs sets TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT to 1,000, so one transaction can fill the block budget. The resource limits page states the same rule and says a skipped transaction has no receipt and may be reconsidered in a later block. Ordering: I sampled 80 blocks between 32,610,921 and 32,614,160. After removing deposits and the zero price transactions of 0xa887dcb9d5f39ef79272801d05abdf707cfbbd1d, 954 transactions remain. In 133 of 874 neighbouring pairs from different senders the later transaction pays the higher priority fee, and 59 of the 80 blocks contain such a pair. Blocks are therefore not sorted by priority fee, which agrees with the research sample. The base fee was 1,000,000 wei in every sampled block, so 22,559,525 gas costs 0.0000226 ETH. Deposits: the OptimismPortal 0x7f82f57F0Dd546519324392e408b01fcC7D709e8 on Ethereum names SystemConfig 0x1ed92e1bc9a2735216540eddd0191144681cb77e, whose resourceConfig has maxResourceLimit 20,000,000. For 12 deposits from the explorer list I read the block: each deposit is at index 1 and the first transaction that is no deposit is at index 2. The FAQ states the limit of 500 pending transactions per account and no rate limit per account. Unconfirmed link. Step 3 and the title need the sequencer to take pending transactions in arrival order and to keep skipped ones ahead of later arrivals. The mini-block page and the FAQ say nothing about the order of pending transactions, the pool of mega-reth is closed source, and no block with a full state budget exists to observe. My sample cannot tell arrival order from fee order inside one mini-block of about 10 milliseconds. The delay of N blocks for a queue of N filling transactions is therefore an inference. Not repeated: the gas figure of 22,559,525 for 1,000 entries (measured in cycle 2), and the scan of 400,000 block headers with 30 traces.",
+   "codeCheck": "Every exit from the PoolManager is a transaction that reaches unlock and then modifyLiquidity, take or burn (src/PoolManager.sol:104-114, 145-184, 291-297, 332-336). The contract has no path that pays out without a transaction on the chain, so a block that admits no further transactions delays every exit until the next block that does. Nothing in src/ reads block fields or depends on timing, so the delay changes no accounting. The actor value unprivileged is right for the part that is confirmed: any account can send a transaction with 1,000 new state entries. The victims did nothing unusual.",
+   "corrections": "The title states the queue delay as a fact. Only this much is confirmed: one filling transaction closes the rest of its one second block for every later candidate, deposits excepted because they run first, and a higher priority fee does not place a transaction ahead of it at block level. That is the cycle 2 statement of F-042 and it remains confirmed at low severity. The delay by the length of a queue is plausible and depends on lead L-170. If the sequencer keeps arrival order across blocks, the hazard is a standing delay for everyone at about 1.95 ETH per day, and medium would fit the scale because liquidity operations would be held back without loss. Step 6 gives the wrong bound for deposits, and the conclusion still holds. The cheapest state growth by deposits is a deposit from a sender address that does not exist on MegaETH: the Rex5 rule records one new account for the caller of such a deposit, and the portal accepts a gas limit of 21,000 (minimumGasLimit(0) on the portal). 20,000,000 gas buys at most 952 such deposits per L1 block, against fewer than 900 slots by storage writes at the 22,559 gas per slot that cycle 2 measured. Both are below 1,000, with a margin of 48 entries. I did not confirm that a deposit that fails for lack of intrinsic gas (60,000 on MegaETH) is counted as state growth. If it is not counted, the bound is lower.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/block/limit.rs",
+     "supports": "pre_execution_check skips every candidate once the block state growth counter has reached the limit, and the transaction that reaches the limit is kept"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/block/executor.rs",
+     "supports": "The block executor applies pre_execution_check to every transaction, deposits included"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/constants.rs",
+     "supports": "TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT are both 1,000"
+    },
+    {
+     "url": "https://docs.megaeth.com/spec/megaevm/resource-limits.md",
+     "supports": "The first transaction that reaches a block level runtime limit is included, later candidates are skipped and may be reconsidered in a later block"
+    },
+    {
+     "url": "rpc https://mainnet.megaeth.com/rpc eth_getBlockByNumber with transactions for 80 blocks between 32,610,921 and 32,614,160",
+     "supports": "133 of 874 neighbouring pairs from different senders have the higher priority fee second, base fee 1,000,000 wei"
+    },
+    {
+     "url": "rpc https://ethereum-rpc.publicnode.com eth_call systemConfig(), minimumGasLimit(0) and version() on 0x7f82f57F0Dd546519324392e408b01fcC7D709e8 and resourceConfig() on 0x1ed92e1bc9a2735216540eddd0191144681cb77e",
+     "supports": "maxResourceLimit 20,000,000 gas of deposits per L1 block and a minimum deposit gas limit of 21,000"
+    },
+    {
+     "url": "https://megaeth.blockscout.com/api/v2/optimism/deposits",
+     "supports": "List of recent deposits. The 12 I read on chain are each at index 1 of their block"
+    },
+    {
+     "url": "https://docs.megaeth.com/developer-docs/faq.md",
+     "supports": "500 pending transactions per account, no rate limit per account, intrinsic gas of 60,000"
+    },
+    {
+     "url": "https://docs.megaeth.com/spec/network-upgrades/rex5.md",
+     "supports": "A deposit whose caller account is empty records one new account as state growth"
+    },
+    {
+     "url": "https://docs.megaeth.com/mini-block.md",
+     "supports": "The page describes mini-blocks and gives no rule for the order of pending transactions"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Lead L-251 and critic gap of cycle 3: does the KeylessDeploy sandbox start only at depth zero in the release that mainnet runs, and does any later specification or transaction type let it start next to other contract code of the same transaction (src/PoolManager.sol:279-288, 349-364, 322-329)?",
+   "agrees": true,
+   "note": "A mistake here would be an unprivileged double credit, so I read it first. system/intercept.rs at tag v1.7.3 is byte identical to main. KeylessDeployInterceptor returns without acting when ctx.is_inside_sandbox() is true or depth is not 0 (line 301), and the trait comment defines depth as FrameInit::depth, which is 0 only for the first frame of a transaction. The target test uses call_inputs.target_address, so a delegated account that points at the contract does not match. The keyless deploy page of the specification lists depth zero as a precondition and says other calls reach the bytecode and revert with NotIntercepted. stateless-validator 2.1.0 pins mega-evm v1.7.3 (Cargo.toml line 44), evm/spec.rs at that tag ends at REX6, and the changelog entry for v1.7.3 removes REX7. On chain the contract at 0x6342000000000000000000000000000000000003 has 515 bytes of code, and calls from the PoolManager address with empty calldata, transfer and balanceOf revert. A sandbox therefore runs as the only code of its transaction, and sync, unlock and settle inside it behave as in a separate transaction. Still unconfirmed, as the research file says: which mega-evm revision the closed mega-reth v2.2.3 binary links."
+  },
+  {
+   "check": "Wrapped stock tokens (lead L-259 names them): source of the wrapper for a limit on what one address may send or hold, and for a way in which another account can move or lock the PoolManager's shares.",
+   "agrees": true,
+   "note": "7.9 million dollars rest on this item. I read the source and tested the deployed contract. The 46 selectors in the implementation bytecode equal the 46 of the source, with none extra, so the deployed code has no function beyond the published ones. From an arbitrary account redeem, withdraw and transferFrom with the PoolManager as owner revert with insufficient allowance, delegatedTransfer and permit with an arbitrary signature revert, setPause reverts with Only pauser and addToSanctionsList reverts with the Ownable message. The PoolManager cannot be made to grant an allowance, because it calls a currency only with transfer and balanceOf (src/types/Currency.sol:60-73, 94) and no hook selector occurs in the implementation. _beforeTokenTransfer has no amount, count or time rule. A deposit by a third party with the PoolManager as receiver only adds shares that the depositor paid for. Remaining gap: the bytecode was not rebuilt from source, so the match is by selectors and revert messages."
+  },
+  {
+   "check": "Whether the Monad precompile sweep of cycles 1 and 2 still describes mainnet, and whether a pooled currency is a special address.",
+   "agrees": true,
+   "note": "docs.monad.xyz/ai/current-facts.md lists mainnet at v0.16.5 and MONAD_TEN, and revision.h on main names MONAD_TEN as the latest stable revision. precompiles.cpp resolves 0x01 to 0x11 and 0x0100, and monad_precompiles.cpp adds only the staking address and, from MIP-4, the reserve balance address. Both Monad precompiles reject every call that is not a plain CALL, so the staticcall of sync fails. I ran the call shapes P1, P2 and P3 from the PoolManager address against 0x1000 and 0x1001: empty calldata with and without value, transfer with zero and nonzero amount and balanceOf all revert with method not supported. 0x0100 returns empty data on these inputs, so a take of that address moves nothing and debits the caller, and sync of it reverts at decoding (src/types/Currency.sol:94). I did not repeat the code check over the 8,375 tokens."
+  },
+  {
+   "check": "Lead L-171: are L1 deposits placed ahead of sequencer transactions, and can a deposit be skipped because the block's state growth counter has reached 1,000 while deposits remain?",
+   "agrees": true,
+   "note": "The result holds and the stated reason needs a correction. Deposits are at index 1 in the 12 deposit blocks I read, and maxResourceLimit on the L1 SystemConfig is 20,000,000. The research file bounds the growth by storage writes (fewer than 900 slots). A denser route exists: the Rex5 rule counts one new account for a deposit whose caller account is empty, and the portal accepts a gas limit of 21,000, so one L1 block can carry up to 952 such deposits. That is still below 1,000, with a margin of 48 entries, and the limiter admits the transaction that reaches the limit. The clearance therefore stands on a thinner margin than recorded. Whether a deposit that fails for lack of the 60,000 intrinsic gas is counted as growth was not confirmed."
+  },
+  {
+   "check": "Transfer quotas, cooldowns and per block movement rules (lead L-259) for every token with a balance at the Monad PoolManager. Can a take of the whole balance that is paid back in the same unlock, repeated, leave the PoolManager unable to send (src/PoolManager.sol:291-297, src/types/Currency.sol:60-86)?",
+   "agrees": true,
+   "note": "I agree for the wrapped stock tokens, where the source shows no such rule, and I found no contrary case. The census has a limit that the result does not state. Four round trips of the whole balance in one call detect a quota below four times the balance and a cooldown inside one block. A quota set in absolute units far above the PoolManager balance, or a rule that counts over a day, passes four rounds, while a caller can repeat take and settle several hundred times per transaction (src/PoolManager.sol:291-297, 349-364). For the tokens outside the wrapped stock set the clearance rests on the census alone. I did not repeat the census."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "question": "For the 20 tokens with the largest value at the Monad PoolManager outside the wrapped stock set (USDC, GHO, cbBTC, syrupUSDC, AUSD, mUSD, bridged WETH, WBTC, apxUSD, USDT0, shMON and the next ones), does the transfer path in the verified source or the bytecode contain a per sender volume, count or time rule of any size?",
+   "why": "The census of cycle 4 moved the whole balance four times in one call. A quota in absolute units above four times the PoolManager balance, or a rule counted per day, passes that test, and a caller can repeat take and settle hundreds of times per transaction at no cost (src/PoolManager.sol:291-297). Lead L-259 is closed for these tokens on the census alone.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "question": "When one currency of a pool rejects transfers from the PoolManager, can a position held through the deployed PositionManager on Monad (0x5b7ec4a94ff9bedb700fb82ab09d5846972f4016) still be closed, by minting ERC-6909 claims for the blocked currency or by clearing its delta, so that the other currency is paid out?",
+   "why": "Core allows this route (src/PoolManager.sol:310-329). It decides whether a pause of a wrapped stock token or of cbBTC freezes only that token or also the USDC side of 7.9 million dollars of pools, which sets the impact of F-015.",
+   "priority": "low"
+  }
+ ]
+}

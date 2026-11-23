@@ -6,7 +6,10 @@
 #   test:    [ PoolManager.sync(token), original call ]
 # sync ignores its caller (src/PoolManager.sol:279-288), so the test equals a sync made by anyone earlier in the transaction.
 # Nothing is signed or sent.
-import json, sys, time, concurrent.futures as cf
+import json, sys, os, time, concurrent.futures as cf
+MODE=os.environ.get('MODE','native')  # native: transactions that carry value. token: transactions without value (token input)
+OUT='replay_native.json' if MODE=='native' else 'replay_token.json'
+EPSET={'0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789','0x0000000071727de22e5e9d8baf0edac6f37da032','0x4337084d9e255ff0702461cf8895ce9e3b5ff108','0x433709009b8330fda32311df1c2afa402ed8d009'}
 from lib import *
 from config import CFG
 T0='0x'+keccak256(b'Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)').hex()
@@ -24,7 +27,7 @@ def call(u,frm,data,block,code,gas):
         e=j['error']; d=e.get('data'); d=d if isinstance(d,str) else json.dumps(d)
         return {'ok':False,'msg':str(e.get('message'))[:120],'data':(d or '')[:600]}
     return {'ok':True}
-def run(n, maxlogs=3000, per_sender=2, max_senders=14):
+def run(n, maxlogs=3000, per_sender=(2 if MODE=='native' else 1), max_senders=14):
     cid=n['chainId']; c=CFG[cid]; pm=n['poolManager']; out={'chainId':cid,'name':n['name'],'results':[],'err':None}
     try:
         lu=c['logs']; head=int(rpc(lu,'eth_blockNumber',[]),16); chunk=c['chunk']; hi=head-2; logs=[]; req=0
@@ -37,7 +40,7 @@ def run(n, maxlogs=3000, per_sender=2, max_senders=14):
             req+=1; logs+=l[::-1]; hi=lo-1
         txs={}
         for l in logs: txs.setdefault(l['transactionHash'],set()).add('0x'+l['topics'][2][-40:])
-        out['txs']=len(txs); hashes=list(txs)[:900]
+        out['txs']=len(txs); hashes=list(txs)[:(900 if MODE=='native' else 160)]
         su=[u for u in c['state']]+[n['rpc']]
         def gettx(h):
             for u in (lu,n['rpc']):
@@ -47,7 +50,7 @@ def run(n, maxlogs=3000, per_sender=2, max_senders=14):
                 except Exception: pass
             return None
         with cf.ThreadPoolExecutor(6) as ex: tl=list(ex.map(gettx,hashes))
-        cand=[t for t in tl if t and t.get('to') and int(t.get('value','0x0'),16)>0 and t.get('type') not in ('0x7e','0x76','0x6a','0x68','0x69')]
+        cand=[t for t in tl if t and t.get('to') and ((int(t.get('value','0x0'),16)>0) if MODE=='native' else (int(t.get('value','0x0'),16)==0 and t['to'].lower() not in EPSET)) and t.get('type') not in ('0x7e','0x76','0x6a','0x68','0x69')]
         out['valueTxs']=len(cand); seen={}; picks=[]
         for t in cand:
             ss=tuple(sorted(txs[t['hash']])); k=(t['to'].lower(),ss)
@@ -77,10 +80,10 @@ if __name__=='__main__':
     nets=[n for n in NETS if not sys.argv[1:] or str(n['chainId']) in sys.argv[1:]]
     with cf.ThreadPoolExecutor(7) as ex: res=list(ex.map(run,nets))
     old={}
-    try: old={r['chainId']:r for r in json.load(open('replay_native.json'))}
+    try: old={r['chainId']:r for r in json.load(open(OUT))}
     except Exception: pass
     for r in res: old[r['chainId']]=r
-    json.dump(list(old.values()),open('replay_native.json','w'),indent=1)
+    json.dump(list(old.values()),open(OUT,'w'),indent=1)
     for r in res:
         print(r['chainId'],r['name'],'txs',r.get('txs'),'with value',r.get('valueTxs'),'err',r['err'])
         for x in r['results']:

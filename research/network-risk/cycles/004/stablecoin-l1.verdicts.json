@@ -1,0 +1,111 @@
+{
+ "unit": "stablecoin-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "The chain facts hold. crates/hardfork/src/constants.rs at commit 697ea97 sets SSTORE_CREATE_COST to 250,000, TEMPO_T1_GENERAL_GAS_LIMIT to 30,000,000 and TEMPO_T1_TX_GAS_LIMIT_CAP to 30,000,000, and tips/tip-1000.md at the same commit gives 252,100 gas for a cold write to an empty slot and says the transaction gas cap is 30M. The endpoint reports tempo/v1.19.0-697ea97. Block 50,378,538 has gasLimit 500,000,000, mainBlockGeneralGasLimit 30,000,000 and baseFeePerGas 600,000,000. I ran a gas probe with eth_estimateGas and override code at an unused address: a call that stops at once costs 274,318 gas, one SSTORE from 0 to 1 costs 530,642, two such writes cost 784,951, and a write over a nonzero slot costs 279,364. A fresh slot therefore costs 256,324 gas for the first and 254,309 for the second, and a rewrite costs 5,046. Two fresh slots per crossing give about 510,000 gas, which agrees with the 504,684 of the finding. crates/precompiles/src/storage_credits/accounting.rs charges 245,000 gas up front for each creation in the default Refund mode on top of the 5,000 residual, so the gas limit must cover the full amount. crates/payload/builder/src/lib.rs lines 561 to 604 defer a transaction that is no payment when the general gas already used plus min(gas limit, cap) exceeds the general limit. The test uses the gas limit of the transaction, so a swap sent with a 30,000,000 limit is admitted only while no general gas has been used in that block. The fee document gives a floor of 600 million and a cap of 12 billion attodollars per gas and a general limit of 30M gas per block. The cost figures follow: 30,000,000 gas is 0.018 USD at the floor and 0.36 USD at the cap, and 540,000 gas is 0.0003 USD at the floor. I listed the 167 Initialize logs of the PoolManager and read slot0, both fee growth globals and liquidity of every pool with extsload. 70 of the 147 pools without a hook have both globals nonzero, so the precondition holds on live pools. I did not repeat the harness simulation that plants positions and swaps. The per crossing figure rests on the slot probe above and on the source.",
+   "codeCheck": "Pool.updateTick writes the two fee growth outside values only when the tick is at or below the current tick (src/libraries/Pool.sol:533-538), so a tick first used above the price keeps both at zero. Pool.crossTick writes global minus outside to both slots with no condition (src/libraries/Pool.sol:606-609), and the swap loop calls it for every initialized tick it reaches (src/libraries/Pool.sol:413-428). For a price raising swap the first argument is the stored feeGrowthGlobal0X128 and the second is the running value for currency1 (src/libraries/Pool.sol:416-418), so both writes create a slot when both globals are nonzero. modifyLiquidity has no owner or allowlist check and takes msg.sender as position owner (src/PoolManager.sol:145-168). A range above the price owes currency0 only (src/libraries/Pool.sol:209-217). The swap loop has no bound on the number of crossings other than the price limit and the amount (src/libraries/Pool.sol:344), and a revert from lack of gas undoes the whole swap. Liquidity removal has no loop over ticks. It updates two tick slots, at most two bitmap words, the position slots and the pool liquidity (src/libraries/Pool.sol:159-203, src/libraries/Position.sol:76-102), so it stays far below the cap. take and mint add one TIP-20 transfer or one claim balance write each (src/PoolManager.sol:291-297, 322-329). I found no guard that the finding missed. The actor is right: the planter needs no role and the victims use a pool without a hook and with ordinary tokens. No funds move to the planter and no withdrawal is blocked, which fits low.",
+   "corrections": "The pathUSD and USDC.e pool with fee 375 and spacing 4 (id 0x2fafb8d5...297d) is initialized and empty on chain: liquidity, feeGrowthGlobal0X128 and feeGrowthGlobal1X128 all read zero. The measured figures therefore describe a state that the harness built by override, and the finding should say so. The count of 58 crossings ignores the 63/64 rule. The swap runs at least two call frames below the transaction, so the count is a little lower. The statement that price lowering swaps are not affected is too wide. A tick at or below the price that was initialized while a global was zero starts with an empty slot, and a downward crossing writes zero when the global equals the stored value, after which the next upward crossing creates the slot again. The cost figures are upper bounds. The PoolManager account holds 13 storage credits (balanceOf on 0x1060000000000000000000000000000000000000), removals that clear tick or position slots mint more, and settle_storage_credit_refunds returns 245,000 gas per credit at the end of a transaction that created slots in PoolManager storage. The refund lowers the fee and leaves the needed gas limit unchanged. Because the builder admits by gas limit, any earlier transaction of the general lane with a higher tip defers a swap that carries a 30,000,000 limit in that block. This strengthens the degrade effect for large swaps and does not touch withdrawals, whose gas limits are small.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/hardfork/src/constants.rs",
+     "supports": "SSTORE_CREATE_COST 250,000, SSTORE_SET_COST 5,000, general gas limit 30,000,000, transaction gas cap 30,000,000, base fee floor 600,000,000 and cap 12,000,000,000, T14 at timestamp 1796742000"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/tips/tip-1000.md",
+     "supports": "252,100 gas for a cold write to an empty slot and the transaction gas cap of 30M"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/storage_credits/accounting.rs",
+     "supports": "in Refund mode the 245,000 gas of a slot creation is charged up front and a pending refund is recorded"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler/config.rs",
+     "supports": "settle_storage_credit_refunds records a gas refund of 245,000 per settled credit at the end of a successful transaction"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/payload/builder/src/lib.rs",
+     "supports": "lines 561 to 604: a transaction that is no payment is deferred when general gas used plus min(gas limit, cap) exceeds the general limit"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/protocol/fees/spec-fee.md",
+     "supports": "base fee cap of 12 billion and floor of 600 million attodollars per gas, general gas limit of 30M gas per block"
+    },
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "web3_clientVersion tempo/v1.19.0-697ea97; block 50,378,538 header fields; eth_estimateGas slot probe 274,318, 530,642, 784,951 and 279,364 gas; 167 Initialize logs from eth_getLogs in 504 ranges; extsload of slot0, fee growth globals and liquidity for all pools; StorageCredits balanceOf(PoolManager) returns 13"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "I repeated the reads on https://rpc.mainnet.tempo.xyz near block 50,378,600. On 0x20c000000000000000000000030a4c7f7b8f3586 symbol() returns GABAGOOL, decimals() 6, totalSupply() 310,600,000 base units, transferPolicyId() 0 and balanceOf(PoolManager) 600,000. isAuthorized(0, PoolManager) on 0x403c000000000000000000000000000000000000 returns false and isAuthorized(1, PoolManager) returns true. An eth_call with the PoolManager as sender to transfer(address,uint256) reverts with 0x54cfe659 for amounts 0, 1 and 600,000. My own Keccak gives 0x54cfe659 for PolicyForbids(). The token emitted one TransferPolicyUpdate log in its whole history: block 43,401,478, updater 0x3b387f83c0b46a544050eaa307e185f701c21871, new policy 0, transaction 0x7e0b7b5e33ce3b867fce2f5b4ae0eeca38d9a68642bb2d0c155e4e39b290023a. The two pools that name the token were initialized at blocks 43,299,165 and 43,299,232, so the policy changed after the pools existed. crates/precompiles/src/tip20/mod.rs lines 280 to 304 let a holder of DEFAULT_ADMIN_ROLE set any existing policy id. The same transfer of 1 unit from the PoolManager returns true on pathUSD, OUSD and USDC.e. pathUSD and OUSD both report transfer policy 2, and policyData(2) returns type 1 (BLACKLIST) with admin 0x251d2711ebeb0a09fdb8992f5506f3d949175246. The PoolManager holds 19,633 pathUSD and 408,832 OUSD at this block. I did not repeat the take test on the other 69 currencies, so the statement that GABAGOOL is the only failing one rests on the research run.",
+   "codeCheck": "take debits the caller and then calls currency.transfer (src/PoolManager.sol:291-297). For a token the library calls transfer(address,uint256) and treats a revert as failure (src/types/Currency.sol:64-74), then reverts with the wrapped ERC20TransferFailed error (src/types/Currency.sol:82-86, src/libraries/CustomRevert.sol:83-119). No other function of the PoolManager moves a token out except collectProtocolFees, which uses the same transfer (src/ProtocolFees.sol:55). A positive GABAGOOL delta can still be closed without a transfer through mint (src/PoolManager.sol:322-329) or clear (src/PoolManager.sol:310-319), so the other currency of a position can leave. The actor is right for the hazard class: the state needs the admin of the token or of its policy, and no step is open to an ordinary account. High fits the scale because the freeze needs a token issuer. The live instance itself is 0.6 tokens.",
+   "corrections": "Both GABAGOOL pools carry the hook 0x55aeb9ebfa15c28ff9d9a675e8574a5bbe186aa8 (21,648 bytes of code). Its address has the beforeInitialize, beforeAddLiquidity, beforeRemoveLiquidity, beforeSwap, beforeDonate and beforeSwapReturnsDelta flags, so step 4 of the mechanism also depends on that hook accepting the removal (src/libraries/Hooks.sol:195-206). The finding does not mention the hook. TIP20Factory.create_token has no role check (crates/precompiles/src/tip20_factory/mod.rs lines 98 to 149), so the admin of GABAGOOL is whoever created it. For a token that an attacker issues and that victims then choose to pool, the schema class is pool-creator. The class issuer stays right for pathUSD, OUSD and the other stablecoins. The cited registry file holds the interface only. The checks that a transfer runs and the admin check for a policy change are in crates/precompiles/src/tip20/mod.rs. pathUSD and OUSD share policy 2, a blacklist with one admin, so one entry for the PoolManager stops takes of both tokens at once. The OUSD balance is 408,832 at my block, where the finding has 406,692.",
+   "sources": [
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "eth_call symbol, decimals, totalSupply, transferPolicyId and balanceOf on GABAGOOL; isAuthorized(0 and 1, PoolManager) on the TIP-403 registry; transfer from the PoolManager reverts with 0x54cfe659 for 0, 1 and 600,000 units; eth_getLogs gives one TransferPolicyUpdate at block 43,401,478 and the two Initialize logs at blocks 43,299,165 and 43,299,232; policy 2 with type 1 and admin 0x251d2711ebeb0a09fdb8992f5506f3d949175246 on pathUSD and OUSD"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/tip20/mod.rs",
+     "supports": "change_transfer_policy_id requires DEFAULT_ADMIN_ROLE and accepts any existing policy id; transfers return PolicyForbids when the policy rejects sender or recipient"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/contracts/src/precompiles/tip403_registry.rs",
+     "supports": "policy types WHITELIST, BLACKLIST and COMPOUND and the isAuthorized and policyData views"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/tip20_factory/mod.rs",
+     "supports": "create_token deploys a TIP-20 for any sender with an admin the sender names"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Transaction types and execution contexts on Arc: legacy, EIP-2930, EIP-1559 and EIP-7702 transactions, the CallFrom subcall behind Memo and Multicall3From, and ERC-4337 bundles. Can any of them give the PoolManager a msg.sender that did not authorise the call, a msg.value without a debit, or a second transient map.",
+   "agrees": true,
+   "note": "I read crates/evm/src/evm.rs lines 884 to 955 and 1665 to 1680, crates/precompiles/src/call_from.rs, contracts/src/memo/Memo.sol and contracts/src/batch/Multicall3From.sol on the main branch of arc-node. The registry admits Memo (0x5294E9927c3306DcBaDb03fe70b92e01cCede505) and Multicall3From (0x522fAf9A91c41c443c66765030741e4AaCe147D0) as the only callers of 0x1800000000000000000000000000000000000003, both helpers pass their own msg.sender, and the EVM refuses a child caller that is neither the helper nor the transaction signer, any value, static context and every scheme other than CALL. I tested it on https://rpc.mainnet.arc.io at block 32,682,364 with a target stub that returns CALLER. An account that calls Multicall3From.aggregate is seen as msg.sender by the target. The same call through a forwarding stub reverts with 'sender spoofing requires tx.origin as sender'. A direct call of the precompile and a call of the precompile from a stub with the transaction signer as sender argument both revert with 'unauthorized caller'. A contract that runs inside a user's transaction therefore cannot act as that user towards the PoolManager, including when it uses DELEGATECALL into a helper, because the precompile then sees the delegating contract as caller."
+  },
+  {
+   "check": "Transaction types on Tempo: for legacy, EIP-2930, EIP-1559, EIP-7702, the type 0x76 batch with fee sponsor, session credential and authorization list, and system transactions, what msg.sender, msg.value and transient storage look like inside the PoolManager, walked through unlock, sync, settle and take.",
+   "agrees": true,
+   "note": "Source at commit 697ea97: validate_no_native_value opens each of prepare_legacy, prepare_eip2930, prepare_eip1559 and prepare_eip7702 (crates/evm/src/handler/config.rs lines 494 to 568), the 0x76 path rejects any call with value at crates/evm/src/handler.rs lines 372 and 1440, execute_batch sets the origin to the signer, takes one checkpoint and runs each call as an initial frame with the signer as caller (lines 1277 to 1372), and validate_system_tx accepts only a call to the zero address, which it rejects from T4 on (crates/evm/src/block.rs lines 573 to 617). On chain: eth_call and eth_estimateGas with value 1 fail with 'value transfer not allowed', a stub reads SELFBALANCE 0, BALANCE(PoolManager) 0 and CALLVALUE 0 while eth_getBalance returns a placeholder, and an inner CALL with 1 wei fails while the same call with 0 succeeds. settle therefore sees msg.value 0 (src/PoolManager.sol:352-354) and a native take of a nonzero amount reverts (src/types/Currency.sol:48-53). I did not repeat the two transaction TLOAD test that the critic of cycle 1 ran on this endpoint."
+  },
+  {
+   "check": "Does the storage credit accounting, which the Tempo SSTORE instruction runs inside every contract including the PoolManager, read or write transient slots that the PoolManager uses for its lock, deltas and synced currency (src/libraries/Lock.sol:8, src/libraries/CurrencyReserves.sol:11-13, src/libraries/NonzeroDeltaCount.sol:8-9).",
+   "agrees": true,
+   "note": "crates/evm/src/instructions.rs lines 76 to 83 pass an explicit address to the host tload and tstore, and crates/precompiles/src/storage_credits/accounting.rs lines 103 and 165 to 191 always use STORAGE_CREDITS_ADDRESS with the slot equal to the owner address. settle_storage_credit_refunds takes the transient slots of that one address (crates/evm/src/handler/config.rs lines 444 to 487). On chain I ran a stub that writes 0xaa to its own transient slot numbered by its own address, then creates a storage slot, then reads the transient slot again. It returns 0xaa, and the control without the first write returns 0. The hook does not reach the transient slots of the contract that executes SSTORE. Two side effects are worth recording. StorageCredits.balanceOf(PoolManager) returns 13, and by accounting.rs lines 147 to 159 and 196 to 203 it rises inside a transaction each time a PoolManager slot is cleared. sync and settle on 0x1060000000000000000000000000000000000000 would then give a credit under that currency id (src/PoolManager.sol:279-288 and 349-364). transfer on that address reverts with UnknownFunctionSelector, so such a credit can only become a claim, and none of the 167 initialized pools names that address as a currency. I read this from source and did not simulate it. The credits of the PoolManager account are spent as gas refunds by whichever transaction next creates slots in PoolManager storage."
+  },
+  {
+   "check": "L-212: can an ordinary account keep liquidity providers out by filling the 30,000,000 gas general limit of every block, given the fee rule and the ordering rule.",
+   "agrees": true,
+   "note": "tempo_t7_next_block_base_fee uses denominator 8 against a 10,000,000 target and clamps to 600,000,000 and 12,000,000,000 (crates/hardfork/src/constants.rs lines 50 to 80), which gives 25 percent per block for 30,000,000 gas used and about 14 blocks from floor to cap. TempoTipOrdering ranks by effective tip per gas (crates/transaction-pool/src/ordering.rs). The builder admits a transaction of the general lane by its gas limit: it is deferred when general gas used plus min(gas limit, cap) exceeds 30,000,000 (crates/payload/builder/src/lib.rs lines 561 to 604). A withdrawal sent with a gas limit of 1,500,000 is therefore kept out only while more than 28,500,000 general gas with a higher tip sits ahead of it, which costs what the cleared item says. The item should add that a transaction sent with a limit near 30,000,000 is deferred by any earlier general transaction, so a liquidity provider should set a tight gas limit."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "question": "Which gas limits do the deployed PositionManager and Universal Router front ends on Tempo attach to a liquidity removal and to a swap, and does any of them send a limit close to 30,000,000 after a failed estimate?",
+   "why": "The payload builder admits a transaction of the general lane by its gas limit (crates/payload/builder/src/lib.rs lines 561 to 604 at commit 697ea97). One small general transaction with a higher tip per block defers every transaction whose limit is near the lane size, at a cost far below the 0.36 USD per block that the cleared item for L-212 assumes.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "question": "Measure through eth_simulateV1 how much of the 245,000 gas per storage credit a swap over fresh ticks gets back at the end of the transaction, whether the refund is capped, and whether the general lane counts gas before or after that refund.",
+   "why": "The PoolManager account holds 13 storage credits and earns more when positions are removed. The fee figures of the tick crossing finding are upper bounds until the refund rule is measured, and a planter that removes and adds dust positions feeds the credit balance that later pays its own creations.",
+   "priority": "low"
+  }
+ ]
+}

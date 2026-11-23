@@ -26,12 +26,13 @@ def f(j):
         c=bytes.fromhex(rpc(u,'eth_getCode',[a,'latest'])[2:])
     except Exception as e: return (cid,name,k,a,'ERR '+repr(e)[:100])
     return (cid,name,k,a,len(c),hashlib.sha256(mask(c)).hexdigest()[:12],{s:(bytes.fromhex(h) in c) for s,h in SEL.items()})
-with cf.ThreadPoolExecutor(8) as ex: res=list(ex.map(f,jobs))
-json.dump(res,open('code_groups.json','w'),indent=1)
-g={}
-for r in res:
-    if isinstance(r[4],str): print(r); continue
-    g.setdefault((r[4],r[5]),[]).append(r)
-for (ln,h),mem in sorted(g.items(),key=lambda x:-len(x[1])):
-    print('len',ln,'masked',h,'n',len(mem),'verified in group:',sum(ver[(m[0],m[3].lower())] for m in mem), {k.split('(')[0]:v for k,v in mem[0][6].items()})
-    for m in mem: print('    %s %s %s %s %s'%(m[0],m[1],m[2],m[3],'verified' if ver[(m[0],m[3].lower())] else 'UNVERIFIED'))
+if __name__=='__main__':
+    with cf.ThreadPoolExecutor(8) as ex: res=list(ex.map(f,jobs))
+    json.dump(res,open('code_groups.json','w'),indent=1)
+    g={}
+    for r in res:
+        if isinstance(r[4],str): print(r); continue
+        g.setdefault((r[4],r[5]),[]).append(r)
+    for (ln,h),mem in sorted(g.items(),key=lambda x:-len(x[1])):
+        print('len',ln,'masked',h,'n',len(mem),'verified in group:',sum(ver[(m[0],m[3].lower())] for m in mem), mem[0][6])
+        for m in mem: print('    %s %s %s %s %s'%(m[0],m[1],m[2],m[3],'verified' if ver[(m[0],m[3].lower())] else 'UNVERIFIED'))

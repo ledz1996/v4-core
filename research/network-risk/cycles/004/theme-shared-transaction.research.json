@@ -1,0 +1,437 @@
+{
+ "unit": "theme-shared-transaction",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "A sync left earlier in a shared transaction makes a later native payment revert for routers that settle value without their own sync",
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A1",
+    "A3"
+   ],
+   "effect": "degrade",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "Ethereum has the same code path. The networks differ in how often one transaction carries the operations of several users. Among the most recent transactions that hold a PoolManager Swap event, 342 of 463 on World Chain, 300 of 600 on Soneium and 62 of 600 on Base were ERC-4337 handleOps calls, and bundles with two or three user operations occur on all three. On Ethereum the count was 7 of 600. EntryPoint v0.6 to v0.9, Multicall3 and the public Simple7702Account hold code on all 21 networks, and senders with an EIP-7702 delegation were among the sampled swap senders on 13 of them. Tempo is left out of the chain list because no transaction there can carry native value (cleared in an earlier cycle), so the path has no target.",
+   "mechanism": "1. sync has no lock check and no caller check. For a token it stores the currency and balanceOf(PoolManager) in two transient slots and returns (src/PoolManager.sol:279-289, src/libraries/CurrencyReserves.sol:27-32). Nothing clears the currency slot when the call ends. Only a later sync or a later ERC-20 settle changes it (src/PoolManager.sol:283, 286, 361). 2. unlock returns with the lock flag false and reverts unless every delta is zero (src/PoolManager.sol:104-114). The synced currency and its reserves are therefore the only PoolManager values that one party can leave for the next party inside one transaction. 3. _settle reads the synced currency first. When it is nonzero and msg.value is above zero the call reverts with NonzeroNativeValue (src/PoolManager.sol:349-356). The comment at src/PoolManager.sol:348 tells integrators to call sync before a native settle. 4. The attacker needs one call, sync(X) for any token X, that runs before the victim's operation in the same transaction. Carriers: an earlier user operation in a handleOps bundle, the validation step of any operation in the bundle (all four EntryPoint versions run every validation before the first execution), a pre hook of a CoW order, a call in a relayer or delegated account batch. 5. Test, read only. For recent swaps the original call was replayed at its parent block by eth_call. The sender address received the code of the public Simple7702Account by state override and ran executeBatch of [original call] as control and of [PoolManager.sync(token), original call] as test. Of the replays whose control succeeded, 209 native value replays and 193 token input replays gave the same result, and 9 and 7 reverted in the test only. The revert data was ExecuteError(1, NonzeroNativeValue) in 15 of the 16 cases and a router specific error 0x81ceff30 in one (Elysium, cause not decoded). 6. Contracts that reverted: Ethereum 0x3e8282bd1bfabd23249701e978e9db3df3d7073a (unverified, 187,745 transactions). Soneium LiFiDiamond 0x864b314d4c5a0399368609581d3e8933a63b9232 on routes through EisenDiamond 0x7e36665858d17fd1cbfd4fd464d2a3da49aa3b9d, whose facet 0x0b20601669dbce7e14210e24ca2b748cfb6dfc08 is unverified; EisenDiamond was the swap sender in 18.1 percent of 4,082 recent Soneium Swap events. Avalanche AvaxHookRouterV2 0xc8b2b67a1e286f74648a705617d54a0415fc651a (verified source line 103 calls settle with value and no sync), SwapHelper 0xde9d7290959b6060860b983b32f2d65b2701ebc2 and 0xfe807eb087439ec6e59ed5f93fad011223cb50f9. Arc 0x944fe8becf9a02a3e9378b4cadde1b14ef8d2ed9. BNB Smart Chain 0xdc0e98fd40ccd1c1d7084de9f254d7853846cc6e and 0x95337791024b5f0480b353fbafd2882b4d8e99c8. Monad 0x7db99f225af7a1a21b7b6468ed28f4bc60fbe937. Robinhood Chain 0x29d8d0a5c38716ebb4ae1786a46cf0ab74d480db, the sender of 11.0 percent of 5,624 recent Swap events. Zora 0xdb2e211c43ee4ac4665c44e8ae6723adfd62a07f. Elysium 0xa834e70303322d86e5dae95ee47e9c6a073d9812. 7. By source reading only, without a replay: the verified NodeRouter implementation 0x893f30424f8e6064b1d7284e5415be8413901c0d on World Chain (4.3 percent of sampled swaps there) calls settle with value and no sync at line 1127, as do the verified Bot 0xe41698520e4817b55c1841859a36847d50f0c82f (line 1014) and Router 0xeff6cb8b614999d130e537751ee99724d01aa167 (line 836) on Ethereum. 8. Inside a real bundle: three Base handleOps transactions replayed through eth_simulateV1 with a sync placed before handleOps kept UserOperationEvent.success true and lost their PoolManager swaps (5 to 4, 1 to 0 and 2 to 0 Swap events). The account behind them, with swap sender 0x5c40d83c6361aef9604c3d9a20d8452d496035eb, catches the failed leg and ends without trading. 9. No wrong credit follows from the leftover state. A payer that calls sync itself replaces both slots (src/PoolManager.sol:286). A payer that sends value without sync reverts at line 356. A zero value settle against the leftover credits its own caller with the balance rise since the stale sync, which is the attacker's own donation, or reverts on the checked subtraction at line 360 when the balance fell.",
+   "impact": "No funds move to the attacker and none are locked. The victim's native input swap reverts and the victim pays the gas of the failed operation. In an ERC-4337 bundle that fee still goes to the bundler. Accounts that catch the failure end the operation without the trade. The attacker can repeat this in every transaction it shares with the victim. Users of the canonical Universal Router, the PositionManager and the 0x Settler are unaffected. The largest exposed public paths found are LI.FI routes through Eisen on Soneium, where half of the sampled swap transactions travel in bundles, the NodeRouter on World Chain, where three quarters do, and launchpad routers on Avalanche.",
+   "preconditions": "The victim's call and the attacker's sync run in one transaction with no sync and no ERC-20 settle by anyone in between. The victim pays native value through a contract that does not call sync before settle. The attacker holds no role. It needs a place ahead of the victim in the same transaction: its own operation in the same bundle, or a bundle that it submits itself, since handleOps accepts any caller. A sync costs 27,891 to 35,717 gas as a standalone transaction on seven networks by eth_estimateGas, and less inside a bundle, plus the overhead of one user operation. Not confirmed: how often an outsider's operation lands directly ahead of a given victim in the bundles of World Chain, Soneium and Base, and whether the listed unverified contracts are open to the public or are single operator bots.",
+   "mitigations": "Router authors: call sync(address(0)) immediately before every settle that carries value, as the canonical routers and the 0x Settler do. Smart account users: place a sync(address(0)) call first in the same batch when a route pays native value through another router. Deployer: the state cannot be removed without a code change. A change that clears the synced currency when unlock begins would remove it and would break callers that sync before unlock. Publishing the rule at src/PoolManager.sol:348 for integrators on bundle heavy networks costs nothing.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-289",
+    "src/PoolManager.sol:348-365",
+    "src/PoolManager.sol:104-114",
+    "src/libraries/CurrencyReserves.sol:21-32"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:349-356",
+     "supports": "_settle reverts with NonzeroNativeValue when a currency is synced and msg.value is above zero"
+    },
+    {
+     "url": "src/PoolManager.sol:279-289",
+     "supports": "sync has no lock or caller check and leaves the currency and reserves in transient storage"
+    },
+    {
+     "url": "eth_call with state override on https://rpc.soneium.org at blocks 31130229 and 31128716",
+     "supports": "replays of transactions 0x3765e268ca7659ef04123df27e32eb0e35928e7ec73466e2fdb9013a1b324a69 and 0x30121903c75e9ab06f76d1fec5fb2c791bb882becf7f9099ebbb0be87744f005 to LiFiDiamond succeed alone and revert with ExecuteError(1, 0xb0ec849e) when PoolManager.sync(token) runs first in the same call"
+    },
+    {
+     "url": "eth_call with state override on https://api.avax.network/ext/bc/C/rpc at block 101128113",
+     "supports": "replay of transaction 0x139f346f65a15250a39c546581d13470a10f141286921c5b4df21ee8ef8708cc to AvaxHookRouterV2 reverts with NonzeroNativeValue after a preceding sync; the same holds for 0x015c2a2ae1f3f6e5ad55aa5e5df7049bf4b63f97be9934cdc906b072825cece4 and 0xb39c5638560b187f712eb79457f65267e822dd760e01ece673e6b591238c82b4"
+    },
+    {
+     "url": "eth_call with state override on https://rpc.mainnet.arc.io at block 32679640",
+     "supports": "replay of transaction 0xdc735f9e320ac4e4a216b5c215bad0fc3d77f262813025034996a70eb16e81f5 to 0x944fe8becf9a02a3e9378b4cadde1b14ef8d2ed9 reverts with NonzeroNativeValue after a preceding sync"
+    },
+    {
+     "url": "eth_call with state override on https://mainnet.gateway.tenderly.co at block 26475525",
+     "supports": "replay of transaction 0xfd340225507bac3d8a73fd5c41b7f9a4e57bc85f991f72af388293745f9d57e3 reverts with ExecuteError(1, 0xb0ec849e) after a preceding sync"
+    },
+    {
+     "url": "eth_call with state override on https://robinhood.drpc.org, https://rpc.monad.xyz, https://bsc-mainnet.public.blastapi.io, https://rpc.zora.energy/ and https://rpc.elysium.kinetiq.xyz",
+     "supports": "replays of 0xdb558a1f92f071bbd39512a3e813b8fe7862f98cc53e79812b7ed81c59dcb80b, 0x230fc6a1febbb8aa839d39856a79a64fdfc8ea4f0683278a94c6ea1bc6118cf4, 0x24e3f490e2b8b64fb6f1cbffb64fbb15d191770023fe8b0c5f05ac4d558db17f, 0xd2590d3cfc53b9ff5bd7c09da0b2c54bac8ba2f7ac7586cd109ff903a1aed42c, 0xf5026567400ea19643ac5e601791c57082755148a8441c96536057e2755290c0 and 0xd76b478a8678319b842f83cfd87a9c926c32c6cf8b3e8ca7acc51eb9bbaac276 revert in the test run only"
+    },
+    {
+     "url": "eth_simulateV1 with state override on https://mainnet.base.org/ at blocks 61097274, 61097399 and 61097122",
+     "supports": "handleOps transactions 0xb5e3448985965384067a993e3ea4d75db461a0f881ec4133957434ee556835d8, 0x8e445f70c5fd9e9e5454a2898f1565c8e3d0d88ae5842d405c5a9fb53892858d and 0x5e810e227de738ca6be51b47ba77bdc507cd48124711524bf2a3190cf50df06b lose PoolManager Swap events when a sync precedes handleOps while the user operation still reports success"
+    },
+    {
+     "url": "https://eth.blockscout.com/api/v2/addresses/0x3e8282bd1bfabd23249701e978e9db3df3d7073a/counters",
+     "supports": "the Ethereum contract that reverted has 187,745 transactions and no verified source"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/480/0x893f30424f8e6064b1d7284e5415be8413901c0d?fields=sources,compilation",
+     "supports": "NodeRouter.sol line 1127 calls settle with value and no sync; lines 1132 to 1138 call sync before a token settle"
+    },
+    {
+     "url": "https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api?module=contract&action=getsourcecode&address=0xc8b2b67a1e286f74648a705617d54a0415fc651a",
+     "supports": "AvaxHookRouterV2.sol line 103 calls settle with value and no sync; lines 106 to 108 call sync before a token settle"
+    },
+    {
+     "url": "https://soneium.blockscout.com/api/v2/addresses/0x864b314d4c5a0399368609581d3e8933a63b9232",
+     "supports": "0x864b... is the verified LiFiDiamond with 1,320,735 transactions; the same API names 0x7e36665858d17fd1cbfd4fd464d2a3da49aa3b9d EisenDiamond"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x0000000071727De22E5E9d8BAf0edAc6f37da032?fields=sources,compilation",
+     "supports": "EntryPoint v0.7 handleOps validates every operation (line 187) before it executes the first (line 200), and each execution is a call to innerHandleOp inside the same transaction; v0.6, v0.8 and v0.9 have the same two loops"
+    },
+    {
+     "url": "https://docs.cow.fi/cow-protocol/reference/core/intents/hooks",
+     "supports": "CoW orders can carry user defined calls that solvers execute before and after the orders of a settlement"
+    },
+    {
+     "url": "eth_getLogs, eth_getTransactionByHash and eth_getTransactionReceipt on the rpc URLs of the 21 networks",
+     "supports": "share of handleOps transactions among recent PoolManager swap transactions and bundle sizes: World Chain 342 of 463, Soneium 300 of 600, Base 62 of 600"
+    },
+    {
+     "url": "eth_estimateGas on the rpc URLs of Ethereum, Base, World Chain, Soneium, Avalanche, Arc and Arbitrum One",
+     "supports": "a standalone sync(token) call costs 27,891 to 35,717 gas"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "Do calls that one contract makes one after another inside one transaction meet the same transient map of the PoolManager, and does sync leave its two values behind when the call ends. One eth_call per network to Multicall3.aggregate3 with the calls exttload(currency slot), sync(token), exttload(currency slot), exttload(reserves slot), token.balanceOf(PoolManager), sync(address(0)), exttload(currency slot), exttload(reserves slot).",
+   "result": "Yes on all 21 networks. Before the first sync the currency slot read zero. After sync(token) the next call read the token address in the currency slot and a reserves value equal to balanceOf(PoolManager). After sync(address(0)) the currency slot read zero and the reserves slot kept the old number, which is harmless because the native branch of _settle never reads it (src/PoolManager.sol:353-354). This is the shape of every contract level carrier: sibling calls of one caller in one transaction. I recomputed the four slot constants from their comments and they match (src/libraries/Lock.sol:8, NonzeroDeltaCount.sol:9-10, CurrencyReserves.sol:11-13). The Multicall3 code on Zora differs from the Ethereum code in bytes and has the same length; the probe passed there as well.",
+   "source": "research/network-risk/cycles/004/theme-shared-transaction.work/probe_chain.json (eth_call on the rpc URL of each network in state/networks.json); https://eips.ethereum.org/EIPS/eip-1153"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "For each of the 21 networks: which carriers put calls of different users into one transaction, and does any of them run a user's calls anywhere other than in ordinary nested calls of that one transaction. Checked: code at the four EntryPoint addresses, Multicall3, Simple7702Account, CoW GPv2Settlement, 1inch AggregationRouterV6, Bebop JamSettlement and BebopSettlement, Across MulticallHandler, three UniswapX reactor addresses, GelatoRelay1BalanceERC2771, the World Chain PBHEntryPoint and the Arc CallFrom precompile; the top level target, the type and the sender code of up to 600 recent transactions with a PoolManager Swap event per network; the verified sources of the EntryPoints and of PBHEntryPointImplV1.",
+   "result": "Every carrier found is a contract that calls the users' targets one after another in one transaction, so all of them share the one transient map shown by the Multicall3 probe. EntryPoint v0.6 and v0.7 hold byte identical code on all 21 networks, and v0.8 and v0.9 hold the Ethereum code with different PUSH32 operands (cached chain data). In all four versions handleOps first validates all operations and then executes each one through a call to innerHandleOp (v0.6 lines 92 to 108, v0.7 lines 174 to 200, v0.8 lines 58 to 71 with _iterateValidationPhase at line 319, v0.9 lines 78 to 91 with _iterateValidationPhase at line 346). The World Chain PBHEntryPoint is a proxy whose verified implementation forwards to entryPoint.handleAggregatedOps (PBHEntryPointImplV1.sol line 291), so a PBH bundle is an ordinary bundle. A Tempo type 0x76 transaction and an Arc Multicall3From batch carry the calls of one signer only (their documentation and the earlier cleared items on handler.rs and call_from.rs), and a Tempo fee payer adds a signature and no call. Tempo and Elysium also showed type 0x4 transactions, so delegated accounts can batch there as elsewhere. Sequencer or builder bundles, HyperEVM system transactions, the Celo fee currency debit and credit and the X Layer gasless rule are separate transactions or were cleared in earlier cycles; I did not test them again. Per network: Ethereum: 7 of 600 sampled swap transactions were handleOps calls; 16 of 200 sampled senders carry an EIP-7702 delegation; settlement and relay code present: CoW GPv2Settlement, 1inch AggregationRouterV6, JamSettlement, BebopSettlement, Across MulticallHandler, UniswapX V2DutchOrderReactor, GelatoRelay1BalanceERC2771. Optimism: 0 of 600 sampled swap transactions were handleOps calls; 0 of 93 sampled senders carry an EIP-7702 delegation; settlement and relay code present: CoW GPv2Settlement, 1inch AggregationRouterV6, JamSettlement, BebopSettlement, Across MulticallHandler, GelatoRelay1BalanceERC2771. Base: 62 of 600 sampled swap transactions were handleOps calls, largest bundle seen held 3 operations; 7 of 200 sampled senders carry an EIP-7702 delegation; settlement and relay code present: CoW GPv2Settlement, 1inch AggregationRouterV6, JamSettlement, BebopSettlement, Across MulticallHandler, UniswapX PriorityOrderReactor, GelatoRelay1BalanceERC2771. Unichain: 0 of 600 sampled swap transactions were handleOps calls; 1 of 55 sampled senders carry an EIP-7702 delegation; settlement and relay code present: CoW GPv2Settlement, 1inch AggregationRouterV6, Across MulticallHandler. Zora: 1 of 96 sampled swap transactions were handleOps calls; 0 of 13 sampled senders carry an EIP-7702 delegation; settlement and relay code present: Across MulticallHandler, GelatoRelay1BalanceERC2771. Worldchain: 342 of 463 sampled swap transactions were handleOps calls, largest bundle seen held 3 operations; 0 of 80 sampled senders carry an EIP-7702 delegation; settlement and relay code present: Across MulticallHandler. Ink: 0 of 600 sampled swap transactions were handleOps calls; 0 of 133 sampled senders carry an EIP-7702 delegation; settlement and relay code present: CoW GPv2Settlement, BebopSettlement, Across MulticallHandler. Soneium: 300 of 600 sampled swap transactions were handleOps calls, largest bundle seen held 2 operations; 1 of 168 sampled senders carry an EIP-7702 delegation; settlement and relay code present: Across MulticallHandler. Celo: 0 of 238 sampled swap transactions were handleOps calls; 5 of 59 sampled senders carry an EIP-7702 delegation; transaction types in the sample include 2 of type 0x7b; settlement and relay code present: none of the addresses checked. X Layer: 1 of 600 sampled swap transactions were handleOps calls; 12 of 106 sampled senders carry an EIP-7702 delegation; settlement and relay code present: none of the addresses checked. Arbitrum One: 4 of 600 sampled swap transactions were handleOps calls; 13 of 200 sampled senders carry an EIP-7702 delegation; transaction types in the sample include 3 of type 0x4; settlement and relay code present: CoW GPv2Settlement, 1inch AggregationRouterV6, JamSettlement, BebopSettlement, Across MulticallHandler, UniswapX V2DutchOrderReactor, GelatoRelay1BalanceERC2771. Robinhood Chain: 10 of 600 sampled swap transactions were handleOps calls; 5 of 200 sampled senders carry an EIP-7702 delegation; transaction types in the sample include 4 of type 0x4; settlement and relay code present: CoW GPv2Settlement, 1inch AggregationRouterV6, JamSettlement, BebopSettlement. Elysium: 8 of 600 sampled swap transactions were handleOps calls; 0 of 136 sampled senders carry an EIP-7702 delegation; transaction types in the sample include 5 of type 0x4; settlement and relay code present: none of the addresses checked. Polygon: 21 of 600 sampled swap transactions were handleOps calls; 45 of 200 sampled senders carry an EIP-7702 delegation; transaction types in the sample include 11 of type 0x4; settlement and relay code present: CoW GPv2Settlement, 1inch AggregationRouterV6, JamSettlement, BebopSettlement, Across MulticallHandler, GelatoRelay1BalanceERC2771. BNB Smart Chain: 5 of 600 sampled swap transactions were handleOps calls; 25 of 200 sampled senders carry an EIP-7702 delegation; transaction types in the sample include 33 of type 0x4; settlement and relay code present: CoW GPv2Settlement, 1inch AggregationRouterV6, JamSettlement, BebopSettlement, GelatoRelay1BalanceERC2771. Avalanche: 2 of 600 sampled swap transactions were handleOps calls; 0 of 198 sampled senders carry an EIP-7702 delegation; settlement and relay code present: CoW GPv2Settlement, 1inch AggregationRouterV6, JamSettlement, BebopSettlement, GelatoRelay1BalanceERC2771; the BLS12-381 precompile at 0x0b returned nothing, so the Prague instruction set and with it EIP-7702 could not be confirmed here. Monad: 0 of 600 sampled swap transactions were handleOps calls; 2 of 108 sampled senders carry an EIP-7702 delegation; transaction types in the sample include 4 of type 0x4; settlement and relay code present: CoW GPv2Settlement, 1inch AggregationRouterV6. MegaETH: 0 of 600 sampled swap transactions were handleOps calls; 0 of 29 sampled senders carry an EIP-7702 delegation; settlement and relay code present: none of the addresses checked. Tempo: 0 of 600 sampled swap transactions were handleOps calls; 8 of 72 sampled senders carry an EIP-7702 delegation; transaction types in the sample include 9 of type 0x4, 36 of type 0x76; settlement and relay code present: none of the addresses checked. Arc: 2 of 600 sampled swap transactions were handleOps calls; 5 of 200 sampled senders carry an EIP-7702 delegation; settlement and relay code present: none of the addresses checked. HyperEVM: 0 of 1 sampled swap transactions were handleOps calls; 0 of 1 sampled senders carry an EIP-7702 delegation; settlement and relay code present: JamSettlement, BebopSettlement; the BLS12-381 precompile at 0x0b returned nothing, so the Prague instruction set and with it EIP-7702 could not be confirmed here. The contract names were verified on Sourcify for Ethereum, and for Base and Arbitrum One in the case of their UniswapX reactors. On the other networks an entry means code at the same address. The UniswapX and Bebop entries cover only the addresses checked, so absence on a network is unknown and may mean another address.",
+   "source": "research/network-risk/cycles/004/theme-shared-transaction.work/probe_chain.json, bundle_usage.json, entrypoint_code.json; https://sourcify.dev/server/v2/contract/1/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789?fields=sources,compilation; https://sourcify.dev/server/v2/contract/1/0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108?fields=sources,compilation; https://sourcify.dev/server/v2/contract/1/0x433709009B8330FDa32311DF1C2AFA402eD8D009?fields=sources,compilation; https://sourcify.dev/server/v2/contract/480/0x7acdc12cbcba53e1ea2206844d0a8ccb6f3b08fb?fields=sources,compilation; https://worldcoin.github.io/world-chain/pbh/txs.html; https://docs.tempo.xyz/protocol/transactions/spec-tempo-transaction; https://docs.arc.io/arc/concepts/batched-transactions.md; https://eips.ethereum.org/EIPS/eip-7702"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "Every state an ordinary account can leave in the PoolManager for the next party in the same transaction, and who is credited what when a later party pays. Walked in the source for the order: attacker calls sync(X) while the PoolManager holds R, then either sends d of X by plain transfer (balance R+d) or removes d inside an unlock of its own by burning claims and taking X (balance R-d); then the victim pays X or pays native.",
+   "result": "The lock flag is false and all deltas are zero after any unlock (src/PoolManager.sol:105-113), and take, settle, settleFor, clear, mint, burn, swap, modifyLiquidity and donate all require the unlocked state (lines 147, 189, 258, 291, 300, 305, 310, 322, 332). The only leftover is the pair (synced currency X, reserves R). Inside its own later unlock the attacker cannot call settle without consuming the leftover (line 361), so a lower balance needs claims burned and taken, and a higher balance needs a plain transfer. Victim pays X and calls sync(X) first: the sync stores the current balance (line 286), the victim is credited exactly its own transfer (line 360), and a donated d stays in the PoolManager without an owner. Victim pays native and calls sync(address(0)) first: the currency slot is zero (line 283) and the victim is credited msg.value (line 354). Victim pays native without sync: revert at line 356, which is the finding of this unit. Victim calls settle with zero value and no sync: with balance R+d it is credited d of X, the attacker's own gift, and with balance R-d the checked subtraction at line 360 reverts. A settle never credits one currency for a payment made in another, because the credited currency and the measured balance come from the same slot (lines 350, 358-359, 364). settleFor changes the recipient only (lines 305-307).",
+   "source": "src/PoolManager.sol:104-114, 279-289, 291-336, 349-365; src/libraries/CurrencyReserves.sol:15-38"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "check": "How the Universal Router and the v4 PositionManager at the addresses in state/networks.json pay the PoolManager, from their verified source: sync before a token settle, sync(address(0)) before a native settle, settle without a sync of their own, exttload of the reserves or currency slot, settleFor. 77 deployments on 21 networks.",
+   "result": "All 77 pay through one function, DeltaResolver._settle, whose text is the same in every verified build: return when the amount is zero, then poolManager.sync(currency), then settle with value for the native currency, or _pay followed by settle for a token (DeltaResolver.sol lines 38 to 48). _pay is a token transfer by the router or a Permit2 transferFrom to the PoolManager (PositionManager.sol lines 522 to 529, Permit2Payments.sol lines 42 to 45), so no other external call sits between sync and settle. No source line calls settle outside this function, none calls settleFor, and exttload is used for deltas, the delta count and the lock flag only. 54 deployments are verified on Sourcify. The other 23 were matched by runtime code after zeroing PUSH20 to PUSH32 operands: 20 equal a verified deployment on another network, and the three first routers on X Layer, MegaETH and Tempo equal each other, with the MegaETH one verified on Blockscout as a partial match with the same _settle. The HyperEVM and Elysium builds use 500 optimizer runs and hold the sync and settle selectors as shifted constants (0x29610465 shifted left by 226 bits equals the sync selector). None of these contracts holds the reserves or currency slot constant in its code. A stale sync therefore cannot change what these routers are credited, and a native payment through them does not revert.",
+   "source": "research/network-risk/cycles/004/theme-shared-transaction.work/routers_fetched.json, code_groups.json, slot_reads.json; https://sourcify.dev/server/v2/contract/1/0x66a9893cc07d91d95644aedd05d03f95e1dba8af?fields=sources,compilation; https://sourcify.dev/server/v2/contract/1/0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e?fields=sources,compilation; https://sourcify.dev/server/v2/contract/999/0x0d7Ab5B3db668128Aff6F70C4eBC71D7d4DA9bf9?fields=sources,compilation; https://megaeth.blockscout.com/api/v2/smart-contracts/0x47837eb80db5908eabba9105626d9b348bea7b02"
+  },
+  {
+   "chainIds": [
+    1,
+    8453,
+    130,
+    480,
+    57073,
+    137,
+    56,
+    43114,
+    4663,
+    5042
+   ],
+   "lens": "L3",
+   "check": "The 0x Settler, the most widespread third party router among recent swap senders (verified as MainnetSettler, BaseSettler, UnichainSettler, WorldChainSettler, InkSettler, PolygonSettler, BnbSettler, AvalancheSettler, RobinHoodSettler and ArcSettler): the same five questions.",
+   "result": "In all ten sources the token path calls unsafeSync(sellToken) and later unsafeSettle(), and the native path calls unsafeSync(IERC20(address(0))) directly before unsafeSettle(debt) (MainnetTakerSubmittedFlat.sol lines 8578 to 8588 and 8720 to 8721, and the matching lines of the other nine). There is no settleFor and no read of the reserves slot. WorldChainSettler was the swap sender of 65.2 percent of 843 recent World Chain Swap events. Replays through the AllowanceHolder entry with UnichainSettler and PolygonSettler as swap sender gave the same result with a preceding sync, for native value on both networks and for a token input on Polygon.",
+   "source": "https://sourcify.dev/server/v2/contract/1/0xaddc26a3854feabfd20d6bf658254088d83a425a?fields=sources,compilation; https://sourcify.dev/server/v2/contract/480/0xdc7f9131df71efda6a7ae247edbe13a13c7dfd94?fields=sources,compilation; research/network-risk/cycles/004/theme-shared-transaction.work/senders_classified.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "check": "The most used third party routers per network, taken from the sender topic of 185 to 9,365 recent PoolManager Swap events per network: do they revert or change their result when a sync was left earlier in the same transaction. Replayed at the parent block with eth_call, sender code overridden with the public Simple7702Account, batch [original call] against batch [PoolManager.sync(token), original call]. Up to two transactions per pair of top level target and swap sender, native value and token input sampled separately.",
+   "result": "209 native value replays and 193 token input replays gave the same result with and without the stale sync, on targets that include the Universal Routers, the 0x AllowanceHolder, the LI.FI Diamond, 1inch AggregationRouterV6, Velora AugustusV6 and many unverified senders. 16 replays reverted in the test only and are listed in the finding. 32 controls failed and say nothing. World Chain and Tempo had no recent swap that carried value at the top level, Tempo because value is not allowed there. HyperEVM gave one swap transaction in the log range read, and its replay was unchanged. Bytecode of the ten most frequent senders per network: 251 contracts scanned, none holds the reserves or currency slot constant, and settleFor appears only in the Angstrom hook on Ethereum, which calls sync directly before its transfer and settleFor (PoolUpdates.sol lines 146 to 148). The sample covers what traded in the hours before the run. A router that was not active then is not covered.",
+   "source": "research/network-risk/cycles/004/theme-shared-transaction.work/senders.json, senders_classified.json, replay_native.json, replay_token.json, slot_reads.json; https://sourcify.dev/server/v2/contract/1/0x0000000aa232009084bd71a5797d089aa4edfad4?fields=sources,compilation"
+  },
+  {
+   "chainIds": [
+    1,
+    1868,
+    42161
+   ],
+   "lens": "L3",
+   "check": "Stale reserves lower than the balance, on the canonical Universal Router: for recent token input swaps the batch [PoolManager.sync(X), X.transfer(PoolManager, 1), original call] was simulated with eth_simulateV1 at the parent block, X being the input token, and every Transfer log was compared with the control.",
+   "result": "12 of 12 test runs that completed produced the same Transfer logs as the control apart from the one unit gift, on Ethereum (6), Arbitrum One (5) and Soneium (1). The swapper was credited for its own payment only and the gift was credited to nobody. Five further test runs failed inside the router call with a token transfer error because the sender had swapped its whole balance and was one unit short after the gift, which I confirmed by reading the balance before the transaction. The reverse case, reserves higher than the balance, needs ERC-6909 claims and was judged from the source only (src/PoolManager.sol:286). Base returned no usable sample in this run.",
+   "source": "research/network-risk/cycles/004/theme-shared-transaction.work/replay_donation.json (eth_simulateV1 on https://ethereum-rpc.publicnode.com, https://arb1.arbitrum.io/rpc and https://rpc.soneium.org)"
+  },
+  {
+   "chainIds": [
+    8453,
+    1868,
+    42161
+   ],
+   "lens": "L2",
+   "check": "Real ERC-4337 bundles: recent handleOps transactions that contained a PoolManager swap, replayed through eth_simulateV1 at the parent block with the bundler address running [handleOps] against [PoolManager.sync(token), handleOps]. UserOperationEvent.success and the number of Swap events were compared.",
+   "result": "Soneium: 30 of 30 the same, with swap senders 0xacad7a6ecb6a62bd7f61baab28ac35f4293ab475 and EisenDiamond, all bundles of one operation. Base: 27 of 30 the same, five of them bundles of two operations; the three that differ belong to one account that catches a failed native leg and are described in the finding. Arbitrum One: 2 the same and 10 without historical state on the endpoint. The test also shows that a sync made before handleOps is seen by the operations inside it. World Chain could not be tested: the public endpoint refuses eth_simulateV1 and a second endpoint answered with a rate limit.",
+   "source": "research/network-risk/cycles/004/theme-shared-transaction.work/replay_bundles.json (eth_simulateV1 on https://rpc.soneium.org, https://mainnet.base.org/ and https://arb1.arbitrum.io/rpc)"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "Can an attacker that runs later in the same transaction settle to itself a surplus that a victim's token payment left behind.",
+   "result": "No surplus exists to take. A payer that follows sync, transfer, settle is credited the whole balance rise and the settle resets the currency slot (src/PoolManager.sol:358-361), so the next party starts from a zero slot and its own sync records the full balance. The canonical routers, the 0x Settler and every replayed router that pays tokens do follow that order, and none of the 251 scanned contracts reads the leftover slots to size a payment. A victim that sent tokens and then failed to settle them would itself revert on a nonzero delta when its unlock ends (src/PoolManager.sol:112), which undoes the transfer. Tokens sent to the PoolManager outside any unlock and never settled can be claimed by the next caller of sync and settle only if that caller synced before the transfer, which the sender controls by never sending first.",
+   "source": "src/PoolManager.sol:104-114, 349-365; research/network-risk/cycles/004/theme-shared-transaction.work/slot_reads.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "Do the canonical routers keep transient state of their own that one user's operation could leave for the next user in the same transaction.",
+   "result": "No. The Universal Router stores the caller in a transient locker slot when execute begins and writes zero when it ends (Lock.sol modifier isNotLocked, Locker.sol), and the PositionManager does the same (ReentrancyLock.sol). A revert undoes the write. The maximum input amount slot of the Universal Router is the only other transient slot in its source. These slots belong to the router's address and say nothing about PoolManager funds.",
+   "source": "https://sourcify.dev/server/v2/contract/1/0x23617e59A5925b2A4Bf75d73ff6711cD0b29De85?fields=sources,compilation; https://sourcify.dev/server/v2/contract/1/0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e?fields=sources,compilation"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    480
+   ],
+   "lens": "L2",
+   "question": "On an endpoint that serves eth_simulateV1 or debug_traceCall for World Chain, replay recent handleOps and PBH bundles with PoolManager.sync(token) placed first: which operations change their outcome, and do the NodeRouter 0xab73c8f3bf8ae4856c90faa5e6560442a4787020 or the unverified senders 0x575229dcc62cdab8b02e5c2115aa2725c35aafdf and 0x392a2f3bb87b20782c220057556bba36853e8ab7 pay native value inside bundles?",
+   "why": "Three quarters of sampled World Chain swap transactions are bundles of up to three operations, and the NodeRouter source settles value without sync. This would size the denial where shared transactions are the normal case.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    1868,
+    5042,
+    4663,
+    43114
+   ],
+   "lens": "L3",
+   "question": "Who operates and who may call the contracts that reverted in the replay and have no verified source: the Eisen facet 0x0b20601669dbce7e14210e24ca2b748cfb6dfc08 on Soneium, 0x944fe8becf9a02a3e9378b4cadde1b14ef8d2ed9 on Arc, 0x29d8d0a5c38716ebb4ae1786a46cf0ab74d480db on Robinhood Chain and 0xfe807eb087439ec6e59ed5f93fad011223cb50f9 on Avalanche?",
+   "why": "A public router with many users makes the denial worth reporting to its maintainers. A single operator bot does not.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "question": "Do routers that catch a failed PoolManager leg, such as aggregator executors with fallback routes, leave the user's input in a contract that a later caller can sweep when the leg fails with NonzeroNativeValue?",
+   "why": "The Base replay showed an account that swallows the failure and reports success. If a public aggregator does the same while it already holds the user's funds, a forced failure could turn the denial into a loss outside the PoolManager.",
+   "priority": "medium"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-019",
+   "outcome": "cleared",
+   "answer": "Yes for all 77 Universal Router and PositionManager deployments listed in state/networks.json. Each pays through DeltaResolver._settle, which calls sync(currency) for the exact currency, then either settle with value or the token transfer and settle. For the native currency that is sync(address(0)). The only external call between sync and settle is the token transfer itself, made directly or through Permit2. 54 deployments were read from verified source and 23 were matched to them by runtime code with PUSH20 to PUSH32 operands zeroed, with the MegaETH first router read from Blockscout."
+  },
+  {
+   "leadId": "L-156",
+   "outcome": "finding",
+   "answer": "The canonical routers and the PositionManager call sync(address(0)) before a native settle on all 21 networks. Operations of different users do run in one transaction on every network at the contract level: the four EntryPoints, Multicall3 and Simple7702Account hold code on all 21, and bundles of two or three operations with PoolManager swaps were seen on World Chain, Soneium and Base. Several third party routers settle value without sync and revert after a stale sync, which is recorded as a low finding."
+  },
+  {
+   "leadId": "L-199",
+   "outcome": "inconclusive",
+   "answer": "First half answered: the Arc Universal Router 2.1.2 is verified and the first router and the PositionManager match verified builds by code, and all call sync(address(0)) before a native settle. Replays of eight Arc native value swaps through them were unchanged by a stale sync of 0x3600000000000000000000000000000000000000. The second half, routes that name both address(0) and 0x3600, was not examined in this unit."
+  },
+  {
+   "leadId": "L-218",
+   "outcome": "inconclusive",
+   "answer": "First question answered for both networks: the deployed Universal Routers and PositionManagers on Celo and Arc call sync(address(0)) before every native settle (verified source for the 2.1.x routers, code match for the others). The questions about the wrapped native setting and about routes that name both faces were not examined in this unit."
+  }
+ ]
+}
