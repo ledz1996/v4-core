@@ -30,6 +30,8 @@ def main():
     actors = load(f"{cdir}/actors.json") if os.path.exists(f"{cdir}/actors.json") else {}
     # cycles/NNN/skip.json drops findings the critic showed to be a second report of one event: {"<unit>:<findingIndex>": "<reason>"}
     skip = load(f"{cdir}/skip.json") if os.path.exists(f"{cdir}/skip.json") else {}
+    # cycles/NNN/extends.json links a finding to an earlier one when the agent did not: {"<unit>:<findingIndex>": "F-xxx"}
+    ext = load(f"{cdir}/extends.json") if os.path.exists(f"{cdir}/extends.json") else {}
     plan = load(f"{cdir}/plan.json") if os.path.exists(f"{cdir}/plan.json") else {}
     recheck = {u["id"]: set(u.get("recheckIds", [])) for u in plan.get("units", [])}
     units_done = []
@@ -51,10 +53,10 @@ def main():
             if v:
                 entry["verification"] = {"cycle": cycle, "factCheck": v["factCheck"], "codeCheck": v["codeCheck"], "corrections": v.get("corrections", ""), "sources": v.get("sources", [])}
                 entry["lastVerifiedCycle"] = cycle
-            old = by_id.get(f.get("ref", ""))
+            old = by_id.get(ext.get(f"{unit}:{i}", f.get("ref", "")))
             # Only a recheck that the plan assigned to this unit replaces the body of an existing finding.
             # Any other finding that names a "ref" adds to it (another network, another token) and is kept as its own entry.
-            if old and f["ref"] in recheck.get(unit, set()):
+            if old and old["id"] in recheck.get(unit, set()):
                 hist = old.get("history", []) + [event]
                 old.update(entry); old["history"] = hist; stats["updated"] += 1
             else:

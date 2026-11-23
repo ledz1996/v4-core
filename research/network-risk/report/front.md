@@ -1,6 +1,6 @@
 # PoolManager network risk report
 
-State on 2026-11-23: cycles 1 to 3 are merged. The ledger holds 60 findings, 420 checks that came out safe, and 236 open leads across the 21 networks. Sixty-one agents have worked on it so far, about half of them as independent verifiers.
+State on 2026-11-23: cycles 1 to 4 are merged. The ledger holds 74 findings, 501 checks that came out safe, and 290 open leads across the 21 networks. Seventy-four agents have worked on it so far, about half of them as independent verifiers.
 
 ## The question
 
@@ -8,23 +8,27 @@ Can an ordinary account take funds that other users hold in this repository's Po
 
 ## Answer so far
 
-No critical or high finding exists for an ordinary attacker. The planted weakness has not been identified. Cycle 3 closed the three questions that cycle 2 ranked highest, and each came out safe on all 21 networks.
+No critical or high finding exists for an ordinary attacker. The planted weakness has not been identified. Cycle 3 closed the three questions that cycle 2 ranked highest, and each came out safe on all 21 networks. Cycle 4 searched the pooled tokens of every network for two behaviours and found both in use, at small amounts: balance growth that anyone can capture, and a transfer cap that anyone can exhaust.
 
-Twenty findings can be triggered by an ordinary account: 3 medium, 13 low and 4 that only record a mismatch between comments or tests and the source. They fall into five groups.
+Twenty-eight findings can be triggered by an ordinary account: 6 medium, 18 low and 4 that only record a mismatch between comments or tests and the source. They fall into six groups.
 
 Rebase capture, the only one where an attacker gains (F-041, medium, confirmed on Ethereum). Any account can call `sync`, cause the PoolManager's balance of a token to rise, and call `settle` to be credited the rise. Taking the pooled balance first and repaying the nominal amount works as well. For Ampleforth the public rebase is guarded by `msg.sender == tx.origin`, and an EIP-7702 delegated account passes that check while running code; the verifier simulated this on mainnet. The gain is the positive rebase on whatever the PoolManager holds of that token. Today that is 16 base units of AMPL, and the method reaches only pools in elastic or reward-pushing tokens. Cycle 3 found a second case on Avalanche (F-060, low): any account can ask Benqi to pay the QI rewards that accrued on the PoolManager's qiAVAX and book the payment as its own. The accrued amount is 14.84 QI and Benqi's reward contract pays nothing today.
 
-Yield that nobody can withdraw (F-012 stETH on Ethereum, F-037 Aave aTokens on Arbitrum One). The balance grows outside pool accounting and core has no function that pays the growth out. Principal is untouched.
+Cycle 4 found the same capture happening on Polygon (F-066, medium). Five Olympus-style staking tokens on Polygon and BNB Smart Chain let any caller run their rebase. Since 22 May 2026 six accounts have wrapped each sLGNS rebase in `sync` and `settle` and minted the PoolManager's share as ERC-6909 claims: 661 mints for 20,418.69 sLGNS, about 3,300 USD, against a pooled balance of about 36,900 sLGNS in 267 pools, 265 of them without a hook. The verifier re-traced one of these transactions and re-counted the mints. Interest Protocol's USDI on Ethereum behaves the same way (F-067), with about 0.03 USD bookable today. In every case the amount taken is growth that no pool, position or claim was credited with, and principal does not fall. A comparison of balance changes with Transfer logs over 1,262,679 token rows on the 21 networks found no token whose balance an ordinary account can raise and that later falls back, which is the shape that would take accounted funds.
+
+A transfer cap that one account can use up (F-072, medium, confirmed on Polygon). ViciCoin limits every address that its owner has not exempted to 6 VCNT of net outflow per UTC day, and the PoolManager is not exempt. An account that withdraws 6 VCNT at the start of a day makes every later VCNT withdrawal from every v4 pool revert until someone pays VCNT in. The victims use a WETH and VCNT pool without a hook. The PoolManager holds 11.35 VCNT, about 206 USD, so little is at stake today, and the token owner can end it with one exemption. A take that is repaid in the same unlock does not use up the cap, here or for any other token checked.
+
+Yield that nobody can withdraw (F-012 stETH on Ethereum, F-037 Aave aTokens on Arbitrum One, F-070 receipt tokens on thirteen networks). The balance grows outside pool accounting and core has no function that pays the growth out. Principal is untouched.
 
 Payouts to a recipient that swallows them. On every network family some address accepts a payout from the PoolManager and books it to the PoolManager itself, or holds it: HyperCore bridge addresses and the L1 block number precompile on HyperEVM (F-021), `L2ToL1MessagePasser`, the ERC-4337 EntryPoints and `L1BlockNumber` on the seven OP Stack chains (F-048), withdrawal predeploys, fee vaults and Celo core contracts on Celo and X Layer (F-047), EntryPoints, precompiles and custody addresses on Arc and Tempo (F-049), and Tempo accounts whose receive policy rejects the PoolManager (F-033). The caller is debited in full each time, so the only loser is the caller, or the user of a router that passes a recipient through unchecked.
 
 Currency ids that take credit and cannot pay out: Polygon's system token at `0x1010` (F-008) and the USDC implementation address on Arc (F-050). Only someone who pays into such an id loses. The Celo predeploy that names itself WETH and wraps CELO (F-025) is a pricing trap of the same kind.
 
-Delay without loss. One cheap transaction on MegaETH uses a block's whole budget for new state and the node skips the rest of that block (F-042). A HyperEVM small block holds 3,000,000 gas, which fits about 200 tick crossings in one swap (F-039). A HyperCore transfer runs a linked contract ahead of every signed transaction in the block (F-044). Any account can fill one tick to the liquidity cap for dust and block later deposits on that tick, on every network (F-038). Withdrawals keep working in all four.
+Delay without loss. One cheap transaction on MegaETH uses a block's whole budget for new state and the node skips the rest of that block (F-042). A HyperEVM small block holds 3,000,000 gas, which fits about 200 tick crossings in one swap (F-039). A HyperCore transfer runs a linked contract ahead of every signed transaction in the block (F-044). Any account can fill one tick to the liquidity cap for dust and block later deposits on that tick, on every network (F-038). On Tempo a first crossing of a tick with a dust position costs about 505,000 gas, so a swap through more than about 58 such ticks does not fit in one transaction (F-064). When several users' calls share one transaction, as in an ERC-4337 bundle, a `sync` left by an earlier user makes a later user's native payment revert if that user's router sends value without its own `sync` (F-071). The Universal Router, the PositionManager and the 0x Settler are unaffected; routes through Eisen on Soneium, the NodeRouter on World Chain and launchpad routers on Avalanche are exposed. Withdrawals keep working in all six.
 
 The remaining four (F-006, F-014, F-054, F-055) record places where the source disagrees with its own comments, tests or test doubles, with no funds involved.
 
-The other 40 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end. One of them is in force today. The owner of the GoodDollar token put the Celo PoolManager on the token's block list on 11 September 2026, so about 550 million G$ (roughly 60,000 USD) held for pools cannot leave (F-056). An ordinary account can neither set nor lift that block.
+The other 46 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end. One of them is in force today. The owner of the GoodDollar token put the Celo PoolManager on the token's block list on 11 September 2026, so about 550 million G$ (roughly 60,000 USD) held for pools cannot leave (F-056). An ordinary account can neither set nor lift that block. A TIP-20 issuer on Tempo has likewise frozen one pooled token (F-065).
 
 ## What has been tested
 
@@ -46,13 +50,14 @@ The source itself. Eight readings so far: two line by line, a swap trace, a liqu
 
 ## What is open
 
-The cycle 3 critic put four questions at the head of the queue.
+The cycle 4 critic put these questions at the head of the queue.
 
-- Tokens whose balance at the PoolManager moves without a transfer. Every such token found so far (AMPL, stETH, aTokens, qiAVAX, G$) turned up by chance in a sample. Comparing the change of `balanceOf(PoolManager)` between two blocks with the Transfer logs in between would list all of them on each network, and it has not been run.
-- Tokens that cap what one address may send in a period. If a pooled token has such a cap, an account that takes the PoolManager's balance and pays it back in the same unlock could use up the cap and block other users' withdrawals for the rest of the period.
-- Hooks that many pools share on Robinhood Chain, Elysium and X Layer. Whether an ordinary account can create its own pool on one of them and reach state that other pools depend on is unchecked.
-- A line by line list of which test or comment guards each statement in the custody path.
-
-One more question is new: several users' calls inside one transaction, as in an ERC-4337 bundle. Transient storage is shared there, so a `sync` left by one user is still set when the next user's call runs.
+- ERC-6909 claims minted with no payment behind them. Searching each PoolManager's logs for claim mints whose transaction holds no matching transfer in would show every capture that has already happened on the live deployments, whatever its cause.
+- Tokens that count locked, staked or vesting amounts in `balanceOf` and let anyone assign such an amount to another holder. An account could pay the PoolManager in locked units and take liquid ones.
+- Hooks that many pools share on Robinhood Chain, Elysium, X Layer and Monad, and whether an ordinary account can reach state that other pools depend on.
+- The transaction filter on Robinhood Chain: what an entry matches and whether an ordinary account can cause one that covers the PoolManager.
+- The full currency lists of Base, BNB Smart Chain, X Layer and World Chain, where the balance comparison covered only tokens active in its window.
+- Addresses that hold ERC-6909 operator rights or allowances on a PoolManager and run calls that any caller supplies.
+- Whether a position held through the PositionManager can still be closed when one of its two currencies rejects transfers from the PoolManager.
 
 Three limits apply to everything above. No compiler is installed here, so nothing was built, and two questions depend on that: whether the build matches the size and creation code hash recorded in `snapshots/PoolManagerTest.json`, and whether a Yul optimizer bug published on 22 October 2026, which the Solidity bug list marks as affecting the pinned solc 0.8.26, touches the optimized output. Second, some node software could not be read: the HyperEVM validator is closed, the Nitro release that Arbitrum One and Robinhood Chain run is not public, and the Elysium build is unidentified. Third, the chain facts were read from the live official deployments, which may differ from the CTF build once it is deployed.
