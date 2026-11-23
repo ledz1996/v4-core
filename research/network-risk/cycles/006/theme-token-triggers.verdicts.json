@@ -1,0 +1,97 @@
+{
+ "unit": "theme-token-triggers",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "Imperium on Polygon. I fetched the Sourcify record (exact match, contract ImperiumToken, solc 0.8.24) and read the whole file. burnInactiveAfter is the constant 90 days (line 18). _transfer writes lastActivity[to] only (line 99). scanAndClean(address[]) is external with no modifier and no sender test (lines 202 to 215): for a target whose lastActivity is 90 days old and whose balance is above zero it sets the balance to zero, lowers totalSupply by the amount and credits amount * protocolFee / 10000 to the owner. No function exempts an address. On chain at Polygon block 97,828,431 (timestamp 1795448116, polygon.drpc.org and polygon-bor-rpc.publicnode.com gave the same answers): balanceOf(PoolManager) 3029036932838782921101, lastActivity(PoolManager) 1753576517 (484.6 days earlier), burnInactiveAfter 7776000, protocolFee 500, owner 0xe77e6c411f2ee01f1cfbcccb1c418c80f1a534fe, totalSupply still 1,000,000,000 IMP. I ran one eth_simulateV1 request without any state override, from an address with no code and no IMP: scanAndClean([PoolManager]) returned success with two Transfer logs from the PoolManager (2877.585086196843775046 IMP to 0xdead and 151.451846641939146055 IMP to the owner), balanceOf(PoolManager) read 0 afterwards, totalSupply fell by the full amount, the owner balance rose by the 5 percent and the caller received nothing. This repeats the researcher's stub trial by a second method. GeckoTerminal returns price_usd null and total_reserve_in_usd 1.57 for IMP, and coins.llama.fi has no entry. BankToken on Ethereum. Sourcify record read (exact match, BANK.sol, 87 lines): reclaimInactive(address) is external without a caller check (lines 49 to 65) and INACTIVITY_PERIOD is 365 days (line 9). On chain at block 26,478,775: autoAction 2, treasury and owner both 0x9c39d465cffe485757b69cb1b5af4b28022fbc81, balanceOf(PoolManager) 800, lastActivity(PoolManager) 1766711255 (332.6 days earlier), isInactive(PoolManager) false. eth_simulateV1 with a block time override: the call from a stranger reverts with Still active at the current time and at plus 8 hours, and succeeds at plus 91 days and plus 400 days with a Transfer of 800 from the PoolManager to the treasury and a balance of 0 afterwards. DeadToken copy on Polygon at 0x720f29e57cda0a987b7ff37ace02b7021aacbc0c. Sourcify has no record. The code is 22,358 bytes, name and symbol read DEAD, and it holds the selectors of claimIdleTokens, getTimeUntilClaimable, whiteListedPool and lastTransferTime. getTimeUntilClaimable(PoolManager) is 0, whiteListedPool(PoolManager) is 0 and balanceOf(PoolManager) is 1. A claim from an address without DEAD reverts with the custom error 0xb347e4bf. A simulated claim from the token owner 0x3bdbb84b90abaf52814aab54b9622408f2dca483, which holds 179,999,799 DEAD, succeeds and leaves the PoolManager with 0. The Transfer logs show that the PoolManager received 12,501,297.25 DEAD from that owner at block 79,443,715 and paid all but one base unit back to it at block 79,444,130.",
+   "codeCheck": "The path holds. The only reads of a token balance in src/ are sync (src/PoolManager.sol:285) and _settle (src/PoolManager.sol:359), both through balanceOfSelf (src/types/Currency.sol:90-96). No persistent per currency total exists: CurrencyReserves keeps the synced currency and reserves in transient storage only (src/libraries/CurrencyReserves.sol:15-38). A fall of the token balance outside a take is therefore seen by no check. take debits the caller and then calls transfer on the token (src/PoolManager.sol:291-297). When the token refuses, the call reverts with the wrapped ERC20TransferFailed error (src/types/Currency.sol:60-86), and Imperium refuses with Insufficient balance once the balance is gone (ImperiumToken.sol line 90). The same transfer is used by collectProtocolFees (src/ProtocolFees.sol:56). Guards I looked for and did not find in the way: the call to scanAndClean never enters the PoolManager, so the lock, the delta count at the end of unlock (src/PoolManager.sol:112) and the synced currency check in collectProtocolFees (src/ProtocolFees.sol:49-52) play no part. The burn gives the caller nothing inside core either: a sync before the burn and a settle after it reverts on the checked subtraction at src/PoolManager.sol:360, so no credit can be booked. Deltas are kept per currency (src/PoolManager.sol:368-378), so the shortfall stays inside currency IMP. Pool state read through extsload with the layout of this repository (the _pools mapping at slot 6, liquidity at offset 3 of Pool.State, src/libraries/Pool.sol:83-91): pool 0x5d1dd78d9934a3db691919cc020e75512a38a952e7c17502fc28d945464e1985 (native POL and IMP, fee 3000, tick spacing 60, no hook) records liquidity 12489942943046485015 at tick 109762, and pool 0x9356106411a79af20fc90e7ec5d5608dce68857e91f5ce531e1a7ec8ad79a48c (USDT and IMP, fee 3000, tick spacing 60, no hook) records liquidity 21599229951. From these figures the two full range positions record about 3,019.2 IMP and 1.18 IMP, and the rest of the 3,029.04 IMP is swap fee owed to the first position. Pools therefore record IMP that the PoolManager would no longer hold after the call.",
+   "corrections": "The actor value unprivileged is right for the mechanism: the caller needs no role, no token balance and no contract, and both pools have no hook. The impact text needs three corrections. First, no claim holder exists. The PoolManager has emitted no ERC-6909 Transfer log with id IMP, and protocolFeesAccrued for IMP is 0. Second, the only liquidity provider is the token owner. Each pool has one ModifyLiquidity log, made through the PositionManager 0x1ec2ebf4f37e7363fdfe3551602425af0b3ceef9 with IMP paid in by 0xe77e6c411f2ee01f1cfbcccb1c418c80f1a534fe, and ownerOf for position tokens 33811 and 33815 returns that address today. The party that loses the pooled IMP is the party that wrote the rule and that receives the 5 percent. No third party funds are at risk in these two pools today. Third, the other side of the pools is about 0.052 POL and 396 base units of USDT, so the value that a failed removal could strand is below one cent. The PoolManager received IMP in four transfers (155.9987, 2861.8602, 10 and 1.1781 IMP in blocks 74,452,496 to 74,452,887) and has never paid IMP out. For BankToken the finding leaves out that autoAction reads 2, so the 800 base units would go to the treasury, which is the owner, and that the period is 365 days: the rule first applies to the PoolManager on about 26 December 2026 unless it sends or receives the token before then. For the DeadToken copy the caller needs a DEAD balance, as on Base; the threshold was not read because the source is not verified. The finding is of the class of F-085 and adds no network property: the cause is the token in all three cases, so it does not answer the question of a weakness that follows from how a network differs from Ethereum. I kept medium in line with F-085 and F-079 (loss limited to pools of particular tokens, negligible amounts today). I could not read the two liquidity transactions by hash on the public endpoints, so the sender of those transactions rests on the Transfer logs and on ownerOf.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0xf236d2b542eadf2246b307bb1278eafb94fadda6?fields=sources,compilation,proxyResolution",
+     "supports": "ImperiumToken.sol, exact match: burnInactiveAfter 90 days (line 18), lastActivity written for the receiver only (line 99), scanAndClean without any caller check (lines 202 to 215), no exemption."
+    },
+    {
+     "url": "https://polygon.drpc.org",
+     "supports": "Block 97,828,431: balanceOf(PoolManager) 3029036932838782921101, lastActivity(PoolManager) 1753576517, burnInactiveAfter 7776000, protocolFee 500, owner 0xe77e6c41. eth_simulateV1 without override: scanAndClean([PoolManager]) from an account with no code and no IMP succeeds, logs 2877.585 IMP to 0xdead and 151.452 IMP to the owner, and balanceOf(PoolManager) reads 0 afterwards."
+    },
+    {
+     "url": "https://polygon-bor-rpc.publicnode.com",
+     "supports": "Same reads and the same simulation result at block 97,828,432. ownerOf(33811) and ownerOf(33815) on the PositionManager return 0xe77e6c411f2ee01f1cfbcccb1c418c80f1a534fe. Simulated claimIdleTokens(PoolManager) on 0x720f29e5 from the token owner succeeds and leaves balance 0."
+    },
+    {
+     "url": "https://polygon.gateway.tenderly.co",
+     "supports": "Archive logs: two Initialize logs with IMP (pool ids 0x5d1dd78d and 0x93561064, no hook), one ModifyLiquidity per pool, two Swap logs, no ERC-6909 Transfer with id IMP, four IMP transfers into the PoolManager and none out. extsload reads of slot0, liquidity and protocolFeesAccrued. DEAD copy: code size, selectors, getTimeUntilClaimable 0, whiteListedPool 0, balance 1, one transfer in and one out."
+    },
+    {
+     "url": "https://api.geckoterminal.com/api/v2/networks/polygon_pos/tokens/0xf236d2b542eadf2246b307bb1278eafb94fadda6",
+     "supports": "price_usd null, total_reserve_in_usd 1.57."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x718102f857b91eb573b78c41c654af2db05dd0b1?fields=sources,compilation,proxyResolution",
+     "supports": "BANK.sol, exact match: INACTIVITY_PERIOD 365 days (line 9), reclaimInactive external without caller check (lines 49 to 65), burn when autoAction is 1 and transfer to treasury when 2."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "Block 26,478,775: autoAction 2, treasury and owner 0x9c39d465, balanceOf(PoolManager) 800, lastActivity(PoolManager) 1766711255. eth_simulateV1 with time override: reclaimInactive(PoolManager) reverts with Still active at 0 and 8 hours and moves 800 to the treasury at 91 and 400 days."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0x720f29e57cda0a987b7ff37ace02b7021aacbc0c",
+     "supports": "No verified source for the DEAD copy on Polygon (match null)."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Precompile tokens have no selector table in code: 35 B20 tokens on Base (OUSD with 5.3 million USD, the tokenized stocks with suffix c, cbZEC, cbHYPE) and the 5 TIP-20 tokens on Tempo. The function lists were taken from the published interfaces and run through the same trials.",
+   "agrees": true,
+   "note": "Checked for Base, the larger half by value. I fetched IB20.sol, IB20Asset.sol, IB20Stablecoin.sol and IERC8056.sol from raw.githubusercontent.com/base/base-std. The interface gates mint, burn, burnBlocked, seizeWithMemo, pause, updatePolicy, updateSupplyCap, the multiplier setters and announce by roles, states that permit takes ECDSA signatures of externally owned accounts only and that ERC-1271 is not supported, and states that holder balances are stored as raw units with the multiplier as a derived view. On chain, OUSD 0xb2000000000000000000002feb517dfec7415344 at Base block 61,290,260 (code 0xef, balanceOf(PoolManager) 5,318,578.20 OUSD in 6 decimals, multiplier 1e18): one eth_simulateV1 request from an account without code or tokens. Seven permit calls with the PoolManager as owner and malformed signatures (v 0, 1, 27, 28, zero r and s, r equal to the curve order, high s) all reverted and allowance(PoolManager, caller) stayed 0. transferFrom, transferFromWithMemo, burnBlocked, seizeWithMemo, mint to the caller and to the PoolManager, grantRole, updateMultiplier, updateSupplyCap, pause and burn all reverted. A zero amount transfer to the PoolManager was accepted. balanceOf(PoolManager) was unchanged at the end. I tested one B20 token and did not repeat the Tempo TIP-20 trials. The precompile source in the Base node was not read by either of us, so this clearance rests on the interface text and on trials."
+  },
+  {
+   "check": "Lead L-399, FOLD 0xe172e9b6cfbeeb5593bdce3f077356fdb33af904 (24,275,769 FOLD at the PoolManager, about 742,000 USD). A transfer from CLAIM_SOURCE locks the amount at the recipient until NO_MORE_LOCKS. Can any account still cause such a transfer to the PoolManager, and can the owner name a later claim source?",
+   "agrees": true,
+   "note": "I read InterfoldToken.sol and ContinuousClearingAuction.sol from Sourcify. setClaimSource reverts with ClaimSourceAlreadySet once a source is stored (lines 416 to 422). _update creates a claim lock only when from equals CLAIM_SOURCE (lines 681 to 691). The auction sends the token in three places: claimTokens to the stored bid owner (line 611), claimTokensBatch to an owner that must equal each bid owner (lines 617 to 642) and the sweep of unsold tokens, which only the tokens recipient may call (lines 687 to 699). No function changes a bid owner. submitBid reverts with AuctionIsOver from END_BLOCK on (line 472). On chain at Ethereum block 26,478,793: CLAIM_SOURCE is the auction 0x687cc38d8279df3352b64cf3ec1fe8e033933595, endBlock is 25,502,753, nextBidId is 310, and a batch read of all 310 bids shows none owned by the PoolManager, 10 not exited and one exited bid (id 0, owner 0xc5cfec8c) with 8.33 FOLD unclaimed. lockedBalanceOf, lockCount and queuedLockCount of the PoolManager are 0 and transferableBalanceOf equals balanceOf (23,682,098.78 FOLD at my block). I did not read tokensRecipient() of the auction, which still holds 1,359,933 FOLD."
+  },
+  {
+   "check": "Step 3, launch pad tokens with lockPool, vesting, allocation or cap data: the DERC20 family on Base (33 tokens above 10,000 USD of one selector set, 4.2 million USD together), CloneDERC20VotesV2, Zora CreatorCoin and ContentCoin, DopplerERC20V1 on Robinhood Chain (10 tokens), StonkCoin (STONKFI, 1.18 million USD), SEND LaunchToken, GANG.",
+   "agrees": true,
+   "note": "Checked for StonkCoin, the largest single token of the group and the one whose balanceOf adds an amount that no transfer created. Source from Sourcify (exact match): balanceOf returns the raw balance plus claimableAllocation(account) (StonkCoin.sol lines 51 to 62), which reads coinAllocation(raiseId, account) at the controller until the account is materialized. In StonkFi.sol the backing record of an account is written only in back for msg.sender (line 601) and deleted on withdrawal (line 1213); back requires status Funding (line 599) and coinAllocation returns zero unless the account has a backing (lines 1093 to 1109). materialize(account) is public and moves the allocation from the token contract to the account, which leaves balanceOf unchanged. On Robinhood Chain: allocationConfigured 1, allocationAccounts 721, materializedAccounts 721, allocationReserve 0, claimableAllocation(PoolManager) 0, coinAllocation(0, PoolManager) (0, false), and a simulated back by a stranger reverts. A simulated materialize(PoolManager) by a stranger succeeds and balanceOf(PoolManager) stays at 833,807,305 STONKFI. No account can create an allocation for the PoolManager. I did not recheck the DERC20, Zora or Doppler tokens of this item."
+  },
+  {
+   "check": "Leads L-397 and L-386: which pooled currencies hold the selector of claimIdleTokens(address) or of 19 related names? Part checked: sweepInactive on 0xc5f10a8997032ad9a4a07a9bb53721a2dda416df and the tokens with lastActive or lastTransferTime getters did not move the balance from an ordinary account.",
+   "agrees": true,
+   "note": "Two of the hits rechecked. SYNC 0xc5f10a8997032ad9a4a07a9bb53721a2dda416df on Ethereum (972.9 million units at the PoolManager): in the verified source sweepInactive redirects the pending reward claim of an inactive account to feeRedirect through the hook and does not touch a token balance, and it reverts for an excluded account or one whose lastActive is zero (SYNC.sol lines 279 to 296). lastActivity(PoolManager) reads 0 and the call from a stranger reverted at 0, 91, 400 and 1,500 days. OBSD 0x2a2c206ac686edd7d5b8cf1cf325de5261cd446f on Polygon (8,000 units at the PoolManager) has a lastActivity getter and none of scanAndClean, sweepInactive, reclaimInactive, claimIdleTokens or burnInactive in its code. The search is by function name. Imperium was caught through its getter while the function that acts has a name outside the list, so a token with an idle rule and no getter of a listed name would be missed. See the lead."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1,
+    137,
+    8453,
+    56,
+    42161,
+    43114,
+    99901,
+    999
+   ],
+   "lens": "L3",
+   "question": "For every pooled currency with a balance, priced or not, run the stranger trial without a hand-out from the PoolManager at block times moved forward by 91, 400 and 1,500 days, with every state changing selector that takes an address or an address array, and record each call that lowers balanceOf(PoolManager).",
+   "why": "The idle rule search of this unit matched 20 function names. Imperium was found only because it exposes a lastActivity getter, and its acting function scanAndClean(address[]) is on no list. The full selector trials covered the 2,151 priced tokens only, and BankToken shows a period of 365 days that a 91 day shift finds only by the accident of its last transfer date. An unpriced token with real liquidity from third parties and a rule under another name is untested.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1,
+    137
+   ],
+   "lens": "L3",
+   "question": "Who provides liquidity in the pools of BankToken 0x718102f857b91eb573b78c41c654af2db05dd0b1 on Ethereum and of the DEAD copy 0x720f29e57cda0a987b7ff37ace02b7021aacbc0c on Polygon, and does any pool of an idle rule token hold funds of a party other than the token owner?",
+   "why": "Both Imperium pools turned out to be funded by the token owner alone, so the confirmed call harms nobody else today. The same reading was not done for the other two tokens, and the answer decides whether this class has a third party victim anywhere on the 21 networks beyond the Base case of F-085.",
+   "priority": "low"
+  }
+ ]
+}

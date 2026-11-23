@@ -1,0 +1,149 @@
+{
+ "unit": "theme-hook-ledgers",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "I fetched the three Sourcify records. KlikLauncher 0xb6da931df2ed2c80db47923d4eb46fd913ee01c3, KlikHook 0x1d06faa7ff674ccfd8a5736c0c0973cb0a8fa0cc and AnyLauncher 0x95e0da371711502eed78bcc3f17856b4415120ca are exact matches and the cited lines read as the finding says: launch has no caller check (KlikLauncher 310 to 328), _launch records creatorOf and pairOf (383 to 384), creditCreatorFee adds a bare number (559 to 564), collectFees pays pairOf[token] (566 to 574), _tokenOf takes the pair from currency0 of the PoolKey (KlikHook 373 to 378), _flushClaims pays the factory in that currency and credits it (245 to 266), beforeInitialize accepts any caller (332 to 335). AnyLauncher has the same two fee functions (596 to 611) and its _launch calls _verifyQuote (433, 296 to 302). On chain at Ethereum block 26478686 (ethereum-rpc.publicnode.com): launchEnabled() is 1, all 30 listed pairs are enabled, and an eth_call of launch from 0x00000000000000000000000000000000c0ffee77 with pair SPCXon and no dev buy returns a token address for salts 2 and 7. collectFees(0xe413ebda258f05cd12aea2aaf9348b1045a136e4) from its creator 0xc28eba2b0551267f4016ad0dc2324b2b6a770cbf reverts with \"transfer failed\", with 752539572571985445 recorded and 4337367430203047 SPCXon in the factory. I fetched the receipts of both cited transactions from eth.drpc.org. They show what the finding says: in 0xe91af1e1 the factory logs a credit of 975672644994750037 for token 0xec2d248b and sends that amount of SPCXon to 0x1ec0e76d with no SPCXon entering the factory, and in 0x341ecc66 seven credits arrive in token 0x43c6b274 and seven different pair tokens leave. I then ran my own reconciliation: all 2412 factory logs and 2341 token transfers into the factory from block 25901000 to 26478695, matching each CreatorFeeCredited log to a transfer of the same amount in the same transaction. 2233 credits are backed in the listed pair. The unbacked credits sit in four transactions, two more than the finding names. On Tempo at block 50448312 launch from an ordinary account returns a token address, and eth_simulateV1 of creditCreatorFee(DUCK, 100000) from the hook followed by collectFees(DUCK) from the creator emits a pathUSD transfer of 2946234 from the factory.",
+   "codeCheck": "The PoolManager side is as cited. initialize has only noDelegateCall and the currency order, tick spacing and hook address checks (src/PoolManager.sol:117-126), so any account can open a second pool of a launched token on a hook whose beforeInitialize accepts it (src/libraries/Hooks.sol:178-182). mint debits the hook in the currency id it names and burn credits it (src/PoolManager.sol:322-336), take debits the caller and transfers (src/PoolManager.sol:291-297), and the fee the hook returns from beforeSwap is charged to the swapper in the PoolKey currency (src/libraries/Hooks.sol:266-279, src/PoolManager.sol:220-226). The check at src/libraries/Hooks.sol:276 holds because the fee is below the input. No guard in src/ stands in the way, and none should: every delta in the foreign currency nets to zero at src/PoolManager.sol:112, and the loss happens in the factory after the tokens have left the PoolManager. Actor check: launch, initialize, two swaps and collectFees are open to any account on the Ethereum KlikLauncher and on Tempo, and the four Ethereum transactions came from two ordinary senders. The victims are creators who used the launch pad as intended.",
+   "corrections": "1. Four transactions used the path on Ethereum, and the finding names two. The same sender 0x690193287a9f3e0095adae116f4260818332ce0a also sent 0x6f7afaab99a4ad2ab4f7c77cf1953b649e1e69d7da2a521f57a1c2eb4ad4b266 (block 26078715), which took 146203994947546868 AAPLon (0x14c3abf95cb9c93a8b82c1cdcb76d72cb87b2d4c) for token 0xa220196e6d2051595beb8ddb66e6d37f21898b17, and 0xf1dc644ddf2356ab7d9f400208b34a73bd33a4329b1cadcede3c8428d77a4fba (block 26078731), which took 189761423183711877 NVDAon (0x2d1f7226bd1f780af6b9a49dcc0ae00e8df4bdee) for token 0xc5584905cde5376e55d1714c57ec2cb22065ef0f. 2. The shortfall per pair at block 26478691, summed over the 71 tokens of the factory, is 984318316660499281 SPCXon, 225793904152729682 NVDAon, 149040397478561157 AAPLon, 15311085289905665 of 0xf6b1117e, 6797353818778040 of 0xba47214e, 4284309310775460 of 0xfedc5f4a and 470446068834558 of 0x59644165. Each figure equals what the four transactions took in that pair, so the reconciliation is complete for this factory. The impact text should add about 0.149 AAPLon and 0.226 NVDAon to the loss. 3. 25 tokens have pairOf equal to SPCXon today, where the finding says 16. 4. The attacker has to wait one block after initialize: the hook charges no fee in the block a pool was created and rejects buys in that block (KlikHook lines 361 and 403). 5. Scope: the money taken sat in the Klik factory, outside the PoolManager, and the fault does not depend on any network. It does not answer the question about a weakness that follows from a network difference. The claims that the hook holds at the PoolManager are the subject of the earlier part of F-084. 6. Chains: I confirmed the open launch on Ethereum (KlikLauncher) and Tempo only. For Base, Unichain, Ink, Arbitrum One, Robinhood Chain, Avalanche and Monad the factory step is unconfirmed, as the finding states, because AnyLauncher needs a signed price quote and the other factories were not read. An existing creator on those chains needs no new launch.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0xb6da931df2ed2c80db47923d4eb46fd913ee01c3",
+     "supports": "KlikLauncher exact match. launch, _launch, creditCreatorFee and collectFees at the cited lines."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x1d06faa7ff674ccfd8a5736c0c0973cb0a8fa0cc",
+     "supports": "KlikHook exact match. _tokenOf, _mintClaim, _flushClaims, _beforeInitialize, _getFeeSplit and _antiSnipe."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x95e0da371711502eed78bcc3f17856b4415120ca",
+     "supports": "AnyLauncher exact match. Same creditCreatorFee and collectFees, and _verifyQuote inside _launch."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "Receipts of 0xe91af1e1, 0x341ecc66, 0x6f7afaab and 0xf1dc644d with the transfers quoted."
+    },
+    {
+     "url": "https://mainnet.gateway.tenderly.co",
+     "supports": "eth_getLogs from block 25901000 to 26478695: 2412 logs of the factory and 2341 token transfers into it, used for the reconciliation."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "Blocks 26478686 to 26478691: launchEnabled, pair list and factory balances, eth_call of launch from an ordinary account, collectFees revert, creatorFees and pairOf for all 71 tokens."
+    },
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "Block 50448312: launch eth_call from an ordinary account, factory balance 2946234, creatorFees(DUCK) 2846234, and the eth_simulateV1 run."
+    },
+    {
+     "url": "src/PoolManager.sol:117",
+     "supports": "initialize has no caller restriction."
+    },
+    {
+     "url": "src/PoolManager.sol:322",
+     "supports": "mint and burn account claims in the currency id the caller names."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "Sourcify holds CamelotHook 0x57ea4782fbdb6cd8256aae28075ce3a0e7e13f0f (match) and GoldenGateFeeHook 0x195b3936afeae0f9ada52473bb34d67466a4c0c8 (exact match). CamelotHook _beforeSwap (71 to 176) takes the PoolKey input currency, swaps hardcoded WETH and USDC on 0xB1026b8e7276e7AC75410F1fcbbe21796e8f7526 and pays that pool from its own balance in algebraSwapCallback (178 to 207). Nothing compares the PoolKey currencies with WETH and USDC. On chain at Arbitrum One block 526844458 (arb1.arbitrum.io/rpc): the two proxies have flags 0x88 and EIP-1967 implementations 0x57ea4782 and 0xe43403ad, GoldenGateFeeHook has flags 0xc8, and the balances are 1650159984937101 WETH and 64130252 USDC, 8221214982138125 WETH and 34923926 USDC, and 659454474487714 WETH and 10843 WBTC units. An eth_call of PoolManager.initialize from 0x00000000000000000000000000000000c0ffee77 succeeds for a pool of a codeless currency with USDC and for one with WETH on both proxies, and for pools with WETH and with WBTC at fee 0x800000 on GoldenGateFeeHook. I repeated the Quoter test with a state override of slot0 for the foreign pool id. For 0x9b21e1cd the quote for 1650159984937101 units of the codeless currency returns 2945354 USDC and the mirror pool returns 35737211665487918 WETH for 64130252 units. For 0x157af7a1 the results are 14661595 USDC and 19501592155717823 WETH. For GoldenGateFeeHook with fee 0x800000 the results are 3759111254671993 WETH for 10843 units and 1851 WBTC units for 659454474487714 units. A debug_traceCall on arbitrum.drpc.org shows the sequence the finding describes: take of the codeless currency, a transfer of WETH or WBTC from the hook to the exchange pool, sync, a transfer of the output from the hook to the PoolManager, settle.",
+   "codeCheck": "initialize accepts the PoolKey because the hooks have no initialize flag (src/PoolManager.sol:117-142, src/libraries/Hooks.sol:178-182). take debits the hook in the currency it names and a transfer call to an address without code counts as success (src/PoolManager.sol:291-297, src/types/Currency.sol:64-74). The returned delta credits the hook the input and debits it the output in the PoolKey currencies (src/libraries/Hooks.sol:266-279 and 295-313, src/PoolManager.sol:220-226), and settle credits the output the hook transferred (src/PoolManager.sol:349-364). The swap amount becomes zero after the hook delta, which passes the check at src/libraries/Hooks.sol:276 and makes Pool.swap return a zero delta (src/libraries/Pool.sol:320). The hook ends with no open delta, the swapper owes the worthless input and is owed the real output, and the count check at src/PoolManager.sol:112 passes once the swapper settles. I found no guard in src/ that stops this. The PoolManager loses nothing: every unit it pays out was transferred in by the hook in the same call. The exact output branch leaves the hook with a WETH or USDC debt from the callback take (CamelotHook 193 and 203) and reverts at src/PoolManager.sol:112, as the finding says.",
+   "corrections": "1. The mechanism cites src/PoolManager.sol:216-217 for the hook delta. The lines are 220-226. 2. GoldenGateFeeHook routes only when the PoolKey fee is 0x800000 (source line 263). 3. GoldenGateFeeHook has a shorter route that the finding did not see. When hookData is 20 bytes long the hook uses it as the exchange pool address without comparing it with referencePools (lines 284 to 285), stores it as _activePool (313), and uniswapV3SwapCallback sends WBTC and WETH from the hook balance to that address in the amounts the caller states (365 to 380). A swap in the real pool of the hook with a caller made pool address therefore reaches the same balances. I read this in the source and did not run it. 4. Scope: the balances are the fee float of the hook operators (CamelotHook keeps 0.02 percent through ratio 9998, GoldenGateFeeHook keeps its fee until harvest). The victims are those operators. They are outside the victim class of the threat model, the funds are outside the PoolManager, and the fault does not depend on the network. The actor value is still unprivileged because any account can do every step. 5. The quotes differ from the finding by a few percent because the exchange price moved between the two blocks.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/42161/0x57ea4782fbdb6cd8256aae28075ce3a0e7e13f0f",
+     "supports": "CamelotHook source, lines 71 to 221."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/42161/0x195b3936afeae0f9ada52473bb34d67466a4c0c8",
+     "supports": "GoldenGateFeeHook source: fee test at 263, hookData pool at 284 to 285, take at 312, callback at 365 to 380, harvest at 446 to 470."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc",
+     "supports": "Blocks 526844458 and 526844667: flags, implementation slots, balances, initialize eth_call from an ordinary account, and Quoter eth_call with the slot0 override."
+    },
+    {
+     "url": "https://arbitrum.drpc.org",
+     "supports": "debug_traceCall of the same Quoter calls with callTracer, showing the transfers from the hooks."
+    },
+    {
+     "url": "src/libraries/Pool.sol:320",
+     "supports": "A swap amount of zero returns a zero delta without reverting."
+    },
+    {
+     "url": "src/PoolManager.sol:112",
+     "supports": "unlock reverts unless every delta is zero, which is why the exact output branch cannot take PoolManager funds."
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "Sourcify holds SpawnerHook 0xb476c448da4453208df4e371fee26f4e630d3044 as an exact match. _afterSwap (234 to 310) takes the fee in the unspecified currency, keeps the pending amount in spawnerFeesBalance[feeToken], and when the amount reaches minimumFeeDistribution it calls _distributeFees for the token and creator of the current swap (290 to 300). For an ETH fee the mapping slot is address(0), so one number serves every pool. Spawner.createSpawn(swapper, spawnToken) at line 303 makes the swapper the creator of a new spawn token (Spawner.sol 218 to 227, Spawn.sol 66). On chain at Base block 61285777 (mainnet.base.org): spawnerFeesBalance(address(0)) is 945018262798261, totalCreatorFees() is 26132431268132716624, the native balance is 562744349885641146 wei, storage slot 3 holds 0.01 ether, which is minimumFeeDistribution, and slot 4 holds 10. The Spawner is 0x95fe5bc073763fed6e8572e33db9e0e1c06bc78e (read from the immutables in the hook code), isKilled() is false and totalSpawnCount() is 15241. The pending amount and the fee total are the same as at the finding's block 29,000 blocks earlier.",
+   "codeCheck": "The hook takes its fee with take and returns it as the afterSwap delta, so the swapper pays it (src/PoolManager.sol:291-297, src/libraries/Hooks.sol:298-313, src/PoolManager.sol:220-226). The PoolManager accounting is unaffected. The shared number lives in the hook, and the ETH it pays out is the hook's own native balance. swap, modifyLiquidity and donate check that the pool is initialized before they call a hook (src/PoolManager.sol:154, 196 and 264), so the callbacks run only for pools that passed the hook's beforeInitialize.",
+   "corrections": "1. The fee is ETH in two cases: an exact input sale of the spawn token and an exact output purchase (line 255). The finding names the first only. 2. minimumFeeDistribution is 0.01 ETH, read from slot 3. The finding left it unread. 3. The gain is small and conditional. The account that crosses the threshold receives 75 percent of the bucket (half as tokens bought for it, a quarter as a deposit) and 25 percent goes to the Spawner owner. With B pending from others and f paid by the account itself the net is 0.75 B minus 0.25 f, at most about 0.0075 ETH per round, and it is negative today because B is 0.000945 ETH and f would have to be about 0.009 ETH. Effect degrade describes this better than siphon. 4. Nobody ran the path. I did not find the whitelisted routers and did not simulate a sale, so the profit side rests on the source alone and the evidence for it is inferred. 5. Scope: the ETH is held by the hook, outside the PoolManager, and the behaviour does not depend on the network.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/8453/0xb476c448da4453208df4e371fee26f4e630d3044",
+     "supports": "SpawnerHook, Spawner and Spawn sources at the cited lines."
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "Block 61285777: spawnerFeesBalance(address(0)), totalCreatorFees(), storage slots 3 to 5, native balance, Spawner address from the hook code, isKilled() and totalSpawnCount()."
+    },
+    {
+     "url": "src/PoolManager.sol:196",
+     "supports": "swap checks pool initialization before the hook is called."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Single token bonding curve hooks with flags beforeInitialize, beforeAddLiquidity, beforeSwap, beforeSwapReturnDelta that hold native ETH, BNB or AVAX (SatoHook 0x0000f07d2b5f1ddf3244b8780f972f306efd2888 with 981.27 ETH, SurtHook, Sat1Hook, VitaHook, SatopegHook on Ethereum, BloomHook, HookTemplate, J3sseHook on Base, three SatoHook copies and AizoHook on BNB Smart Chain, one on Avalanche, NakamotoHook with 25.89 ETH on Robinhood Chain): they accept a second pool. Can it reach the reserve?",
+   "agrees": true,
+   "note": "I read the SatoHook source on Sourcify (exact match) and probed it at Ethereum block 26478724. beforeInitialize pins currency0 to native, currency1 to the hook's token, fee 3000 and the hook (224 to 231). beforeSwap repeats the currency test (259 to 261) and reads no pool id, tick spacing or pool state, and beforeAddLiquidity always reverts, so a second pool is the same curve with no liquidity of its own. initialize from an ordinary account succeeds for tick spacing 1 and 200 and reverts for another fee, a foreign currency1 and a foreign currency0. The hook holds 981.21 ETH, which equals ethCum 880.03 plus feesAccrued 101.18. Curve.mintFor and Curve.burnFor are inverse forms of one function. I did not read the other hooks of the family, as the item says, and the swapper address for the cooldown comes from hookData, which is a matter of the hook's own rules."
+  },
+  {
+   "check": "The unverified hook 0xc81fd894c0ace037d133af4886550ac8133568e8 (6,024 bytes, same address on three networks) holds 550.25 WETH on Ethereum, 2.70 cbBTC and 1.65 WETH on Base and stock tokens on Robinhood Chain, about 1.1 million USD. Can an ordinary account open a pool on it?",
+   "agrees": true,
+   "note": "The probe result holds: initialize from an ordinary account reverts for six PoolKey variants at block 26478724. I add what the code is. The contract has admin, executors and a table routes(bytes4) that forwards selectors to modules, and getLabels() returns BController, BStaking, BCredit, BFactory, BHook, BSwap and BLens. beforeInitialize, beforeAddLiquidity, beforeSwap, afterSwap, beforeDonate and unlockCallback all route to module 0x6271632aa27121dfd5c73090178d70e2ae4527cc (8676 bytes, no Sourcify record). transfer and balanceOf have no route, so a take that names the contract as currency reverts with 0xd7367435. unlockCallback reverts for a stranger with 0x34bc20f0 and returns empty data when the PoolManager calls it with empty data. The PoolManager calls unlockCallback only on the caller of unlock (src/PoolManager.sol:110) and calls hook selectors only after the pool initialization check (src/PoolManager.sol:154, 196, 264), so with initialize closed no call shape P1 to P7 reaches the module with caller chosen data. The 550.25 WETH is held as a token balance on the contract and the hook has no claims in WETH. The module code and the admin 0x8044f710c58b6ea6a178cc540f9f1cd758f7d1b2 are still unread, and the lead of the research file stands."
+  },
+  {
+   "check": "Hooks that call PoolManager.take or PoolManager.swap with hardcoded currencies inside beforeSwap for any pool, and hold nothing: Unichain proxy 0xad78e0a3b5a552813feb5eb8ecbe842f7b5e9088 (takes native ETH and swaps on a real pool for a foreign PoolKey) and the exact output branch of CamelotHook on Arbitrum One. Can this move PoolManager funds to the swapper?",
+   "agrees": true,
+   "note": "This follows from the source alone. take debits the caller in the currency it names (src/PoolManager.sol:291-297). A hook delta is charged to the swapper in the PoolKey currencies and is zero sum between the two (src/libraries/Hooks.sol:305-313, src/PoolManager.sol:220-226). A credit in a real currency arises only from settle, which counts msg.value or the observed balance rise (src/PoolManager.sol:349-364), from a burn of claims the caller holds or is approved for (src/PoolManager.sol:332-336, src/ERC6909Claims.sol:13-22), or from pool math. A hook that takes WETH or USDC for a pool whose currencies differ keeps that debt, and unlock reverts (src/PoolManager.sol:112). I also walked the variant where the foreign pool keeps the real currency on the input side (WETH against a caller made token, exact output). There the swapper pays the real WETH that the hook took and receives the made up token, and the hook keeps the USDC it bought, so the caller loses and the PoolManager is whole."
+  },
+  {
+   "check": "TurbineHook 0x1be2e33d8f468c09c1aa9e53d54e400470b2a088 (three pools, claims of 14,720 USDC and 0.4 WETH): beforeInitialize registers any currency pair with tick spacing 1 from any caller, and beforeSwap mints input claims and burns output claims. Can a pool opened by a stranger burn the claims of the real pools?",
+   "agrees": true,
+   "note": "I read the hook and also the router 0xe5b67a998b73c5a5817f56c22b433c4642b7262a (Sourcify match), which the item left unread. beforeSwap requires the swap sender to be the router (370 to 375) and the reserves per pool id use checked arithmetic (395 to 402). The router is an ERC-6909 operator of the hook (isOperator is 1 on chain), so it can burn every claim of the hook, 14720.118006 USDC and 0.4 WETH today. Its swapExactTokens, addLiquidity and removeLiquidity accept the settler only. The two public functions are submitRemoveLiquidityIntent and executePendingIntents, which pay a pro rata share of one pool's reserves for LP tokens pulled from the owner through Permit2. A pool registered by a stranger has no LP supply, because minting is settler only. The router's unlockCallback runs a delegatecall on the data it receives, and the PoolManager sends that data only to the caller of unlock (src/PoolManager.sol:110). The settler 0x5964336d54486f70b6a05b7825021427d99a0e16 sets the swap amounts and has no Sourcify record. That link is unread and is listed as a lead."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L4",
+   "priority": "low",
+   "question": "What does the unverified Turbine settler 0x5964336d54486f70b6a05b7825021427d99a0e16 check before it calls swapExactTokens, addLiquidity and removeLiquidity on the router 0xe5b67a998b73c5a5817f56c22b433c4642b7262a, and can an ordinary account make it pass an output amount of its choice for a registered pool?",
+   "why": "TurbineHook burns output claims in the amount the router hands over and the router takes that amount from the settler. The router is an ERC-6909 operator for all claims of the hook (14,720 USDC and 0.4 WETH at the PoolManager). The per pool reserve is the only bound in the verified code, so the settler decides whether a swapper can take a pool's reserve for a small input."
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L4",
+   "priority": "low",
+   "question": "Does a swap in the real GoldenGateFeeHook pool with 20 bytes of hookData that name a caller made pool address let that address call uniswapV3SwapCallback and receive the hook's WBTC and WETH, as source lines 284 to 285, 313 and 365 to 380 read?",
+   "why": "It would mean that the balances of this hook are reachable without a foreign pool, so a beforeInitialize check or a currency comparison would not close the fault reported for it. The path was read in the verified source and not run."
+  }
+ ]
+}

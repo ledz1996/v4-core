@@ -1,0 +1,231 @@
+{
+ "unit": "theme-currency-lists",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "I ran the calls myself on 23 November 2026. balanceOf(PoolManager) on ibBUSD 0x7c9e73d4c71dae564d41f78d56439bb4ba87592f returned 56658476151267410600 on bsc-dataseed1.bnbchain.org, bsc.api.pocket.network, bsc.rpc.sentio.xyz and bsc-rpc.publicnode.com. An eth_call of selector 0xddeae033 (claimFor(address), selector recomputed) with the PoolManager as argument from 0x00000000000000000000000000000000000a11ce returned success on all four endpoints, and the same call for an address without shares reverted with the text no shares. I then ran one eth_simulateV1 request on bsc-rpc.publicnode.com at block 135,297,578 without any state override: balance reads, claimFor(PoolManager) from the unrelated account, balance reads, and a transfer of one base unit of ibBUSD from the PoolManager. The claim emitted ten logs: Transfer(PoolManager, zero address, 56658476151267410600) on ibBUSD, an approval and transfer of 55476046033883265769 ibUSDT 0x90476bfef61f190b54a439e2e98f8e43fb9b4a45 from ibBUSD to 0xd20b887654db8dc476007bdca83d22fa51e93407, a transfer of the same amount from there to 0x4579587ae043131999ce3d9c66199726972e3fb7, and a deposit log of that contract with caller 0xd20b..., account PoolManager and pool 5. Afterwards the PoolManager held 0 ibBUSD and 0 ibUSDT, and the transfer of one base unit reverted with ERC20: transfer amount exceeds balance. The link the researcher left open is closed as far as sources allow. The proxy 0x4579... points to implementation 0x15474b03710187eb9de4401d99e75680ed240b27, which Sourcify lists as an exact match for the Alpaca MiniFL contract. In that source deposit and withdraw both carry onlyWhitelisted, and withdraw only lets the calling funder take back what it funded and pays the tokens to the caller (MiniFL.sol lines 252 to 356). The funder is 0xd20b..., whose implementation 0x86bc51819b8c2dde261d3b706b5d8cab0a5204f7 is not verified. Its 30 selectors resolve at the openchain signature database to the Alpaca account manager functions. The only exits are unstakeAndWithdraw(address,uint256) and unstakeAndWithdrawETH(uint256), which take no account argument, so the position can be closed only by a call from the PoolManager address, which the PoolManager cannot make. This last step rests on selector names, since no source is published. The Alpaca recap of 8 March 2024 states that the BUSD migration under AIP-29 is complete and that depositors may claim their assets converted into USDT. coins.llama.fi prices ibBUSD at 1.0007 USD, so the balance is worth 56.70 USD. The Initialize list in the work directory holds 16 ibBUSD pools without a hook, with LP fees from 88 to 99.9996 percent, and I recomputed all 16 pool ids from the listed parameters. StateView.getLiquidity is above zero for five of them today. I did not recheck the balances quoted for blocks 60,000,000 and 120,000,000.",
+   "codeCheck": "take debits the caller and then calls transfer on the token, and a failed transfer reverts with the wrapped ERC20TransferFailed error (src/PoolManager.sol:291-297, src/types/Currency.sol:55-86). The token balance is read only in sync and in _settle (src/PoolManager.sol:279-288, 349-365), and _accountDelta works on per caller deltas (src/PoolManager.sol:368-378), so nothing in core notices that the balance is gone. No guard stands in the way: the claim is a call to the token by a third party and never enters the PoolManager. After it every take of ibBUSD reverts for all pools, claims and protocol fees of that currency, because they share one holder address.",
+   "corrections": "The actor and the effect are right. Two details to add: only five of the 16 pools show liquidity in range today, and the pool fees of 88 to 99.9996 percent suggest bait pools more than ordinary liquidity, so the 56.70 USD at stake may belong to very few parties. The claim that the staked ibUSDT is out of reach is now supported by the verified MiniFL source and by the selector list of the unverified account manager.",
+   "sources": [
+    {
+     "url": "https://bsc-rpc.publicnode.com",
+     "supports": "eth_simulateV1 at block 135,297,578: claimFor(PoolManager) from an unrelated account succeeds, burns the whole ibBUSD balance, deposits 55.476 ibUSDT into 0x4579... for the PoolManager, and a later transfer of one base unit from the PoolManager reverts."
+    },
+    {
+     "url": "https://bsc-dataseed1.bnbchain.org",
+     "supports": "balanceOf(PoolManager) 56658476151267410600 and success of the claimFor eth_call; no shares revert for an address without a balance."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/56/0x15474b03710187eb9de4401d99e75680ed240b27?fields=sources",
+     "supports": "MiniFL source, exact match: deposit and withdraw are onlyWhitelisted and withdraw pays the calling funder."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/56/0xd20b887654db8dc476007bdca83d22fa51e93407?fields=compilation,proxyResolution",
+     "supports": "0xd20b... is a transparent proxy with implementation 0x86bc51819b8c2dde261d3b706b5d8cab0a5204f7, which has no Sourcify record."
+    },
+    {
+     "url": "https://api.openchain.xyz/signature-database/v1/lookup",
+     "supports": "Names of the 30 selectors found in the implementation bytecode of 0xd20b..., among them unstakeAndWithdraw(address,uint256) and stakeFor(address,address,uint256), and none that unstakes for a named account."
+    },
+    {
+     "url": "https://medium.com/alpaca-finance/february-2024-recap-85c5a75ba37f",
+     "supports": "Alpaca Finance: as per AIP-29 the BUSD migration is completed and users may claim their assets converted into USDT."
+    },
+    {
+     "url": "https://coins.llama.fi/prices/current/bsc:0x7c9e73d4c71dae564d41f78d56439bb4ba87592f",
+     "supports": "ibBUSD price 1.0007 USD."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "The mechanism and the listed transactions hold, and the count for BNB Smart Chain is too low. I fetched the receipt of every one of the 119 listed transactions. Each succeeded, each holds the sSAC rebase log, an sSAC Transfer from the PoolManager equal to the credited amount, no sSAC Transfer to the PoolManager and no PoolManager log, and the amounts sum to 210.068614491 sSAC. The senders are 0x2d68a551e7c8ecf7312ee083a16e736dce2347d5 in 117 and two other accounts in one each, and 0x2d68... has no code. For three of them I read balanceOf(PoolManager) one block before and at the block: the balance is the same (41.82, 1,597.81 and 2,287.62 sSAC), so the rebase rise left in the same transaction. No endpoint I reached served a trace, so the order sync, rebase, settle, take rests on the receipts and balances here and on the traces of the cycle 5 verifier. The rebase log file has 191 rows for epochs 45 to 367, and the staking contract 0x99954eb0b159514d608f64c89a2c5bbe9f42120b reports an epoch length of 96,000 blocks at blocks 104,400,000, 116,000,000 and today, so there are 323 epochs and 132 logs are missing. The cause is the log source: the same eth_getLogs request for the block of epoch 169 on bsc.api.pocket.network returned one log in 12 of 18 tries and an empty list without an error in 6. I located all 132 missing rebase transactions, 35 by log windows and 97 by a binary search on epoch() at old blocks followed by a single block log query, and read their receipts. 69 of them are payouts of the same form: sender 0x2d68..., called contract 0x0b675fb382e0c986d724fd6cbb51837b3ae30e8a, an sSAC Transfer out of the PoolManager, none in, no PoolManager log. They sum to 61.853007741 sSAC and lie between blocks 115,890,216 (epoch 165) and 128,466,212 (epoch 296). The corrected figures are 188 payout transactions among 323 rebase transactions, 271.921622232 sSAC, first payout at block 115,890,216. The 63 missing rows that are no payout went to other contracts and hold no sSAC transfer of the PoolManager. coins.llama.fi has no price for sSAC. Polygon: eth_getLogs on polygon.gateway.tenderly.co for ERC-6909 Transfer logs of the PoolManager with from zero in blocks 96,099,090 to 97,827,090 returned 109 logs for the sLGNS id that sum to 1,349.946361641 sLGNS, all to one recipient, and 84 logs for id 0x2f712578fbd1c42c3459b67dd2b9035e994bbc93 that sum to 78.935548641, which match the finding. I did not trace the Polygon rows again.",
+   "codeCheck": "sync has no modifier and stores balanceOf(PoolManager) (src/PoolManager.sol:279-288). _settle credits the recipient with the balance now minus the stored balance, whoever caused the rise, and the subtraction is checked (src/PoolManager.sol:349-365). take pays the credited amount out and mint books it as a claim (src/PoolManager.sol:291-297, 322-329). unlock only requires that the count of nonzero deltas is zero at the end (src/PoolManager.sol:104-114). No guard ties a credit to a transfer by the settler.",
+   "corrections": "The BNB Smart Chain count is 188 payout transactions and 271.921622232 sSAC, where the finding has 119 and 210.068614. The first payout is in block 115,890,216, which is 95,998 blocks before the one named. 135 of 323 rebase transactions hold no PoolManager transfer, where the finding has 72 of 191. The log scan through bsc.api.pocket.network silently lost 132 of 323 logs, so every other whole history scan through that endpoint needs a second source. The 69 missed payouts are saved in theme-currency-lists.work/raw/ssac_rebase_missed_verifier.json. The value taken is rebase surplus that no pool records, so the effect is lost yield for liquidity providers, as the finding says.",
+   "sources": [
+    {
+     "url": "https://bsc.api.pocket.network",
+     "supports": "Receipts of the 119 listed and the 132 missing rebase transactions, epoch() of the staking contract at old blocks, old balances, and the repeat test in which the same log query returned an empty list in 6 of 18 tries."
+    },
+    {
+     "url": "https://bsc.rpc.sentio.xyz",
+     "supports": "epoch() and balanceOf at old blocks as a second source."
+    },
+    {
+     "url": "https://polygon.gateway.tenderly.co",
+     "supports": "109 sLGNS and 84 sATH claim mints from the zero address in blocks 96,099,090 to 97,827,090 with the sums in the finding."
+    },
+    {
+     "url": "research/network-risk/cycles/006/theme-currency-lists.work/raw/ssac_rebase_missed_verifier.json:1",
+     "supports": "The 132 rebase transactions missing from the research log file, 69 of them payouts, with block, epoch, amount and sender."
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "All chain facts hold, and the link the finding left open is now closed for WHITE in the direction that makes it worse. Ethereum: the receipt of 0x36869e0c74164dfaf399507b77a3d4398d90bb3b0f53d3bb52f47085f381c3fc (block 26,387,568) shows two WHITE Transfer logs from the PoolManager, 27,819.929136657607 to 0x6ec94f50cadcc79984463688de42a0ca696ec2db and 2,781.9929136657606 to 0x287ecebd1223e235b929217fe596c905a11752ae. owner() of WHITE returns that second address, which has no code, so the charge goes to the token owner. 0x6ec94f... is a Uniswap v2 pair of WHITE and USDC (factory 0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f). eth_getLogs on mainnet.gateway.tenderly.co from block 21,688,329 to 26,478,880 returned 766 WHITE transfers from the PoolManager to the owner address that sum to 6,129,406.680924483 WHITE, first block 23,150,160, last block 26,459,964. I ran eth_simulateV1 on ethereum-rpc.publicnode.com at block 26,478,879 without a stub. A transfer of 1,000,000 WHITE from the PoolManager to the pair lowered the PoolManager balance by 1,100,000 and raised the owner balance by 100,000. skim(PoolManager) on the pair, sent by an unrelated account, then returned exactly 1,000,000 WHITE to the PoolManager. A transfer from the PoolManager to an address without code lowered its balance by the amount only. The return leg is therefore free: after take to the pair and skim back the PoolManager has lost 10 percent of the amount to the token owner and the pair is unchanged. The pool 0x9d845dfebac428bebbab5aadce66b0287a5bc0f79370e9dfd013434d76cbde02 is ETH and WHITE with a fee of 0.3 percent, no hook and liquidity above zero. The PoolManager holds 48,265,470.02 WHITE, about 1,462 USD at the DexScreener price of 0.00003031 USD. Arc: the receipt of 0xaf96d29fbbc703117f44d34945c9e8b04fc768ed235c2cd93d66bd0c4289ff4c shows 176.74427871843528 ARGUS to the pair and 1.767442787184353 to the token contract, and eth_getLogs on arc.gateway.tenderly.co returned 1,295 such charge transfers that sum to 188,007.27146091536 ARGUS between blocks 21,078,826 and 32,673,463. An eth_call on rpc.mainnet.arc.io with the Multicall3 runtime code placed at the PoolManager address showed a loss of 1,010 ARGUS for a transfer of 1,000 to the pair. skim(PoolManager) on that pair reverted in the same call, so I found no free return leg for ARGUS. BNB Smart Chain: the receipt of 0x82b6ad131efc04d9ee34211e458f107a1a94f9d093fd679e1554edcf7ebfaf06 shows three transfers of token T from the PoolManager (206,330.82 to the recipient and 6,381.37 each to the token contract and to 0xfe34d3505cc8a835f7efe54bf8ff4d680d2bd6b5). In my simulation a transfer to its PancakeSwap pair costs the PoolManager 103 percent of the amount and a skim back leaves it 8.9 percent short, with a settle credit of 94.1 percent, so the caller would have to add 5.9 percent of its own.",
+   "codeCheck": "take books minus amount on the caller and calls transfer(to, amount) on the token (src/PoolManager.sol:291-297). The transfer routine checks only that the call did not revert and returned nothing or true (src/types/Currency.sol:55-86). Nothing compares the fall of the PoolManager balance with the amount. sync is callable while unlocked and stores the balance after the take (src/PoolManager.sol:279-288). When the pair then pays the amount back to the PoolManager, _settle credits the full amount (src/PoolManager.sol:349-365), the caller's delta is zero and unlock returns (src/PoolManager.sol:104-114). The 10 percent charge stays outside all accounting. The recipient of take is a free argument, so every step is open to any account.",
+   "corrections": "Severity rises from low to medium. For WHITE the cost of doing this on purpose is gas only: one unlock with take to the v2 pair, sync, skim to the PoolManager and settle moves 10 percent of the taken amount from the pooled balance to the token owner, and repeating it empties the PoolManager balance of WHITE. The caller gains nothing unless it is the token owner, so for an ordinary account the effect is a loss and freeze for the liquidity providers of the hookless WHITE pools, and for the owner 0x287ecebd1223e235b929217fe596c905a11752ae it is a siphon. The actor unprivileged is right. For ARGUS and for T the round trip is not free on the pairs I tried, so they stay at the level the finding describes. I did not rerun the count of 13, 12 and 2 currencies on the other lists.",
+   "sources": [
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_simulateV1 at block 26,478,879: a transfer of 1,000,000 WHITE from the PoolManager to the v2 pair costs 1,100,000, and skim(PoolManager) by an unrelated account returns 1,000,000 in full."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "Receipt of 0x36869e0c... with the two WHITE transfers from the PoolManager."
+    },
+    {
+     "url": "https://mainnet.gateway.tenderly.co",
+     "supports": "766 WHITE transfers from the PoolManager to the owner address, 6,129,406.68 WHITE in total."
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "Receipt of 0xaf96d29f... and the eth_call with a code override: 101 percent loss for ARGUS, skim reverts."
+    },
+    {
+     "url": "https://arc.gateway.tenderly.co",
+     "supports": "1,295 ARGUS charge transfers from the PoolManager to the token contract, 188,007.27 ARGUS in total."
+    },
+    {
+     "url": "https://bsc-dataseed1.bnbchain.org",
+     "supports": "Simulation for token T: 103 percent loss on a transfer to its pair and an 8.9 percent net loss after skim."
+    },
+    {
+     "url": "https://api.dexscreener.com/latest/dex/tokens/0x9cdf242ef7975d8c68d5c1f5b6905801699b1940",
+     "supports": "WHITE price 0.00003031 USD and 1,879 USD of liquidity in one v4 pair."
+    }
+   ]
+  },
+  {
+   "findingIndex": 3,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "On bsc-rpc.publicnode.com isRestricted(PoolManager) on HOLD 0xff583dc5ddc7c0bb3625fff39a587a2000e78888 returns 1 and returns 0 for an unrelated address. balanceOf(PoolManager) is 140774905397439540858093. A transfer from the PoolManager of one base unit and of the whole balance reverts with ACCOUNT_IS_RESTRICTED. restrict(address) from an ordinary account reverts with ONLY_RESTRICTER, and restrictor() and owner() both return 0xca2b7aa96a0cd6e02f437516c2f922a2a049838c. Sourcify lists the contract as a match for HoldToken. In that source transfer carries notRestricted(msg.sender) and notRestricted(to) (HoldToken.sol lines 37 to 40), so the PoolManager can neither send nor receive HOLD. A binary search on isRestricted at old blocks puts the change in block 83,149,493 (24 February 2026), where transaction 0x32ea1fab09ace91628bea68f86cf82ebc346da6249d23e2943d607a84289f352 logs Restricted(PoolManager). The balance is the same one block before and today. coins.llama.fi prices HOLD at 0.111 USD, which gives 15,626 USD. The Initialize list holds 16 HOLD pools, none with a hook, and five show liquidity in range. For the other tokens I checked only that the result file holds 517 entries in the classes 449, 44 and 24. I did not rerun those transfers or the X Layer and Base figures.",
+   "codeCheck": "take pays with transfer and reverts when the token call reverts (src/PoolManager.sol:291-297, src/types/Currency.sol:55-86). All pools, claims and fees of a currency share the PoolManager address, so one entry for that address stops every payout of HOLD. Settling HOLD is blocked as well, because a transfer to the PoolManager reverts in the token. The other currency of each pool is still paid out, since accounting is per currency (src/PoolManager.sol:368-384).",
+   "corrections": "actor: issuer is right. Add that the restriction dates from block 83,149,493 and that the token also refuses transfers to the PoolManager. Two of the 16 pools were created within 1,000 blocks of the restriction, and the pool fees are between 85 and 99.5 percent for most of them, so part of the balance may come from bait pools.",
+   "sources": [
+    {
+     "url": "https://bsc-rpc.publicnode.com",
+     "supports": "isRestricted, balanceOf, the reverting transfers, the ONLY_RESTRICTER revert, restrictor() and owner()."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/56/0xff583dc5ddc7c0bb3625fff39a587a2000e78888?fields=sources",
+     "supports": "HoldToken source: transfer has notRestricted on the sender and on the recipient, and the restrictor is set to the owner."
+    },
+    {
+     "url": "https://bsc.rpc.sentio.xyz",
+     "supports": "isRestricted(PoolManager) at old blocks: 0 at block 83,149,492 and 1 at block 83,149,493, with the Restricted log in that block."
+    },
+    {
+     "url": "https://coins.llama.fi/prices/current/bsc:0xff583dc5ddc7c0bb3625fff39a587a2000e78888",
+     "supports": "HOLD price 0.111 USD."
+    }
+   ]
+  },
+  {
+   "findingIndex": 4,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "The class is real, and three of the six tokens reported as new do not belong to it. I read receipts, balances one block before and at the block, and call traces from eth.drpc.org and robinhood.drpc.org. Real cases. Ethereum 0x2bb84fd8f7ed0ffae3da36ad60d4d7840bdeeada (symbol GROK): transaction 0x0528ed0e... is a call by an externally owned account to the token, has two logs, one of them Transfer(PoolManager, 0xdead, 6909670547083978654536), the balance falls from that figure to 0, and the trace holds no call to or from the PoolManager. Ethereum 0x741cdf7f730c259fe50bdf8c54e6b197eabd76cc (symbol WBTC, which is not the real WBTC): transaction 0x38ed1d18... is a call to the token, moves 10740000000000 units from the PoolManager to 0xb365a590be67b0d728325e182666e30a7e559091, the balance falls to 0, and the PoolManager is not called. Robinhood Chain 0x93d6e67bd9b499b0af7776ef5c109b1457543907: transaction 0xa9a21eab... is a call to the token in which transferFrom moves 147966261727731039 units out of the PoolManager, with no PoolManager log and no call from it. The endpoint did not serve the old balance for this one. Not this class. Ethereum 0x1f426c51f0ef7655a6f4c3eb58017d2f1c381bff: in transaction 0x13d30827... the PoolManager executes take of currency 0x6369c3dadfc00054a42ba8b2c09c48131dd4aa38 for 112353849387852719449 units and calls transfer on that address, which calls 0x1f426c51... (selector 0xbeabacc8), and that second contract emits the log. Ethereum 0x39b8b6385416f4ca36a20319f70d28621895279d is the current EURe contract: in transaction 0x218002fe... the PoolManager executes take of the old EURe address 0x3231cb76718cdef2155fc47b5286d82e6eda273f for 221807379888575234 units, and the old address forwards to the new one, which logs. Robinhood Chain 0x79b661c0d27026f9a4266901a0ac88936c0849d6: in transaction 0x93e4a530... the PoolManager executes take of currency 0x5fa24acd... for 51558898530552957670871185 units, and that token calls 0x79b661c0... with selector 0xe30443bc, which is a balance tracker that logs the same amount. In all three the trace shows a transfer call from the PoolManager to the pooled currency and a take that debits the caller by the logged amount, so no balance moved without a debit. They were flagged because the log comes from a second contract. I did not recheck the Polygon and Elysium rows, which earlier cycles recorded.",
+   "codeCheck": "The PoolManager calls only transfer and balanceOf on a currency and never approves anyone (src/types/Currency.sol:55-96). A fall of its balance in a transaction that holds no call from it is the token contract acting on its own, and pools keep recording the old amounts because accounting is per currency and never reads balances outside sync and settle (src/PoolManager.sol:279-288, 349-378). For the three rows that are not this class the path is an ordinary take (src/PoolManager.sol:291-297).",
+   "corrections": "actor: pool-creator is right for the three real cases, which are tokens whose own code moves balances of other holders. The count of new tokens is 2 on Ethereum and 1 on Robinhood Chain, where the finding has 4 and 2. 0x1f426c51..., 0x39b8b638... and 0x79b661c0... are a back end contract of a pooled token, the second address of EURe and a balance tracker of a pooled token. The test that the trace holds no transfer call from the PoolManager to the token must use the pooled currency address and every contract it calls. The address that emits the log is the wrong reference.",
+   "sources": [
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "Receipts, old balances and call traces of the four Ethereum transactions named in the finding."
+    },
+    {
+     "url": "https://robinhood.drpc.org",
+     "supports": "Call traces of the two Robinhood Chain transactions."
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com",
+     "supports": "Receipts of the two Robinhood Chain transactions."
+    }
+   ]
+  },
+  {
+   "findingIndex": 5,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I repeated both trials with eth_simulateV1 on bsc-rpc.publicnode.com and no stub code. FACTR 0xdefac16715671b7b6aeefe012125f1e19ee4b7d7, PoolManager balance 34485790009599590038053: the PoolManager address sends one third to an ordinary account, that account calls transferAndLock(PoolManager, amount, 0x70a7e734, 0x70a7e734, 1), balanceOf(PoolManager) is back at the full figure and the account holds 0, a transfer of the full balance from the PoolManager reverts and a transfer of the balance minus the amount passes, which leaves exactly the assigned amount behind. TC 0x659049786cb66e4486b8c0e0ccc90a5929a21162 (4 decimals), balance 355857962: the same sequence with freezeTo(PoolManager, amount, 0x70a7e734) gives the same pattern. coins.llama.fi prices FACTR at 0.00226 USD and TC at 0.00003 USD, so the pooled balances are worth about 78 USD and 1 USD. I did not read the source of either token, so I cannot say when or by whom the FACTR lock can be released, and I did not rerun the eight tokens without a price or the four other members of the TC family.",
+   "codeCheck": "The credit in _settle is counted in units of balanceOf (src/PoolManager.sol:349-365, src/types/Currency.sol:90-96) and take pays in transferable units (src/PoolManager.sol:291-297, src/types/Currency.sol:55-86). Inside one unlock a caller can take an amount, call sync (src/PoolManager.sol:279-288), assign the same amount to the PoolManager as locked units and settle. The delta is zero and unlock returns (src/PoolManager.sol:104-114). No guard tells locked units from free ones.",
+   "corrections": "The effect is freeze. Nothing is siphoned. The caller hands back as locked units exactly what it took as free units and ends with nothing, and the PoolManager can then pay out less than pools record. The caller needs no tokens of its own, because the take supplies them. The finding's precondition that the caller holds the token is not needed. Whether the FACTR lock ends at the chosen date is unconfirmed.",
+   "sources": [
+    {
+     "url": "https://bsc-rpc.publicnode.com",
+     "supports": "eth_simulateV1 trials for FACTR and TC: balance restored by the locked assignment, full transfer refused, transfer of the balance minus the amount accepted."
+    },
+    {
+     "url": "https://coins.llama.fi/prices/current/bsc:0xdefac16715671b7b6aeefe012125f1e19ee4b7d7,bsc:0x659049786cb66e4486b8c0e0ccc90a5929a21162",
+     "supports": "FACTR price 0.00226 USD and TC price 0.00003 USD."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Part three. Transfer census with one rule and no labels on all 21 networks (leads L-398, L-392, L-385). Per transaction and token: logged outflow from the PoolManager plus claims minted, minus inflow and claims burned, compared with the Swap and Donate amounts of that token in the transaction (src/PoolManager.sol:187-275). Transactions with pool events are judged too. Rows of a token with a ModifyLiquidity log in the transaction are skipped, because that log carries no amounts (src/PoolManager.sol:175). Every flagged row was then read with balanceOf one block before and at the block, the Transfer logs of the block, the receipt and, where served, the call trace.",
+   "agrees": true,
+   "note": "Three tests, no contradiction, two limits to record. First, the staking epoch of sSAC puts five rebases inside the BNB Smart Chain window (epochs 362 to 366), and the census reports five surplus credits there. Second, I sampled 16 of the 288 tokens behind the 918 BNB Smart Chain rows of tokens that are in no pool: each is a contract of about 1,200 bytes with a symbol such as U5DT or BNB, its balanceOf reverts, and the flagged transaction is a call to the token that emits 500 to 1,000 Transfer logs from hundreds of unrelated senders and nothing else, so these are spoof logs. Third, the census read BNB Smart Chain logs through bsc.api.pocket.network (census2.py line 43). That endpoint returned an empty list without an error for an old block in 6 of 18 tries, which cost the sSAC list 132 of 323 logs. For a window inside the census range it returned the same 489 logs in seven of seven tries, as did rpc-bsc.48.club, so I found no loss in the 3 day window. The limit that matters is the rule itself: a row is compared under the address that emits the log. Three of the six tokens reported as moving the balance themselves turned out to be ordinary takes of a pooled currency whose log comes from a second contract. The same blind spot works the other way: a pooled currency whose Transfer logs come from another contract shows no outflow under its own id."
+  },
+  {
+   "check": "Part two on BNB Smart Chain: xfer_sweep.py, third_sweep.py and assign_sweep.py of cycle 5, unchanged, on the 68,701 currencies with a balance that cycle 5 had not tested (72,054 of 78,254 listed currencies hold a balance).",
+   "agrees": true,
+   "note": "I tested the one direction the research names as untested, a charge on the sender when the recipient is a trading pair. For the 361 currencies of the new BNB Smart Chain list with a price and at least 20 USD in the PoolManager (5.51 million USD in total) I looked up the PancakeSwap v2 pairs with WBNB and USDT and any pair address the token reports, 185 tokens had at least one, and for each pair an eth_call with the Multicall3 runtime code at the PoolManager address sent one third of the balance to the pair and called skim back. No token lost more than the amount sent. The method was checked on token T 0x4ef42e4cf51cd779e9947db65b629ecd8c92b1da, where it shows a loss of 103 percent. Not covered: v3 style pools, pairs on other exchanges, the currencies tested in cycle 5 and three Venus tokens whose answer I could not decode. The ibBUSD result of the trial sweep was confirmed separately."
+  },
+  {
+   "check": "Surplus credits other than the rebase bookings: who was called between sync and settle, and did the caller pay for the rise.",
+   "agrees": true,
+   "note": "I read the receipt of Ethereum transaction 0x0967eff055f702371ab99ad27bb9db815ca4c24cec84d7cd16a12ed96bcc94e4 (block 26,383,485). The sender is an account with delegated code (its code starts with 0xef0100) that calls the PoolManager directly. In log order: 9,980.870756 DAI is paid into the PoolManager by 0x955ee42846..., the PoolManager pays the same DAI to the sender, the sender moves it into sDAI, sDAI logs a Deposit with the sender as payer and the PoolManager as owner for 8,438.310941081821348719 shares and no Transfer log to the PoolManager, the PoolManager then sends those shares to the sender, and the sender passes them to a third contract. balanceOf(PoolManager) on sDAI is 451.729523492671524290 one block before and at the block. The rise that settle credited was bought with DAI that entered the PoolManager in the same transaction, and no pooled sDAI left. I did not recheck the Base, BNB Smart Chain and Polygon rows of this item."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1,
+    8453,
+    56,
+    5042,
+    137,
+    42161,
+    10,
+    130,
+    4663,
+    143
+   ],
+   "lens": "L3",
+   "question": "Which pooled tokens charge the sender on top of the amount when the recipient is a listed pair, and for which of them does a transfer from that pair to the PoolManager arrive in full? Test every priced currency of every network against its v2 style pairs with the sequence transfer from the PoolManager to the pair, skim to the PoolManager, and compare the balance before and after.",
+   "why": "For WHITE on Ethereum the verifier's simulation shows that take to the v2 pair followed by skim back costs the PoolManager 10 percent of the amount and costs the caller only gas, so any account can move the whole pooled WHITE balance (48.27 million WHITE, about 1,462 USD) to the token owner. The same test on 361 priced BNB Smart Chain currencies found no second case, and the other networks are untested.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "question": "Which results of this and earlier cycles rest on eth_getLogs through bsc.api.pocket.network for blocks older than a few days? Repeat each with a second source and with a count check that does not depend on logs, as the epoch number does for the sSAC rebases. Start with the sNVB rebase history and the 393 rows of cycle 5.",
+   "why": "The endpoint returns an empty list without an error for old blocks in about one try in three. The sSAC payout list lost 69 of 188 payouts that way. Any cleared item that reads no log found from this endpoint over old ranges may be wrong.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    1,
+    4663,
+    56,
+    137
+   ],
+   "lens": "L3",
+   "question": "List every pooled currency whose Transfer logs are emitted by a second contract (0x6369c3dadfc00054a42ba8b2c09c48131dd4aa38 with 0x1f426c51f0ef7655a6f4c3eb58017d2f1c381bff and the two EURe addresses on Ethereum, tokens with balance trackers on Robinhood Chain and BNB Smart Chain) and reconcile their census rows under the pooled address. Is 0x1f426c51f0ef7655a6f4c3eb58017d2f1c381bff itself the currency of a pool, and does transfer work at both addresses?",
+   "why": "The census compares outflow and pool amounts under the address that emits the log. For these tokens it flags ordinary takes and sees no outflow at all under the pooled id, so an unpaid outflow of such a token would not be flagged. A second address with a working transfer is one balance under two ids on Ethereum.",
+   "priority": "medium"
+  }
+ ]
+}

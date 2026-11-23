@@ -1,0 +1,528 @@
+{
+ "unit": "theme-currency-lists",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Any account can call claimFor on Alpaca ibBUSD for the PoolManager on BNB Smart Chain, which burns the whole pooled ibBUSD balance and stakes the replacement where the PoolManager cannot reach it",
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A4",
+    "A6"
+   ],
+   "effect": "freeze",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "difference": "ibBUSD 0x7c9e73d4c71dae564d41f78d56439bb4ba87592f is the share token of the Alpaca Finance BUSD vault on BNB Smart Chain (proxy, implementation 0xf19c0106fad0892b6d9f5db0ae1c9a2cfd14635b). Alpaca converted the BUSD of that vault to USDT under its proposal AIP-29 and told holders in February 2024 to claim the converted assets. Its function with selector 0xddeae033, claimFor(address), converts the ibBUSD of any holder, and the caller does not have to be that holder. The token is not attacker made and the PoolManager holds it for 16 hookless pools.",
+   "mechanism": "1. The PoolManager keeps no total per currency. It reads the token balance only in sync and settle and pays with transfer in take (src/PoolManager.sol:279-297, 349-365, src/types/Currency.sol:60-80). A balance that a third party removes stays recorded in pool state. 2. An eth_call of claimFor(PoolManager) from the unrelated address 0x00000000000000000000000000000000000a11ce returns success on three endpoints at blocks 135,293,814 to 135,293,817. The same call for an address without shares reverts with the text no shares. 3. The call trace shows what the function does for the PoolManager: ibBUSD logs Transfer(PoolManager, zero address, 56658476151267410600), which is the whole balance. It then approves 55.48 units of the token 0x90476bfef61f190b54a439e2e98f8e43fb9b4a45 (symbol ibUSDT) to 0xd20b887654db8dc476007bdca83d22fa51e93407, and that contract deposits them into 0x4579587ae043131999ce3d9c66199726972e3fb7 with the PoolManager as the account and pool number 5 (selector 0x0efe6a8b). 4. After the call the PoolManager holds no ibBUSD and no ibUSDT. The ibUSDT sits in a staking contract under the PoolManager address. The PoolManager can only call transfer and balanceOf on a currency, the hook selectors on a hook and unlockCallback on its caller, so it has no way to withdraw that position. 5. I did not read the source of the staking contract and did not test whether a third party can withdraw the position for the PoolManager.",
+   "impact": "56.658476151267410600 ibBUSD, about 56 USD at the coins.llama.fi price, held for 16 pools that were created between blocks 48,048,145 and 133,218,725. Nine of them pair ibBUSD with USDT, and their LP fees lie between 88 and 99.9996 percent. Once any account sends the call, every take of ibBUSD reverts in the transfer and the liquidity providers of those pools cannot withdraw that side. The amount is small. The class is the same as the DEAD case on Base (F-085): an ordinary account empties the PoolManager balance of a token that the victims did not get from the attacker.",
+   "preconditions": "None beyond gas. The call has not been sent yet: the PoolManager balance was 188.70 ibBUSD at block 60,000,000, 18.87 at block 120,000,000 and is 56.66 today.",
+   "mitigations": "Liquidity providers should withdraw ibBUSD from v4 pools now. Interfaces should stop listing ibBUSD pools. The assigned balance sweep tests one token per selector family, so vault tokens with a conversion or migration function that names the holder as an argument should be listed per token on every network.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-297",
+    "src/PoolManager.sol:349-365",
+    "src/types/Currency.sol:60-80"
+   ],
+   "sources": [
+    {
+     "url": "https://bsc.api.pocket.network",
+     "supports": "eth_call from 0x00000000000000000000000000000000000a11ce to ibBUSD with data 0xddeae033 and the PoolManager address returns 0x at block 135,293,814; balanceOf(PoolManager) is 56658476151267410600. The same two results came from https://bsc.rpc.sentio.xyz and https://bsc-dataseed1.bnbchain.org."
+    },
+    {
+     "url": "https://bsc-mainnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3",
+     "supports": "debug_traceCall of the same call with callTracer and logs: burn of the whole PoolManager balance, approval of ibUSDT and deposit for the PoolManager into 0x4579587ae043131999ce3d9c66199726972e3fb7. A second trace is saved in research/network-risk/cycles/006/theme-currency-lists.work/raw/ibbusd_claimfor_trace.json."
+    },
+    {
+     "url": "https://medium.com/alpaca-finance/february-2024-recap-85c5a75ba37f",
+     "supports": "Alpaca Finance: as per AIP-29 the BUSD migration is completed, and users who had BUSD deposited may now claim their assets, which are converted into USDT."
+    },
+    {
+     "url": "https://github.com/Galxe/alpaca-vault-subgraph",
+     "supports": "Lists ibBUSD at 0x7C9e73d4C71dae564d41F78d56439bB4ba87592f among the Alpaca vault contracts."
+    },
+    {
+     "url": "research/network-risk/cycles/006/theme-currency-lists.work/raw/assign_56.json.gz:1",
+     "supports": "Trial sweep row of class lowered for ibBUSD and claimFor(address): the PoolManager balance fell by twice the trial amount, which was all that was left after the trial transfer."
+    },
+    {
+     "url": "src/types/Currency.sol:60-80",
+     "supports": "take pays with transfer and reverts when the token refuses, so a missing balance blocks every payout of that currency."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "F-066",
+   "title": "The sSAC rebase on the PoolManager balance has been paid out to ordinary accounts on BNB Smart Chain in 119 transactions since block 115,986,214, and on Polygon the sLGNS and sATH rebases were booked 193 times in 30 days",
+   "chainIds": [
+    56,
+    137
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2"
+   ],
+   "effect": "siphon",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "difference": "The staked tokens of these Olympus forks raise every balance at a rebase that any account can start. Ethereum pools of the main assets hold no token whose balance an ordinary caller can raise at will.",
+   "mechanism": "1. settle credits the caller with balanceOf(PoolManager) now minus the balance stored by sync (src/PoolManager.sol:279-288, 349-365). 2. I read every log with topic 0x917acfbe39be6509ccf7fecb66a7e42ce2be1083c2d7dd3b9b7491dabddb8da4 that sSAC 0x0ae7cd10f94fd16a6f9a29a372708718144c46f8 emitted from block 104,200,000 (the PoolManager balance is zero before block 104,200,560) to block 135,290,559: 191 rebase transactions, epochs 45 to 367. 3. Each of them was classified with one rule from its receipt and its call trace. 119 are payouts: the trace shows sync(sSAC), the rebase call 0xaf14052c on the staking contract 0x99954eb0b159514d608f64c89a2c5bbe9f42120b, settle returning more than was transferred in, and take or mint of that amount. The other 72 rebase transactions hold no call from the PoolManager to sSAC. 4. The payouts sum to 210.068614 sSAC (9 decimals). 119 were taken out as tokens and 0 were minted as claims. The senders: 0x2d68a551e7c8ecf7312ee083a16e736dce2347d5 through 0x0b675fb382e0c986d724fd6cbb51837b3ae30e8a in 117; 0x00000000004ef5098c6a84d085a2e9d69e332b2f through 0x0000000000be226afde21672a5e4adc45692e69d in 1; 0x000000000062b66705d912df5940ffacbbec6a82 through 0x0000000000be226afde21672a5e4adc45692e69d in 1. 5. The list with transaction hash, block, epoch, amount, sender and called contract is in the work directory. 6. Polygon, 30 day census: 109 sLGNS bookings that sum to 1,349.946362 sLGNS and 84 sATH bookings that sum to 78.935549 sATH, each a claim mint after sync, rebase and settle with no transfer in.",
+   "impact": "The amounts are the rebase on the tokens that pools hold. Pool accounting never records them, so no pool becomes short. The liquidity providers lose the rebase that their staked tokens earned: about 0.11 percent of the pooled sSAC per epoch on BNB Smart Chain, where the PoolManager holds 2,287 sSAC. The loss repeats every epoch for as long as the tokens sit in the PoolManager.",
+   "preconditions": "A rebase that is due and that any account can start. The taker needs no funds.",
+   "mitigations": "Holders of rebasing staked tokens should pool the wrapped, non rebasing form. Interfaces should mark pools whose currency balance grows without transfers.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:322-329"
+   ],
+   "sources": [
+    {
+     "url": "https://bsc.api.pocket.network",
+     "supports": "eth_getLogs for the sSAC rebase topic in windows of 5,000 blocks from block 104,200,000, then eth_getTransactionReceipt and debug_traceTransaction with callTracer for each of the 191 transactions. Old balances were read through https://bsc.rpc.sentio.xyz."
+    },
+    {
+     "url": "research/network-risk/cycles/006/theme-currency-lists.work/raw/ssac_payout_list.json:1",
+     "supports": "One entry per payout: transaction, block, epoch, credited amount, sender, called contract and the calls made between sync and settle."
+    },
+    {
+     "url": "https://polygon.gateway.tenderly.co",
+     "supports": "Census of blocks 96,099,090 to 97,827,090 on Polygon and debug_traceTransaction of every flagged row: the sLGNS and sATH rows show sync, the rebase call 0xaf14052c, settle and a claim mint."
+    },
+    {
+     "url": "src/PoolManager.sol:349-365",
+     "supports": "The credit is the balance rise since sync, whoever caused it."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "WHITE on Ethereum and ARGUS on Arc charge the sender on top of a transfer to a listed pair, so a take that names such a recipient costs the PoolManager more than the caller is debited",
+   "chainIds": [
+    1,
+    5042,
+    56
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A5"
+   ],
+   "effect": "siphon",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "Both tokens keep a list of trading pairs. A transfer to a listed address moves the amount to the recipient and a further share from the sender to a tax address: 10 percent for WHITE 0x9cdf242ef7975d8c68d5c1f5b6905801699b1940 (to 0x287ecebd1223e235b929217fe596c905a11752ae) and 1 percent for ARGUS 0xece5ca8bf9220718e5727754026757512212cb3c (to the token contract). The main assets of Ethereum pools take nothing from the sender beyond the amount.",
+   "mechanism": "1. take debits the caller by amount and then calls transfer(to, amount) on the token (src/PoolManager.sol:291-297, src/types/Currency.sol:60-80). Core assumes that the call lowers its balance by amount. 2. The census flagged these rows because the logged outflow exceeds the Swap amounts of the transaction. Ethereum transaction 0x36869e0c74164dfaf399507b77a3d4398d90bb3b0f53d3bb52f47085f381c3fc: the trace shows one transfer call from the PoolManager for 27,819.93 WHITE to 0x6ec94f50cadcc79984463688de42a0ca696ec2db, and the receipt shows a second Transfer log from the PoolManager for 2,781.99 WHITE to the tax address. Arc transaction 0xaf96d29fbbc703117f44d34945c9e8b04fc768ed235c2cd93d66bd0c4289ff4c: 176.74 ARGUS to the pair 0x6a3bacaa6493734c1ac221ebf42cf530a96c1e02 and 1.767 ARGUS to the token contract. 3. Simulation with a measuring stub at the PoolManager address (state override, eth_call): a transfer of one third of the balance to the listed pair lowers the PoolManager balance by 110.0000 percent of the amount for WHITE and 101.0000 percent for ARGUS. The same transfer to an address without code lowers it by the amount only. A transfer from the WHITE pair to the PoolManager arrives in full, and one from the ARGUS pair arrives at 99 percent. 4. Whole history of Transfer logs from the PoolManager to the tax address: 766 transfers that sum to 6,129,406.68 WHITE between blocks 23,150,160 and 26,459,964, and 1,295 transfers that sum to 188,007.27 ARGUS between blocks 21,078,826 and 32,673,463. 5. The recipient of take is chosen by the caller, so any account can make the PoolManager pay the charge on any amount it takes to a listed pair. The caller owes only the amount. I did not test whether the caller can get the amount back out of the pair, so the cost of doing this on purpose is unknown. 6. BNB Smart Chain shows the same pattern once in the 3 day census: in transaction 0x82b6ad131efc04d9ee34211e458f107a1a94f9d093fd679e1554edcf7ebfaf06 the pool owed 212,712.18 units of the token with symbol T 0x4ef42e4cf51cd779e9947db65b629ecd8c92b1da and the PoolManager paid a further 6,381.37 units, 3 percent, to 0xfe34d3505cc8a835f7efe54bf8ff4d680d2bd6b5. I did not simulate that token.",
+   "impact": "The pools of these two tokens together record 6,129,406.68 WHITE and 188,007.27 ARGUS more than the PoolManager holds, assuming no other flow outside pool accounting. The PoolManager holds 48,265,470.02 WHITE and 46,697,370.97 ARGUS. DexScreener prices WHITE at 0.0000303 USD, so the WHITE shortfall is about 186 USD. I found no price for ARGUS. The last liquidity providers to withdraw bear the shortfall, and it grows with every routed sale into a listed pair. The same test on the new lists found 13 currencies on BNB Smart Chain, 12 on Base and 2 on X Layer where the PoolManager loses more than the amount it sends. The priced ones are receipt tokens of lending markets that lose between 1 and 537 base units by rounding.",
+   "preconditions": "A pool of such a token and a route or a caller that names a listed pair as the recipient of take. The list is set by the token owner.",
+   "mitigations": "Routers should take such tokens to their own address first. Interfaces should flag tokens whose transfer lowers the sender balance by more than the amount. Liquidity providers in WHITE and ARGUS pools should expect a shortfall.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:60-80"
+   ],
+   "sources": [
+    {
+     "url": "https://mainnet.gateway.tenderly.co",
+     "supports": "Census of Ethereum blocks 26,377,966 to 26,478,434 (8 WHITE rows), receipt and debug_traceTransaction of 0x36869e0c74164dfaf399507b77a3d4398d90bb3b0f53d3bb52f47085f381c3fc, eth_getLogs for WHITE Transfer logs from the PoolManager to 0x287ecebd1223e235b929217fe596c905a11752ae from block 21,688,329, and the two stub simulations."
+    },
+    {
+     "url": "https://arc.gateway.tenderly.co",
+     "supports": "Census of Arc blocks 30,362,860 to 32,750,542 (24 ARGUS rows) and eth_getLogs for ARGUS Transfer logs from the PoolManager to the token contract from block 1,948,056."
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "Receipt of 0xaf96d29fbbc703117f44d34945c9e8b04fc768ed235c2cd93d66bd0c4289ff4c and the stub simulations for ARGUS."
+    },
+    {
+     "url": "https://bsc.api.pocket.network",
+     "supports": "Receipt of BNB Smart Chain transaction 0x82b6ad131efc04d9ee34211e458f107a1a94f9d093fd679e1554edcf7ebfaf06 with three Transfer logs of token T from the PoolManager."
+    },
+    {
+     "url": "https://api.dexscreener.com/latest/dex/tokens/0x9cdf242ef7975d8c68d5c1f5b6905801699b1940",
+     "supports": "WHITE price 0.00003031 USD and 1,879 USD of liquidity in one v4 pair."
+    },
+    {
+     "url": "research/network-risk/cycles/006/theme-currency-lists.work/raw/sender_charge_history.json:1",
+     "supports": "Counts, sums, first and last block of the charge transfers."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "The restrictor of HOLD has restricted the PoolManager address on BNB Smart Chain, so 140,774.9 HOLD held for pools cannot leave, and 448 more of the newly listed BNB Smart Chain currencies refuse every transfer from the PoolManager",
+   "chainIds": [
+    56,
+    196,
+    8453
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A4",
+    "A6"
+   ],
+   "effect": "freeze",
+   "actor": "issuer",
+   "severity": "medium",
+   "difference": "HOLD 0xff583dc5ddc7c0bb3625fff39a587a2000e78888 has a restrictor role that can stop any address from sending. One entry for the PoolManager address stops every pool of the token, because all pools share that address.",
+   "mechanism": "1. isRestricted(PoolManager) returns true. Every transfer from the PoolManager reverts with ACCOUNT_IS_RESTRICTED, for one base unit as for the whole balance. restrict(address) from an ordinary account reverts with ONLY_RESTRICTER. 2. take pays with transfer and reverts when the token refuses (src/PoolManager.sol:291-297, src/types/Currency.sol:60-80), so no pool can pay HOLD out. 3. The full balance transfer test ran on the 68,701 BNB Smart Chain currencies that cycle 5 had not tested. 517 refuse the full balance. For those I repeated the transfer with one base unit, 1 percent, one half and a second recipient: 449 refuse even one unit, 44 accept a smaller amount (transfer or wallet limits) and 24 passed on the second run. The frozen ones with a price are HOLD, LN (325 USD), STBU (218 USD, text Address: should be allowed), BSU (43 USD, paused) and GBCK (8 USD, text Sender is blacklisted). 4. X Layer: 21 of 2,051 refuse the full balance and 16 of those refuse one unit, none with a price. Base: 3,474 of 54,674 tested currencies refuse the full balance. In a random sample of 240 of them, 206 accept a smaller amount, 28 refuse one unit and 6 passed on the second run. None has a price at coins.llama.fi.",
+   "impact": "140,774.905 HOLD, 15,626 USD at the coins.llama.fi price, is the largest priced balance among the frozen ones. The other priced ones sum to less than 600 USD. The liquidity providers of those pools cannot withdraw that side while the restriction stands. The other currency of each pool is not affected.",
+   "preconditions": "A token with a per address stop and a role holder who applies it to the PoolManager. For HOLD this has happened.",
+   "mitigations": "Interfaces should test a one unit transfer from the PoolManager address by eth_call before they show a pool. Liquidity providers cannot undo the restriction.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:60-80"
+   ],
+   "sources": [
+    {
+     "url": "https://bsc.api.pocket.network",
+     "supports": "eth_call on HOLD: isRestricted(PoolManager) returns 1, balanceOf(PoolManager) is 140774905397439540858093, transfer from the PoolManager reverts with ACCOUNT_IS_RESTRICTED and restrict(address) from an ordinary account reverts with ONLY_RESTRICTER."
+    },
+    {
+     "url": "https://bsc-dataseed1.bnbchain.org",
+     "supports": "Full balance transfer test and the repeat with smaller amounts for the BNB Smart Chain list (eth_call with a measuring stub at the PoolManager address and with from set to the PoolManager)."
+    },
+    {
+     "url": "research/network-risk/cycles/006/theme-currency-lists.work/raw/why_56.json.gz:1",
+     "supports": "Per token results of the repeat on BNB Smart Chain. The files why_196.json.gz and why_8453.json.gz hold X Layer and the Base sample."
+    },
+    {
+     "url": "https://coins.llama.fi/prices/current/bsc:0xff583dc5ddc7c0bb3625fff39a587a2000e78888",
+     "supports": "HOLD price used for the 15,626 USD figure."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "F-086",
+   "title": "The wider census finds more tokens that moved the PoolManager balance themselves: 4 new ones on Ethereum in 14 days and 2 on Robinhood Chain in 5 days, and over the whole history of Elysium only the three known ones",
+   "chainIds": [
+    1,
+    4663,
+    137,
+    99901
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A4"
+   ],
+   "effect": "siphon",
+   "actor": "pool-creator",
+   "severity": "medium",
+   "difference": "These token contracts lower the balance of the PoolManager from inside their own code, in a call that the PoolManager did not make. The main assets of Ethereum pools cannot do that.",
+   "mechanism": "1. The PoolManager can only call transfer and balanceOf on a currency and never approves anyone (src/types/Currency.sol:60-80, 90-96). A fall of its balance without a transfer call from it is the token acting on its own. 2. The census rule: per transaction and token, the logged outflow plus claims minted minus inflow minus claims burned must not exceed the Swap and Donate amounts of the transaction. Each flagged row was then read with balanceOf one block before and at the block, the Transfer logs of the block and the call trace. A row is in this class when the balance fell as the logs say and the trace holds no transfer call from the PoolManager to the token. 3. Ethereum, blocks 26,377,966 to 26,478,434: 0x2bb84fd8f7ed0ffae3da36ad60d4d7840bdeeada in 3 rows, for example 0x0528ed0ea31f1e4aa0a07c5119834fa408acdff1f7ad3fbfc85880dcf48fa958; 0x1f426c51f0ef7655a6f4c3eb58017d2f1c381bff in 3 rows, for example 0x13d30827134d5d4a798a588ace8b83a192d0ac60828151a8dce7f86301bc846f; 0x741cdf7f730c259fe50bdf8c54e6b197eabd76cc in 3 rows, for example 0x38ed1d1871c3190dd78c371728d864c6bf170635527a9314ad2f2f8c8eaf603c; 0x39b8b6385416f4ca36a20319f70d28621895279d in 2 rows, for example 0x218002fef949f405326bfee360af4acc931a618d43c8010866b6681e925532a5, and one more row of MAGA 0xf211b655431c10e72c1caeae37688ae9f7f7a549, which F-086 already names. 4. Robinhood Chain, blocks 117,163,727 to 121,483,727: 0x79b661c0d27026f9a4266901a0ac88936c0849d6 in 1 row, for example 0x93e4a5307a0bcc9fecca0c6a0e3b81aaa1e54da9ca35c132dfebf8b5c9488c60; 0x93d6e67bd9b499b0af7776ef5c109b1457543907 in 1 row, for example 0xa9a21eabeb4c291b6239cd56d3eaf05af745ad596f2a115b3b9e0ac59ca3147f. 5. BNB Smart Chain, blocks 134,715,087 to 135,290,767: no row of this class. 6. Polygon, 30 days: 0xdc685acc53ca2a760029cab2f6a587482aa9cf57 in 1 row, for example 0xeba5a802345f6569cc02ddb56285230bccd4f72e7054249d0cb2127c7e6abae7, which cycle 5 already recorded. 7. Elysium from the deployment block: five rows over the three tokens that cycle 5 recorded (0x13c83fd2df0ae8c7b462d344a458275d1f6b5b82, 0x5cf58da30b62aca1c7a735a680279fbedaa7189c, 0xa425daa2cc467378ab4368496f1d8027c69915f3). The Elysium endpoint serves no trace, so those rows rest on the balance fall in a transaction without a pool event. 8. I did not read the source of the new tokens, so I cannot say for each who may start the move.",
+   "impact": "Pools of these tokens record balances that the PoolManager no longer holds. The loss falls on whoever provided or bought the token in those pools. The other currency of each pool is not touched, because accounting is per currency (src/PoolManager.sol:368-376).",
+   "preconditions": "A pool of a token whose code can move balances of other holders.",
+   "mitigations": "Monitors should compare balanceOf(PoolManager) with the sum of pool records per currency. Interfaces should hide pools of tokens that have moved the PoolManager balance.",
+   "coreRefs": [
+    "src/types/Currency.sol:60-80",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:368-376"
+   ],
+   "sources": [
+    {
+     "url": "https://mainnet.gateway.tenderly.co",
+     "supports": "Ethereum census logs, receipts, old balances and traces for the rows listed."
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com",
+     "supports": "Robinhood Chain census logs; old balances and traces through https://robinhood.drpc.org and the endpoints listed in rule.py."
+    },
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz",
+     "supports": "Elysium census from block 256,083 to 9,953,762: 3,344,473 transactions, 5 flagged rows."
+    },
+    {
+     "url": "research/network-risk/cycles/006/theme-currency-lists.work/raw/census_summary.json:1",
+     "supports": "Per network classes with token, row count and one example transaction each."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "F-078",
+   "title": "FACTR and TC on BNB Smart Chain join the tokens that count locked units in balanceOf and let any holder assign them to the PoolManager",
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A4"
+   ],
+   "effect": "siphon",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "FACTR 0xdefac16715671b7b6aeefe012125f1e19ee4b7d7 has transferAndLock(address,uint256,uint32,uint32,uint16) and TC 0x659049786cb66e4486b8c0e0ccc90a5929a21162 has freezeTo(address,uint256,uint64). Both let a holder send units that the recipient cannot move until a release time, and balanceOf counts them.",
+   "mechanism": "1. settle credits the rise of balanceOf(PoolManager) since sync (src/PoolManager.sol:279-288, 349-365). 2. Trial by eth_call with state overrides: the PoolManager address hands an ordinary account A one third of its balance, A calls the function with the PoolManager as recipient, and the stub then tries to send the full balance and the balance minus the amount. For both tokens the balance rose by the amount, the full transfer was refused and the transfer of the balance minus the amount passed. 3. A caller can therefore book locked units as a payment through sync and settle and take the same number of free units out, as described in F-078. 4. Ten tokens gave this result on the new list: FACTR, TC and eight without a price. The test ran on one token per selector family, and TC stands for a family of 5 tokens.",
+   "impact": "The PoolManager holds FACTR worth 78 USD and TC worth 1 USD at coins.llama.fi prices. The liquidity providers of those pools can be left with units that cannot be paid out until the lock ends.",
+   "preconditions": "The caller holds the token. No role is needed.",
+   "mitigations": "As for F-078: interfaces should hide pools of tokens whose balanceOf counts locked units that third parties can assign.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "https://bsc-dataseed1.bnbchain.org",
+     "supports": "Trial sweep by eth_call with state overrides on the BNB Smart Chain list, rows of class locked-assign for FACTR and TC."
+    },
+    {
+     "url": "research/network-risk/cycles/006/theme-currency-lists.work/raw/assign_56.json.gz:1",
+     "supports": "The stub readings for each trial."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    8453,
+    56,
+    480,
+    196
+   ],
+   "lens": "L3",
+   "check": "Part one. Full list of pool currencies from the whole Initialize history of the PoolManager on Base, BNB Smart Chain, World Chain and X Layer (leads L-396, L-317, L-291, L-353).",
+   "result": "All four lists are complete from the deployment block. Base: 15,540,638 pools and 15,315,529 distinct currencies from blocks 25,350,000 to 61,262,999, read through base.gateway.tenderly.co in 35,913 windows of 1,000 blocks with no failed window. 14,831,656 currencies sit in exactly one pool. Twelve random windows were read again through base.rpc.sentio.xyz and gave the same log counts, and the totals of the two ranges that cycle 5 read in full agree to within the boundary windows. BNB Smart Chain: 341,903 pools and 78,255 currencies from blocks 45,970,610 to 135,285,510, the cycle 5 rows from the NodeReal endpoint plus 870 new ones. That endpoint stopped answering during this run with the message that the public usage limit is reached, and later reads used bsc.api.pocket.network. World Chain: 4,760 pools and 826 currencies from blocks 9,111,872 to 38,053,882 through the QuickNode endpoint. X Layer: 12,500 pools and 3,750 currencies from the deployment block 46,106,392 to 76,674,819, read through xlayer-mainnet.rpc.sentio.xyz, which serves 1,000 block windows over the whole history. All 2,833 rows that cycle 5 read through rpc.xlayer.tech are in the new list. The first X Layer pool was created in block 46,460,144. The lists are in the work directory: raw/base_tokens.npy with raw/base_init.bin, and raw/currencies_56.json.gz, raw/currencies_480.json.gz, raw/currencies_196.json.gz.",
+   "source": "https://base.gateway.tenderly.co"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "check": "Part two on BNB Smart Chain: xfer_sweep.py, third_sweep.py and assign_sweep.py of cycle 5, unchanged, on the 68,701 currencies with a balance that cycle 5 had not tested (72,054 of 78,254 listed currencies hold a balance).",
+   "result": "Apart from the findings of this file no priced token lets a third party lock, claw back, sweep or mirror the balance. Full balance transfer: 68,701 tested, 517 refused (see the HOLD finding), 609 where the recipient got less than the amount (transfer fees), 294 where a remainder stayed. The remainders with a price are xStocks tokens with one base unit left, which F-068 covers. Own transfer of one third: 65,511 tested, 97 where the sender keeps more and 13 where it loses more. The priced ones differ by rounding: valBUSD keeps 1,110 base units on 2.4 million USD, valTUSD loses 537 base units, the Aave style tokens lose one. Trial sweep: 8,372 families by selector set, 138,729 trials with one token per family. Classes: 302 free raise, 104 lowered, 101 gain for the caller only, 18 locked assignment, 3 lock only. With a price: ibBUSD (finding), FACTR with transferAndLock (78 USD pooled) and TC with freezeTo (1 USD), which are the class of F-078. The free raise rows have no price and are tokens that anyone can mint. coins.llama.fi prices 1,190 of the tested currencies, 5.5 million USD in total, so a token with a market but no listing there counts as unpriced here.",
+   "source": "research/network-risk/cycles/006/theme-currency-lists.work/raw/assign_56.json.gz"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "check": "Part two on Base. The list holds 15.3 million currencies, so the tests ran on a set that covers every code family: EXTCODEHASH of all 15,315,529 currencies (2,561,352 distinct hashes), every currency of a hash family with 2 to 1,000 members, 30 of each larger family, and for the 2,555,510 currencies with a hash of their own, EXTCODESIZE, every member of a size group of at most 20 and 20 of each larger group.",
+   "result": "The set has 59,170 currencies from 5,842 hash families and 4,948 size groups. 55,922 hold a balance and 54,674 of those were new. No priced token lets a third party lock, claw back, sweep or mirror the balance. Full balance transfer: 3,474 refused, and in a sample of 240 of them 206 accept a smaller amount, which points to wallet and transfer limits of launch templates. Own transfer of one third: 50,011 tested, 17 where the sender keeps more, 12 where it loses more, by one to six base units where a price exists. Trial sweep: 75,202 trials, 121 free raise, 98 lowered, 35 gain for the caller only, 1 lock only, none with a price. Limits: 7,865,260 currencies share one code hash and 2,680,543 a second, and 30 of each were tested. The two largest size groups hold 1,343,826 and 1,135,867 currencies with code of 10,143 and 12,791 bytes, and 20 of each were tested. A token of those templates whose owner set an unusual state is not seen. coins.llama.fi prices 874 of the tested currencies, 1.77 million USD in total.",
+   "source": "research/network-risk/cycles/006/theme-currency-lists.work/raw/base_testset.json.gz"
+  },
+  {
+   "chainIds": [
+    196,
+    480
+   ],
+   "lens": "L3",
+   "check": "Part two on X Layer and World Chain with the same three scripts on the currencies that cycle 5 had not tested.",
+   "result": "X Layer: 3,749 listed currencies, 2,147 with a balance, 2,051 new. Full balance transfer refused by 21. A remainder of one base unit stays for 428, among them the priced xStocks tokens (F-068). Own transfer of one third: 2,009 tested, 223 keep more, by one to three base units where a price exists, and 2 lose one base unit. Trial sweep: 2,517 trials, 22 free raise, 2 lowered, none with a price. coins.llama.fi prices 739 of them, 30,291 USD in total. World Chain: the full history adds 7 currencies with a balance to the 851 of cycle 5. All pass the full balance transfer and the trial sweep reports nothing.",
+   "source": "research/network-risk/cycles/006/theme-currency-lists.work/raw/xfer_196.json.gz"
+  },
+  {
+   "chainIds": [
+    8453,
+    56,
+    480,
+    196
+   ],
+   "lens": "L3",
+   "check": "One balance under two ids. Currencies were grouped by equal balanceOf(PoolManager). For each group a stub at the PoolManager address sent one third of its balance of one member and read the balance of every other member before and after. The native balance was compared with every token balance.",
+   "result": "No pair on the four lists. BNB Smart Chain: 867 groups with 26,206 currencies, 5,457 trials. Base test set: 2,481 groups with 27,741 currencies, 12,661 trials, 18 failed calls. X Layer: 110 groups, 434 trials. World Chain: 26 groups, 95 trials. No token balance equals the native balance. The large groups are launch tokens with the same supply fully in the PoolManager. The stub was checked on the Polygon EURe pair of F-075, where moving the old address lowers the balance of the new one from 75,624.38 to 50,416.25. For groups above 12 members 12 members were moved, so a pair hidden inside a large group could be missed.",
+   "source": "research/network-risk/cycles/006/theme-currency-lists.work/raw/mirror_56.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "check": "Part three. Transfer census with one rule and no labels on all 21 networks (leads L-398, L-392, L-385). Per transaction and token: logged outflow from the PoolManager plus claims minted, minus inflow and claims burned, compared with the Swap and Donate amounts of that token in the transaction (src/PoolManager.sol:187-275). Transactions with pool events are judged too. Rows of a token with a ModifyLiquidity log in the transaction are skipped, because that log carries no amounts (src/PoolManager.sol:175). Every flagged row was then read with balanceOf one block before and at the block, the Transfer logs of the block, the receipt and, where served, the call trace.",
+   "result": "17,682,242 transactions and 28,103,882 rows on 21 networks, 3,752 flagged. No row is a payout of pool funds without a debit other than the classes named in the findings. Ethereum: blocks 26,377,966 to 26,478,434 (14.0 days), 1,589,353 transactions, 2,415,672 rows, 866 flagged (831 fee collection, 8 spoof log, 2 surplus credit, 5 credit above the logged transfer by rounding or reflection, 8 sender charge, 12 balance moved by the token itself). Optimism: blocks 159,015,813 to 159,923,013 (21.0 days), 1,209,422 transactions, 1,659,080 rows, 50 flagged (47 fee collection, 3 credit above the logged transfer by rounding or reflection). Base: blocks 59,978,222 to 61,274,222 (3.0 days), 940,540 transactions, 1,608,362 rows, 340 flagged (333 fee collection, 1 spoof log, 6 credit above the logged transfer by rounding or reflection). Unichain: blocks 62,882,211 to 64,696,611 (21.0 days), 950,173 transactions, 1,431,870 rows, 0 flagged. Zora: blocks 25,434,534 to 54,375,246 (from the deployment block), 15,846 transactions, 19,099 rows, 0 flagged. Worldchain: blocks 35,462,429 to 38,054,429 (60.0 days), 423,925 transactions, 808,724 rows, 0 flagged. Ink: blocks 60,738,116 to 61,947,716 (14.0 days), 233,246 transactions, 407,245 rows, 0 flagged. Soneium: blocks 29,211,663 to 31,155,663 (45.0 days), 73,630 transactions, 132,275 rows, 0 flagged. Celo: blocks 43,985,163 to 83,543,918 (from the deployment block), 648,177 transactions, 1,302,119 rows, 0 flagged. X Layer: blocks 75,466,070 to 76,675,670 (14.0 days), 346,636 transactions, 697,503 rows, 0 flagged. Arbitrum One: blocks 519,849,915 to 526,833,748 (21.0 days), 799,568 transactions, 1,214,520 rows, 581 flagged (536 fee collection, 42 log of a token that is in no pool and whose balanceOf reverts, 3 credit above the logged transfer by rounding or reflection). Robinhood Chain: blocks 117,163,727 to 121,483,727 (5.0 days), 3,282,899 transactions, 4,629,467 rows, 298 flagged (295 fee collection, 1 credit above the logged transfer by rounding or reflection, 2 balance moved by the token itself). Elysium: blocks 256,083 to 9,953,762 (from the deployment block), 3,344,473 transactions, 4,300,791 rows, 5 flagged (5 balance fell with no pool event and no trace). Polygon: blocks 96,099,090 to 97,827,090 (30.0 days), 799,556 transactions, 1,634,164 rows, 586 flagged (129 fee collection, 1 spoof log, 193 surplus credit, 1 credit above the logged transfer by rounding or reflection, 261 payout of the old EURe id that logs at the new address, 1 balance moved by the token itself). BNB Smart Chain: blocks 134,715,087 to 135,290,767 (3.0 days), 870,038 transactions, 1,547,704 rows, 987 flagged (37 fee collection, 918 log of a token that is in no pool and whose balanceOf reverts, 21 log of a dividend tracker that mirrors a pooled token, 5 surplus credit, 4 credit above the logged transfer by rounding or reflection, 1 sender charge, 1 difference of at most 10 base units or one millionth of the amount). Avalanche: blocks 98,211,046 to 101,175,194 (30.0 days), 134,373 transactions, 203,318 rows, 1 flagged (1 difference of at most 10 base units or one millionth of the amount). Monad: blocks 122,756,461 to 124,744,626 (7.0 days), 673,794 transactions, 1,432,642 rows, 0 flagged. MegaETH: blocks 7,009,653 to 32,647,370 (from the deployment block), 50,885 transactions, 75,776 rows, 0 flagged. Tempo: blocks 6,455,926 to 50,443,046 (from the deployment block), 113,507 transactions, 227,240 rows, 0 flagged. Arc: blocks 30,362,860 to 32,750,542 (14.0 days), 1,179,440 transactions, 2,351,681 rows, 38 flagged (14 fee collection, 24 sender charge). HyperEVM: blocks 45,998,366 to 52,040,489 (from the deployment block), 2,761 transactions, 4,630 rows, 0 flagged. Classes. Fee collection: the trace shows collectProtocolFees for the token, or protocolFeesAccrued fell by the amount (src/ProtocolFees.sol:44-57). Spoof log: the balance did not change, and the trace holds no transfer call from the PoolManager or, on BNB Smart Chain, the token is in no pool of the complete list. Surplus credit: settle returned more than was transferred in after sync. Rounding or reflection: the credit exceeds the logged transfer by a few units or by the reflection share of the token. Rows skipped for a ModifyLiquidity log: Ethereum 45,745, Optimism 57,124, Base 113,517, Unichain 7,153, Zora 1,207, Worldchain 4,804, Ink 38,063, Soneium 8,072, Celo 1,211, X Layer 7,707, Arbitrum One 16,629, Robinhood Chain 112,633, Elysium 39,235, Polygon 34,798, BNB Smart Chain 45,548, Avalanche 1,429, Monad 2,357, MegaETH 1,004, Tempo 3,218, Arc 28,554, HyperEVM 65. Rows of the native currency without logs are not judged outside Arc: Ethereum 19,842, Optimism 8,976, Base 20,736, Unichain 11,406, Worldchain 977, Ink 649, X Layer 1,422, Arbitrum One 378, Robinhood Chain 62,756, Elysium 1,141,116, Polygon 257, BNB Smart Chain 1,074, Avalanche 2,846, Monad 687, MegaETH 1, HyperEVM 288. On Arc native transfers are logged at 0xfffffffffffffffffffffffffffffffffffffffe and the native currency reconciles to the wei, with the USDC face counted at 10^12. The census covers the whole history on Zora, Celo, Elysium, MegaETH, Tempo and HyperEVM and a recent window elsewhere.",
+   "source": "research/network-risk/cycles/006/theme-currency-lists.work/raw/census_summary.json"
+  },
+  {
+   "chainIds": [
+    56,
+    137,
+    5042,
+    10,
+    42161,
+    1
+   ],
+   "lens": "L3",
+   "check": "Re-read of every row that cycle 5 flagged and explained by a label: 393 on BNB Smart Chain, 50 on Polygon, 126 on Arc, 17 on OP Mainnet, 18 on Arbitrum One and 1 on Ethereum.",
+   "result": "BNB Smart Chain: all 393 rows lie inside the new window. 391 are logs of tokens that are in no pool of the complete list and whose balanceOf reverts or returns nothing for the PoolManager, 2 are surplus credits over 134 tokens. The surplus rows are the two sSAC payouts that the verifier found, and the label spoof was wrong for those two only. For the other rows the label holds no pool funds either way: the 133 tokens are in none of the 341,903 pools. The rows of tokens that are in no pool were read with balanceOf only, without a trace. Polygon: 49 rows are surplus credits (28 sLGNS and 21 sATH claim mints after a public rebase, F-066) and 1 is a spoof log of 0x20204018a5a97149168faa73477bd5db9756a141. Arc: all 126 rows are native payouts matched in the same transaction by a burn of claims of id 0 or of the USDC face id, and the block balance moves exactly as the native logs say. Cycle 5 flagged them because it compared the native log address with the claim id. OP Mainnet: all 17 rows are fee collection by trace. Arbitrum One: all 18 are fee collection, shown by protocolFeesAccrued falling to zero, since no endpoint serves a trace. Ethereum: the one row is the MAGA case of F-086, where the balance fell and the PoolManager made no transfer call.",
+   "source": "research/network-risk/cycles/006/theme-currency-lists.work/raw/reread_56_w.json.gz"
+  },
+  {
+   "chainIds": [
+    1,
+    8453,
+    10,
+    42161,
+    4663,
+    137,
+    43114
+   ],
+   "lens": "L3",
+   "check": "Surplus credits other than the rebase bookings: who was called between sync and settle, and did the caller pay for the rise.",
+   "result": "None of them takes value that pools record. Ethereum, 2 rows: an account with delegated code calls unlock itself, syncs sDAI 0x83f20f44975d03b1b09e64809b757c47f942beea, deposits its own DAI into sDAI with the PoolManager as receiver (selector 0x6e553f65), settles 8,438.31 sDAI and takes it out again (transaction 0x0967eff055f702371ab99ad27bb9db815ca4c24cec84d7cd16a12ed96bcc94e4). The receipt holds a Deposit log of sDAI for the PoolManager and no Transfer log to it, and the caller paid the DAI. Base, 6 rows: three reflection tokens (0xbc3dabf2f77e58859c6a2ba9bf5393a0d08ff363, 0x74f84a0add717a6c405b2c8c0b82d94b514e113e, 0x4e27de65c2124a93d9a9446156893fe38914f057) credit the payer 0.0007 to 0.7 percent more than the Transfer log, because the PoolManager balance earns its holder share during the incoming transfer, and one token differs by one unit. Lending receipt tokens credit one unit, or the interest of the block, more than the log on Ethereum (5 rows), OP Mainnet (3), Arbitrum One (3), Robinhood Chain (1) and Polygon (1), and on Avalanche one row pays out one unit more than came in. BNB Smart Chain, 4 rows: stHYPER 0x6e9804a08092d8ba4e69dacf422df12459f2599e logs 18.06 units for a transfer that raises balanceOf by 31.97, so its logs and its balances use different units, and two other tokens credit a few units or a holder share of 2.6 percent above the log. On Polygon 248 open rows and 13 spoof rows carry the address 0xe0aea583266584dafbb3f9c3211d5588c73fea8d: they are payouts of the old EURe id 0x18ec0a6e18e5bc3784fdd3a3634b31245ab704f6, which logs at the new address (F-075). In 20 of 25 sampled rows the Swap amount of the old id equals the logged outflow. The other five hold liquidity events of pools of the old id, which I did not reconcile.",
+   "source": "https://mainnet.gateway.tenderly.co"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "check": "BNB Smart Chain rows of tokens that are in no pool although the reported PoolManager balance fell: 21 rows over 13 contracts in the 3 day census.",
+   "result": "All 13 are dividend trackers of pooled tokens (names such as ETHBack_Dividend_Tracker and DIVIDEND_TRACKER). A tracker repeats the balance that each holder has in the main token and logs a Transfer when it changes, so its figure for the PoolManager falls when a pool pays the main token out. None is a currency of a pool. A transfer of one unit from the PoolManager reverts on each of them, for 11 with the text No transfers allowed, so a pool created with a tracker as currency could be credited through sync and settle and never paid out, as with the mirror tokens of F-008 and F-050. The PoolManager is not excluded from dividends on the trackers that answer excludedFromDividends. The reward tokens are USDT, BUSD, DOGE, ASTER, BNCB and DogeZilla. withdrawableDividendOf(PoolManager) is zero on 10 trackers and dust on the others today. Rewards that a tracker pays to the PoolManager are not recorded by any pool. A lead asks how much has been paid and whether a public claim lets a caller book it.",
+   "source": "research/network-risk/cycles/006/theme-currency-lists.work/raw/bnb_trackers.json"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "question": "How much USDT, BUSD and other reward tokens have the 13 dividend trackers of BNB Smart Chain paid to the PoolManager, which public function starts a payout for a named account (process, processAccount, claim), and can a caller place that call between sync and settle of the reward token? Check the same for dividend trackers on the other networks.",
+   "why": "The PoolManager holds tokens whose trackers pay holder rewards in a second token. Such a payment raises the PoolManager balance of the reward token outside pool accounting, which is the class of F-081 and F-060, and USDT and BUSD are main pool assets.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "question": "Run the full balance transfer test and the own transfer test on the 2,479,693 Base currencies of the two large code size groups (10,143 and 12,791 bytes) and on the two large hash families (7,865,260 and 2,680,543 members), ordered by the value of the paired balance. The list and the hashes are in theme-currency-lists.work/raw.",
+   "why": "The Base tests of this cycle cover every code family with a sample of 20 or 30 tokens. A token of a mass template whose owner later set a block, a limit or a tax is not in the sample, and Base holds most pools.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "question": "List every pooled vault or receipt token on all 21 networks that has a conversion, migration or claim function taking the holder as an argument (claimFor, migrateFor, redeemFor, exitFor, convertFor, withdrawTo with an owner argument) and call each for the PoolManager by eth_call. Start with the other Alpaca tokens on BNB Smart Chain and with closed lending vaults.",
+   "why": "ibBUSD lets any account burn the PoolManager balance through claimFor. The trial sweep calls one token per selector family and only functions whose name matches a fixed pattern, so a second token of this kind with a price can be missing.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    1,
+    5042,
+    56,
+    8453
+   ],
+   "lens": "L3",
+   "question": "For WHITE on Ethereum and ARGUS on Arc: can the caller of take get the amount back out of the listed pair (skim on a v2 style pair, or a swap), so that a loop of take and settle drains the PoolManager balance at the cost of gas only? Which other pooled tokens charge the sender on top for listed recipients? The own transfer test sends to an address without code and so misses them.",
+   "why": "The simulation shows a 10 percent and a 1 percent loss per take to a listed pair. If the return leg is free, any account can empty the pooled balance of these tokens into the tax address.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "question": "Scan the whole history of sNVB 0x6d6c16a3cbd318f3000e33cfd27662cf00f7e7c1 (the PoolManager holds it since block 49,283,730) and of the other staked tokens that share the staking helper of sSAC for rebase transactions that call the PoolManager, with an endpoint that serves 50,000 block ranges.",
+   "why": "The sSAC list of this cycle rests on the rebase logs of one token. The payout transaction rebases a family of staked tokens in one call, and the NodeReal endpoint that served wide ranges reached its public limit during the run.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1,
+    8453,
+    56,
+    42161,
+    4663,
+    137,
+    130,
+    10,
+    143,
+    5042
+   ],
+   "lens": "L3",
+   "question": "Extend the census of this cycle to the whole history on the ten busy networks with an indexed log source, and reconcile the rows that hold a ModifyLiquidity log by reading the position deltas from a trace.",
+   "why": "The windows are 3 to 30 days on these networks, and rows of a token with a liquidity event in the transaction are skipped (113,517 on Base in 3 days). A capture that sits next to a liquidity change or lies before the window is unseen.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    42161,
+    5042,
+    99901,
+    8453
+   ],
+   "lens": "L3",
+   "question": "Find an endpoint that serves debug_traceTransaction on Arbitrum One, Arc, Elysium and Base and re-read the flagged rows that were classified without a trace.",
+   "why": "On these networks fee collection was recognised from protocolFeesAccrued and balance moves from block balances. A trace would show the caller and the calls between sync and settle.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-396",
+   "outcome": "finding",
+   "answer": "The four lists are complete from the deployment block: Base 15,315,529 currencies in 15,540,638 pools, BNB Smart Chain 78,255 in 341,903, World Chain 826 in 4,760, X Layer 3,750 in 12,500. The three sweep scripts and the equal balance grouping ran on every new currency with a balance on BNB Smart Chain (68,701), World Chain (7) and X Layer (2,051) and on a Base set of 59,170 currencies that covers every code family. With a price: ibBUSD on BNB Smart Chain can be burned out of the PoolManager by any account (new finding), HOLD is restricted by its issuer (new finding), FACTR and TC accept locked assignments (class of F-078). No mirror pair."
+  },
+  {
+   "leadId": "L-317",
+   "outcome": "finding",
+   "answer": "Done for the four networks. The window independent test of the lead is part of assign_sweep.py, which calls every named function without arguments and every function with an address argument for one token per selector family. It found the ibBUSD conversion on BNB Smart Chain. On Base it ran on a set that covers every code family, with the limits stated in the cleared item."
+  },
+  {
+   "leadId": "L-291",
+   "outcome": "finding",
+   "answer": "The lists now come from the Initialize history, so tokens that never moved in a window are included: 68,701 untested currencies with a balance on BNB Smart Chain and 2,051 on X Layer. The own transfer test replaces reconcile.py for tokens whose balance moves with transfers. It found no priced token that gains more than rounding."
+  },
+  {
+   "leadId": "L-353",
+   "outcome": "cleared",
+   "answer": "The Base list is built: 15,540,638 pools, 15,315,529 currencies, no failed window, twelve windows confirmed on a second endpoint. The Tenderly gateway answers 1,000 block windows fast enough to read the whole history in about 15 minutes. The sweeps ran on 59,170 currencies chosen by code hash and code size. A new lead asks for the per token tests of the mass templates."
+  },
+  {
+   "leadId": "L-398",
+   "outcome": "finding",
+   "answer": "The census ran with one rule on all 21 networks: 17,682,242 transactions, 28,103,882 rows, 3,752 flagged, each read with balances, block logs and, where an endpoint serves one, a trace. Transactions with pool events are included. Classes are in the cleared item. Open rows that remain are the sender charge tokens WHITE, ARGUS and T (new finding) and tokens that moved the balance themselves (F-086). The contract called between sync and settle is the staking contract of sSAC, sLGNS and sATH for the rebase rows and sDAI for the two paid rows on Ethereum."
+  },
+  {
+   "leadId": "L-392",
+   "outcome": "finding",
+   "answer": "Every labelled row was re-read. BNB Smart Chain 393: 391 nopool, 2 surplus (nopool means a token that is in no pool and whose balanceOf reverts). Polygon 50: 49 surplus credits and 1 spoof. Arc 126: all balanced by claim burns. OP Mainnet 17 and Arbitrum One 18: fee collection. The whole history census for tokens whose balance changes without transfers was run for sSAC through its rebase logs."
+  },
+  {
+   "leadId": "L-385",
+   "outcome": "finding",
+   "answer": "The census covers the whole history on Zora, Celo, Elysium, MegaETH, Tempo and HyperEVM and windows of 3 to 60 days on the other 15 networks. It lists every row where the balance falls without a matching pool amount, whatever the recipient. The busy networks still need an indexed source for the whole history."
+  },
+  {
+   "leadId": "L-391",
+   "outcome": "finding",
+   "answer": "sSAC: 119 payout transactions between blocks 115,986,214 and 135,186,213 among 191 rebase transactions since block 104,200,000, summing to 210.068614 sSAC. The list is in theme-currency-lists.work/raw/ssac_payout_list.json. sNVB was not scanned over the whole history: the endpoint with wide log ranges reached its limit, and the verifier saw no sNVB outflow in the last 1.2 million blocks."
+  }
+ ]
+}

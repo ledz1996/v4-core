@@ -22,6 +22,7 @@ POOLEV = {'0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f': 
 ARCH = {56: ['https://bsc.api.pocket.network', 'https://bsc.rpc.sentio.xyz', 'https://bsc-mainnet.public.blastapi.io'],
         480: ['https://sparkling-autumn-dinghy.worldchain-mainnet.quiknode.pro', 'https://worldchain-mainnet.g.alchemy.com/public'],
         196: ['https://rpc.xlayer.tech', 'https://xlayerrpc.okx.com']}
+TRACE_URLS = {56: ['https://bsc.api.pocket.network']}
 def state_urls(cid):
     out = []
     for u in ARCH.get(cid, []) + CFG[cid]['state'] + [net(cid)['rpc']] + EXTRA.get(cid, []):
@@ -45,6 +46,7 @@ def any_rpc1(cid, method, params, kind, timeout=60):
                 j = post(u, {'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params}, timeout=timeout, tries=1)
                 if 'error' in j:
                     last = json.dumps(j['error'])[:120]
+                    if method == 'eth_call' and 'execution reverted' in last: return {'error': last, 'reverted': True}
                     if any(s in last.lower() for s in ('rate', 'limit', 'capacity', 'busy', 'too many')): time.sleep(1.5); continue
                     break
                 if j.get('result') is None: last = 'null'; break
@@ -63,7 +65,15 @@ def walk(c, depth=0, out=None):
     return out
 def read_trace(cid, tx, tok):
     pm = net(cid)['poolManager'].lower(); tok = tok.lower()
-    t = any_rpc(cid, 'debug_traceTransaction', [tx, {'tracer': 'callTracer'}], 'trace', timeout=120)
+    t = None
+    if cid in TRACE_URLS:
+        for k in range(12):
+            try:
+                j = post(TRACE_URLS[cid][k % len(TRACE_URLS[cid])], {'jsonrpc': '2.0', 'id': 1, 'method': 'debug_traceTransaction', 'params': [tx, {'tracer': 'callTracer'}]}, timeout=60, tries=1)
+                if isinstance(j.get('result'), dict): t = j['result']; break
+            except Exception as e: pass
+            time.sleep(0.4)
+    else: t = any_rpc(cid, 'debug_traceTransaction', [tx, {'tracer': 'callTracer'}], 'trace', timeout=120)
     if not isinstance(t, dict) or 'error' in t and 'calls' not in t and 'to' not in t: return None
     flat = walk(t); takes = []; paid = []; fees = []; trig = []; synced = None; top = dict(sender=t.get('from'), to=t.get('to'), selector=(t.get('input') or '')[:10])
     for d, c in flat:
