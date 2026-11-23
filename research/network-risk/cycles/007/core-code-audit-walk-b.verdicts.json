@@ -1,0 +1,124 @@
+{
+ "unit": "core-code-audit-walk-b",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I ran the log queries again on 2026-11-23 with my own script and my own Keccak routine. The topic of Donate(bytes32,address,uint256,uint256) is 0x29ef05caaff9404b7cb6d1c0e9bbae9eaa7ab2541feba1a9c4248594c08156cb. eth_getLogs on the PoolManager returned 108 events for Ethereum blocks 26,474,597 to 26,479,597, 7 for Arbitrum One blocks 526,785,892 to 526,885,892, 138 for Robinhood Chain blocks 121,516,721 to 121,616,721 and 304 for Elysium blocks 9,906,492 to 10,006,492, all from 0x9c97c716ddcd8c15ecdd822c3daf6422dba2be24 on Elysium. These are the counts in the finding. I fetched three of the four sample receipts. Ethereum 0x357c58d6870b26eb1abdfa14e9b52a250d4c2a908aa7e9349371c8cdf0a57069 (block 26,474,962) has a Donate of 8,029,767,512,377 units of currency0 by 0xd847b6153c321abfbf7969422fceb129343d2888 and a Swap event of the same pool in the same transaction. Robinhood Chain 0x79aab5aa0d341c706a6f164245769bd0fd35b50943c99406473e57468da195b9 (block 121,520,063) has a Donate of 5,114,616,276,503,669,596 units of currency0 by 0x342baa22e202954593b04b7ed1663621e0565d46 to a pool that the same transaction swaps 5,659,805,065,421,765,020,230 units through. Arbitrum One 0xafab7987ac14ebebde5c00f522166832ede42df41fe3198f4b9ff0148574e226 has a Donate of 11,230 units of currency1 by 0x8614c6af5c3db50e694d37c4147a3c3891b0e877 after a Swap of the same pool by the same contract. I did not open the Elysium sample again. I read both audit passages in the PDF files of this repository. Spearbit 5.1.1 is rated medium, describes the three transaction sandwich with liquidity added before and removed after the donation, and records the response that comments were added in PR 851, marked verified. Certora M-02 is rated medium, states that donate may pay the wrong tick when the price sits exactly on an initializable tick, and records the response acknowledged, will not be fixed, comments added in PR 851. No source contradicts the finding. The finding names no difference between a network and Ethereum, and I found none: the path is plain contract logic.",
+   "codeCheck": "donate carries onlyWhenUnlocked and noDelegateCall and has no condition on who holds liquidity or since when (src/PoolManager.sol:256-276). Pool.donate reads state.liquidity, reverts when it is zero, and adds amount * 2^128 / liquidity to the global fee growth of each currency (src/libraries/Pool.sol:466-480). The donor is debited the full amounts at PoolManager.sol:270, so the gift is paid by the donor and no reserve of another pool or position is touched. modifyLiquidity is open to any caller during an unlock and records msg.sender as the owner (PoolManager.sol:145-184). A position that is in range collects global growth minus the two outside values (Pool.sol:488-510) times its liquidity when it is next touched (src/libraries/Position.sol:91-97, Pool.sol:184-192). I looked for a snapshot, a minimum holding time or a per position start block and the text has none. The tick effect also holds: when a step ends on the price of the next tick the tick is crossed if it is initialized and result.tick is set to tickNext - 1 for zeroForOne (Pool.sol:413-432), the loop stops when the price equals the limit (Pool.sol:344), and the stored liquidity is the value after the crossing (Pool.sol:442). A position whose lower bound is that tick then falls in the first branch of getFeeGrowthInside (Pool.sol:498-500) and receives nothing from a donation made in that state. The interface comment at src/interfaces/IPoolManager.sol:149-155 and the comment at Pool.sol:409-412 warn about both effects and add no check.",
+   "corrections": "The actor value unprivileged stands for the mechanism: adding and removing liquidity around a call needs no role. Four points need correction or a limit. First, the effect is narrower than siphon suggests. The only funds that move are the donated amounts, which the donor gives up at PoolManager.sol:270. Principal and earlier fees of other providers cannot be reached through this path. Second, in all three receipts that I read the donation is made by a contract inside a transaction that also swaps through the same pool, so a caller who triggers it funds it. Capture then needs ordering around another user's swap, which is the same position a just in time provider has toward ordinary swap fees. The finding says this and I agree that it keeps the rating at low. Spearbit rates the mechanism medium, and medium would apply under SCHEMA.md once a donor is found that pays out a balance accrued earlier on a call open to anyone. None is known. Third, the remark on senders is slightly off: the most frequent Ethereum sender in the window is 0x3f8262ed65fdd4d46c0d008a49e938769bb22488 with 15 events, whose address ends in 488, and the next five end in 888. Fourth, the unit's raw file has no log count for Base, World Chain, X Layer, Polygon, BNB Smart Chain, Avalanche and Monad, because those queries failed, so four networks with donations is a lower bound. I queried second endpoints: BNB Smart Chain shows 22 Donate events in blocks 135,322,108 to 135,327,108 (13 from 0x8c7852bb503b4579c28a6fa2bcf112c7657a6488), and Base (61,353,982 to 61,358,982), Polygon (97,832,805 to 97,837,805), Avalanche (101,187,597 to 101,192,597), X Layer (1,000 blocks) and Monad (1,000 blocks) show none in those short windows. World Chain could not be queried. The hazard does not follow from any network difference, so it is not the planted weakness the review is looking for.",
+   "sources": [
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_getLogs, Donate topic, PoolManager, blocks 26,474,597 to 26,479,597: 108 events; receipt of 0x357c58d6870b26eb1abdfa14e9b52a250d4c2a908aa7e9349371c8cdf0a57069 with Donate and Swap of the same pool"
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc",
+     "supports": "eth_getLogs, blocks 526,785,892 to 526,885,892: 7 Donate events, five from 0x8614c6af5c3db50e694d37c4147a3c3891b0e877; receipt of 0xafab7987ac14ebebde5c00f522166832ede42df41fe3198f4b9ff0148574e226"
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com",
+     "supports": "eth_getLogs, blocks 121,516,721 to 121,616,721: 138 Donate events; receipt of 0x79aab5aa0d341c706a6f164245769bd0fd35b50943c99406473e57468da195b9"
+    },
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz",
+     "supports": "eth_getLogs, blocks 9,906,492 to 10,006,492: 304 Donate events, all from 0x9c97c716ddcd8c15ecdd822c3daf6422dba2be24"
+    },
+    {
+     "url": "https://bsc-rpc.publicnode.com",
+     "supports": "eth_chainId 56; eth_getLogs, blocks 135,322,108 to 135,327,108: 22 Donate events on the BNB Smart Chain PoolManager"
+    },
+    {
+     "url": "docs/security/audits/DRAFT_Spearbit_audit_core.pdf: finding 5.1.1, printed page 4",
+     "supports": "medium; donations can be taken by liquidity added just before and removed just after; response: comments added in PR 851"
+    },
+    {
+     "url": "docs/security/audits/DRAFT_Certora_audit_core.pdf: finding M-02, printed page 7",
+     "supports": "medium; tick may not correspond to the price after a zeroForOne step that ends on a tick, so donate may pay the wrong positions; acknowledged, not fixed"
+    },
+    {
+     "url": "src/libraries/Pool.sol:466",
+     "supports": "donate divides by the liquidity active at the call and has no time condition"
+    },
+    {
+     "url": "src/PoolManager.sol:270",
+     "supports": "the donor is debited the donated amounts"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "I read printed page 39 of docs/security/audits/DRAFT_Spearbit_audit_core.pdf. Finding 5.4.14 is informational. It says sync can be called outside of unlocks and that a native take hands control to the recipient. The recorded response lists two changes: a lock added to sync in PR 856, and sync no longer reverting, overriding, and accepting the native currency in PR 866. Spearbit acknowledges the new behaviour and notes that tokens sent between two syncs without a settle are not accounted for. The Trail of Bits report in the same folder records the same change for TOB-UNI4-3: a guard on sync so that it runs only while unlocked, and a check in collectProtocolFees that reverts with ContractUnlocked while unlocked. I tested the deployed contracts with eth_call on all 21 RPC endpoints of state/networks.json on 2026-11-23 (Avalanche through https://avalanche-c-chain-rpc.publicnode.com after the listed endpoint returned HTTP 429). sync(address(0)) with selector 0xa5841194 returns successfully with empty data on every network while the manager is locked. settle() and take(address(0), 0x...dead, 0) revert with 0x54e3ca0d, which is ManagerLocked(), on every network. exttload of the unlock slot and of the synced currency slot returns zero at the start of a call on every network. The deployed contracts therefore behave as the source text reads: sync has no lock. A call of a state changing function by eth_call shows that it does not revert and shows nothing about state after the call.",
+   "codeCheck": "sync is declared external with no modifier (src/PoolManager.sol:279). For address(0) it clears the synced currency, otherwise it stores the currency and balanceOf(PoolManager) together (PoolManager.sol:281-287, src/libraries/CurrencyReserves.sol:21-32). onlyWhenUnlocked reads one transient flag (PoolManager.sol:96-99, src/libraries/Lock.sol:23-27) and unlock has no access check (PoolManager.sol:104-114). An unlock whose callback only calls sync returns with a zero delta count and passes line 112, and nothing at lines 112-113 clears the synced currency. A lock on sync would therefore leave the same state reachable for any account that can deploy a contract. I traced what a pending sync can change. _settle reads the synced currency; when it is nonzero a call with value reverts with NonzeroNativeValue and a call without value credits balanceOf now minus the stored reserves and then clears the currency (PoolManager.sol:349-364). syncCurrencyAndReserves always writes both slots, so an old reserves value cannot be paired with a newly set currency. I walked the order sync(face token), sync(address(0)), settle with value, sync(face token), settle for a native asset with an ERC-20 face: the second sync of the token records the balance after the native payment, so the payment is credited once. The guard at line 356 blocks the order without the reset. collectProtocolFees reverts for an ERC-20 that is currently synced in both lock states and never calls _isUnlocked (src/ProtocolFees.sol:44-57, 60). The comment at src/interfaces/IPoolManager.sol:111 names only initialize and updateDynamicLPFee, and test/Sync.t.sol:36-41 calls sync twice from the test contract with no unlock and expects success. I found no path by which the missing modifier gives a credit without a payment.",
+   "corrections": "The actor value unprivileged is right for the revert effect and no fund movement follows from it. Two additions. First, the Spearbit text lists the lock in PR 856 and then a second change in PR 866 that reworked sync. The report does not say whether the lock was meant to remain after the second change, so the documents of this repository cannot tell a fix that is missing from a guard that was later dropped on purpose. The title should say that the report lists a lock and the source has none, without calling the lock the final fix. Second, the lead result of the unit says that every fix described by its three reports is present except two. That holds for its three reports. The Trail of Bits fix record for the same pull request also describes a ContractUnlocked check in collectProtocolFees that the source does not have; the source has the synced currency check at ProtocolFees.sol:49-52 in its place. F-006 and F-014 already record this, so nothing new follows. The finding is a statement about the source text and does not depend on any network. It is not the planted weakness.",
+   "sources": [
+    {
+     "url": "docs/security/audits/DRAFT_Spearbit_audit_core.pdf: finding 5.4.14, printed page 39",
+     "supports": "response lists a lock added to sync in PR 856 and a later change in PR 866 that makes sync override and accept native; Spearbit notes the unaccounted transfer between two syncs"
+    },
+    {
+     "url": "docs/security/audits/TrailOfBits_audit_core.pdf: fix review of TOB-UNI4-3",
+     "supports": "resolved in PR 856 by a guard on sync and a ContractUnlocked check in collectProtocolFees"
+    },
+    {
+     "url": "src/PoolManager.sol:279",
+     "supports": "sync has no modifier"
+    },
+    {
+     "url": "src/PoolManager.sol:356",
+     "supports": "a settle with value reverts while an ERC-20 is synced"
+    },
+    {
+     "url": "test/Sync.t.sol:36",
+     "supports": "the test calls sync while the manager is locked and expects success"
+    },
+    {
+     "url": "https://forno.celo.org",
+     "supports": "eth_call on the Celo PoolManager 0x288dc841A52FCA2707c6947B3A777c5E56cd87BC: sync(address(0)) succeeds while locked, settle() and take revert with 0x54e3ca0d; the same result on the RPC endpoints of the other 20 networks in state/networks.json"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Spearbit 5.4.10 (informational) and ABDK CVF-8 (major): the unchecked blocks of Pool.swap, among them the protocol fee product that ABDK calls a phantom overflow.",
+   "agrees": true,
+   "note": "I traced each unchecked statement of Pool.swap. Line 373 subtracts an amountOut that SwapMath caps at the remaining amount (src/libraries/SwapMath.sol:91-96). Line 379 adds amountIn + feeAmount, which stays at or below the remaining input in both branches of the exact input case: in the branch that reaches the target the sum is the rounded up value of amountIn * 1e6 / (1e6 - fee) with amountIn at most the remaining amount less fee, and in the other branch the fee is the remainder (SwapMath.sol:64-83). Lines 375 and 381 are outside the unchecked blocks and are checked. The fee split at lines 391-396 cannot underflow because feeAmount * 1e6 is at least (amountIn + feeAmount) * swapFee in both branches and calculateSwapFee returns at least the protocol fee (src/libraries/ProtocolFeeLibrary.sol:38-46). The product at line 393 could wrap only for a step total above 2^246, and every swap that completes passes its totals through toInt128 at lines 455-459, which rejects 2^127 and above (src/libraries/SafeCast.sol:40-43 and 56-59). liquidityNet is bounded by liquidityGross, which the cap at Pool.sol:165-173 keeps below 2^123 for every spacing from 1 to 32767 (the number of ticks is 56 at spacing 32767 and grows as the spacing falls). I found no input from an ordinary caller that completes a swap with a wrapped value."
+  },
+  {
+   "check": "Spearbit 5.4.7 (informational, custom errors dropped for code size) and ABDK CVF-48, CVF-49 and CVF-50 (moderate): balances, allowances and accrued protocol fees are protected only by checked subtraction.",
+   "agrees": true,
+   "note": "I read the six subtractions: src/ERC6909.sol:26, 38, 41 and 86, src/ERC6909Claims.sol:18 and src/ProtocolFees.sol:55. None is inside an unchecked block. transferFrom and _burnFrom lower the allowance unless the caller is the owner or an operator or the allowance is the maximum (ERC6909.sol:36-39, ERC6909Claims.sol:15-20). mint calls _mint from inside an unchecked block at src/PoolManager.sol:323-328. The Solidity 0.8.26 documentation states that the setting only affects statements that are syntactically inside the block and that functions called from it do not inherit it, so the addition at ERC6909.sol:80 stays checked. burn credits the caller only after toInt128 and then burns the same amount from the named account with the allowance rule (PoolManager.sol:332-336). The claim id always has zero upper bits because it is built by toId from an address (src/types/Currency.sol:110-118). No compiler is installed here, so this is a reading of the text and of the language rule, and the bytecode was not inspected."
+  },
+  {
+   "check": "ABDK CVF-10 (major): NonzeroDeltaCount.decrement has no underflow check and relies on its caller.",
+   "agrees": true,
+   "note": "The counter is written only by _accountDelta (src/PoolManager.sol:368-378). A zero change returns early, a delta that becomes zero decrements, and a delta that leaves zero increments, so the counter equals the number of nonzero deltas and the decrement at src/libraries/NonzeroDeltaCount.sol:28-34 never runs at zero. applyDelta uses a checked addition and the slot is the hash of target and currency, both masked to 160 bits (src/libraries/CurrencyDelta.sol:10-16 and 28-41). unlock reverts unless the counter is zero (PoolManager.sol:112). The reliance on A1 is stated correctly. I ran two read-only checks on all 21 RPC endpoints on 2026-11-23: exttload of the unlock slot and of the synced currency slot returns zero at the start of a call, and a 25 word creation payload sent by eth_call returned the expected values on every network, among them TLOAD after TSTORE, TLOAD of an unwritten slot, SIGNEXTEND, SAR, SDIV, SMOD, MULMOD, BYTE, MCOPY and PUSH0. Rollback in a failed frame was tested by an earlier unit on all 21 networks and I did not repeat it."
+  },
+  {
+   "check": "Certora L-03 (low, impact high): assembly reads values of narrow types as full words, so dirty upper bits could change results.",
+   "agrees": true,
+   "note": "I read every assembly block of src outside src/test and found each narrow value masked or sign extended at the lines the item lists, with one addition. The native transfer passes its recipient to CALL without a mask (src/types/Currency.sol:48). This is harmless: the value comes from a calldata address that the ABI decoder of the external function validates, and CALL uses the low 160 bits. The item's statement that the two unmasked returns of ParseBytes are cleaned by the compiler rests on the build and stays open as the unit's own low lead. Both values come from a hook, so only a pool that uses that hook is exposed. My opcode payload confirms on all 21 networks that the bit instructions the masks rely on return the Ethereum values."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    56,
+    8453,
+    480,
+    196,
+    137,
+    43114,
+    143
+   ],
+   "lens": "L6",
+   "question": "BNB Smart Chain shows 22 Donate events of the PoolManager in blocks 135,322,108 to 135,327,108, 13 of them from 0x8c7852bb503b4579c28a6fa2bcf112c7657a6488, 4 from 0x15544eba1a7c7054a4bedceb876a7bf1a6ac258b and 2 from 0x02c3d34faad49df254b20724e62a36b6a09f6488. Does any of these donors, or any donor on the six other networks for which the audit walk has no log count (Base, World Chain, X Layer, Polygon, Avalanche, Monad), pay out a balance that was accrued before the call that triggers the donation, on a call open to any account?",
+   "why": "The donation capture finding rests at low because every donation read so far is funded by the transaction that triggers it. The unit's raw file has no count for seven networks, and BNB Smart Chain turns out to have donors. One donor with an earlier accrued balance and a public trigger would raise the rating to medium for that pool. Counts on BNB Smart Chain need a second source, since one endpoint was found to drop logs in an earlier cycle.",
+   "priority": "low"
+  }
+ ]
+}

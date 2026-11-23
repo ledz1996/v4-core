@@ -1,0 +1,146 @@
+{
+ "unit": "theme-transfer-side-effects",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "I ran every chain claim myself on 23 November 2026 with eth_simulateV1 and no stub code, using the PoolManager address as sender. WHITE on Ethereum at block 26,479,956 (ethereum-rpc.publicnode.com): balanceOf(PoolManager) is 48,265,470.0228 WHITE. A transfer of 1,000,000 WHITE from the PoolManager to the v2 pair 0x6ec94f50cadcc79984463688de42a0ca696ec2db lowers the PoolManager balance by 1,100,000, raises the pair by 1,000,000 and raises the owner 0x287ecebd1223e235b929217fe596c905a11752ae by 100,000. skim(PoolManager) from an unrelated account then returns 1,000,000, so the net loss is 100,000. The same transfer to 0xf8f6191561997010870056fc265d0f7ddaf105bf costs 1,100,000 as well, and a transfer of 1,000,000 from that address back to the PoolManager arrives in full. That address reports token0 WHITE, token1 WETH, fee 3000 and the Uniswap v3 factory 0x1f98431c8ad98523631ae4a59f267346ea31f984. The pair reports token1 USDC and the v2 factory 0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f. A transfer to a plain address costs the amount only, and a plain holder that sends to either pool pays 110 percent. ARGUS on Arc at block 32,784,916 (arc.drpc.org, getters repeated on rpc.mainnet.arc.io): currentTaxes() returns (100, 100), taxExpiry() returns 0, isExempt(PoolManager) returns false, mainPool() returns 0x6a3bacaa6493734c1ac221ebf42cf530a96c1e02, which reports token0 0x3600000000000000000000000000000000000000, token1 ARGUS, fee 10000 and factory 0xf0db7b58379503491d857db50ac9ece64c653918. A transfer of 1,000,000 ARGUS from the PoolManager to that pool lowers the PoolManager balance by 1,010,000, and the token contract gains 10,000. skim(PoolManager) on the pool reverts. A transfer of 1,000,000 from the pool to the PoolManager arrives as 990,000. Transfers between the PoolManager and a plain address move the amount only. Two other ARGUS pools that DexScreener lists (0x46ea4646de574a33b5428ce8316d65aaaafacdce and 0xdfaf8ea140070fe82b095e6a305903d24632c9a7) carry no charge. The receipt of 0x471fafc3a4761f749412e3856fac067b8f95e73d1d7bf6240dee396e9fc3e9fb (block 32,766,474, to 0x4d680e3a362f64005b4f71004fdfebe203b0ea59) shows two PoolManager Swap logs, a transfer of 3,161.797 ARGUS from the PoolManager to the pool, a transfer of 31.618 ARGUS from the PoolManager to the token contract and 7.200687 USDC from the pool to the PoolManager. eth_getLogs on arc.gateway.tenderly.co for ARGUS transfers from the PoolManager to the token contract from block 21,000,000 to the head returns 1,297 logs that sum to 188,066.5155 ARGUS, first block 21,078,826, last block 32,767,296. I had this count from one endpoint only, because rpc.mainnet.arc.io and arc.drpc.org refused the range. The pool id 0xb3f441e8871840ecfcb284e5cbb5b9c21a50e961e1c50109bdced25e429f00cc equals keccak256 of (0x3600...0000, ARGUS, 9850, 99, zero hook), and StateView on Arc returns nonzero liquidity and an LP fee of 9850 for it. Prices: coins.llama.fi gives ARGUS 0.002278 USD and WHITE 0.00003098 USD. DexScreener gives 223,427 USD of liquidity and 47,998 USD of 24 hour volume for the charged v3 pool and 90,739 USD of liquidity for the hookless v4 pool. I did not rerun the sweep of 13,001 currencies, so the statement about the 19 other networks rests on the research files.",
+   "codeCheck": "take has only the onlyWhenUnlocked modifier, books minus amount on msg.sender and calls currency.transfer(to, amount) with a recipient the caller chooses (src/PoolManager.sol:291-297). The ERC-20 branch of transfer accepts the call when it does not revert and returns nothing or a 32 byte 1, and it never reads a balance (src/types/Currency.sol:55-86). The cast at src/libraries/SafeCast.sol:56-59 only caps the amount below 2^127. So a token that debits the sender by more than the amount leaves the difference outside every delta. sync has no modifier and stores balanceOfSelf (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32). _settle rejects msg.value while a token is synced (line 356), credits balanceOfSelf minus the stored reserves to the recipient (lines 358-364) and resets the synced currency (line 361). For WHITE the sequence take to the v2 pair, sync, skim to the PoolManager, settle therefore ends with a delta of zero, and the end check of unlock passes (src/PoolManager.sol:104-114) while the PoolManager has lost 10 percent of the amount. I found no guard on this path. collectProtocolFees is not involved (src/ProtocolFees.sol:44-57).",
+   "corrections": "The actor unprivileged and the severity medium stand. Six points need correction or addition. 1. The gain of the caller is overstated for ARGUS. The verified implementation source of ARGUS (ArgusTaxToken.sol at Sourcify, lines 430-435) clamps the sell surcharge to the balance the sender has left after the transfer. My simulation confirms it: an account that holds exactly 1,000,000 ARGUS and sends all of it to the main pool pays no surcharge, and an account that holds 1,004,000 pays 4,000. A seller can therefore avoid the 1 percent charge with any helper contract that holds exactly the amount, and the route through take saves the seller nothing beyond that. The loss to the PoolManager on ARGUS comes from routes that name the pool as recipient without need. For WHITE the saving is real: a holder with 100 or 105 percent of the amount gets the revert text Insufficient balance for amount + tax, so only the route through take lets a seller pay 100 percent. 2. The cost of doing it on purpose for ARGUS is lower than the 3 percent the finding states. The source charges third party liquidity adds on the main pool like sells (comment at lines 376-377). A one sided liquidity add paid by take inside the v3 mint callback, followed by burn and collect to the PoolManager, would cost the caller the 1 percent buy charge and no swap fee, for a loss of 1 percent to the PoolManager. I derived this from the token source and the standard v3 pool interface and did not simulate it, because it needs a contract. 3. Who receives the ARGUS charge. config() returns creatorBps 10000, burnBps 0 and dividendBps 0, with creatorWallet 0x7d613c6316ede9d257f3bf512777cb4ea4a6bee4, which is also owner(). swapBack is open to any caller and pays a bounty of 0.5 percent, and the last three TaxReceived logs of the processor 0x863a810de5d1b9ab8e853dbb6218fabfa5fc6d61 show a protocol fee of 1 percent. The creator wallet therefore receives about 98.5 percent of the proceeds of both charges, and for that wallet the round in point 2 gains about 1 percent of the amount per round out of the pooled balance. That part has actor issuer. It is inferred from source and logs and was not simulated. 4. The title says no other priced currency charges the sender. Priced means a DefiLlama price in the sweep. Token T 0x4ef42e4cf51cd779e9947db65b629ecd8c92b1da on BNB Smart Chain has no DefiLlama price and has a DexScreener price of 0.000002139 USD with a PancakeSwap pair of 56 USD liquidity. The PoolManager holds 19,136,577.6 T, about 41 USD. The title should say no other currency with a DefiLlama price. 5. Figures have moved. balanceOf(PoolManager) is 46,617,370.19 ARGUS at block 32,784,916, about 106,200 USD, against 46,618,706.31 in the finding. 6. The portal 0x0f1c7cb26d6cd36bd4189e41947658b39437587a has nonce 7 and its logs show two launches: ARGUS and BBASRUS 0x6de0323c4bf764849df01a82e307c24dda18c6cf, a clone of the same implementation with charges of 200 basis points and main pool 0xf21f82a7125d6a4e1db00a1ffde1f056a8b95f77. The PoolManager holds 0 BBASRUS. This answers the third lead of the research file for this portal.",
+   "sources": [
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_simulateV1 at block 26,479,956: WHITE transfers from the PoolManager to the v2 pair and the v3 pool cost 110 percent, skim returns the amount, a transfer from the v3 pool arrives in full, a holder with 100 or 105 percent of the amount is refused; token0, token1, fee and factory of both pools."
+    },
+    {
+     "url": "https://arc.drpc.org",
+     "supports": "eth_simulateV1 at block 32,784,916: ARGUS transfer to the main pool costs 101 percent, skim reverts, a transfer from the pool arrives at 99 percent, a sender that holds exactly the amount pays no surcharge; getters of ARGUS and BBASRUS."
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "currentTaxes, taxExpiry, isExempt, mainPool, config, owner and taxProcessor of ARGUS; receipt of 0x471fafc3a4761f749412e3856fac067b8f95e73d1d7bf6240dee396e9fc3e9fb; StateView reads for pool 0xb3f441e8...; portal nonce 7."
+    },
+    {
+     "url": "https://arc.gateway.tenderly.co",
+     "supports": "eth_getLogs: 1,297 ARGUS transfers from the PoolManager to the token contract, 188,066.5155 ARGUS; 8 logs of the portal for two launches; TaxReceived logs of the processor with a fee of 1 percent."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/5042/0x122c82cfca7a3a2227285cc21f4522e8f551db3a?fields=sources,abi",
+     "supports": "Source of the ARGUS implementation (status match): surcharge on transfers to mainPool clamped to the remaining balance of the sender, buy charge on transfers from mainPool, open swapBack with a bounty of 50 basis points, portal only setMainPool and graduate."
+    },
+    {
+     "url": "https://coins.llama.fi/prices/current/arc:0xece5ca8bf9220718e5727754026757512212cb3c,ethereum:0x9cdf242ef7975d8c68d5c1f5b6905801699b1940",
+     "supports": "ARGUS 0.002278 USD and WHITE 0.00003098 USD."
+    },
+    {
+     "url": "https://api.dexscreener.com/latest/dex/tokens/0xece5ca8bf9220718e5727754026757512212cb3c",
+     "supports": "Liquidity and volume of the ARGUS v3 pool and of the hookless v4 pool, and the list of other ARGUS pools."
+    },
+    {
+     "url": "https://api.dexscreener.com/latest/dex/tokens/0x4ef42e4cf51cd779e9947db65b629ecd8c92b1da",
+     "supports": "Token T on BNB Smart Chain has a price of 0.000002139 USD and two pairs."
+    },
+    {
+     "url": "https://coins.llama.fi/prices/current/bsc:0x4ef42e4cf51cd779e9947db65b629ecd8c92b1da",
+     "supports": "DefiLlama returns no price for token T."
+    },
+    {
+     "url": "src/PoolManager.sol:291",
+     "supports": "take debits the caller by amount and transfers to a free recipient."
+    },
+    {
+     "url": "src/types/Currency.sol:64",
+     "supports": "The transfer check reads return data only."
+    },
+    {
+     "url": "src/PoolManager.sol:358",
+     "supports": "_settle credits the rise of the balance since sync."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I ran one eth_simulateV1 request without state overrides on mainnet.base.org and on base-rpc.publicnode.com at block 61,361,038, with the same result on both. balanceOf(PoolManager) on 0xe443cadb4a4fa403caee0e0546c33baff32c51f8 is 98,714,225 base units and totalSupply is 10,721,408,987. claimFor(PoolManager), selector 0xddeae033, sent by the unrelated account 0x00000000000000000000000000000000000a11ce, succeeds and logs Transfer(zero address, PoolManager, 2,580,190). The balance is then 101,294,415 and totalSupply 10,723,989,177. The caller holds 0 shares before and after. A second claimFor(PoolManager) mints 0, and claimFor for an address without shares leaves the PoolManager balance unchanged. A transfer of the full 101,294,415 units from the PoolManager then passes, so the new shares are transferable. The same call also moves 90.585 USDC from the token contract to 0x87d2e27147a640092e06c9329bf8110ca9927446, which is the daily forwarding in the giveYield modifier and does not touch the PoolManager. Sourcify lists the contract as an exact match. In the source claimFor(address receiver) is public with the modifiers giveYield and fetch(receiver) and no check of the caller, and it mints claimable[receiver] to receiver (lines 167-172). transfer runs fetch for sender and recipient (line 480), so every take of the token also moves the accrued yield of the PoolManager into claimable. Owing(PoolManager) reads 2,565,472 and yieldOverwrite(PoolManager) reads the zero address. The pool id 0x620bc43c2198b61932b13aabbfdba4f6e0b236d6dca7282711277856175b0895 equals keccak256 of (USDC 0x833589fcd6edb6e08f4c7c32d4f71b54bda02913, the share token, 100, 1, zero hook), and StateView on Base returns liquidity 1,924,522,056 for it. GeckoTerminal lists this pool as the only one of the token with a price of 1.0214 USD per share.",
+   "codeCheck": "sync has no lock check and no caller check and stores balanceOfSelf for the currency (src/PoolManager.sol:279-288, src/types/Currency.sol:90-96). _settle reads the balance again, credits the difference to the recipient and resets the synced currency (src/PoolManager.sol:349-365). Inside one unlock a caller can call sync for the share token, call claimFor(PoolManager) on the token, call settle with no value and take the credited 2,580,190 units (src/PoolManager.sol:291-297). The delta is zero and unlock returns (src/PoolManager.sol:104-114). The msg.value check at line 356 does not apply, and the synced check of collectProtocolFees (src/ProtocolFees.sol:49-52) is not on the path. Nothing ties the rise of the balance to a payment by the caller. I did not run the sequence through the deployed PoolManager, because that needs a contract.",
+   "corrections": "The facts and the actor stand. Three additions. 1. This is the hazard of F-081 (TITHE claimFor on Robinhood Chain) and F-041 on a second token, and it should be filed as an extension of F-081 at the same severity. 2. The liquidity providers lose no principal. The 98.71 shares stay in place, and the yield could not reach them through the PoolManager in any case, since the PoolManager cannot call claim. The loss is the accrued yield, 2.58 shares today, about 2.64 USD. 3. The token admin can redirect the yield of any holder with setOverwrite(who, receiver) (source line 179, ADMIN_ROLE). If the admin sets an overwrite for the PoolManager address, claimFor mints nothing to it and the step stops working. That part has actor issuer.",
+   "sources": [
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "eth_simulateV1 at block 61,361,038: claimFor(PoolManager) from an unrelated sender mints 2,580,190 units to the PoolManager; balances, totalSupply, second claim, claim for an address without shares, full transfer afterwards; StateView liquidity of the pool."
+    },
+    {
+     "url": "https://base-rpc.publicnode.com",
+     "supports": "The same simulation with the same numbers at the same block."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/8453/0xe443cadb4a4fa403caee0e0546c33baff32c51f8?fields=sources,abi",
+     "supports": "Exact match source: claimFor is public without a caller check and mints claimable[receiver]; fetch and giveYield modifiers; setOverwrite for the admin."
+    },
+    {
+     "url": "https://api.geckoterminal.com/api/v2/networks/base/tokens/0xe443cadb4a4fa403caee0e0546c33baff32c51f8/pools",
+     "supports": "One pool, uniswap-v4-base, id 0x620bc43c..., price 1.0214 USD per share."
+    },
+    {
+     "url": "src/PoolManager.sol:279",
+     "supports": "sync has no modifier."
+    },
+    {
+     "url": "src/PoolManager.sol:360",
+     "supports": "paid is the balance now minus the synced reserves."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Can the full amount be brought back to the PoolManager at no cost after a charged transfer of WHITE or ARGUS",
+   "agrees": true,
+   "note": "A wrong answer for ARGUS would let any account move about 106,000 USD of pooled ARGUS to the token contract for gas. My eth_simulateV1 runs give the same results: WHITE comes back in full through skim on the v2 pair and through a transfer from the v3 pool, skim on the ARGUS pool reverts, and a transfer from the ARGUS pool to the PoolManager arrives at 99 percent. The ARGUS source applies the buy charge to every transfer out of mainPool to a recipient that is not exempt, and the exempt list is written only in initialize (the token, the portal, the processor, the dead address, the zero address and any extra entries passed at launch, which I could not list), so I found no free way back for an ordinary account. One addition: the cheapest way back is a burn and collect of a one sided v3 position, which costs the 1 percent buy charge and no swap fee, so doing it on purpose costs about 1 percent of the amount and the 3 percent in the finding is too high. I did not simulate that route."
+  },
+  {
+   "check": "Is ARGUS one of many clones with the same charge rule among the currencies of the Arc PoolManager",
+   "agrees": true,
+   "note": "I did not repeat the code hash count over 261,204 currencies. I closed the part the item left open. The portal 0x0f1c7cb26d6cd36bd4189e41947658b39437587a has nonce 7, and its 8 logs on arc.gateway.tenderly.co show two launches, ARGUS at block 18,819,901 and BBASRUS 0x6de0323c4bf764849df01a82e307c24dda18c6cf at block 21,166,011. BBASRUS has the same 45 byte proxy code, charges of 200 basis points and is graduated, and balanceOf(PoolManager) is 0. None of the eight tokens that DexScreener lists in pools with ARGUS answers mainPool(). Other portals or implementation versions of the same launchpad were not searched, and the log list comes from one endpoint, checked against the nonce."
+  },
+  {
+   "check": "Part two (L-458) on Ethereum: does a call by an unrelated account, with the PoolManager as address argument, change balanceOf(PoolManager) of a pooled vault, receipt, staking or migration token",
+   "agrees": true,
+   "note": "I traced the one link the item left open. For the Pendle market 0x13285bcbc27f92b47b4edb99d744c07b48c977c0 the contract holds 2.35e16 base units of SY and 13,255 base units of PT above its stored totals. mint(receiver, 1901630352103, far) turns part of that surplus into 1,660,472 LP units for whatever receiver the caller names: the simulation gives the same 1,660,472 units to an unrelated address and to the PoolManager. The units are dust that any caller can also mint to itself, and the PoolManager balance only rises, so the clearance stands. The raw file shows the 126 other free-raise rows are aToken transfers with one base unit of rounding. I did not rerun the 158,646 trials. Seven tokens (aSTETH, RLC, REQ, aLINK, aBUSD, aUSDC, CAGA) had failed calls and stay partly untested, which the item states as 7 eth_call failures."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "priority": "medium",
+   "question": "Does one unlock with a one sided liquidity add on the ARGUS main pool 0x6a3bacaa6493734c1ac221ebf42cf530a96c1e02 paid by take inside the mint callback, followed by burn and collect to the PoolManager, cost the caller only the 1 percent buy charge, and how much of both charges reaches the creator wallet 0x7d613c6316ede9d257f3bf512777cb4ea4a6bee4 after swapBack and dispatch?",
+   "why": "config() shows that 100 percent of the ARGUS charge goes to the creator wallet after a bounty of 0.5 percent and a protocol fee of 1 percent. If the round costs 1 percent, the creator gains about 1 percent of the amount per round out of 46.6 million pooled ARGUS (about 106,000 USD), and any other account can remove the same share at a cost equal to the damage. The finding states 3 percent. The route was derived from source and not simulated."
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "priority": "low",
+   "question": "Which other portals and implementation versions of the launchpad behind ARGUS exist on Arc, which of their tokens does the PoolManager hold, and does any of them have a dividend tracker (dividendBps above 0)?",
+   "why": "The tracker interface in the verified ARGUS source pays native USDC to every holder, lets any account call reclaimStranded for a contract holder that cannot receive native value, and credits deposits to whoever holds at the moment dispatch runs, which any account can call. A pooled token of that kind would let a caller borrow the pooled balance through take for one transaction and collect the dividend share of the PoolManager. ARGUS and BBASRUS both have no tracker. The portal check covered one portal."
+  },
+  {
+   "chainIds": [
+    56,
+    1,
+    8453,
+    5042
+   ],
+   "lens": "L3",
+   "priority": "low",
+   "question": "Rerun the charged transfer test with the price list taken from DexScreener in addition to DefiLlama, and for each hit test whether a sender that holds exactly the amount is refused or pays no charge.",
+   "why": "Token T on BNB Smart Chain charges 3 percent on top and has a DexScreener price while DefiLlama has none, so the sweep counted it as unpriced. The exact balance test separates tokens like WHITE, where the route through take saves the seller the charge, from tokens like ARGUS, where the charge is clamped and the seller gains nothing."
+  }
+ ]
+}

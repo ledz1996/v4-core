@@ -1,0 +1,98 @@
+{
+ "unit": "op-stack-eth",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "eth_getCode on https://mainnet.optimism.io (block 159,929,911) and https://mainnet.base.org/ (block 61,341,130) returned 15,125 bytes for AGL 0x0000000000109de411eabc9f04906d79f06fda0e and 8,730 bytes for PoolAGL 0x0000000456b76bc801253ef2366664750f602840 on both chains. On both chains cota() returns 0, lancado() returns true, token() returns the AGL address and poolManager() returns the PoolManager of state/networks.json. The verified PoolAGL source was fetched from Celo Blockscout and from explorer.optimism.io and the two texts are identical (sha256 prefix 0d637f057cabfcdc). It keeps one signed quota in transient slot SLOT_ENTRADA (line 66). afterSwap adds the negated AGL amount of the swap delta (lines 203 to 211). consumirEntrada reverts with ForaDaCota unless the quota is at least zero and at least the amount (lines 218 to 223). consumirSaida reverts unless the quota is at most zero and its magnitude is at least the amount (lines 228 to 233). The quota is written only at lines 209, 222, 232, 348 and 377, and no line resets it when an unlock ends. The low 14 bits of the hook address are 0x2840, which are the beforeInitialize, beforeAddLiquidity and afterSwap flags. The verified AGL source (same two explorers, identical text, sha256 prefix 16f8e61d6667272d) calls consumirEntrada in _update when the recipient is the PoolManager and consumirSaida when the sender is the PoolManager (lines 130 to 145). I tested the token side on chain, which the finding had taken from cycle 4: an eth_call of AGL.transfer(other, 1) with from set to the PoolManager reverts with 0x7c467237, ForaDaCota(1, 0), on both chains, a transfer of 1 unit into the PoolManager from another account reverts with the same error, and a transfer of 0 from the PoolManager returns true. The sequence with two parties in one transaction was not simulated, because that needs a purpose built caller contract. I did not look for a bundle or batch executor that has carried AGL trades of two parties.",
+   "codeCheck": "mint debits the caller's delta and writes the claim balance without any call to the currency (src/PoolManager.sol:322-329, src/ERC6909.sol:79-83), and burn is the same in reverse (src/PoolManager.sol:332-336). take calls currency.transfer with the PoolManager as msg.sender (src/PoolManager.sol:291-297, src/types/Currency.sol:60-75), which is the call the token gates, and a revert there reverts the take (src/types/Currency.sol:82-86). The hook receives the caller's swap delta in afterSwap (src/PoolManager.sol:221, src/libraries/Hooks.sol:298-303). The hook address has no return delta flag, so the returned amount is ignored (src/libraries/Hooks.sol:163). unlock checks only the PoolManager's own delta count before it locks (src/PoolManager.sol:112-113), so a first party that buys AGL and closes with mint leaves its unlock cleanly while the hook's quota stays negative. A later seller's swap in the same transaction moves the quota to its amount minus the leftover, and its payment transfer into the PoolManager then reverts inside the token before settle is reached (src/PoolManager.sol:349-364). No guard in src/ changes this, because the revert happens in the token. No delta or claim of the second party is credited to the first party at any step, so no funds move between them.",
+   "corrections": "actor: unprivileged. The party that leaves the quota open is any account that trades in the AGL pool, and the author of the hook and token takes no step. The victims use a pool whose hook and token the attacker did not write, which is the definition of unprivileged in SCHEMA.md, and F-071 records the same shape (state left by an earlier party of a shared transaction) with that actor. The preconditions overstate the cost: the first party does not need to hold or accept claims, because clear (src/PoolManager.sol:310-319) forfeits a dust output and leaves the quota open in the same way, so one unit of AGL plus gas is enough. Effect degrade and severity low stand. The later trade reverts, can be repeated in another transaction, and no balance changes hands. The finding is not specific to OP Mainnet or Base and follows from no rule of those chains. The attacker must also get its call placed before the victim's call in one transaction, for example as the sender of an ERC-4337 bundle that contains the victim's operation. I did not confirm that any such carrier has handled an AGL trade.",
+   "sources": [
+    {
+     "url": "https://celo.blockscout.com/api/v2/smart-contracts/0x0000000456b76bc801253ef2366664750f602840",
+     "supports": "Verified PoolAGL source: transient quota, afterSwap adding the negated AGL delta, the two consume functions with their sign checks, and no reset of the quota."
+    },
+    {
+     "url": "https://explorer.optimism.io/api/v2/smart-contracts/0x0000000456b76bc801253ef2366664750f602840",
+     "supports": "The same PoolAGL source text is the verified source at the OP Mainnet address."
+    },
+    {
+     "url": "https://celo.blockscout.com/api/v2/smart-contracts/0x0000000000109de411eabc9f04906d79f06fda0e",
+     "supports": "Verified AGL source: _update calls consumirEntrada for transfers into the PoolManager and consumirSaida for transfers out of it."
+    },
+    {
+     "url": "https://mainnet.optimism.io",
+     "supports": "eth_getCode sizes, cota() = 0, lancado() = true, and eth_call of AGL.transfer from and to the PoolManager reverting with ForaDaCota(1, 0) at block 159,929,911."
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "The same reads and the same two reverts on Base at block 61,341,130."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "All reads were repeated on https://mainnet.base.org/ at block 61,342,065. eth_getCode of OUSD 0xB2000000000000000000002fEb517dFeC7415344 and AMDc 0xb2000000000000000000000d8ce462e99ee7a47b returns the one byte 0xef, the stub of a B20 precompile token. policyId returns 0x7a for the TRANSFER_SENDER_POLICY scope of OUSD and 0 for its five other scopes. For AMDc it returns 5 for the sender, receiver, executor and mint receiver scopes, 0x81 for seize exempt and 0 for seize receiver. On the registry 0x8453000000000000000000000000000000000002, policyAdmin returns 0x251d2711ebeb0a09fdb8992f5506f3d949175246 for 0x7a, 0xec0f05c174e54fbf0fe16ad930a8afebce612812 for 5 and 0x38467be00970af18076fd08f6b4cf38ba91572b1 for 0x81, pendingPolicyAdmin returns zero for each, and isAuthorized returns true for the PoolManager on each. The three admin addresses have empty code and nonces 619, 130 and 4,024. balanceOf(PoolManager) is 5,318,720.449079 OUSD and 32.74196534 AMDc. updateBlocklist(0x7a, true, [PoolManager]) from an ordinary account reverts with 0x82b42900, Unauthorized(). I also ran the admin's step as a read only eth_simulateV1 request. After updateBlocklist from 0x251d..5246, a transfer of 1 unit of OUSD from the PoolManager reverts with PolicyForbids(TRANSFER_SENDER_POLICY, 0x7a). After updateBlocklist(5) from 0xec0f..2812, a transfer of AMDc from the PoolManager reverts with PolicyForbids(TRANSFER_EXECUTOR_POLICY, 5) and a transfer of 0 AMDc to the PoolManager from another account reverts with PolicyForbids(TRANSFER_RECEIVER_POLICY, 5). Before those calls both transfers from the PoolManager return true. In the client source at v1.5.6, policy/logic/v3.rs encodes type 0 as a block list (lines 20 to 23), update_membership compares the stored admin with the caller (lines 292 to 318), stage_update_admin needs the admin (lines 429 to 450) and finalize_update_admin needs the pending admin (lines 452 to 470). b20_stablecoin/logic/v3.rs transfer_inner checks the executor policy for the caller, the sender policy when the caller differs from the source or the two policy ids differ, and the receiver policy, before move_balance (lines 55 to 88). The scope hashes and the registry address match the constants page of the Base documentation. I did not establish who operates the three admin accounts.",
+   "codeCheck": "take calls currency.transfer(to, amount) with the PoolManager as msg.sender, so the PoolManager is both executor and sender of the B20 transfer (src/PoolManager.sol:291-297, src/types/Currency.sol:60-75). A reverting transfer makes the take revert through the wrapped error (src/types/Currency.sol:82-86). The only other outbound token call in src/ is the transfer in collectProtocolFees (src/ProtocolFees.sol:56), which fails the same way. A payment is a transfer to the PoolManager by the payer between sync and settle (src/PoolManager.sol:279-288, 349-365), so a receiver policy that names the PoolManager stops payments in that token. Nothing in src/ can route around a token that refuses the PoolManager as sender, and all pools and claims share the one balance, so after a block list entry no liquidity provider or claim holder can take OUSD or AMDc out. Swaps and liquidity changes that are closed with claims still run, since mint and burn make no token call (src/PoolManager.sol:322-336).",
+   "corrections": "The actor issuer is right: every step needs the admin account of a policy that the token's default admin bound, and an ordinary account is refused. Balances have moved since the finding was written, to 5,318,720.45 OUSD and 32.74 AMDc at block 61,342,065. For AMDc the sender check is skipped because the executor and sender scopes hold the same policy and the caller is the source, so the revert names the executor scope. The outcome is the same.",
+   "sources": [
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "eth_call of policyId, policyAdmin, pendingPolicyAdmin, isAuthorized and balanceOf, eth_getCode and nonces of the admin accounts, the Unauthorized revert for an ordinary caller, and the eth_simulateV1 run in which a block list entry made by the admin makes transfers from and to the PoolManager revert with PolicyForbids, at block 61,342,065."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/policy/logic/v3.rs",
+     "supports": "Block list type encoding, the admin check on membership updates, and the two step admin transfer that needs the current admin first."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_stablecoin/logic/v3.rs",
+     "supports": "transfer_inner checks executor, sender and receiver policies before move_balance."
+    },
+    {
+     "url": "https://docs.base.org/specifications/b20/reference/constants.md",
+     "supports": "Registry address 0x8453000000000000000000000000000000000002 and the keccak256 values of the six policy scopes."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base-std/main/src/interfaces/IPolicyRegistry.sol",
+     "supports": "Function and error signatures used for the calls: policyAdmin, pendingPolicyAdmin, isAuthorized, updateBlocklist, Unauthorized."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Lead L-484, part one: every code path of the B20 stablecoin and asset logic v3, the factory and the policy registry at v1.5.6 that writes a balance or an allowance, and who may call it.",
+   "agrees": true,
+   "note": "A mistake here would let any account move the 5.3 million OUSD that the PoolManager holds. I read b20_stablecoin/logic/v3.rs, b20_stablecoin/dispatch.rs and b20_factory/logic/v1.rs at v1.5.6. In the logic file balances are written at lines 112 and 116 (move_balance), 135 (burn_inner) and 333 (mint), and allowances at 272 (transfer_from) and 288 (approve). transfer uses the caller as source. transfer_from checks the allowance of the source for the caller before the privileged branch (lines 250 to 258). seize_with_memo and burn_blocked check a token role first, and permit requires the recovered signer to equal the owner (lines 693 to 694). dispatch_with_observer routes every external call with the privileged flag false. The factory routes with true only for the token object of the address it has just computed, after the TokenAlreadyExists check on that address (v1.rs lines 87 to 97 and 203 to 213). On chain at block 61,342,065, from an ordinary account and also with from set to the factory address, transferFrom(PoolManager, caller, 1) on OUSD reverts with InsufficientAllowance and mint, burnBlocked, seizeWithMemo and updatePolicy revert with AccessControlUnauthorizedAccount. allowance(PoolManager, caller), allowance(PoolManager, factory) and nonces(PoolManager) are 0, and src/ contains no approve or permit call to a currency. I did not read b20_asset/dispatch.rs or credit_recipient.rs, so the asset variant part rests on the researcher."
+  },
+  {
+   "check": "Known weakness: the Base block production halts of 25 and 26 June 2026, caused by journal state kept after a rejected transaction. Could an ordinary account use that fault, or one like it, to carry the unlock flag, a delta or a synced currency of the PoolManager into another transaction (assumption A1).",
+   "agrees": true,
+   "note": "A mistake here would break assumption A1 for every pool on Base. The postmortem states that an invalid transaction failed in the block builder without clearing the journal of accessed accounts and slots, that the next transaction was charged different gas, and that other nodes re-executed without the invalid transaction, computed another receipts root and rejected the block. Pull request 3806 of base/base (merged 6 July 2026) adds the discard, and crates/common/evm/src/handler.rs at v1.5.6 has it: catch_error reverts to the first checkpoint and commits for a failed deposit (lines 358 to 384) and calls discard_tx in every other case (line 386). One detail of the cleared text is narrower than the source. The review comment on the pull request says that before the fix execution and database errors also skipped the cleanup, so leftover state was not limited in principle to warm entries of a transaction that failed validation. The conclusion does not change: a block that the builder produces from leftover journal state does not match re-execution on other nodes and cannot become canonical, and the release that runs today discards the journal for all three error classes."
+  },
+  {
+   "check": "Known weakness: op-reth and kona accepted deposit transactions written as a bare RLP body without the 0x7E type byte (fixed by optimism pull request 22778, released in op-reth v2.4.3). Could an ordinary account use it to run a call with a sender or a value that nobody authorised.",
+   "agrees": true,
+   "note": "A mistake here would give any account a forged sender and minted ETH on seven chains, so I read the parts the researcher had left unread. The pull request text limits the bypass to the leading byte gates of derivation. The derivation specification accepts batch data only from transactions whose recovered sender is the batcher address of the system config (derivation.md lines 502 to 510) and drops batches that contain a deposit, identified by the prefix byte (lines 672 to 675), so the gate is passed only by the party that signs batches. The public pool cannot carry a deposit in any encoding: OpPooledTransaction at tag op-reth/v2.9.0-rc.1 has the variants Legacy, Eip2930, Eip1559 and Eip7702 and no deposit variant (rust/op-alloy/crates/consensus/src/transaction/pooled.rs lines 22 to 35). The actor is therefore the operator, as the item says. One open point of the item is now answered: the four referencing pull requests are in base/base, where 4970 was closed in favour of 4972, and 4972 was merged on 8 September 2026 as a port of the fix to Base's transaction, payload and flashblock handling. I did not confirm that v1.5.6 contains that merge commit, and the builds of OP Mainnet, World Chain and Zora remain unmatched."
+  },
+  {
+   "check": "Exits and payouts, special recipients on Base. What the factory, the policy registry, the activation registry, the transaction context precompile, the nonce manager precompile, two created B20 tokens and one B20 shaped address without a token answer to the sixteen call shapes when the PoolManager is the caller of an inner frame.",
+   "agrees": true,
+   "note": "Fourth check, done because it was cheap. I repeated four of the shapes as top level eth_call requests with from set to the PoolManager at block 61,342,065, without a forwarding stub. The factory, the policy registry, the activation registry, TxContext and NonceManager revert on transfer, on balanceOf and on empty calldata, and revert with 0x6fb1b0e9 on empty calldata with 1 wei. An uncreated B20 shaped address (0xb200000000000000000000000000000000001234, eth_getCode empty) reverts on all four shapes, so it does not act as a currency without code. OUSD returns true for a transfer of 0 and a balance for balanceOf and reverts on empty calldata with and without value. This matches the cleared result. In b20_stablecoin/dispatch.rs at v1.5.6 the value check and the is_initialized check precede routing, which explains both reverts."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L1",
+   "question": "Does the Base release v1.5.6 that the endpoint reports contain merge commit 5c7850b02e103645022e1374ea854aab4e5879f1 of base/base pull request 4972, which rejects a deposit body without the 0x7e type byte?",
+   "why": "The cleared item on bare RLP deposits left the Base client unconfirmed. The pull request is merged, and only the link from the merge to the running release is missing. Without the fix the party that signs batches could place an unsigned deposit with a chosen sender.",
+   "priority": "low"
+  }
+ ]
+}

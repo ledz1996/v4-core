@@ -1,0 +1,134 @@
+{
+ "unit": "core-code-audit-walk-a",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "Audit record. I extracted docs/security/audits/TrailOfBits_audit_core.pdf with pdftotext. Printed page 33 holds finding 3 (TOB-UNI4-3) with the short term recommendation of a guard on collectProtocolFees while unlocked and a guard on sync. Printed page 62 says the finding was resolved by a guard on sync and by a ContractUnlocked revert in collectProtocolFees. Printed page 22 lists UNI-ACTION-6 as collectProtocolFees() must not revert on valid input. All three match the finding. Native faces. At one block per network balanceOf(PoolManager) equalled eth_getBalance(PoolManager) on Optimism (block 159,931,394, 239074452633244736221 at 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000), Zora (54,383,865, 149457822462144435, same address), Celo (83,560,817, 6114883734772741596863 at 0x471EcE3750Da237f93B8E339c536989b8978a438) and Polygon (97,837,415, 3251054889383257034207892 at 0x1010). On Arc (32,783,297) the native balance was 2444342522169831679506417 and 0x3600000000000000000000000000000000000000 reported 2444342522169, the floor of that figure divided by 10^12. The OP Stack predeploy specification, the Celo token duality page, the Arc contract address page and the Polygon MRC20 source state the same relation. Controllers. protocolFeeController() is nonzero on Ethereum, Optimism, Base, Arbitrum One, Robinhood Chain, Polygon, BNB Smart Chain and Arc and zero on the other 13 networks, Celo and Zora included. The research script showed only that collect((address,uint256)[]) does not revert for an arbitrary caller. I added a stronger test: one eth_call to the public Multicall3 that reads protocolFeesAccrued(address(0)), calls collect with one entry for address(0) and amount 0, and reads again. On all eight networks the accrued figure went to 0, the native balance of TOKEN_JAR rose by the full amount and the PoolManager balance fell by the same amount (0.3303 ETH on Ethereum, 0.04077 ETH on Optimism, 0.01748 ETH on Base, 0.002973 ETH on Arbitrum One, 0.09271 ETH on Robinhood Chain, 718.99 POL on Polygon, 0.2102 BNB on BNB Smart Chain, 53.69 USDC on Arc). A direct collectProtocolFees from an ordinary account reverted with InvalidCaller (0x48f5c3ed) on all eight. Lock state. sync(address(0)) from an ordinary account outside any unlock returned without revert on all 21 networks, and sync of the real face did so on the five face networks. Walk. I read walk.py and asm.py of the research unit, confirmed that they send eth_call only, checked their selectors against my own keccak, and ran them again from a scratch copy on Optimism (block 159,931,697), Polygon (97,837,305), Arc (32,782,811), Celo (83,560,666) and Zora (54,384,166). With the stub at the controller address and the real face synced, collection of the face id reverted with ProtocolFeeCurrencySynced, collection of address(0) inside the unlock returned the accrued native amount, and the next settle reverted with Panic, on Optimism, Polygon and Arc. The results equal the ones the finding reports. These calls describe the contracts deployed today. Nobody compiled the checkout, so the statements about src rest on reading.",
+   "codeCheck": "sync has no modifier and writes the synced currency and reserves for any caller in any lock state (src/PoolManager.sol:279-288). collectProtocolFees checks the caller, then reverts only when the currency is nonzero and equals the synced currency, and never reads the lock (src/ProtocolFees.sol:48-52). _isUnlocked is declared at src/ProtocolFees.sol:60 and implemented at src/PoolManager.sol:392-394, and a search of src outside src/test finds no call to it. The interface comment still says the function reverts if the contract is unlocked (src/interfaces/IProtocolFees.sol:40) and declares ProtocolFeeCurrencySynced at line 17. The tests expect the source behaviour (test/PoolManager.t.sol:1001-1039) and call sync with no unlock (test/Sync.t.sol:36-41). I traced who can gain. Collection subtracts the amount from protocolFeesAccrued with a checked subtraction and then transfers to the recipient (src/ProtocolFees.sol:54-56). It writes no delta and no transient slot. A token settle credits balanceOfSelf minus the stored reserves with a checked subtraction (src/PoolManager.sol:358-360), so a collection of address(0) between sync(face) and settle lowers the credit of that bracket or reverts it. I looked for the opposite direction, a rise of the face balance that the bracket holder did not pay for, and found none through the PoolManager: a settle with value reverts while any token is synced (line 356), the contract has no receive or fallback function and only settle and settleFor are payable (lines 300-307), a native take lowers the balance and is debited in full (lines 291-297), and the recipient of a collection is the fixed TOKEN_JAR of each controller. The caller of collect therefore gains nothing, and no account other than the holder of the face bracket loses. The stale sync effects in step 7 follow from src/ProtocolFees.sol:49-51 and src/PoolManager.sol:356 as stated.",
+   "corrections": "The evidence for an open collect function was a call that did not revert. The Multicall3 run above shows the payout and should be cited in its place. The finding should say in its impact field that every on-chain test describes the deployed contracts and that the checkout was not compiled. On each tested point the deployed contracts gave the answer that the cited source lines predict. Severity info stands. Low would also fit the scale for the integration hazard, and the ledger already holds the stale sync part as F-071 at low.",
+   "sources": [
+    {
+     "url": "docs/security/audits/TrailOfBits_audit_core.pdf:33",
+     "supports": "Printed pages 33, 62 and 22: finding 3, its recorded fix (guard on sync, ContractUnlocked in collectProtocolFees) and invariant UNI-ACTION-6"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/specs/main/specs/protocol/predeploys.md",
+     "supports": "LegacyERC20ETH at 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000, whose stateful methods revert after Bedrock"
+    },
+    {
+     "url": "https://docs.celo.org/specs/token-duality",
+     "supports": "The CELO token passes balanceOf through to the native balance and transfers through the transfer precompile"
+    },
+    {
+     "url": "https://docs.arc.network/arc/references/contract-addresses",
+     "supports": "USDC at 0x3600000000000000000000000000000000000000 is an ERC-20 interface over the native balance with 6 decimals, and the native unit has 18"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/maticnetwork/contracts/main/contracts/child/MRC20.sol",
+     "supports": "balanceOf returns account.balance and transfer returns false when msg.value differs from the amount (lines 84-95)"
+    },
+    {
+     "url": "eth_call, eth_getBalance and eth_getCode on the rpc URLs of research/network-risk/state/networks.json on 2026-11-23: protocolFeeController(), balanceOf of the five faces against eth_getBalance, sync from an ordinary account, collectProtocolFees from an ordinary account",
+     "supports": "Face equality on five networks, eight controllers, sync without a lock on all 21, InvalidCaller for a direct collection"
+    },
+    {
+     "url": "eth_call to Multicall3 0xcA11bde05977b3631167028862bE2a173976CA11 on the rpc URLs of chain ids 1, 10, 8453, 42161, 4663, 137, 56 and 5042 on 2026-11-23",
+     "supports": "collect from an arbitrary caller moves the whole accrued native fee from the PoolManager to TOKEN_JAR on all eight networks"
+    },
+    {
+     "url": "eth_call with state overrides on the rpc URLs of chain ids 10, 137, 5042, 42220 and 7777777 on 2026-11-23, second run of walk.py of the research unit from a scratch copy",
+     "supports": "The walk results of the finding reproduce at later blocks"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "docs/security/audits/OpenZeppelin_audit_core.pdf page 24, CR-01, reads as the finding says: the modifier on unlock was meant to stop delegate calls for licence reasons, a custom unlock that writes the same lock slot gets around it, and the update says the team added noDelegateCall to all relevant external functions. The report does not list which functions it counts as relevant, so the word absent in the finding is an inference from the test double and not a statement of the report. I tested the present behaviour without a caller contract: an account whose code is the delegation designator 0xef0100 followed by the PoolManager address, placed by state override, was called on Ethereum, Optimism, Base, Unichain, Celo, Arbitrum One, Polygon, BNB Smart Chain, Arc and HyperEVM. On all ten owner() returned zero while the PoolManager's own owner() is nonzero, sync(address(0)) returned without revert, settle() reverted with ManagerLocked (0x54e3ca0d) and initialize reverted with DelegateCallNotAllowed (0x0d89438e). The unguarded functions therefore run on the storage and transient storage of the calling account, and the four pool functions refuse to run there.",
+   "codeCheck": "noDelegateCall appears at src/PoolManager.sol:117, 148, 190 and 259 and nowhere else in the file. unlock, sync, take, settle, settleFor, clear, mint and burn carry no such modifier (lines 104, 279, 291, 300, 305, 310, 322, 332). The guard compares address(this) with an immutable (src/NoDelegateCall.sol:24-26). src/test/ProxyPoolManager.sol carries the modifier at lines 58, 151, 156, 163, 176 and 181, and test/NoDelegateCall.t.sol:63-82 expects the revert from modifyLiquidity, swap and donate only. A search of src outside src/test finds no delegatecall, callcode or staticcall written by hand, and the PoolManager's outbound calls are the unlock callback, the hook call, the native payout, transfer and balanceOf (src/PoolManager.sol:110, src/libraries/Hooks.sol:134, src/types/Currency.sol:48, 73, 94). A delegatecall into the unguarded functions reads the lock, the deltas, the claims, the owner and the fee controller of the calling account, where the controller slot is zero, so collectProtocolFees is closed to every caller there (src/ProtocolFees.sol:48). I found no path from such a call to the balances that the real PoolManager holds.",
+   "corrections": "State that the report names no list of functions. The rest stands. Actor unprivileged is acceptable for an info entry, because the only account exposed is one that chooses to run this code in its own context.",
+   "sources": [
+    {
+     "url": "docs/security/audits/OpenZeppelin_audit_core.pdf:24",
+     "supports": "CR-01 and its update text"
+    },
+    {
+     "url": "eth_call with a state override that places 0xef0100 plus the PoolManager address as code of a test account, on the rpc URLs of chain ids 1, 10, 8453, 130, 42220, 42161, 137, 56, 5042 and 999 on 2026-11-23",
+     "supports": "The delegated account answers owner() with zero, accepts sync, answers settle with ManagerLocked and initialize with DelegateCallNotAllowed"
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "docs/security/audits/OpenZeppelin_audit_core.pdf pages 13 and 14 hold M-03 with the five step scenario and the update Acknowledged, not resolved, with the team's answer that peripheral contracts add slippage protection. I repeated the on-chain test with my own script: an eth_call of initialize from an ordinary account for an unused PoolKey (currency0 zero, an unused currency1, fee 3000, tick spacing 60, no hook) returned ticks 0, 138162, -887272 and 887271 for the prices 2^96, 1000 times 2^96, 4295128739 and 1461446703485210103287273052203988822378723970341 on 20 networks. On Avalanche the public endpoint answered three of the four calls (138162, -887272, 887271) and returned HTTP 429 for the first price on each of three attempts. No source was fetched on who can see pending transactions on each network, and the finding says the same. I did not read the periphery, so the existence of a liquidity path without binding amount bounds is unconfirmed.",
+   "codeCheck": "initialize has no caller check and stores the price argument (src/PoolManager.sol:117-134, src/libraries/Pool.sol:100-107). The pool id is the hash of the five PoolKey words and does not contain the price (src/types/PoolId.sol:11-15), and a second initialize reverts at Pool.sol:101. swap rejects only a zero amount (src/PoolManager.sol:193). With zero liquidity computeSwapStep returns amountIn 0, amountOut 0 and feeAmount 0 and sets the next price to the target (src/libraries/SwapMath.sol:63-106, with getAmount0Delta and getAmount1Delta returning 0 for zero liquidity at src/libraries/SqrtPriceMath.sol:188-252), so the loop at Pool.sol:344-437 walks the price to the limit and the returned delta is zero (Pool.sol:451-462). modifyLiquidity computes both amounts from the stored price (Pool.sol:206-236) and takes no bound from the caller (src/PoolManager.sol:145-184). No statement in src closes the path.",
+   "corrections": "The price moves for free only while the path crosses no tick that brings liquidity into range. Once a crossing adds liquidity (Pool.sol:413-428) the swap costs the usual amounts. The loss needs a provider whose add carries no binding amount bound, and no such path was identified, so the siphon effect is conditional and low is the right level until the lead on the deployed PositionManager is answered. The code path is the same on every network, as the finding says.",
+   "sources": [
+    {
+     "url": "docs/security/audits/OpenZeppelin_audit_core.pdf:13",
+     "supports": "M-03 on pages 13 and 14 and its acknowledged status"
+    },
+    {
+     "url": "eth_call of initialize from 0x7e57000000000000000000000000000000c0ffee on the 21 rpc URLs of research/network-risk/state/networks.json on 2026-11-23",
+     "supports": "Any account can initialize a fresh pool at four chosen prices on 20 networks, and at three of the four on Avalanche where one call was rate limited"
+    }
+   ]
+  },
+  {
+   "findingIndex": 3,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "docs/security/audits/TrailOfBits_audit_core.pdf printed pages 39 and 40 hold finding 6 (TOB-UNI4-6, severity informational, difficulty high) with the four requirements the finding lists, and printed page 62 marks it unresolved by decision of the team. The report itself says the issue does not affect the protocol and concerns third party integrators. The finding claims no chain fact beyond the reference to F-013, which I did not test again.",
+   "codeCheck": "The pool id is keccak256 over 0xa0 bytes of the PoolKey in memory (src/types/PoolId.sol:11-15) and hooks is the fifth word (src/types/PoolKey.sol:11-22). initialize checks tick spacing, currency order and isValidHookAddress and nothing else about the hook (src/PoolManager.sol:119-126). isValidHookAddress reads the low 14 bits and the dynamic fee flag only (src/libraries/Hooks.sol:109-127), so the upper 146 bits of the hook address are free. Pool state is stored under the full 32 byte id (src/PoolManager.sol:93, 151, 194, 262), so two pools with similar ids share nothing in core. The attacker's pool runs the attacker's hook with the powers that finding 4 of this file lists.",
+   "corrections": "",
+   "sources": [
+    {
+     "url": "docs/security/audits/TrailOfBits_audit_core.pdf:39",
+     "supports": "Printed pages 39, 40 and 62: finding 6 and its unresolved status"
+    }
+   ]
+  },
+  {
+   "findingIndex": 4,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "I extracted docs/security/Known_Effects_of_Hook_Permissions.pdf with pdftotext. Page 2 says that before removeLiquidity and after removeLiquidity can cause a revert, implying user funds could be permanently locked and fees never collected. Pages 2 to 4 list the return delta cases with the remark should be checked in a router, the statement that each return delta permission needs its action permission, and the statement that a hook can take the full unspecified amount and cannot take any of the specified amount of an exact output swap. The count of 27 effects matches the note when each bullet is counted once. The finding claims no chain fact of its own.",
+   "codeCheck": "A hook call that fails reverts the action, and so does an answer shorter than 32 bytes or with another selector (src/libraries/Hooks.sol:131-155). The remove hooks run for every liquidityDelta at or below zero (lines 203-204 and 232-243), and modifyLiquidity reaches the pool only between the two hook calls (src/PoolManager.sol:156-178). The only way around them is a call by the hook itself (Hooks.sol:171-175, 217). Return deltas: the caller's delta is the pool delta minus the hook delta in add, remove and swap (Hooks.sol:230, 242, 312), the hook delta is booked to the hook address in the two currencies of the PoolKey (src/PoolManager.sol:181, 224, 381-384), and every subtraction passes through toInt128 (src/types/BalanceDelta.sol:34-46, src/libraries/SafeCast.sol:40-43). I checked the sum in each branch: caller delta plus hook delta equals the pool delta, so a hook and a caller that work together cannot draw more from the PoolManager than their own pool state allows. The specified delta of beforeSwap is bounded only by the sign rule at Hooks.sol:273-279. For an exact input swap it can reduce the amount to zero, and the caller is then charged the full specified amount. For an exact output swap a positive specified delta raises what the pool must deliver, the caller still receives the requested amount and pays for the excess in the unspecified currency, which has no bound. Return delta flags without their action flag are rejected at initialize (Hooks.sol:111-120, src/PoolManager.sol:126). These lines agree with the finding in every step.",
+   "corrections": "",
+   "sources": [
+    {
+     "url": "docs/security/Known_Effects_of_Hook_Permissions.pdf:2",
+     "supports": "Pages 2 to 4: the removal reverts, the return delta effects and the advice to check them in a router"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "OpenZeppelin audit, C-01: an ERC-20 representation of the native currency lets one payment be credited twice, once as msg.value under address(0) and once as a balance increase under the token, which drains native pools (worked case Celo, with Polygon as a network where deltas can be inflated).",
+   "agrees": true,
+   "note": "I read docs/security/audits/OpenZeppelin_audit_core.pdf pages 10 and 11 and traced the five steps against the source. Step 2, a settle with value while the CELO token is synced, reverts at src/PoolManager.sol:356. A native credit is taken from msg.value only when the synced currency is zero (lines 353-354). The synced currency becomes nonzero only in syncCurrencyAndReserves, which writes the reserves in the same call (src/libraries/CurrencyReserves.sol:27-32, src/PoolManager.sol:285-286), so the stale reserves left by sync(address(0)) or by a native settle are never paired with a later currency. While a face stays synced no native credit can be booked, so every inflow inside a face bracket is credited under the face id only, and every native take inside it is debited in full (lines 291-297). I tried the orders take before sync, take inside the bracket, a transfer through the face, and a collection inside the bracket, and none leaves a credit without an equal payment when the face reports the native balance one to one. The second run of the research walk gave the same seven answers with the real face on Celo (block 83,560,666), Polygon (97,837,305), Arc (32,782,811), Optimism (159,931,697) and Zora (54,384,166): NonzeroNativeValue for the settle with value, 0 for the settle that clears the slot, 1000 for the native settle, 0 for the face settle after a new sync. The one residue is the Arc face, which reports the native balance divided by 10^12 and rounded down. A forced native send while that face is synced can gain less than one face unit per bracket. Earlier cycles bounded this below 0.000001 USDC per round and above the gas cost, and I agree with that bound. The clearance describes the source by reading and the deployed contracts by test, and the checkout itself was not compiled."
+  },
+  {
+   "check": "Trail of Bits audit, settlement invariants UNI-SETTLE-1 to UNI-SETTLE-13: a settle never raises what the user is owed beyond the amount paid, the amount paid equals what reached the singleton, and burn, mint and clear move the delta and the claim balance by exactly the stated amount.",
+   "agrees": true,
+   "note": "settle and settleFor reach _settle only, which credits msg.value when nothing is synced or the checked difference balanceOfSelf minus reserves otherwise, then casts with toInt128 (src/PoolManager.sol:300-307, 349-365, src/libraries/SafeCast.sol:56-59). burn books the credit and then calls _burnFrom, which lowers the allowance with a checked subtraction unless the caller is the holder or an operator and then lowers the claim balance with a checked subtraction, so a caller without the right reverts the whole call (src/PoolManager.sol:332-336, src/ERC6909Claims.sol:13-22, src/ERC6909.sol:85-89). mint debits the caller before it writes the claim under currency.toId() (lines 322-329). clear compares the int128 cast of the amount with the stored delta and passes only on equality, so a negative delta can never be cleared (lines 310-319). The unchecked blocks in take, mint and clear cover only the negation of a value already bounded by toInt128, and the additions inside applyDelta and _mint keep their own checked arithmetic (src/libraries/CurrencyDelta.sol:37, src/ERC6909.sol:80). The dependence of UNI-SETTLE-3 on A2 and A3 is stated correctly."
+  },
+  {
+   "check": "Trail of Bits audit, end to end and inter-action invariants UNI-E2E-1 to UNI-E2E-3 and UNI-ACTION-1 to UNI-ACTION-5: no delta is left when the manager locks again, a round trip swap gives no gain, and what is owed to an actor or to the protocol never exceeds the singleton's balance.",
+   "agrees": true,
+   "note": "unlock reverts when the lock is already open, calls the callback, reverts unless the count of nonzero deltas is zero and then closes the lock (src/PoolManager.sol:104-114). The count changes only in _accountDelta, which returns early for a zero delta, decrements when the new value is zero and increments when the old value was zero (lines 368-378), so it cannot underflow and cannot miss a slot. Every function that writes a delta carries onlyWhenUnlocked (lines 147, 189, 258, 291, 300, 305, 310, 322, 332). I read the rounding again: amounts owed round up and amounts paid round down in the signed helpers (src/libraries/SqrtPriceMath.sol:261-288) and in computeSwapStep (src/libraries/SwapMath.sol:63-105), and amountIn plus the fee of a step never exceeds what remains of an exact input (lines 66-82). The protocol share is subtracted from the step fee inside an unchecked block (src/libraries/Pool.sol:385-398). I checked by algebra that the share cannot exceed the fee in the three fee branches of computeSwapStep, because the swap fee is never below the protocol fee (src/libraries/ProtocolFeeLibrary.sol:38-46). Protocol fees accrue per currency from that share only (src/PoolManager.sol:238, src/ProtocolFees.sol:66-70), so the accrued figure is always backed by an amount some caller owes. I found nothing that contradicts the cleared text."
+  },
+  {
+   "check": "Trail of Bits audit, static invariants (appendix E): functions with noSelfCall return nothing, every function that calls a hook is protected against a call by the hook itself, no PoolManager selector equals a hook selector, and only settle and settleFor are payable.",
+   "agrees": true,
+   "note": "I recomputed the selectors with my own keccak. The 33 external functions of PoolManager and its parents (13 in PoolManager, 5 of ProtocolFees with the two getters, owner and transferOwnership, 8 of ERC6909, 3 extsload and 2 exttload overloads) and the 13 outbound signatures (ten IHooks functions, transfer(address,uint256), balanceOf(address), unlockCallback(bytes)) give 46 distinct selectors with no equal pair. settle and settleFor are the only payable functions in src outside src/test and lib/solmate/src/auth/Owned.sol has none, and no receive or fallback function exists (src/PoolManager.sol:300, 305). noSelfCall sits on the five hook wrappers without return value and the three with return values compare msg.sender with the hook first (src/libraries/Hooks.sol:171-175, 178, 187, 200, 217, 253, 293, 320, 330)."
+  }
+ ],
+ "leads": []
+}

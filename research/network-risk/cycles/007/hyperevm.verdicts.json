@@ -1,0 +1,108 @@
+{
+ "unit": "hyperevm",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "plausible",
+   "severity": "medium",
+   "factCheck": "All eight cited sources were fetched or queried again on 2026-11-23 and each one says what the finding states. 1. The HyperCore explorer (POST userDetails to https://rpc.hyperliquid.xyz/explorer) lists 13 actions for 0x4E5319dEb1072B01439EE674db5C321d11fd96F8. One is authorizeAqav2Role with token 0 and role treasury at time 1780434975903, which is 2026-06-02 21:16:15 UTC, in HyperCore block 1,020,511,746. The other twelve are evmRawTx, cDeposit, tokenDelegate, approveAgent and agentSetAbstraction, and none contains the treasury address. The same query for 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00 returns an empty list. 2. The exchange endpoint documentation gives authorizeAqav2Role the fields type, token and role, with role technical or treasury, and no address field. 3. The aligned quote assets page says that the treasury deployer designates a treasury address, that both deployers stake 500k HYPE, that activation of AQAv2 is by validator vote after both authorization transactions, that the linked HyperEVM contract rebalances with the treasury address in a ratio of 9 to 1, and that AQAv2 will be required for quote assets of HIP-4 and validator-operated perp markets. https://hyperliquid.xyz/article/aqav2 names Coinbase as treasury deployer and Circle as technical deployer for USDC. 4. On https://rpc.hyperliquid.xyz/evm the treasury address has no code and account nonce 1,045,655, and the CoreDepositWallet 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24 has code and nonce 2,352,485. eth_getSystemTxsByBlockNumber for block 0x31a309e returns three transactions with r and s equal to 0 and gas price 0: USDC transfer from the CoreDepositWallet to the treasury address, USDC transfer from the treasury address to the CoreDepositWallet, and a coreReceiveWithData call from 0x2000000000000000000000000000000000000000, each with 200,000 gas. USDC balanceOf gives 5,048,861,534.93 for the treasury address and 560,984,616.64 for the CoreDepositWallet, a ratio of 9.0000. 5. I repeated the census of blocks 52,048,026 to 52,052,025 on https://rpc.purroofgroup.com with my own script and got the same counts: 3,179 transactions with gas price 0, of which 1,144 are transfer calls sent in the name of the CoreDepositWallet, 673 in the name of the treasury address, 1,004 from 0x20 system addresses, 336 coreReceiveWithData calls and 22 HYPE credits. None follows a signed transaction and none names the PoolManager as sender, target or argument. 6. On https://rpc.hyperliquid-testnet.xyz/evm the address 0x0b80659a4076e9e93c7dbe0f10675a16a3e5c206 has 2,175 bytes of code and nonce 28,692 at my query, spotMeta lists it as the EVM contract of testnet USDC, and eth_getSystemTxsByBlockNumber 0x34dd397 returns one unsigned transfer call on 0x2b3370ee501b4a559b57d449569354196457d8ab with that contract in the from field, nonce 183 and 200,000 gas. 7. In the archive client, system_tx_to_reth_transaction starts at line 183 of reth_compat.rs and takes the sender from transaction.from when it is present (lines 196 to 198), mod.rs lines 215 to 220 declare the optional from field, and config.rs sets disable_base_fee and disable_eip3607 at lines 330 and 331 under a comment that says to enable them only for system transactions. In the official replay client SystemTx has the fields tx and receipt only (types.rs lines 53 to 56), the sender is the HYPE bridge address for empty input or the system address mapped from the target contract (run.rs lines 223 to 227), and the receipt is asserted equal at line 236. 8. Two checks the finding did not make. An eth_call of USDC.transfer(CoreDepositWallet, 1) with from set to the PoolManager and 200,000 gas returns true on the official node, so the token would carry out such a call. The PoolManager holds 997.75 USDC and its account nonce is 1, so no transaction has been sent in its name since deployment. Not confirmed: which HyperCore record names a treasury address, whether the node accepts an address with code or an address whose owner gave no consent in that role, and whether the record can change without a new vote. The node that decides this is closed source. I found no primary source that contradicts the finding.",
+   "codeCheck": "The code path holds. The PoolManager reads a token balance in two places only, sync at src/PoolManager.sol:285 and _settle at src/PoolManager.sol:359, both through balanceOfSelf (src/types/Currency.sol:90-96). The amounts owed to pools, to claim holders and to the fee controller are counters in storage (pool state behind src/PoolManager.sol:93, src/ERC6909.sol:79-89, src/ProtocolFees.sol:54-56 and 66-70) and no function compares them with a balance. A token transfer that the node executes with the PoolManager as msg.sender runs in the token contract and enters no PoolManager function, so the lock (src/PoolManager.sol:96-99), the delta count check (src/PoolManager.sol:112), the int128 casts and the msg.value guard (src/PoolManager.sol:356) are never reached and cannot stop it. Afterwards take still debits the caller and calls transfer (src/PoolManager.sol:291-297, src/types/Currency.sol:60-75), and when the balance is short the token call fails and the take reverts (src/types/Currency.sol:82-86). The last withdrawals in that currency therefore fail. If the outflow happened between a caller's sync and settle in one transaction, the subtraction at src/PoolManager.sol:360 would revert, which I saw as Panic on the deployed contract when a take followed a sync. System transactions are separate transactions at the top of the block, so that case does not arise. A transfer into the PoolManager by the same rule is credited to nobody, because _settle credits only the rise since a sync in the same transaction (src/PoolManager.sol:358-360). I found no guard that the finding missed.",
+   "corrections": "The actor value operator is right. The documentation ties activation to a validator vote and to two deployers that each stake 500,000 HYPE, and an ordinary account can do neither. Verdict plausible and not confirmed for one reason: step 5 is an inference. The observed facts are that the node sends unsigned transfers in the name of an address that has no HyperCore action and in the name of contracts. Whether it would do so for an address with code in the treasury role, or for the PoolManager, has no source. The evidence field should therefore read inferred for step 5 and primary for steps 1 to 4. Smaller points. The testnet nonce was 28,692 at my query and rises with every system transaction. The effect is better described as loss or freeze for pools of that token than as a siphon by an attacker: the tokens would go to the token's linked contract, and the 9 to 1 rule can also send tokens into the named address, which the PoolManager credits to nobody. The amount exposed today is small, 997.75 USDC in the PoolManager. Severity medium stands: the loss is limited to pools of one token and needs a deliberate act of the validator set. A cheap detector that the mitigations omit is the PoolManager's own account nonce, which is 1 and would rise with the first transaction sent in its name.",
+   "sources": [
+    {
+     "url": "https://rpc.hyperliquid.xyz/explorer",
+     "supports": "userDetails queried 2026-11-23: 13 actions for 0x4E5319dEb1072B01439EE674db5C321d11fd96F8, one authorizeAqav2Role with token 0 and role treasury on 2026-06-02 21:16:15 UTC, none that contains the treasury address; empty list for 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md",
+     "supports": "Treasury deployer designates a treasury address, both deployers stake 500k HYPE, activation by validator vote, 9 to 1 balance rule between treasury address and linked contract, AQAv2 required for HIP-4 and validator-operated perp quote assets"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md",
+     "supports": "authorizeAqav2Role has the fields type, token and role and no address field"
+    },
+    {
+     "url": "https://hyperliquid.xyz/article/aqav2",
+     "supports": "Coinbase is the treasury deployer and Circle the technical deployer of USDC under AQAv2 (read through a search result excerpt)"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm",
+     "supports": "eth_getCode, eth_getTransactionCount, eth_call and eth_getSystemTxsByBlockNumber 0x31a309e on 2026-11-23: treasury address without code and with nonce 1,045,655, unsigned USDC transfers in the name of the treasury address and of the CoreDepositWallet, balances in a ratio of 9.0000, PoolManager nonce 1 and USDC balance 997.75, USDC.transfer with from set to the PoolManager returns true"
+    },
+    {
+     "url": "https://rpc.purroofgroup.com",
+     "supports": "eth_getBlockByNumber for blocks 52,048,026 to 52,052,025: 3,179 system transactions, 1,144 in the name of the CoreDepositWallet and 673 in the name of the treasury address, all ahead of signed transactions, none naming the PoolManager"
+    },
+    {
+     "url": "https://rpc.hyperliquid-testnet.xyz/evm",
+     "supports": "0x0b80659a4076e9e93c7dbe0f10675a16a3e5c206 has 2,175 bytes of code and nonce 28,692; block 0x34dd397 holds an unsigned transfer call with that contract as sender"
+    },
+    {
+     "url": "https://api.hyperliquid-testnet.xyz/info",
+     "supports": "spotMeta lists 0x0b80659a4076e9e93c7dbe0f10675a16a3e5c206 as the EVM contract of testnet USDC"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/types/reth_compat.rs",
+     "supports": "Lines 183 to 207: the sender of a system transaction is taken from the upstream from field when present"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/types/mod.rs",
+     "supports": "Lines 215 to 220: SystemTx has an optional from field"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/evm/config.rs",
+     "supports": "Lines 329 to 331: disable_base_fee and disable_eip3607 are set for every transaction"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hyperliquid-dex/hyper-evm-sync/main/src/run.rs",
+     "supports": "Lines 217 to 238: the official replay client derives the sender of a system transaction from the target contract and asserts receipt equality; lines 122 and 155 to 163: each transaction runs in a newly built Evm with SpecId CANCUN and no authorization list"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hyperliquid-dex/hyper-evm-sync/main/src/types.rs",
+     "supports": "Lines 53 to 56: SystemTx holds tx and receipt only"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bluealloy/revm/v53/crates/revm/src/journaled_state.rs",
+     "supports": "revm 19.2.0, the version pinned by the official replay client: JournaledState::new starts with an empty transient map (line 64) and finalize resets it (line 126)"
+    },
+    {
+     "url": "https://api.hyperliquid.xyz/info",
+     "supports": "userNonFundingLedgerUpdates for 0xd377621a703210ca2b547bc9df51c539c1c9fa68: one credit of 0.0001 HYPE from the bridge address at 1792636116026 and none for the forged log 226 seconds later (used in the spot check of the bridge item)"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Opcode differential on the node that produces blocks: do TSTORE and TLOAD roll back on REVERT, INVALID and out of gas, including a successful inner write under a reverted parent, does TSTORE fail under STATICCALL, and do CALL with value, the stipend, calls to addresses without code, the 63/64 rule, RETURNDATASIZE, MCOPY and PUSH0 behave as on Ethereum?",
+   "agrees": true,
+   "note": "I tested the rollback with the deployed PoolManager as the probe, where the researcher used a stub. One eth_call on https://rpc.hyperliquid.xyz/evm (client string hyperliquid evm Mainnet, block 0x31a5312) ran a stub placed by state override that called the real PoolManager and read the synced currency slot 0x27e0...93b9 through exttload after each step. A frame that calls sync(WHYPE) and then ends in REVERT leaves the slot at 0. A direct sync(WHYPE) sets it. A STATICCALL frame that calls sync(0) sees the inner call fail and the slot keeps WHYPE. A frame that calls sync(0) and then runs INVALID leaves WHYPE in place. A direct sync(0) clears it. The archive endpoint returns the same twelve words. This matches src/libraries/CurrencyReserves.sol:15-32 under Ethereum rules. The boundary between two transactions of one block is still not shown on the block producing node. A second public client supports it: the official replay client builds a new Evm for every transaction with SpecId CANCUN (hyper-evm-sync src/run.rs lines 122 and 155 to 163), and the revm 19.2.0 it pins creates the journal with an empty transient map and resets the map in finalize (https://raw.githubusercontent.com/bluealloy/revm/v53/crates/revm/src/journaled_state.rs lines 61 to 71 and 114 to 133). Its transient map therefore starts empty for each transaction, and it asserts receipt equality for the blocks it replays."
+  },
+  {
+   "check": "Does the deployed PoolManager, run by the official node, enforce the unlock flag, the delta count and the native value guard as src/ states (src/PoolManager.sol:96-99, 104-114, 279-288 and 349-365)?",
+   "agrees": true,
+   "note": "I ran 18 cases of my own through a script running stub against the deployed PoolManager on the official node. A take of 1 wei, a take of 1 unit of USDC, a mint of 1 native claim and a settle with value 1 each revert with CurrencyNotSettled when the delta is left open (src/PoolManager.sol:112). Take then settle with value passes, mint then settle with value passes, and settle with value then clear passes. sync(WHYPE) then settle with value 1 reverts with NonzeroNativeValue, and so does take USDC, sync(USDC), settle with value 1 (src/PoolManager.sol:356). sync(USDC), take 1 USDC, settle reverts with Panic from the subtraction at src/PoolManager.sol:360. A nested unlock reverts with AlreadyUnlocked (src/PoolManager.sol:105). A take of 2^127 reverts with SafeCastOverflow (src/PoolManager.sol:294). A burn of a claim the caller does not hold reverts with Panic (src/ERC6909.sol:86). settle, take and mint outside unlock revert with ManagerLocked (src/PoolManager.sol:96-99). Every answer is what src/ gives."
+  },
+  {
+   "check": "Inherited caller, CoreWriter: a hook or unlock callback, which the PoolManager calls without value, uses DELEGATECALL into the code at 0x3333333333333333333333333333333333333333 so that the RawAction log names the PoolManager as user. Can this make HyperCore act for the PoolManager's account, for example add an API wallet or send its spot balance?",
+   "agrees": true,
+   "note": "The trace is reproduced with the real PoolManager in the path. debug_traceCall on https://rpc.purroofgroup.com: a stub calls unlock, the PoolManager calls unlockCallback without value (src/PoolManager.sol:110), and the stub runs the 544 bytes at 0x3333333333333333333333333333333333333333 by DELEGATECALL. The log has topic 0x8c7f585f...12e3 and names the PoolManager as user, and its emitter is the stub address. The PoolManager itself makes no DELEGATECALL and cannot send sendRawAction calldata: its outgoing calls are an empty value call, transfer, balanceOf, the hook selectors and unlockCallback to the caller (src/types/Currency.sol:48, 73 and 94, src/libraries/Hooks.sol:134, src/PoolManager.sol:110). The documentation says CoreWriter emits a log to be processed by HyperCore as an action and does not state the emitter test, so that link stays inferred, as the item says. The inference is strong because any contract can emit the same log for any user with LOG2, and the emitter test is shown on chain for the bridge log. The stake is also bounded by what the PoolManager's HyperCore account holds, which earlier cycles found to be nothing."
+  },
+  {
+   "check": "Inherited caller, HYPE bridge: a contract called by the PoolManager with value uses DELEGATECALL into the code at 0x2222222222222222222222222222222222222222. The log then reads Received(PoolManager, payout amount) although no HYPE reached the bridge. Does HyperCore credit the PoolManager's account, or anyone, for it?",
+   "agrees": true,
+   "note": "Reproduced both parts. Trace on the archive endpoint with the real PoolManager: take(address(0), stub, 0.001 HYPE) followed by settle with the same value succeeds, the stub runs the 122 bytes at 0x2222222222222222222222222222222222222222 by DELEGATECALL, and the log Received(PoolManager, 0.001 HYPE) is emitted by the stub address while the HYPE stays in the stub. Chain history on the official node: transaction 0x09a92d6340e17b84ebaf767db86ef26f5be4e1ab7b6c4b63920bfe0e3ed32111 in block 49,185,997 (timestamp 1792636342) has value 0 and one log with the Received topic from 0xd4cbc0953d9e291a55e590f0acc1de0c3d05f3f7 for user 0xd377621a703210ca2b547bc9df51c539c1c9fa68 and 0.0001 HYPE. Block 49,185,767 (timestamp 1792636116) holds the real bridge log for the same user and amount. userNonFundingLedgerUpdates on https://api.hyperliquid.xyz/info for that user between 1792600000000 and 1792680000000 returns one entry, a credit of 0.0001 HYPE from the bridge address at 1792636116026. The forged log 226 seconds later produced no credit."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "question": "Which record tells HyperCore the ERC-20 address that AQAv2 system transactions call? For USDC the linked contract in spotMeta is the CoreDepositWallet 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24, an upgradeable proxy, while the unsigned transfers go to the token 0xb88339cb7199b77e23db6e890353e22632ba630f. Read the CoreDepositWallet implementation for a token getter and ask the Hyperliquid team whether the node reads it at run time or stores the address at the vote.",
+   "why": "F-020 depends on two records, the treasury address and the token that is moved out of it. If the node reads the token address from the linked contract, the party that can upgrade that contract chooses which token leaves a recorded treasury address without a new vote. This changes who the privileged actor of F-020 is and does not open a path for an ordinary account.",
+   "priority": "low"
+  }
+ ]
+}

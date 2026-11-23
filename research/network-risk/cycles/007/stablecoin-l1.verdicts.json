@@ -1,0 +1,76 @@
+{
+ "unit": "stablecoin-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "Documentation. https://docs.arc.io/arc/references/evm-differences.md was fetched and states that the blocklist is enforced at runtime, that a value transfer to or from a blocklisted address reverts, and that native USDC (18 decimals) and the ERC-20 interface (6 decimals) share one balance. Client source. native_coin_control.rs on the main branch of circlefin/arc-node accepts blocklist and unBlocklist only when the caller is the native fiat token address, rejects them in a static context and under DELEGATECALL, and leaves isBlocklisted open. native_coin_authority.rs applies the same three checks to transfer, and helpers.rs rejects a call whose target address or bytecode address differs from the precompile address. I could not confirm which release the mainnet validators run. On chain, https://arc.drpc.org, block 32,779,395. USDC.blacklister() returns 0x2a2b7ff330f15f9a8c52af5fec27d775f5138467, an address without code. An eth_call of USDC.blacklist(PoolManager) from an ordinary address reverts with 'Blacklistable: caller is not the blacklister' and the same call from the blacklister address succeeds. isBlocklisted(PoolManager) on 0x1800000000000000000000000000000000000001 and USDC.isBlacklisted(PoolManager) are false today. The mapping entry of the PoolManager at slot 2 of the precompile is 0xf30da4b807686673e814baa3f26eb4aae6ad0277a450e773c1f4ec0603bba7a9 and holds zero. With that entry set to 1 by state override, isBlocklisted(PoolManager) returns true. Simulation with the deployed PoolManager code left in place and a call runner as the caller of unlock. Without the override, take of 1 wei of address(0), take of 1 unit of 0x3600, WETH, EURC and cirBTC, settle with 10^12 wei of value, and settle after a transfer of USDC, WETH and EURC into the PoolManager all succeed. With the override, the takes of address(0), 0x3600 and WETH revert with WrappedError, the takes of EURC and cirBTC succeed, settle with value reverts, USDC.transfer to the PoolManager reverts, WETH.transfer to the PoolManager reverts with 0x27eecc56 carrying the PoolManager address, and the EURC transfer succeeds. The researcher ran the outbound side with a stub in place of the PoolManager code. My run keeps the real code and gives the same result. Can an ordinary account write the list. At block 32,779,905, with a forwarding stub placed at 0x3600 by state override, a direct CALL to blocklist(PoolManager) returns true. The same call sent by DELEGATECALL from a second stub that the 0x3600 stub called reverts with 'Delegate call not allowed', by CALLCODE with 'Not enabled for blocklisting', and inside a STATICCALL with 'State change during static call'. The Native Coin Authority transfer function answers the same shapes the same way. A frame that inherits 0x3600 as caller therefore cannot write the list or move native balance. Balances at block 32,779,440: 2,443,535.66 USDC of native balance, a face reading of 2,443,535,658,538 units, which is the native balance divided by 10^12 and rounded down, and 8.465 bridged WETH. Not confirmed by me: the counts of Initialize logs per currency, which the finding takes from cycle 4, and the source of the WETH token, its adapter and the CrossChainTokenService, none of which is verified on Sourcify. The WETH part rests on the simulated reverts and on the access list.",
+   "codeCheck": "take debits the caller and then calls currency.transfer (src/PoolManager.sol:291-297). For address(0) the transfer is a value call with empty calldata, and a failed call reverts with NativeTransferFailed (src/types/Currency.sol:45-53). For a token it is a call of transfer(to, amount), and a revert in the token reverts the take with ERC20TransferFailed (src/types/Currency.sol:55-86). collectProtocolFees ends in the same transfer (src/ProtocolFees.sol:56). settle credits msg.value when no currency is synced (src/PoolManager.sol:353-354). A value call into a listed PoolManager is rejected by the chain before this code runs. With a token synced, settle credits the rise of balanceOf since sync (src/PoolManager.sol:358-360), and that rise is zero when the token refuses the transfer into the PoolManager. I looked for a path that pays out without the transfer and found none. The other ways to reduce a positive delta are mint (src/PoolManager.sol:322-329) and clear (src/PoolManager.sol:310-319), and neither moves the asset. src/ has no receive or fallback function, the only payable functions are settle and settleFor (src/PoolManager.sol:300-307), and no owner function moves funds (src/ProtocolFees.sol:29-57, lib/solmate/src/auth/Owned.sol:19-43). The int128 casts, the delta count check at src/PoolManager.sol:112 and the synced currency check at src/ProtocolFees.sol:49 do not bear on this path, because the revert happens in the chain's value rule or in the token. sync, swap, modifyLiquidity, mint and burn make no transfer, so positions and claims can still be changed among parties who settle with claims, as the finding says.",
+   "corrections": "actor: issuer. The value in the finding is right. Three points of detail. First, the access list of WETH.transfer from the PoolManager also names the CrossChainTokenService proxy 0x431871229103b780868f8C6BB820cd16ECf942BC with two slots: the EIP-1967 implementation slot, which holds 0xcef229c35cf3b6ba34690295399369412ab9b2b8, and slot 0x86a0e84c7d929f61fb2e716e558792f9ee8d701914df21037b29796118dd8e02, which holds the adapter address 0x3ebe1f103151890346cd7dbcec1c596cc50ef58e. The finding and the L3 profile describe the transfer as a call from the token to the adapter and do not name the service. Every WETH transfer passes through that upgradeable proxy, so whoever controls it is a second party that can stop WETH for the PoolManager without the USDC blacklister. Second, the PoolManager held 8.465 WETH at block 32,779,440. The figure of 9.54 belongs to block 32,769,037. Third, the blacklister address carries no code, so the role is exercised by one signing account today. I could not confirm how that account is held. The severity stays high: the freeze covers about 2.44 million USDC under two currency ids and the WETH pools, it lasts as long as the entry stands, and it needs the token issuer.",
+   "sources": [
+    {
+     "url": "https://docs.arc.io/arc/references/evm-differences.md",
+     "supports": "The blocklist is enforced at runtime, a value transfer to or from a blocklisted address reverts, the two USDC interfaces share one balance, and the minimum base fee is 20 gwei"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_control.rs",
+     "supports": "blocklist and unBlocklist accept only the native fiat token as caller and reject static and delegate calls; isBlocklisted is open"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_authority.rs",
+     "supports": "transfer accepts only the native fiat token as caller, rejects static and delegate calls, and reverts when sender or recipient is blocklisted"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/helpers.rs",
+     "supports": "check_delegatecall rejects a call whose target address or bytecode address is not the precompile address"
+    },
+    {
+     "url": "https://arc.drpc.org",
+     "supports": "eth_call at block 32,779,395 with the deployed PoolManager code and the blocklist entry of the PoolManager set by state override: takes of address(0), 0x3600 and WETH revert, takes of EURC and cirBTC succeed, settle with value and transfers of USDC and WETH into the PoolManager revert. Without the override all succeed"
+    },
+    {
+     "url": "https://arc.drpc.org",
+     "supports": "eth_call at block 32,779,905: blocklist(PoolManager) and Native Coin Authority transfer succeed only as a direct CALL from 0x3600 and revert under DELEGATECALL, CALLCODE and STATICCALL shapes; USDC.blacklist from an ordinary address reverts with 'Blacklistable: caller is not the blacklister'"
+    },
+    {
+     "url": "https://arc.drpc.org",
+     "supports": "eth_createAccessList, eth_getStorageAt and eth_getBalance at block 32,779,440: the WETH transfer touches the CrossChainTokenService proxy and its slot that holds the adapter address; native balance 2,443,535.66 USDC and 8.465 WETH"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Faces angle on Arc, with the moves earlier models left out. One caller, three ids over one balance (address(0) in wei, the token face 0x3600000000000000000000000000000000000000 in units of 10^12 wei, the USDC implementation address 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6), sync before and inside the unlock, settle, take, mint, burn, payment through the face, native value forced in by SELFDESTRUCT, a payout to the PoolManager itself, and collectProtocolFees through the fee adapter that any account can call.",
+   "agrees": true,
+   "note": "I traced the source and did not rely on the deployed bytecode for the code claims. A native credit needs the synced slot to be zero and equals msg.value (src/PoolManager.sol:353-354). With any token id synced, settle with value reverts (src/PoolManager.sol:356). sync writes currency and reserves together (src/libraries/CurrencyReserves.sol:27-32) and sync(address(0)) clears only the currency (src/PoolManager.sol:281-283), so a token credit always measures from the last sync of that id and each inflow is counted in one settle. collectProtocolFees only sends funds out, is blocked when the collected token is the synced one (src/ProtocolFees.sol:49-52), and otherwise lowers the reading, which makes the checked subtraction at src/PoolManager.sol:360 revert or reduces the caller's own credit. The gain from rounding is paid = floor(after / 10^12) minus floor(before / 10^12), which exceeds the forced amount by less than one face unit per settle. On chain at block 32,779,440 the face reading equals the native balance divided by 10^12 and rounded down, the base fee in the header is 20,000,000,000 wei, and the documentation gives 20 gwei as the minimum, so one round costs far more gas than the 10^12 wei it can gain. On the adapter, the verified source fixes the recipient to the immutable TOKEN_JAR. I did not rerun the 4,062,481 state model."
+  },
+  {
+   "check": "Critic gap of cycle 6: the code of the Arc fee adapter and of the jar it pays. Can an ordinary account choose the recipient of a fee collection, receive the fees, or re-enter the PoolManager through the payout while it is unlocked.",
+   "agrees": true,
+   "note": "I fetched both contracts from Sourcify and both are full matches. V4FeeAdapter.collect has no modifier and calls POOL_MANAGER.collectProtocolFees(TOKEN_JAR, p.currency, p.amount), and POOL_MANAGER and TOKEN_JAR are immutables. On chain TOKEN_JAR() is 0xfd39ac616e630e9db03efb2c9a4fe63edb949233, POOL_MANAGER() is the PoolManager, and protocolFeeController() of the PoolManager is the adapter. TokenJar has receive() external payable {} with an empty body and one outflow, release, behind onlyReleaser, and releaser() is 0xe1adf3f130abf616a7ab04aeebf8d0470f6b6a16. The jar held no native balance at block 32,779,440. In the source the amount is bounded by the checked subtraction at src/ProtocolFees.sol:55 and the fee by src/ProtocolFees.sol:37. The caller chooses currency and amount only, so the open function can move accrued fees to the jar at a time of the caller's choosing and nothing else. I did not read the WormholeReleaser or the fee policy."
+  },
+  {
+   "check": "L-264: walk sync, a slot clearing action and settle with the StorageCredits precompile 0x1060000000000000000000000000000000000000 as currency on the deployed PoolManager, and test every way the credit could leave.",
+   "agrees": true,
+   "note": "TIP-1060 in the tempoxyz/tempo repository defines storage credits as per account and non-transferable, minted when an account clears one of its own slots and usable only against that account's later storage creation cost. The interface has balanceOf, modeOf, budgetOf, setMode and setBudget and no transfer function, and every function rejects DELEGATECALL and CALLCODE. On chain at block 50,471,951 (tempo/v1.19.0-697ea97) balanceOf(PoolManager) on the precompile is 12, and transfer with amounts 0 and 1, transferFrom and approve revert with 0xaa4bc69a from the PoolManager address and from an ordinary address. A delta under that id can therefore only be cleared or minted as a claim (src/PoolManager.sol:310-329), and take reverts because the transfer call fails (src/types/Currency.sol:64-86). The dispatcher at the mainnet commit rejects any call to a Tempo precompile whose destination differs from the call target (crates/precompiles/src/lib.rs lines 323 to 329), so a contract that the PoolManager calls cannot reach setMode or setBudget with the PoolManager as inherited caller. I did not rerun the burn inside an unlock."
+  },
+  {
+   "check": "L-197: what the v1.18.2 item EVM call input hardening and the v1.18.4 fix for EVM execution changed, and whether the PoolManager's call and return data sequences depend on it.",
+   "agrees": true,
+   "note": "Partial check. Cargo.toml at commit 697ea97 pins evm2 at revision 66687c18b34d3bdbb899f5eb7605070615c03475, and the mainnet endpoint reports tempo/v1.19.0-697ea97. message.rs at that revision defines MessageInput with a Borrowed variant that stores a byte range and the entry number of the caller frame, as the item says. The precompile provider at the mainnet commit checks has_input_gas and then copies the borrowed input with to_vec before it runs the precompile. The three call patterns named for the PoolManager match the source: disjoint input and output for transfer (src/types/Currency.sol:73), and the caller frame is suspended while the callee reads its input. I did not rerun the 32 case differential and did not compare the v1.18.3 and v1.18.4 tags."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "Who can upgrade the CrossChainTokenService proxy 0x431871229103b780868f8C6BB820cd16ECf942BC on Arc or rewrite its slot 0x86a0e84c7d929f61fb2e716e558792f9ee8d701914df21037b29796118dd8e02, which holds the denylist adapter address that every transfer of the bridged WETH token 0x128cC466B61f542da60c70e3aA11c10e19B84EDB consults, and can the 597 byte adapter 0x3ebe1f103151890346cd7dbcec1c596cc50ef58e be replaced?",
+   "why": "The access list of a WETH transfer from the PoolManager names the service proxy, its implementation 0xcef229c35cf3b6ba34690295399369412ab9b2b8 and that slot. The research file describes the path as token to adapter only. A replaced adapter or implementation that reports the PoolManager as listed stops the 8.47 WETH in 275 pools without any action by the USDC blacklister. This needs an issuer level party and extends the blocklist finding of this cycle.",
+   "priority": "low"
+  }
+ ]
+}

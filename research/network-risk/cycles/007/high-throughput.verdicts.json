@@ -1,0 +1,172 @@
+{
+ "unit": "high-throughput",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "Portal cap, queried by me. eth_call of depositTransaction on the MegaETH portal 0x7f82f57F0Dd546519324392e408b01fcC7D709e8 at L1 block 26,479,791 succeeds for gas limits 300,000, 999,999 and 1,000,000 and reverts with 'L2 message gas must not exceed 1 million' for 1,000,001, 2,000,000, 5,000,000 and 20,000,000. The same call on the OP Mainnet and Base portals succeeds up to 20,000,000. The MegaETH portal reports version 3.15.2 and implementation 0x55400445e384393f9c1be23e7e734e8d44ed9fd9. Storage gas, read by me at tag v1.7.3. external/gas.rs lines 49 to 55 return SSTORE_SET_STORAGE_GAS_BASE times (multiplier minus 1) from REX on, constants.rs line 177 sets the base to 20,000, and lines 141 to 158 take the multiplier as bucket capacity divided by MIN_BUCKET_SIZE. evm/instructions.rs lines 2858 to 2876 charge it only when the original value and the present value of the slot are zero and the new value is nonzero. evm/host.rs lines 607 to 620 skip the scaling only for a transaction stamped exempt, and system/tx.rs lines 129 to 137 give that stamp to the pre-block caller and to mega system transactions; the comment at lines 111 to 128 says a user deposit is never matched. The dual gas model page states the same formula, says the multiplier comes from the parent block, and says both gas kinds are deducted from the gas limit of the transaction. Live check of the formula. eth_estimateGas for a creation that writes 1, 11 and 101 fresh slots returned 119,239, 354,539 and 2,472,240 gas, which is 23,530 gas per extra slot. Storage gas is therefore zero at multiplier 1 on mainnet, as the REX formula gives and the earlier flat 2,000,000 would not. Bucket growth, read by me. The stateless validator 2.1.0 pins mega-evm v1.7.3 and salt revision abf47a4cd786b4686d9837d064ae4554b24d3686. constant.rs, state/hasher.rs and state/state.rs at that revision are byte identical to the main branch files the finding cites. MIN_BUCKET_SIZE is 256, NUM_KV_BUCKETS is 16,711,680, the load factor is 80 percent and the resize multiplier is 2. bucket_id is an AHash with four fixed seeds modulo NUM_KV_BUCKETS plus NUM_META_BUCKETS. shi_upsert rehashes to compute_resize_capacity when used exceeds 80 percent of capacity (state.rs lines 547 to 551 and 1069 to 1075). canonicalize rebuilds only buckets that were resized in the same batch, and I found no automatic contraction; the README lists contraction as manual. Cost, recomputed by me. With 1,000 new entries per block priced at the parent multiplier, seven blocks take a bucket through multipliers 1, 8, 16, 16, 32, 32 and 32 to 64 for 22.6 + 163 + 323 + 323 + 643 + 643 + 643 million gas, 2.76 billion in total, which is 0.00276 ETH at the base fee of 1,000,000 wei that the latest block reports. 6,554 entries is the smallest count above 80 percent of 8,192. One first write at multiplier 64 costs 1,260,000 storage gas and two at multiplier 32 cost 1,240,000. The resource limit page gives 10,000,000,000 gas per transaction, so the same write stays affordable through the sequencer. Raising a slot above that cap needs a multiplier near 500,000, which by the same arithmetic costs on the order of 100,000 ETH, so no ordinary account can close the sequencer route this way. Positions, recounted by me from all 1,315 ModifyLiquidity logs of the PoolManager since block 7,009,653 and from extsload and StateView.getFeeGrowthInside at block 32,663,604. 137 positions hold liquidity and the stored liquidity equals the log sum for all of them. 120 store zero fee growth for both currencies. 36 need a zero to nonzero write on their next update and 29 of them need two. These are the figures of the finding. Not confirmed on chain: that a mainnet bucket has ever grown. The public endpoint gives no bucket capacity, so the growth and its price rest on the specification, on the reference EVM and on the SALT source that the validator pins. The sequencer build is closed source.",
+   "codeCheck": "modifyLiquidity (src/PoolManager.sol:144-184) is not payable, requires the unlocked flag and calls Pool.modifyLiquidity with msg.sender as owner (lines 157-166). Pool.modifyLiquidity reads getFeeGrowthInside and calls Position.update for every call, also with a zero delta (src/libraries/Pool.sol:183-189). Position.update writes feeGrowthInside0LastX128 and feeGrowthInside1LastX128 without a condition (src/libraries/Position.sol:99-101). updateTick copies the global fee growth into a newly initialized tick only when the tick is at or below the current tick (src/libraries/Pool.sol:533-539), and getFeeGrowthInside then returns zero in all three branches for a range whose two ticks were just initialized (src/libraries/Pool.sol:497-510), so such a position stores zero in both slots. After fees accrue in the range the next update is a zero to nonzero write that the owner cannot avoid or split: there is no other function that changes a position, and one SSTORE cannot be divided between transactions. A removal has no other zero to nonzero write inside the PoolManager. updateTick lowers liquidityGross, the bitmap flip clears a bit, clearTick deletes (src/libraries/Pool.sol:159-203), pool liquidity falls (line 226), and the deltas live in transient storage (src/PoolManager.sol:367-378). The storage call stipend of 23,000 in the client applies to the callee of a value carrying inner CALL, and modifyLiquidity cannot be that callee because it rejects value. The slot index of a position follows from the pool id, the owner, the ticks and the salt, which the ModifyLiquidity event publishes (src/PoolManager.sol:175, src/libraries/Position.sol:34-67, src/libraries/StateLibrary.sol:11 and 28). I found no guard in src/ that bears on the cost of a storage write, and none is possible at contract level.",
+   "corrections": "The actor value operator is right and the verdict covers the finding with that actor. An ordinary account can do the preparation, and the preparation alone stops nobody: the owner still leaves through the sequencer for about 0.0000013 ETH more. The freeze needs the sequencer to keep the owner out. The paid queue of F-062 is the only route without the sequencer and its ordering link is unconfirmed. 1. The gas range of removals is that of the window the researcher scanned. Over the whole history I find 207 transactions with a negative liquidity delta. The 186 sent to the PositionManager used 178,687 to 320,170 gas, median 248,037, with at most 836 bytes of calldata. Nine others used 1,167,873 to 3,235,334 gas. They are rebalance calls (selectors 0x07d1774e, 0xfc3fd85e and 0x3d546218) on the vault contract 0xdc41ab847d922fe4375d7d050f518480634ff0e9 and on 0xafc1cbe636c01504eba073f446fc70e084d5c7c6, at blocks 9,168,335 to 13,873,214. The sentence that no removal used more than 1,000,000 gas holds only from block 26,669,668 on. 2. 19 of the 36 exposed positions belong to the PositionManager. 15 belong to 0x5f16b71cc05b146d73e181354b1c8ac89fc4bbc3 and 2 to 0xdc41ab847d922fe4375d7d050f518480634ff0e9, two contracts with the same 20,944 byte code. For those 17 the exit is a function of the vault, its gas was not measured by the finding or by me, and the observed calls that removed their liquidity already exceed the portal cap without any grown bucket. 3. The portal has a second limit the finding does not mention. minimumGasLimit returns 21,000 for 0 bytes, 21,880 for 2 bytes and 65,000 for 100 bytes of calldata, which is 440 gas per byte where the standard portal charges 40. With the cap of 1,000,000 a forced call can carry at most 2,225 bytes of calldata. PositionManager removals fit. 4. The OP Mainnet and Base portals accepted 20,000,000 gas in my simulation; the finding tested 5,000,000. 5. Severity medium stands. Under the scale a freeze that needs the sequencer would be high, as F-001 and F-046 are. Here it reaches only positions with a zero stored fee growth (36 of 137 today), the owner can close the exposure with one update while the sequencer still serves them, the finding puts the PoolManager at about 17,000 dollars (I read a native balance of 2.234 ETH and did not price the tokens), and bucket growth was not observed on mainnet. 6. Evidence: the portal cap, the position counts and the zero storage gas at multiplier 1 are on-chain facts. Bucket growth and its price are specification and source facts.",
+   "sources": [
+    {
+     "url": "rpc https://ethereum-rpc.publicnode.com eth_call depositTransaction, version, systemConfig, resourceConfig, minimumGasLimit and eth_getStorageAt at block 26,479,791 on 2026-11-23",
+     "supports": "MegaETH portal accepts 1,000,000 gas and rejects 1,000,001 with 'L2 message gas must not exceed 1 million'; OP Mainnet and Base portals accept 20,000,000; minimumGasLimit is 21,000 plus 440 per calldata byte; resourceConfig maxResourceLimit 20,000,000"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/external/gas.rs",
+     "supports": "REX storage gas for a new slot is base times (multiplier minus 1), multiplier is bucket capacity divided by MIN_BUCKET_SIZE"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/evm/instructions.rs",
+     "supports": "SSTORE charges storage gas only when original and present value are zero and the new value is nonzero (lines 2858 to 2876)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/evm/host.rs",
+     "supports": "Only a transaction stamped exempt is charged at multiplier 1 (lines 607 to 620)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/system/tx.rs",
+     "supports": "is_system_originated matches the pre-block caller and mega system transactions and never a user deposit (lines 102 to 137)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/constants.rs",
+     "supports": "SSTORE_SET_STORAGE_GAS_BASE 20,000, NEW_ACCOUNT_STORAGE_GAS_BASE 25,000, STORAGE_CALL_STIPEND 23,000, state growth limits 1,000"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/limit/storage_call_stipend.rs",
+     "supports": "The storage stipend is granted to the callee of a value carrying CALL or CALLCODE only"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/stateless-validator/main/Cargo.toml",
+     "supports": "Validator 2.1.0 pins mega-evm v1.7.3 and salt revision abf47a4cd786b4686d9837d064ae4554b24d3686"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/salt/abf47a4cd786b4686d9837d064ae4554b24d3686/salt/src/state/state.rs",
+     "supports": "Insertion above 80 percent load rehashes to a doubled capacity; canonicalize rebuilds only buckets resized in the same batch; file identical to main"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/salt/abf47a4cd786b4686d9837d064ae4554b24d3686/salt/src/constant.rs",
+     "supports": "MIN_BUCKET_SIZE 256, NUM_KV_BUCKETS 16,711,680, load factor 80, resize multiplier 2; file identical to main"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/salt/abf47a4cd786b4686d9837d064ae4554b24d3686/salt/src/state/hasher.rs",
+     "supports": "bucket_id is a fixed seed AHash modulo NUM_KV_BUCKETS plus NUM_META_BUCKETS; file identical to main"
+    },
+    {
+     "url": "https://docs.megaeth.com/spec/megaevm/dual-gas-model.md",
+     "supports": "Storage gas schedule, parent block multiplier, bucket id formula, expansion rule, exemption for system originated transactions only"
+    },
+    {
+     "url": "https://docs.megaeth.com/developer-docs/overview-3/resource-limits.md",
+     "supports": "10,000,000,000 gas per transaction and per block, 200,000,000 compute gas, 1,000 state growth entries per transaction and per block"
+    },
+    {
+     "url": "https://docs.megaeth.com/user-guide/force-inclusion.md",
+     "supports": "depositTransaction on the portal is the documented forced route, with a 12 hour bound and no mention of a gas cap"
+    },
+    {
+     "url": "rpc https://mainnet.megaeth.com/rpc (eth_getLogs, eth_call, eth_getTransactionReceipt, eth_getTransactionByHash, eth_estimateGas, eth_getBlockByNumber) at blocks 32,663,604 to 32,663,945 on 2026-11-23",
+     "supports": "1,315 ModifyLiquidity logs, 137 live positions, 120 with zero stored fee growth, 36 exposed and 29 needing two writes; gas and calldata size of 207 removal transactions; 23,530 gas per fresh slot; base fee 1,000,000 wei"
+    },
+    {
+     "url": "https://api.openchain.xyz/signature-database/v1/lookup?function=0x07d1774e&filter=true",
+     "supports": "Selector 0x07d1774e is rebalanceSwap; the same service names 0xfc3fd85e as rebalance and 0x3d546218 as executeRebalance"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "plausible",
+   "severity": "low",
+   "factCheck": "Confirmed by my own reading. block/limit.rs at tag v1.7.3 lines 880 to 890 return StateGrowthLimit for every candidate once block_state_growth_used has reached the block limit, and constants.rs lines 206 and 211 set the transaction and block limits to 1,000. The resource limits page says the first transaction that reaches a block level limit is included, later candidates are skipped, and a skipped transaction may be reconsidered in a later block. block/executor.rs line 593 carries the comment that a rejected transaction is typically dropped from the block and put back in the pool. Ordering. In the 60 blocks 32,662,355 to 32,662,414 the header field miniBlockCount is 100 in 51 blocks and 99 in 9. After removing deposits and the transactions of 0xa887dcb9d5f39ef79272801d05abdf707cfbbd1d, 194 of 845 neighbouring pairs from different senders have the later one paying the higher priority fee, and 55 of the 60 blocks hold such a pair. Blocks are not sorted by fee. The mini-block page says the sequencer executes continuously, seals a mini-block about every 10 ms and signs every header. I did not repeat the WebSocket capture, so the order inside one mini-block and the silence of the pending subscription rest on the researcher's capture. L1 route. The portal accepts 1,000,000 gas and rejects 1,000,001 (my eth_call at L1 block 26,479,791). resourceConfig on SystemConfig 0x1ed92e1bc9a2735216540eddd0191144681cb77e has maxResourceLimit 20,000,000, and minimumGasLimit(0) is 21,000, so at most 952 deposits fit in one L1 block. evm/execution.rs lines 883 to 918 record one state growth entry for a deposit whose sender account is empty, before the gas test at lines 921 to 941. I did not trace whether the block counter keeps that entry when the deposit then fails. The FAQ gives 500 pending transactions per account and says the pool cannot be inspected. Unconfirmed link, unchanged since cycle 4: what the sequencer's pool does with a skipped transaction and with later arrivals. No source states it, the payload builder is closed, and no block with a full state budget was observed. The delay by the length of a queue is an inference.",
+   "codeCheck": "Every exit is a transaction that reaches unlock and then modifyLiquidity, take or burn (src/PoolManager.sol:104-114, 144-184, 291-297, 332-336). No function pays out without a transaction on the chain, and nothing in src/ reads a block field, so a delay changes no accounting and no position. The finding needs nothing else from the code. Step 5 depends on the first finding of the file, whose code path I read: Position.update writes both fee growth slots on every update (src/libraries/Position.sol:99-101).",
+   "corrections": "The actor value unprivileged is right for the confirmed part: any account can send one transaction that closes the rest of its one second block, as F-042 records. The queue that the title describes stays unconfirmed, and the title now states the condition. Severity low stands; medium would fit if the pool keeps skipped transactions ahead of later arrivals. 1. Step 4 uses the portal minimum of 21,000 gas. That figure is for a deposit without calldata. The portal charges 440 gas per calldata byte on top (minimumGasLimit(100) is 65,000), which does not change the bound of 952. 2. Step 5 combines this finding with the first one. For a position whose slot was prepared, the delay lasts as long as the sender pays about 1.95 ETH per day and the ordering link holds, against the roughly 17,000 dollars that the first finding gives for the whole PoolManager. That is a paid delay and I do not count it as a confirmed freeze. 3. The mini-block facts in step 2 are confirmed at block level only by my sample; the pair count inside mini-blocks is the researcher's.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/block/limit.rs",
+     "supports": "pre_execution_check rejects every candidate once the block state growth counter has reached the limit (lines 880 to 890)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/block/executor.rs",
+     "supports": "Comment at line 593: a rejected transaction is typically dropped from the block and put back in the pool"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/evm/execution.rs",
+     "supports": "A deposit from an empty sender records one state growth entry before the final gas test (lines 883 to 941)"
+    },
+    {
+     "url": "https://docs.megaeth.com/spec/megaevm/resource-limits.md",
+     "supports": "First transaction to reach a block level limit is included, later candidates are skipped and may be reconsidered in a later block"
+    },
+    {
+     "url": "https://docs.megaeth.com/mini-block.md",
+     "supports": "Continuous execution, a mini-block about every 10 ms, signed headers"
+    },
+    {
+     "url": "https://docs.megaeth.com/developer-docs/faq.md",
+     "supports": "500 pending transactions per account and no way to inspect the pool"
+    },
+    {
+     "url": "rpc https://mainnet.megaeth.com/rpc eth_getBlockByNumber with transactions for blocks 32,662,355 to 32,662,414 on 2026-11-23",
+     "supports": "miniBlockCount 99 or 100, 194 of 845 neighbouring pairs with the higher priority fee second, base fee 1,000,000 wei"
+    },
+    {
+     "url": "rpc https://ethereum-rpc.publicnode.com eth_call depositTransaction, version, systemConfig, resourceConfig, minimumGasLimit and eth_getStorageAt at block 26,479,791 on 2026-11-23",
+     "supports": "Deposit gas capped at 1,000,000, 20,000,000 per L1 block, minimumGasLimit 21,000 plus 440 per calldata byte"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Inherited caller on Monad. From a frame that the PoolManager called (unlock callback, hook, recipient of a native take), can DELEGATECALL, CALLCODE or STATICCALL to the staking precompile 0x1000 or the reserve balance precompile 0x1001 act for the PoolManager or use a value that nobody moved? This is the shape of the Spearbit finding of 2025.",
+   "agrees": true,
+   "note": "I read monad_precompiles.cpp on the main branch and at tag v0.16.5, the release mainnet runs. Both return a rejected result when the message kind is anything other than a plain call or any flag is set, before the selector is read, and both pass msg.sender and msg.value of the real call to the method (main lines 43 to 59; the tag differs in type names and revision gates only). On chain at blocks 124,797,935 to 124,799,458 I placed a forwarding stub by state override and called it with from set to the PoolManager 0x188d586ddcf52439676ca21a244753fa19f9ea8e, with 0 and with 3 MON. DELEGATECALL, CALLCODE and STATICCALL of getEpoch, delegate(1), claimRewards(1), compound(1), undelegate(1,1,0), withdraw(1,0), externalReward(1) and empty calldata to 0x1000, and of dippedIntoReserve and empty calldata to 0x1001, all failed with empty return data. A plain CALL of getEpoch and of delegate(1) succeeded, and a plain CALL with value and empty calldata failed, so a native take that names 0x1000 reverts at src/types/Currency.sol:45-53. With the stub at the PoolManager address itself DELEGATECALL, CALLCODE and STATICCALL of delegate(1) failed and CALL succeeded. getDelegator(1, PoolManager) reads zero."
+  },
+  {
+   "check": "Inherited caller on MegaETH. From a frame that the PoolManager called, do the natively implemented behaviours (Oracle sendHint, KeylessDeploy, MegaAccessControl, MegaLimitControl) act on the PoolManager when reached by DELEGATECALL, CALLCODE or STATICCALL, and does a switch set by a callee outlive the callee?",
+   "agrees": true,
+   "note": "system/intercept.rs at tag v1.7.3 compares call_inputs.target_address with the system contract address in each interceptor (lines 185, 305, 430 and 497), and the KeylessDeploy interceptor returns early inside a sandbox or at any depth other than zero (lines 301 to 303). On chain at block 32,663,945, from a stub called with from set to the PoolManager 0xacb7e78fa05d562e0a5d3089ec896d57d057d38e, DELEGATECALL and CALLCODE of disableVolatileDataAccess, isVolatileDataAccessDisabled and remainingComputeGas reverted with the selector 0x1894f076 of NotIntercepted. CALL and STATICCALL of the same functions succeeded and act on the calling frame. All four kinds failed for keylessDeploy and for empty calldata to KeylessDeploy and to the Oracle; my keylessDeploy probe returned empty revert data where the item reports NotIntercepted, which I put down to my malformed argument. I did not repeat the test that the switch ends when the frame that set it returns."
+  },
+  {
+   "check": "Transaction types and execution contexts of both networks against unlock, sync, settle and take: who is msg.sender, what is msg.value, and what does transient storage hold. Monad: types 0, 1, 2 and 4 and the staking system transaction. MegaETH: legacy, EIP-2930, EIP-1559, EIP-7702, deposit, mega system transaction, pre-block calls and the KeylessDeploy sandbox.",
+   "agrees": true,
+   "note": "Checked in part. The Monad transactions page lists types 0, 1, 2 and 4 as supported and type 3 as unsupported. On MegaETH, system/tx.rs at tag v1.7.3 restricts a mega system transaction to a legacy transaction from the system address to the whitelist, which holds the Oracle only (lines 22 to 25 and 63 to 78), and a user deposit carries a source hash it cannot choose. The sandbox starts only at depth zero (system/intercept.rs lines 301 to 303), when the PoolManager has no transient state. In 60 MegaETH blocks I saw types 0x7e, 0x0 and 0x2 only. In the source, the lock and the synced currency are transient, and deltas and claims are booked to msg.sender (src/PoolManager.sol:104-114, 291-297, 322-336, 349-378), so the walk depends only on who the sender of the one top level call is. I did not repeat the ten step walk with an EIP-7702 delegated caller on the deployed PoolManagers, and I did not read the Monad staking system transaction."
+  },
+  {
+   "check": "Does a liquidity removal fit in the 1,000,000 gas that the portal allows a forced transaction when no bucket has been grown?",
+   "agrees": false,
+   "note": "The answer holds for the PositionManager and is not shown for the other owners. All 186 PositionManager removals since block 7,009,653 used 178,687 to 320,170 gas with at most 836 bytes of calldata, which also fits the portal minimum of 21,000 plus 440 gas per byte. 36 of the 137 live positions belong to other contracts. Every transaction that removed liquidity of the vault 0xdc41ab847d922fe4375d7d050f518480634ff0e9 used 1,167,873 to 3,235,334 gas (nine rebalance calls at blocks 9,168,335 to 13,873,214, outside the window the item scanned). The contract 0x5f16b71cc05b146d73e181354b1c8ac89fc4bbc3 has the same code, holds 19 live positions and has never removed one. Whether a holder of those vaults has a withdrawal call that fits in 1,000,000 gas and 2,225 bytes of calldata is unknown. The sentence that the hazard arises only from grown buckets is therefore unproven for 21 positions. The consequence stays within the operator case of F-017: it matters only when the sequencer refuses the transaction."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "question": "Which function lets a depositor of the vault contracts 0x5f16b71cc05b146d73e181354b1c8ac89fc4bbc3 and 0xdc41ab847d922fe4375d7d050f518480634ff0e9 (same 20,944 byte code, 21 live positions in the MegaETH PoolManager) withdraw, and does eth_estimateGas for that call from a real depositor stay under 1,000,000 gas with calldata under 2,225 bytes?",
+   "why": "A cleared item of this cycle says a removal fits in a forced transaction when no bucket has grown. That was measured for the PositionManager only. Every call that removed liquidity of 0xdc41ab847d922fe4375d7d050f518480634ff0e9 used 1.17 to 3.24 million gas. If the withdrawal call is of the same size, depositors of these vaults have no L1 exit today and the 12 hour bound of F-017 does not apply to them. The actor would be operator, since the sequencer route works.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "question": "The MegaETH portal requires a gas limit of at least 21,000 plus 440 per calldata byte and at most 1,000,000, so a forced call carries at most 2,225 bytes of calldata. Which exits need more: a PositionManager call that closes several positions, a call through a Safe or another smart account that owns a position, a Universal Router path, a claim burn through a wrapper?",
+   "why": "The cap on calldata follows from two portal checks that the documentation does not state, and earlier cycles assumed a forced budget of 20,000,000 gas. An owner whose only way to act is a long call has no forced route. This also needs the sequencer to refuse the owner.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "question": "evm/execution.rs lines 883 to 918 at tag v1.7.3 add new account storage gas of 25,000 times (multiplier minus 1) to the intrinsic gas of a deposit whose sender account is empty. Can any account grow the SALT bucket of a chosen address so that every forced transaction from that address fails the intrinsic gas test at the 1,000,000 cap, and do holders of positions or claims exist whose MegaETH account is empty (received by transfer, never funded)?",
+   "why": "At multiplier 64 the charge is 1,575,000 gas. This would close the forced route for a whole sender, where the first finding closes it for one position. It reaches only accounts with nonce zero, no balance and no code, and again needs the sequencer to refuse the owner.",
+   "priority": "low"
+  }
+ ]
+}

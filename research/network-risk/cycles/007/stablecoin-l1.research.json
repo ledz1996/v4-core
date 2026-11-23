@@ -1,0 +1,377 @@
+{
+ "unit": "stablecoin-l1",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 4217,
+   "lens": "L1",
+   "summary": "The two unexplained release notes of November 2026 are now identified from the tagged source. The mainnet node still reports tempo/v1.19.0-697ea97, and the interpreter revision has not changed since v1.18.3. A differential of 32 nested call cases gave byte identical results on Tempo and on Arc.",
+   "deltas": [
+    {
+     "delta": "Release v1.17.0 executed with revm 43.0.3. Release v1.18.2 moved to evm2 at revision a29a283f with a patch revision fc6acade, which the manifest describes as the perf-call branch. The difference between the two revisions in crates/evm2/src/evm/mod.rs makes the input of a call a range of the caller frame's memory in place of a copy (message.input.make_owned before inspector hooks, interp_ref.lend_memory when a frame starts). This is the item the release notes call EVM call input hardening.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/refs/tags/tempo/v1.18.2/Cargo.toml and https://raw.githubusercontent.com/alloy-rs/evm2/fc6acadec5972f0cff0a104a0c6249d8ac5af14d/crates/evm2/src/evm/mod.rs compared with revision a29a283f6cd4bc65e44f5813de5e9f43553c5fda",
+     "relevance": "low"
+    },
+    {
+     "delta": "At the mainnet revision 66687c18 the borrowed input is stored as a byte range plus the entry number of the caller frame and is resolved through the caller's memory when read (MessageInput, crates/evm2/src/interpreter/message.rs lines 209 to 313, and message_input in evm/mod.rs). A child frame that grows its own memory therefore cannot move the bytes it reads as calldata.",
+     "source": "https://raw.githubusercontent.com/alloy-rs/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/evm2/src/interpreter/message.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "Releases v1.18.3, v1.18.4 and v1.19.0 pin the same evm2 revision 66687c18, and Cargo.toml and Cargo.lock of v1.18.3 and v1.18.4 differ only in the version number. Of 147 modules of crates/evm, crates/precompiles, crates/primitives, crates/transaction-pool, crates/payload/builder, crates/hardfork and crates/chainspec, two differ between the tags. crates/precompiles/src/lib.rs gains has_input_gas, and the precompile provider now returns an out of gas halt when the remaining gas does not cover the input cost, before it copies the borrowed input out of the caller's memory. crates/evm/src/instructions.rs applies the same check in the instruction that runs the T14 account marker. This is the fix for EVM execution of v1.18.4. For the PoolManager it means a call to a TIP-20 precompile with 36 or 68 bytes of input fails only when the gas left is below the input cost, a state in which the call could not complete anyway.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/refs/tags/tempo/v1.18.3/crates/precompiles/src/lib.rs compared with https://raw.githubusercontent.com/tempoxyz/tempo/refs/tags/tempo/v1.18.4/crates/precompiles/src/lib.rs, and crates/evm/src/instructions.rs at the same two tags",
+     "relevance": "low"
+    },
+    {
+     "delta": "Differential for the borrowed input: three override contracts (a top frame, a middle frame that calls on with input and output on one range, and an echo frame that grows its memory to 64 kB before it copies its calldata), 8 input lengths from 1 to 1,000 bytes and 4 output offsets (same range, shifted by 16 and by 32 bytes, disjoint), followed by a STATICCALL on the same range after the memory was rewritten. All 32 results of 24,576 bytes each are identical on the Tempo endpoint (evm2) and on an Arc endpoint (revm 38).",
+     "source": "eth_call with state override code via https://rpc.mainnet.tempo.xyz and https://arc.drpc.org on 23 November 2026 (research/network-risk/cycles/007/stablecoin-l1.work/t5_alias.py)",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4217,
+   "lens": "L2",
+   "summary": "A search of 351 Rust modules of the node at the mainnet commit found no use of the evm2 functions that start a transaction inside a running one. Transient storage on Tempo keeps one lifetime per transaction as earlier cycles recorded.",
+   "deltas": [
+    {
+     "delta": "I downloaded every module reachable through mod declarations from the 13 crates crates/evm, crates/precompiles, crates/node, crates/payload/builder, crates/transaction-pool, crates/primitives, crates/contracts, crates/ext, crates/chainspec, crates/hardfork, crates/alloy, crates/consensus and bin/tempo at commit 697ea97 (351 files). committed_copy and call_tx do not occur. transact occurs in test modules and in the payload builder's prewarming worker, which runs pool transactions on its own EVM instance and detaches the result. system_call occurs in the block executor and in genesis. set_initial_call_depth occurs only around execute_batch in the transaction handler (handler.rs lines 1696 to 1709). No precompile and no opcode handler calls any of them.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler.rs, https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/payload/builder/src/prewarming.rs and the other 349 files under https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4217,
+   "lens": "L3",
+   "summary": "The PoolManager holds 31 TIP-20 precompile tokens and 42 ordinary token contracts. All 31 TIP-20 tokens are unpaused, 30 of them authorise the PoolManager under their transfer policy and move one unit when it sends, and the one exception is the token earlier cycles reported. No pooled currency on Tempo shares a balance with another.",
+   "deltas": [
+    {
+     "delta": "Balances at block 50,461,100: 412,798 OUSD, 49,998 BRLA, 41,691 USDC.e, 19,911 pathUSD, 2,858 USDT0, 125 stcUSD, 49 syrupUSDC and dust of 24 further TIP-20 tokens. paused() is false for all 31. transferPolicyId is 1 for 23 tokens, 2 for pathUSD and OUSD, 3 for USDT0, 21, 554, 580 and 607 for EURAU, sUSDe, USDY and jEUR, and 0 for GABAGOOL. isAuthorized(policy, PoolManager) is true for every token except GABAGOOL, and a transfer of one unit from the PoolManager succeeds for every token except GABAGOOL.",
+     "source": "eth_call paused(), transferPolicyId(), isAuthorized(uint64,address) on 0x403c000000000000000000000000000000000000 and transfer with from set to the PoolManager via https://rpc.mainnet.tempo.xyz at block 50,461,100 (research/network-risk/cycles/007/stablecoin-l1.work/t4_tip20.py)",
+     "relevance": "low"
+    },
+    {
+     "delta": "Coupling test at block 50,461,695: a measuring stub at the PoolManager address moved one third of its balance of each of OUSD, USDC.e, pathUSD, BRLA, USDT0, ENSH, stcUSD, syrupUSDC and cbBTC in turn, and balanceOf(PoolManager) of all 73 other addresses (the 72 other pool currencies and the StorageCredits precompile) was read before and after. No other reading changed in any of the 9 runs.",
+     "source": "eth_call with state override via https://rpc.mainnet.tempo.xyz at block 50,461,695 (research/network-risk/cycles/007/stablecoin-l1.work/f1_coupling.py)",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4217,
+   "lens": "L4",
+   "summary": "The storage credit counter was walked as a currency on chain and yields only a claim that cannot be paid out. T14 activates on the Moderato testnet on 24 November 2026 and on mainnet on 8 December 2026, and a simulation with a block time after the mainnet activation shows the ConfigurableAccount precompile rejecting every call shape the PoolManager can produce.",
+   "deltas": [
+    {
+     "delta": "StorageCredits.balanceOf(PoolManager) was 13 at block 50,460,341. Inside one transaction the reading rose to 14 directly after a burn of ERC-6909 claims cleared one PoolManager slot, before the transaction ended. A sync of 0x1060000000000000000000000000000000000000 before the burn and a settle after it credited 1 unit under that id.",
+     "source": "eth_call with state override via https://rpc.mainnet.tempo.xyz at block 50,460,341 (research/network-risk/cycles/007/stablecoin-l1.work/t1_credits.py)",
+     "relevance": "low"
+    },
+    {
+     "delta": "The release notes of v1.19.0 give the T14 activation as 24 November 2026 15:00 UTC (timestamp 1795532400) on Moderato and 8 December 2026 15:00 UTC (1796742000) on mainnet. Both the mainnet and the Moderato endpoints report tempo/v1.19.0-697ea97 and return no code at 0xAACC000000000000000000000000000000000000 today.",
+     "source": "https://tempo.com/developers/docs/changelog.md, web3_clientVersion and eth_getCode via https://rpc.mainnet.tempo.xyz and https://rpc.moderato.tempo.xyz on 23 November 2026",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_simulateV1 accepts a block time override. With time set to 1796742600 the 15 call shapes sent from the PoolManager address to 0xAACC000000000000000000000000000000000000 (empty calldata, transfer of 0 and 1, balanceOf, unlockCallback and the ten hook selectors) all revert, where the same calls succeed with empty data at the current time. An address that carries the single byte 0xef as code without a registered configuration fails every shape with OpcodeNotFound at both times.",
+     "source": "eth_simulateV1 with blockOverrides and stateOverrides via https://rpc.mainnet.tempo.xyz on 23 November 2026 (research/network-risk/cycles/007/stablecoin-l1.work/t2_t14.py)",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L1",
+   "summary": "Native value can reach the Arc PoolManager without a call to settle: a contract that self destructs with the PoolManager as beneficiary delivers its balance. This closes the one fact the earlier clearances of the 12 digit truncation left open.",
+   "deltas": [
+    {
+     "delta": "In a simulation at block 32,767,874 a 22 byte account whose code is PUSH20 PoolManager, SELFDESTRUCT and whose balance is 752,591,764,406 wei was called inside an unlock. The native balance of the PoolManager rose by that amount and USDC.balanceOf(PoolManager) rose by one unit. Arc's documentation states that SELFDESTRUCT follows EIP-6780 with the native value rules and reverts only when the source or the beneficiary is blocklisted or the beneficiary is the contract itself.",
+     "source": "eth_call with state overrides via https://arc.drpc.org at block 32,767,874 (research/network-risk/cycles/007/stablecoin-l1.work/a1_faces.py) and https://docs.arc.io/arc/references/evm-differences.md",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L2",
+   "summary": "Nothing new on the state model. Three public endpoints serve eth_simulateV1 for Arc, which keeps state between the calls of one simulated block, and none of nine endpoints tried serves debug_traceCall.",
+   "deltas": [
+    {
+     "delta": "eth_simulateV1 is served by https://arc.drpc.org, https://arc-rpc.publicnode.com and https://5042.rpc.thirdweb.com. eth_createAccessList is served by https://arc.drpc.org and https://arc.gateway.tenderly.co. debug_traceCall, trace_call and tenderly_simulateTransaction were refused by https://rpc.mainnet.arc.io, https://arc.gateway.tenderly.co (HTTP 429 on these methods), https://arc.drpc.org, https://5042.rpc.thirdweb.com and https://arc-rpc.publicnode.com.",
+     "source": "JSON-RPC probes on 23 November 2026 against the endpoints named",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L3",
+   "summary": "The four pooled tokens with value are native USDC under two ids, EURC, cirBTC and bridged WETH. A transfer of each touches only balances, a pause flag and proxy slots, so none meters the PoolManager. The bridged WETH token asks the USDC blocklist on every transfer, which ties its availability to the USDC blacklister. Fee collection through the open adapter is one more way to move the native balance across a face unit boundary, and the gain it allows stays below one face unit per settle.",
+   "deltas": [
+    {
+     "delta": "Balances of the PoolManager at block 32,769,037: 2442363116012213626600956 wei of native USDC, 22,807.6 EURC, 1.1267 cirBTC and 9.5449 bridged WETH. protocolFeesAccrued is 53.14 USDC for address(0), 82.01 USDC for 0x3600, 3.74 EURC and 0.004 WETH. The fee jar holds no native balance, so no native fee has been collected and left there.",
+     "source": "eth_getBalance and eth_call via https://arc.drpc.org at blocks 32,767,874 to 32,769,037",
+     "relevance": "low"
+    },
+    {
+     "delta": "Bridged WETH at 0x128cC466B61f542da60c70e3aA11c10e19B84EDB is a proxy over an unverified implementation at 0xdc0518fa6940ecc05dbe5988a93c5a6e43fec52e with OpenZeppelin namespaced storage. Its service() is the CrossChainTokenService 0x431871229103b780868f8C6BB820cd16ECf942BC, and owner and pauser are 0x173d00f7e8702d176628963fbd4e1bcc18b29f94. On every transfer it calls isDenylisted(address) on a 597 byte adapter at 0x3ebe1f103151890346cd7dbcec1c596cc50ef58e, which reads the USDC blocklist through 0x3600000000000000000000000000000000000000 and the Native Coin Control precompile. A transfer from the PoolManager to the blocklisted USDC address reverts with AccountDenylisted(address) (0x27eecc56).",
+     "source": "eth_createAccessList, eth_getCode, eth_getStorageAt and eth_call via https://arc.drpc.org at block 32,767,960 (research/network-risk/cycles/007/stablecoin-l1.work/a2_access.py)",
+     "relevance": "high"
+    },
+    {
+     "delta": "Storage slots touched by a transfer out of the PoolManager, for amounts of 1, the whole balance and one third to a second recipient. USDC: slot 1 (pauser and pause flag), the proxy admin and implementation slots, the implementation code and the Native Coin Authority precompile. EURC and cirBTC: slot 1, the two proxy slots and the entries of the mapping at slot 9 for the PoolManager and the recipient. WETH: the ERC20 namespace balances of the PoolManager and the recipient, the Pausable namespace flag, one configuration slot that holds the adapter address and the decimals, and one slot at 0x3dd25e0047d6d00b4d8443336d6cde00c8d01c381664a6499f183b835193c160 that holds zero, is read for every sender and recipient tried, and that I could not name.",
+     "source": "eth_createAccessList and eth_getStorageAt via https://arc.drpc.org at block 32,767,960 (research/network-risk/cycles/007/stablecoin-l1.work/a2_access.py)",
+     "relevance": "low"
+    },
+    {
+     "delta": "Coupling test at block 32,769,037 with 125 other addresses read in each run (the 119 most used pool currencies, USYC, the implementation addresses behind USDC, behind EURC and cirBTC and behind WETH, and the three EntryPoints): moving one third of the token face of USDC changes the native balance and the reading at the USDC implementation address 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6 and nothing else. Moving EURC, cirBTC or WETH changes no other reading.",
+     "source": "eth_call with state override via https://arc.drpc.org at block 32,769,037 (research/network-risk/cycles/007/stablecoin-l1.work/f1_coupling.py)",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L4",
+   "summary": "The protocol fee controller is a verified V4FeeAdapter whose collect function has no caller check and pays an immutable TokenJar, and the jar releases only to a governance controlled releaser. The Denylist system contract takes entries only from accounts its owner has named as denylisters.",
+   "deltas": [
+    {
+     "delta": "V4FeeAdapter at 0x2f2bd3f43880b9644211f16d861b0672aab23782: collect(CollectParams[]) is external without a modifier and calls POOL_MANAGER.collectProtocolFees(TOKEN_JAR, currency, amount) for each entry. TOKEN_JAR and POOL_MANAGER are immutables. triggerFeeUpdate and batchTriggerFeeUpdate are open and push the fee that the pool override or the policy gives. setPolicy and setFeeSetter need the owner and setPoolOverride needs the fee setter. owner() and feeSetter() are the PoolManager owner 0xbca30b5429935205037069cf5b8a165f55d05a75 and policy() is a verified V4FeePolicy at 0x9671b518da771c5c73d8115b3800fa7653a72015.",
+     "source": "https://sourcify.dev/server/v2/contract/5042/0x2f2bd3f43880b9644211f16d861b0672aab23782?fields=sources,abi,compilation (file src/feeAdapters/V4FeeAdapter.sol only) and eth_call via https://arc.drpc.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "TokenJar at 0xfd39ac616e630e9db03efb2c9a4fe63edb949233 has an empty receive function and one way out, release(assets, recipient), which only the releaser may call. releaser() is a verified WormholeReleaser at 0xe1adf3f130abf616a7ab04aeebf8d0470f6b6a16 and owner() is the PoolManager owner.",
+     "source": "https://sourcify.dev/server/v2/contract/5042/0xfd39ac616e630e9db03efb2c9a4fe63edb949233?fields=sources,abi,compilation (file src/TokenJar.sol only) and eth_call via https://arc.drpc.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "Denylist.sol in the client repository writes an entry only in denylist(address[]), which requires the caller to be a denylister, and only the owner adds denylisters. The 13 selectors in the deployed implementation 0x4b5a1f0cf56b193cca1a0b16fce0713d44abddbe match that source. The transaction pool validator only reads the list, for the sender, the to address and EIP-7702 authorities. isDenylisted is false for the PoolManager, the PositionManager, both Universal Routers and Permit2.",
+     "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/contracts/src/Denylist.sol, https://raw.githubusercontent.com/circlefin/arc-node/main/crates/execution-txpool/src/validator.rs (lines 294 to 360) and eth_call on 0x3600000000000000000000000000000000000004 via https://arc.drpc.org",
+     "relevance": "low"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "One USDC blocklist entry for the PoolManager on Arc stops native USDC in both directions, the token face and the bridged WETH token",
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A3",
+    "A6"
+   ],
+   "effect": "freeze",
+   "actor": "issuer",
+   "severity": "high",
+   "difference": "On Arc the USDC blocklist lives in the Native Coin Control precompile and the EVM checks it on every value-bearing call, so a listed address can neither send nor receive the native asset. The ERC-20 face of USDC moves the same balance and fails the same check. The bridged WETH token of the CrossChainTokenService asks the same list on every transfer through an adapter contract. On Ethereum a USDC blacklist entry stops USDC only, and ETH and WETH keep moving.",
+   "mechanism": "1. The USDC blacklister (0x2a2b7ff330f15f9a8c52af5fec27d775f5138467) lists the PoolManager address. In the simulation this is one storage entry of 0x1800000000000000000000000000000000000001, the entry for the PoolManager address in the mapping at slot 2, set to 1 by state override. 2. A native payout, which take performs as a value call from the PoolManager (src/types/Currency.sol:44-52), reverts with 'Blocked address', so take of address(0) reverts, and collectProtocolFees for address(0) uses the same call (src/ProtocolFees.sol:56). 3. USDC.transfer from the PoolManager reverts, so take of 0x3600000000000000000000000000000000000000 reverts (src/types/Currency.sol:60-86). 4. A value call into the PoolManager reverts before its code runs, and USDC.transfer to the PoolManager reverts, so settle can credit nothing under either id (src/PoolManager.sol:349-364). 5. WETH.transfer from the PoolManager and to the PoolManager reverts with AccountDenylisted(PoolManager), because the token calls isDenylisted on the adapter 0x3ebe1f103151890346cd7dbcec1c596cc50ef58e, which reads the USDC blocklist. 6. EURC and cirBTC keep moving, since each has its own list. Swaps and liquidity changes that are settled with ERC-6909 claims alone still run, and nothing in the three affected currencies can enter or leave.",
+   "impact": "At block 32,769,037 the PoolManager held 2,442,363 USDC of native balance for both ids and 9.54 bridged WETH. Of the 286,916 Initialize logs that cycle 4 collected up to block 32,670,244, 229,191 name 0x3600, 53,208 name address(0) and 275 name the WETH token. Every liquidity provider, swapper and claim holder in those pools loses access for as long as the entry stands. The source has no path that pays out without the transfer (src/PoolManager.sol:291-297).",
+   "preconditions": "The USDC blacklister, a Circle role, must list the PoolManager address. An ordinary account cannot write the list. The effect was reproduced with eth_call and a state override, with the PoolManager as an inner caller, and no transaction was sent. I could not read the WETH implementation source, which is unverified, so the claim about WETH rests on the access list of a transfer and on the simulated reverts.",
+   "mitigations": "Deployers and interfaces should state that on Arc the bridged WETH token shares the USDC blocklist, so one decision of one issuer covers native USDC, its token face and WETH. Liquidity providers who want an asset outside that list can use EURC or cirBTC, which carry their own issuer lists. Nothing in core can route around a listed PoolManager address.",
+   "coreRefs": [
+    "src/types/Currency.sol:44-52",
+    "src/types/Currency.sol:60-86",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:349-364",
+    "src/ProtocolFees.sol:44-57"
+   ],
+   "sources": [
+    {
+     "url": "https://docs.arc.io/arc/references/evm-differences.md",
+     "supports": "The blocklist is enforced at runtime and a value transfer to or from a blocklisted address reverts"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_control.rs",
+     "supports": "Native Coin Control stores a blocklist status per address and offers blocklist, unBlocklist and isBlocklisted"
+    },
+    {
+     "url": "https://arc.drpc.org",
+     "supports": "eth_call at block 32,768,272 with a measuring stub at the PoolManager address and the PoolManager entry of the blocklist mapping set by state override: native send of 1 wei, USDC.transfer and WETH.transfer from the PoolManager revert, EURC.transfer and cirBTC.transfer succeed; USDC.transfer, a value call and WETH.transfer to the PoolManager revert and EURC.transfer succeeds. Without the override all of these succeed (research/network-risk/cycles/007/stablecoin-l1.work/a3_blocklist.py)"
+    },
+    {
+     "url": "https://arc.drpc.org",
+     "supports": "eth_createAccessList at block 32,767,960: a WETH transfer reads the adapter 0x3ebe1f103151890346cd7dbcec1c596cc50ef58e, the USDC proxy and implementation and the precompile 0x1800000000000000000000000000000000000001. isDenylisted(0x3600000000000000000000000000000000000000) on the adapter returns true, and blacklister() on USDC returns 0x2a2b7ff330f15f9a8c52af5fec27d775f5138467"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "Faces angle on Arc, with the moves earlier models left out. One caller, three ids over one balance (address(0) in wei, the token face 0x3600000000000000000000000000000000000000 in units of 10^12 wei, the USDC implementation address 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6), sync before and inside the unlock, settle, take, mint, burn, payment through the face, native value forced in by SELFDESTRUCT, a payout to the PoolManager itself, and collectProtocolFees through the fee adapter that any account can call.",
+   "result": "No order gains more than one face unit minus one wei per settle, which is less than 0.000001 USDC. On chain at block 32,767,874: (a) 752,591,764,406 wei forced in after sync of the face raised the reading by one unit and settle credited 1 unit, a gain of 247,408,235,594 wei; (b) with the balance on a unit boundary, a native take of 1 wei lowered the face reading by one whole unit, and after a new sync 1 wei forced in was credited as 1 unit; (c) collect of the face through the adapter while the face is synced reverted with ProtocolFeeCurrencySynced, collect of 1 wei of native fees was allowed (src/ProtocolFees.sol:49 exempts address(0)) and lowered the face reading by one unit, after which settle reverted with a panic on the subtraction at src/PoolManager.sol:360; (d) with the implementation address synced, collect of the face was allowed and settle panicked the same way; (e) take of the face with the PoolManager as recipient left the balance unchanged, settle credited 0 and the caller kept the debit; (f) a native take to the PoolManager and any take under the implementation id reverted, also for amount 0. Fee collection therefore only lowers a reading inside a bracket. It gives the caller a free way to place the balance just below a unit boundary, where earlier models needed a native debit of 1 wei. A bounded search over a model with the unit scaled to 4 base units (4,062,481 states at depth 10, fee collection and forced value included) found a best gain of 3 base units with one settle and 6 with two, that is one unit minus one base unit per settle. Each such settle needs a value-bearing call for the forced wei, which costs at least 9,000 gas, 1.8 * 10^14 wei at the 20 gwei fee floor, against a gain below 10^12 wei. Pool operations and hook deltas move amounts inside one currency id and add no cross id move, so they were left out of the model.",
+   "source": "eth_call with state overrides via https://arc.drpc.org at block 32,767,874 (research/network-risk/cycles/007/stablecoin-l1.work/a1_faces.py), model in research/network-risk/cycles/007/stablecoin-l1.work/a4_model.py, src/PoolManager.sol:279-297 and 349-364, src/ProtocolFees.sol:44-57, https://docs.arc.io/arc/references/evm-differences.md (20 gwei floor)"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L4",
+   "check": "Critic gap of cycle 6: the code of the Arc fee adapter and of the jar it pays. Can an ordinary account choose the recipient of a fee collection, receive the fees, or re-enter the PoolManager through the payout while it is unlocked.",
+   "result": "No. collect has no caller check and passes the immutable TOKEN_JAR as recipient, so the caller chooses only currency and amount. The jar has an empty receive function, so the native payout of src/types/Currency.sol:48 runs no code that calls back. The jar pays out only through release, which requires the releaser, a WormholeReleaser contract under the same governance path as the PoolManager owner. triggerFeeUpdate lets any account push the fee that the pool override or the policy gives, and src/ProtocolFees.sol:37 caps it at 1000 pips per direction. With amount 0 and a currency without accrued fees the adapter makes the PoolManager call transfer(jar, 0) on an address of the caller's choice, which is the zero amount shape of P2 without an unlock and moves nothing.",
+   "source": "https://sourcify.dev/server/v2/contract/5042/0x2f2bd3f43880b9644211f16d861b0672aab23782?fields=sources,abi,compilation, https://sourcify.dev/server/v2/contract/5042/0xfd39ac616e630e9db03efb2c9a4fe63edb949233?fields=sources,abi,compilation and eth_call owner(), feeSetter(), policy(), releaser() via https://arc.drpc.org; src/ProtocolFees.sol:35-57"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "Pooled assets angle on Arc: for native USDC under both ids, EURC, cirBTC and bridged WETH, does transfer or balanceOf do anything a holder can trigger (rebase, fee, callback, share accounting, special amounts), and does a transfer write a counter or a flow limit for the sender. This is the Arc part of L-306, answered with access lists because no endpoint served debug_traceCall.",
+   "result": "No such behaviour. A transfer out of the PoolManager touches only the two balances, the pause flag, proxy slots and, for USDC and WETH, the blocklist read. The same slots appear for an amount of 1, for the whole balance and for one third to a second recipient, and no slot is specific to the sender apart from its balance. USDC keeps no balance in storage and moves native value through the Native Coin Authority precompile. EURC and cirBTC share the FiatToken implementation 0xc6061272419bb754a6c0386d1df81ddb3fe5cf3c and keep balance and blacklist state in the mapping at slot 9. The WETH implementation is unverified. Of its 46 selectors I could name 33 (ERC-20, permit, pause, minter and ownership functions, service, tokenId, denylistProvider and isDenylisted) and 13 remain unnamed, and one global slot that every transfer reads holds zero and could not be named; a follow-up lead covers both. In the coupling test a transfer of one third of each balance left every other reading unchanged except the known USDC implementation mirror. Cycle 4 took and repaid the full balance of each of the four tokens 3 and 25 times in a row without a change in behaviour.",
+   "source": "eth_createAccessList, eth_getStorageAt and eth_call via https://arc.drpc.org at blocks 32,767,960 and 32,769,037 (research/network-risk/cycles/007/stablecoin-l1.work/a2_access.py and f1_coupling.py)"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L4",
+   "check": "Arc part of L-321: are entries of the Denylist at 0x3600000000000000000000000000000000000004 added by rules from observed behaviour, so that an ordinary account could make the PoolManager meet a rule with zero amount or dust native takes.",
+   "result": "No. The contract writes an entry only when a denylister calls denylist(address[]), denylisters are named by the owner, and the node's pool validator only reads the list for the sender, the to address and EIP-7702 authorities of a transaction. No part of the client source I read adds entries. The PoolManager and its periphery are not listed today. A listing of the PoolManager would be a governance action already recorded as F-052.",
+   "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/contracts/src/Denylist.sol and https://raw.githubusercontent.com/circlefin/arc-node/main/crates/execution-txpool/src/validator.rs; eth_call isDenylisted via https://arc.drpc.org"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "Can an ordinary account sign for the PoolManager at the USDC token, through permit, transferWithAuthorization or an ERC-1271 check, and so move the native balance without a take.",
+   "result": "No. The signature paths of the token need a signature of the owner of the funds. The PoolManager has no private signer, and its code has no isValidSignature function and no fallback (src/PoolManager.sol:80-395), so a contract signature check against it fails. The PoolManager never calls approve on any token (src/types/Currency.sol:40-88 holds its only token calls).",
+   "source": "src/PoolManager.sol:80-395, src/types/Currency.sol:40-104 and the token implementation source cited in cycle 2 (https://sourcify.dev/server/v2/contract/5042/0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6?fields=sources,abi,compilation)"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "L-264: walk sync, a slot clearing action and settle with the StorageCredits precompile 0x1060000000000000000000000000000000000000 as currency on the deployed PoolManager, and test every way the credit could leave.",
+   "result": "The credit is one unit per cleared slot and can only become an ERC-6909 claim. At block 50,460,341, with a measuring stub at an address that holds 230,765 units of pathUSD claims: balanceOf(PoolManager) at the precompile was 13 before, sync stored 13, a burn of the claims inside the unlock cleared one slot and the reading was 14 at once, settle returned 1 and the caller's delta under the precompile id was 1. take of that id reverted for amounts 1 and 0, because the precompile answers transfer with UnknownFunctionSelector (0xaa4bc69a). transfer, transferFrom and approve sent to the precompile by an ordinary caller reverted the same way. mint of 1 claim under the id closed the delta and the unlock returned. No real asset is accounted under that id. The gas side of the lead was answered in cycle 4: creating a slot costs 245,000 gas more when no credit is left, any account can use the credits up, and no call fails for it.",
+   "source": "eth_call with state override via https://rpc.mainnet.tempo.xyz at block 50,460,341 (research/network-risk/cycles/007/stablecoin-l1.work/t1_credits.py); src/PoolManager.sol:279-297, 322-329 and 349-364"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "L-284 as far as it can be answered before the fork: what do the ConfigurableAccount precompile and an account with the 0xef marker answer to the call shapes of take, sync, unlock and the hooks once T14 rules apply.",
+   "result": "The node already contains the T14 code and applies it when a simulated block carries a time after 1796742000. Under that time all 15 shapes from the PoolManager address to 0xAACC000000000000000000000000000000000000 revert, so the address stops acting like an account without code. An account with code 0xef and no registered configuration fails every shape with OpcodeNotFound before and after. For a registered account the source of the shim returns success with empty data for empty calldata, answers isValidSignature and onERC721Received, and reverts with empty data for every other selector, so it cannot serve as a currency, a hook or a direct caller of unlock. Registration is kept in an account extension that a state override cannot set, so the registered case was read from source and not run.",
+   "source": "eth_simulateV1 with blockOverrides via https://rpc.mainnet.tempo.xyz (research/network-risk/cycles/007/stablecoin-l1.work/t2_t14.py), https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/configurable_account/shim.rs and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/instructions.rs (lines 141 to 185)"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "L-255: does any crate of the Tempo node at commit 697ea97 start a transaction inside a running user call through evm2 committed_copy, call_tx or transact, which would give the inner execution an empty transient map.",
+   "result": "No. In 351 modules of 13 crates committed_copy and call_tx do not occur at all. transact is used by tests and by the payload builder's prewarming worker, which executes whole pool transactions on a separate EVM and detaches the result. The transaction handler changes the initial call depth around a batch and runs the batch calls on the same state and the same transient map. Precompiles have no way to call a contract, as cycle 3 recorded. The zone crates and the test and fuzz crates were not searched; zones are separate chains. The answer holds for this commit and has to be repeated for the next release that mainnet adopts.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/ (351 files fetched through mod declarations, list in the profile entry), in particular crates/evm/src/handler.rs lines 1693 to 1711 and crates/payload/builder/src/prewarming.rs lines 180 to 200"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "L-197: what the v1.18.2 item EVM call input hardening and the v1.18.4 fix for EVM execution changed, and whether the PoolManager's call and return data sequences depend on it.",
+   "result": "v1.18.2 introduced evm2 with a patch that passes call input as a borrowed range of the caller's memory. At the mainnet revision the range is resolved through the caller frame on each read, so growth of the child's memory cannot corrupt it, and output is written to the caller's memory after the child has ended. v1.18.4 added a check that the remaining gas covers the input cost before a precompile or the T14 account marker copies its input, in crates/precompiles/src/lib.rs and crates/evm/src/instructions.rs, and changed no other module of the seven execution crates I compared. The PoolManager's calls use disjoint input and output ranges for transfer (src/types/Currency.sol:73), no output range for hooks (src/libraries/Hooks.sol:134) and Solidity's same range pattern for balanceOf (src/types/Currency.sol:94). A differential of 32 cases that cover these three patterns, a child that grows its memory and a second call after the memory was rewritten matched revm byte for byte. Cycle 4 established that the jit feature is absent from the default build and that 256 swaps and 288 adds through the deployed bytecode matched the source formulas. Not confirmed: which features each validator compiles in.",
+   "source": "https://raw.githubusercontent.com/alloy-rs/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/evm2/src/interpreter/message.rs, https://raw.githubusercontent.com/tempoxyz/tempo/refs/tags/tempo/v1.18.4/crates/precompiles/src/lib.rs, https://raw.githubusercontent.com/tempoxyz/tempo/refs/tags/tempo/v1.18.4/crates/evm/src/instructions.rs, https://tempo.com/developers/docs/changelog.md and eth_call with override code via https://rpc.mainnet.tempo.xyz and https://arc.drpc.org (research/network-risk/cycles/007/stablecoin-l1.work/t5_alias.py)"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "check": "Faces and pooled assets angles on Tempo: can one balance at the PoolManager be reached under two currency ids, and does any pooled TIP-20 token change its balance or refuse a transfer through something a holder can trigger.",
+   "result": "No second id was found. Tempo has no native asset, so address(0) has no face. Moving one third of each of the 9 largest holdings changed none of the 73 other readings, the StorageCredits counter included. All 31 pooled TIP-20 tokens are unpaused, and 30 authorise the PoolManager and transfer one unit from it; GABAGOOL is the frozen token of F-065. The balance writes of the TIP-20 precompile were listed in cycle 2 and tested function by function in cycle 6, and this cycle found no change in the node version since then (tempo/v1.19.0-697ea97).",
+   "source": "eth_call with state override via https://rpc.mainnet.tempo.xyz at blocks 50,461,100 and 50,461,695 (research/network-risk/cycles/007/stablecoin-l1.work/t4_tip20.py and f1_coupling.py)"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "question": "After 24 November 2026 15:00 UTC on Moderato and after 8 December 2026 15:00 UTC on mainnet, register one configurable account (or find one) and repeat the 15 shape sweep on it and on 0xAACC000000000000000000000000000000000000 with the PoolManager address as caller. Does a registered account return success with empty data for empty calldata and revert for transfer, balanceOf, unlockCallback and the hook selectors, as shim.rs at commit 697ea97 says?",
+   "why": "The precompile part was confirmed with a simulated block time. The registered account part is read from source only, because registration sits in an account extension that a state override cannot set. A registered account that answered transfer with success and empty data would behave like a currency without code that also holds state.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "Obtain the source or a decompilation of the bridged WETH implementation 0xdc0518fa6940ecc05dbe5988a93c5a6e43fec52e on Arc and name the storage slot 0x3dd25e0047d6d00b4d8443336d6cde00c8d01c381664a6499f183b835193c160 that every transfer reads, and the 13 selectors I could not match to a name (01ca4d43, 06923592, 06bfcec6, 40ed6916, 5c49b8c0, 5e4b599a, 604cfaaa, 77e7370f, 7f3f4fde, 84df9f72, c3cfb506, e34e32c0, f47b1eb9). Does any of them let the owner 0x173d00f7e8702d176628963fbd4e1bcc18b29f94 or the CrossChainTokenService move or burn a holder's balance, or switch transfers off globally?",
+   "why": "The token is unverified on Sourcify and the explorer could not be reached from this environment. The PoolManager holds 9.54 WETH in 275 pools. The slot holds zero today and is read whatever the sender and recipient are, which fits a global switch. This concerns issuer powers and would extend the blocklist finding of this cycle.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "Do other tokens issued through the CrossChainTokenService 0x431871229103b780868f8C6BB820cd16ECf942BC on Arc use the same adapter 0x3ebe1f103151890346cd7dbcec1c596cc50ef58e, and does the PoolManager hold any of them?",
+   "why": "Each such token is frozen for the PoolManager by the same USDC blocklist entry. The finding of this cycle counts WETH only.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "question": "When mainnet adopts a release after v1.19.0, read the evm2 revision it pins (the main branch pins 35aa32800b147b00e616d4e1869a3835aa86701f today) and repeat the 32 case call input differential and the search for committed_copy, call_tx and transact call sites.",
+   "why": "The borrowed call input and the absence of nested transactions are properties of one revision of an interpreter that changes every few weeks.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-197",
+   "outcome": "cleared",
+   "answer": "Both changes are identified. v1.18.2 moved from revm 43.0.3 to evm2 with a patch that passes call input as a borrowed range of the caller's memory; at the mainnet revision 66687c18 the range is resolved through the caller frame on each read. v1.18.4 changed two files with identical dependencies: the precompile provider and the T14 account marker instruction now check that the remaining gas covers the input cost before they copy the borrowed input. Neither touches return data or transient storage handling. A 32 case differential on nested calls with overlapping input and output ranges matched revm byte for byte. The jit feature is outside the default build (cycle 4). Not confirmed: the build features of each validator."
+  },
+  {
+   "leadId": "L-255",
+   "outcome": "cleared",
+   "answer": "No call site exists at commit 697ea97. committed_copy and call_tx do not occur in 351 modules of 13 node crates, transact is used only by tests and by the prewarming worker on a separate EVM, and precompiles cannot call contracts. The zone, test and fuzz crates were not searched. The check has to be repeated for the next release."
+  },
+  {
+   "leadId": "L-264",
+   "outcome": "cleared",
+   "answer": "Walked on chain at block 50,460,341. One cleared PoolManager slot raises the counter by one inside the transaction, settle credits exactly that one unit under the precompile id, take reverts for amounts 1 and 0, the precompile rejects transfer, transferFrom and approve, and the credit can only be minted as a claim. The gas question was answered in cycle 4: 245,000 gas more per new slot when the shared credits are used up, which any account can cause, and no call fails."
+  },
+  {
+   "leadId": "L-284",
+   "outcome": "inconclusive",
+   "answer": "T14 is not active on mainnet or on Moderato today (Moderato activates on 24 November 2026 15:00 UTC). A simulation with a block time after the mainnet activation confirms that all 15 shapes revert on 0xAACC000000000000000000000000000000000000 and that a marker account without registration fails with OpcodeNotFound. The registered account case could not be run and is read from shim.rs. A follow-up lead asks for the on-chain repeat after activation."
+  },
+  {
+   "leadId": "L-306",
+   "outcome": "inconclusive",
+   "answer": "Arc part only. None of nine public endpoints serves debug_traceCall for Arc. Access lists for transfers of USDC, EURC, cirBTC and bridged WETH from the PoolManager, for three amounts and two recipients, show balances, pause flag, proxy slots and the blocklist read and no counter or flow slot; one WETH slot that holds zero could not be named. Zora, World Chain, Soneium and Celo were not attempted by this unit."
+  },
+  {
+   "leadId": "L-309",
+   "outcome": "inconclusive",
+   "answer": "Arc part only: the access lists of the four pooled tokens with value were read and explained slot by slot (see the cleared entry). The World Chain sweep and the Celo contract belong to other units and were not attempted."
+  },
+  {
+   "leadId": "L-321",
+   "outcome": "inconclusive",
+   "answer": "Arc part closed: Denylist entries are written only by denylisters that the owner names, the node only reads the list, and no rule adds entries from behaviour, so an ordinary account cannot make the PoolManager meet one. The Soneium and X Layer parts were not attempted by this unit."
+  }
+ ]
+}

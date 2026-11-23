@@ -1,0 +1,66 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.base.org/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+> ## Agent Instructions
+> For the current source of truth, read https://docs.base.org/llms.txt and connect the Base docs MCP server at https://docs.base.org/mcp.
+
+# Precompiles
+
+> Specification of precompiled contracts on Base, including native EVM implementations available at predefined addresses.
+
+## Overview
+
+[Precompiled contracts](https://docs.base.org/specifications/reference/glossary.md#precompiled-contract-precompile) exist on Base at
+predefined addresses. They are similar to predeploys but are implemented as native code in the EVM as opposed to
+bytecode. Precompiles are used for computationally expensive operations, that would be cost prohibitive to implement
+in Solidity. Where possible predeploys are preferred, as precompiles must be implemented in every execution client.
+
+Base contains the [standard Ethereum precompiles](https://www.evm.codes/precompiled) as well as Base-specific precompiles. The table below
+lists P256VERIFY, including its introduction version and current gas cost. B20's singleton precompiles are documented
+separately in the B20 section.
+
+| Name | Address | Introduced | Gas Cost |
+| - | - | - | - |
+| P256VERIFY | 0x0000000000000000000000000000000000000100 | Fjord | 6,900 (updated in Azul) |
+
+## P256VERIFY
+
+The `P256VERIFY` precompile performs signature verification for the secp256r1 elliptic curve. This curve has widespread
+adoption. It's used by Passkeys, Apple Secure Enclave and many other systems.
+
+It is specified as part of [RIP-7212](https://github.com/ethereum/RIPs/blob/master/RIPS/rip-7212.md) and was added to
+the Base protocol in the Fjord release with a gas cost of 3,450.
+
+With the [Azul hardfork](https://docs.base.org/upgrades/azul/exec-engine.md#secp256r1-precompile-gas-cost), the gas cost was updated to **6,900** to match [EIP-7951](https://eips.ethereum.org/EIPS/eip-7951) and maintain strict equivalence with L1 precompile pricing.
+
+Address: `0x0000000000000000000000000000000000000100`
+
+## Standard Ethereum Precompile Modifications (Azul)
+
+The [Azul hardfork](https://docs.base.org/upgrades/azul/exec-engine.md) introduced changes to two standard Ethereum precompiles:
+
+### MODEXP (Address `0x05`)
+
+* **[EIP-7823](https://eips.ethereum.org/EIPS/eip-7823)** — input fields are capped at 1,024 bytes each. Calls with larger inputs are rejected.
+* **[EIP-7883](https://eips.ethereum.org/EIPS/eip-7883)** — minimum gas cost raised from 200 to 500; the general cost formula is tripled.
+
+These changes apply from the Azul activation timestamp and match Ethereum L1 behavior.
+
+## B20
+
+B20 is Base's native token standard for programmable assets. Its shared token logic runs as precompiles in the Base node
+rather than as per-token Solidity code. B20 assets expose an ERC-20-compatible interface with additional roles, policies,
+and supply controls.
+
+Each B20 asset has its own address, created through the Factory; the addresses below are shared system entry points,
+not token addresses.
+
+| Precompile | Address | Purpose |
+| - | - | - |
+| Factory (`B20_FACTORY_ADDRESS`) | `0xB20f000000000000000000000000000000000000` | Creates and looks up B20 tokens. |
+| Policy Registry (`POLICY_REGISTRY_ADDRESS`) | `0x8453000000000000000000000000000000000002` | Stores policies and answers authorization checks for B20 policy scopes. |
+| Activation Registry (`ACTIVATION_REGISTRY_ADDRESS`) | `0x8453000000000000000000000000000000000001` | Controls which B20 variants or features are active on a given chain. |
+
+For an overview of B20's design and capabilities, see the [B20 introduction](https://docs.base.org/specifications/b20/introduction.md). See
+[B20 constants](https://docs.base.org/specifications/b20/reference/constants.md#precompile-addresses) for the canonical address list.
