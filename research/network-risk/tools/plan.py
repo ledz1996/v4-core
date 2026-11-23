@@ -72,9 +72,10 @@ def main():
     picks = [READINGS[(2 * (cycle - 1) + j) % len(READINGS)] for j in range(n_read)]
     code = [{"id": f"core-code-{k}", "task": t} for k, t in picks]
     # themes are cross-network questions queued by hand in state/themes.json; up to three open ones run per cycle
+    n_themes = int(sys.argv[sys.argv.index("--themes") + 1]) if "--themes" in sys.argv else 3
     tp = f"{R}/state/themes.json"
     if os.path.exists(tp):
-        code += [{"id": t["id"], "task": t["task"]} for t in json.load(open(tp))["themes"] if t["status"] == "open"][:3]
+        code += [{"id": t["id"], "task": t["task"]} for t in json.load(open(tp))["themes"] if t["status"] == "open"][:n_themes]
     plan = {"cycle": cycle, "date": date, "dir": f"research/network-risk/cycles/{cycle:03d}", "units": chosen, "code": code}
     # the full plan (with the long angle and task texts) goes to disk for the agents; the workflow gets a compact copy
     os.makedirs(f"{R}/cycles/{cycle:03d}", exist_ok=True)
