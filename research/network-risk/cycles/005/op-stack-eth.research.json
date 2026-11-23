@@ -1,0 +1,837 @@
+{
+ "unit": "op-stack-eth",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 10,
+   "lens": "L1",
+   "summary": "The next hardfork for OP Mainnet is Lagoon, targeted for 11 January 2027 together with Unichain. It adds no opcode that the PoolManager bytecode uses and one transaction type that runs no code. A released op-reth build that follows OP Mainnet was read for the transaction boundary.",
+   "deltas": [
+    {
+     "delta": "The hardfork registry lists Lagoon as in development with no superchain default. The interop preparation notice targets Lagoon on OP Sepolia and Unichain Sepolia for 10 December 2026 and on OP Mainnet and Unichain for 11 January 2027, pending a governance vote. The exact timestamps are not yet set.",
+     "source": "https://docs.optimism.io/notices/interop-prep",
+     "relevance": "high"
+    },
+    {
+     "delta": "Lagoon carries interop, post-execution transactions (type 0x7D) and sequencer-defined metering, and reduces BLS12-381 precompile input sizes. The 0x7D transaction is appended as the last transaction of a block, charges no fee, uses no gas and is not executed as code.",
+     "source": "https://specs.optimism.io/protocol/lagoon/sdm.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "The official endpoint still reports op-reth/v0.0.0-dev-unknown. A third party endpoint that serves OP Mainnet reports op-reth/v2.4.2-f863ff4c. In op-revm at the tag op-reth/v2.4.2 the handler ends a transaction with journal.commit_tx(), calls discard_tx() on a transaction error, and for a failed deposit reverts to the first checkpoint, bumps the nonce, adds the mint and commits. The workspace at that tag pins revm 41.0.0. This is the same structure that cycle 2 read at commit 72fcf947.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.4.2/rust/op-revm/src/handler.rs",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 10,
+   "lens": "L2",
+   "summary": "Lagoon adds two state changes outside a user's own call frames: a fee credit to the transaction sender after execution, and ETH delivered by a constructor that self-destructs. Neither can name the PoolManager as the party that receives a credit it did not pay for.",
+   "deltas": [
+    {
+     "delta": "Sequencer-defined metering credits tx.from with refund times effective gas price and debits the block beneficiary, the base fee vault and the operator fee vault. The settlement runs after the EVM frame of the transaction ends and before its state is committed. Deposits and the 0x7D transaction get no refund.",
+     "source": "https://specs.optimism.io/protocol/lagoon/sdm.html",
+     "relevance": "low"
+    },
+    {
+     "delta": "L2ToL2CrossDomainMessenger.relayMessage is payable and executes target.call{value: msg.value}(message) for any target except itself and a short list of unsafe targets. Any account can therefore make the address 0x4200000000000000000000000000000000000023 the msg.sender of a call to the PoolManager with calldata of its choice.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L2/L2ToL2CrossDomainMessenger.sol",
+     "relevance": "low"
+    },
+    {
+     "delta": "SuperchainETHBridge.relayETH and refundETH pay out with new SafeSend{value: amount}(recipient). The SafeSend constructor executes selfdestruct(recipient), so the recipient receives ETH without any call into its code. ETHLiquidity.mint pays the bridge the same way.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/SafeSend.sol",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 10,
+   "lens": "L3",
+   "summary": "OP Mainnet keeps one read only second view of the native balance (LegacyERC20ETH) and five Synthetix tokens whose implementation address reports the same balance as the proxy. In all six cases the second address answers balanceOf and refuses transfer for the PoolManager. Lagoon adds new ways for ETH and tokens to arrive, and no way for them to leave.",
+   "deltas": [
+    {
+     "delta": "LegacyERC20ETH at 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000 (3,671 bytes) returned 245.376 ETH for balanceOf(PoolManager) at block 159909409, equal to the native balance, and reverted on empty calldata with and without value, on transfer with amount 0 and 1, on all ten hook selectors and on unlockCallback, with the PoolManager as msg.sender.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "Synthetix sUSD, sETH, sBTC and sLINK follow the SNX pattern recorded in cycle 2. The proxy returns target(), balanceOf(PoolManager) is equal at proxy and target (2 wei of sETH, 30,687.3 SNX, zero for the other three), and transfer of 0 and of 1 called by the PoolManager at the target reverts with an Error(string).",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "After Lagoon the SuperchainTokenBridge burns with crosschainBurn(msg.sender, amount) inside sendERC20 and mints with crosschainMint(to, amount) inside relayERC20, which only the messenger can call. A holder's balance can fall only when the holder itself calls sendERC20. A balance can rise at any address that a sender on the other chain names.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-contracts/v4.0.0/packages/contracts-bedrock/src/L2/SuperchainTokenBridge.sol",
+     "relevance": "low"
+    },
+    {
+     "delta": "ETHLiquidity will hold 2^128 - 1 wei of native ETH from the fork block. burn and mint accept only the SuperchainETHBridge as caller. fund() is payable for any caller and needs its own selector. The contract has no receive or fallback function.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L2/ETHLiquidity.sol",
+     "relevance": "low"
+    },
+    {
+     "delta": "A read only probe called 70 public trigger functions (rebase, accrue, poke, harvest, distribute, sync, claim and similar, each with the PoolManager address as argument data) on each of 1,594 tokens that the PoolManager holds and compared balanceOf(PoolManager) before and after in one eth_call. No balance changed. A control contract whose balance rises on every call changed from 0 to 70 in the same call.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 10,
+   "lens": "L4",
+   "summary": "The whole predeploy namespace from 0x4200..0000 to 0x4200..07ff was read on chain. No interop predeploy has an implementation today. Two predeploys that earlier profiles did not name, at 0x2c and 0x2d, revert on every call shape. The interop contracts that Lagoon will install have no receive function and no transfer or balanceOf selector in their source.",
+   "deltas": [
+    {
+     "delta": "Implementation slots (EIP-1967) are set at 0x00, 0x02, 0x07, 0x0f, 0x10 to 0x1b, 0x20, 0x21, 0x2c and 0x2d. WETH at 0x06 (2,041 bytes) and the governance token at 0x42 (16,528 bytes) are not proxies. Slots 0x22 to 0x28 and 0x30 (CrossL2Inbox, L2ToL2CrossDomainMessenger, SuperchainETHBridge, ETHLiquidity, the SuperchainERC20 factory and beacon, SuperchainTokenBridge, UndeliveredMessageExporter) hold the 2,055 byte proxy with an empty implementation slot.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "A loop contract placed by state override called all 2,048 addresses of the namespace with empty calldata. 2,027 reverted with the 132 byte error of a proxy without implementation. The other 21 are the addresses listed above. The test cannot tell an implemented predeploy whose own revert is also 132 bytes long (L2StandardBridge at 0x10 is one), so above 0xff it rests on the revert length alone.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "0x2c is ConditionalDeployer (implementation 0x906835344844979ffd3a752eaa23728d513db00b, 1,464 bytes) and 0x2d is L2DevFeatureFlags (implementation 0xe35b194efc4907f383b7e3b87f4c2c339ce239f6, 611 bytes), both version 1.0.0. With the PoolManager as msg.sender both revert on empty calldata with and without value, transfer of 0 and 1, balanceOf, the ten hook selectors and unlockCallback.",
+     "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/libraries/Predeploys.sol",
+     "relevance": "low"
+    },
+    {
+     "delta": "Sixteen call shapes through a forwarding stub at the PoolManager address gave these non reverting targets: WETH (every shape), SequencerFeeVault 0x11, BaseFeeVault 0x19, L1FeeVault 0x1a and OperatorFeeVault 0x1b (empty calldata with and without 1 wei), L2ToL1MessagePasser 0x16 (same), L1BlockNumber 0x13 (every shape, returns the L1 block number), and the governance token 0x42 (transfer and balanceOf). This matches cycle 2 and adds the four fee vaults as recipients that accept a native payout.",
+     "source": "https://mainnet.optimism.io",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L1",
+   "summary": "Base lists one planned upgrade, Everest, with no date. It adds a transaction type and a billing rule and no precompile. The second execution engine named in lead L-193 is present in the workspace and is not wired into the node.",
+   "deltas": [
+    {
+     "delta": "The upgrades page lists Everest as planning with dates TBD on Sepolia and mainnet. Its one listed feature is Base Transactions (EIP-8430, type 0x79): batched calls in atomic phases, a separate payer, token reimbursement of the payer, parallel nonce lanes and EIP-7702 style delegation. Denim (5 November 2026) and Cobalt (30 September 2026) are live.",
+     "source": "https://docs.base.org/upgrades/overview",
+     "relevance": "low"
+    },
+    {
+     "delta": "In the node source at the deployed tag the precompile set for Denim, Everest and Zenith is the Cobalt set. The code comment states that these three introduce no new precompiles.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/provider.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "The crate base-common-evm2 states in its README that it is intentionally not wired into the node and exists to be tested against the revm engine. The endpoint still reports reth/v2.5.2-9e380dd with base/v1.5.6, the build cycle 2 read.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm2/README.md",
+     "relevance": "none"
+    },
+    {
+     "delta": "The B20 variant table on the main branch still holds two variants, Asset (0) and Stablecoin (1). No third variant byte is defined, so the set of addresses that the token dispatcher answers has not grown since cycle 2.",
+     "source": "https://raw.githubusercontent.com/base/base/main/crates/common/precompiles/src/b20_factory/variant.rs",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L2",
+   "summary": "The planned Base Transaction authenticates sender and payer by secp256k1 recovery only, so a contract cannot be named as either. Fees are taken from and returned to the payer outside the call frames.",
+   "deltas": [
+    {
+     "delta": "At the deployed tag the executor pre-charges the payer the worst case fee before the calls and refunds the surplus to the payer after them. Before the Zenith gate, which Base does not schedule, authorization is pure secp256k1 recovery and never reads account configuration. Each call is dispatched from the sender with tx.origin equal to the sender.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/eip8130.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "Cobalt added validity transactions: signed transactions that the sequencer includes only when balance, storage or block number predicates hold. They change when a transaction is included and nothing about its execution.",
+     "source": "https://docs.base.org/upgrades/cobalt/overview",
+     "relevance": "none"
+    },
+    {
+     "delta": "Denim moved Base to five canonical blocks per second. block.timestamp stays in seconds and the millisecond part is written by a metadata deposit into the BaseTime predeploy.",
+     "source": "https://docs.base.org/upgrades/denim/overview",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L3",
+   "summary": "The node source of both B20 variants was read for every balance write. Each one needs the owner of the balance, an allowance from the owner, or a token role. The Asset multiplier scales a separate view and leaves balanceOf unchanged.",
+   "deltas": [
+    {
+     "delta": "Stablecoin logic v3 writes balances in four places: move_balance (reached from transfer with the caller as source, from transferFrom after the allowance check, and from seizeWithMemo after the Seize role check), burn_inner (burn with the Burn role on the caller's own balance, burnBlocked with the BurnBlocked role on a blocked account) and mint (Mint role, or the factory during creation of that token). No path lets an account without a role change another account's balance.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_stablecoin/logic/v3.rs",
+     "relevance": "high"
+    },
+    {
+     "delta": "Asset logic v3 has the same write sites plus batchMint, which checks the Mint role. balanceOf returns the stored raw balance. The multiplier is applied only in scaledBalanceOf and balanceOfUI. updateMultiplier needs the operator role.",
+     "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_asset/logic/v3.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "Since Denim the transfer executor policy is checked on every transfer path, with the caller of transfer as executor, and a transfer, mint or seize to the token's own address reverts with InvalidReceiver. For a take the PoolManager is both executor and sender.",
+     "source": "https://docs.base.org/specifications/b20/changelog",
+     "relevance": "low"
+    },
+    {
+     "delta": "USD+ at 0xb79dd08ea68a908a97220c76d19a6aa9cbde4376: the PoolManager holds 112.37 USD+. changeSupply reverts with 'Caller is not the EXCHANGER'. payout() on the exchange 0x7cb1b38591021309c64f451859d79312d8ca2789 reverts for an account without a role. nextPayoutTime reads 1783288800, a date in July 2026.",
+     "source": "https://base.gateway.tenderly.co",
+     "relevance": "low"
+    },
+    {
+     "delta": "The main branch of the node defines B20 logic versions v1 to v3 for both variants and no v4 file exists. As of today no coming fork changes the transfer or balance rules of the tokens the PoolManager holds.",
+     "source": "https://raw.githubusercontent.com/base/base/main/crates/common/precompiles/src/b20_stablecoin/logic/mod.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_getCode returns the single byte 0xef at the OUSD token address 0xB2000000000000000000002fEb517dFeC7415344 and at the Policy Registry. If a call ever reached that code instead of the precompile it would hit an invalid opcode and revert, so a take could not report success without moving tokens (src/types/Currency.sol:64-74).",
+     "source": "https://base.gateway.tenderly.co",
+     "relevance": "low"
+    },
+    {
+     "delta": "The trigger probe described for OP Mainnet ran over 9,108 tokens with a balance at the Base PoolManager (the list of tokens that moved in one day, taken from the cycle 4 balance unit). No balance changed.",
+     "source": "https://base.gateway.tenderly.co",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 8453,
+   "lens": "L4",
+   "summary": "Base has one predeploy that the OP Stack chains lack, BaseTime at 0x4200..0030, and has no implementation at 0x2c and 0x2d, which the other six chains have. The five most used hooks in a sample of recent pools refuse initialization by an ordinary account.",
+   "deltas": [
+    {
+     "delta": "0x4200000000000000000000000000000000000030 has implementation 0xc0d3c0d3c0d3c0d3c0d3c0d3c0d3c0d3c0d30030 (878 bytes, version 1.0.0) with a timestampMs() getter. It reverts on all sixteen call shapes with the PoolManager as msg.sender. On the OP Stack repository the same slot is reserved for UndeliveredMessageExporter.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "low"
+    },
+    {
+     "delta": "Slots 0x2c and 0x2d hold a proxy without implementation on Base. Slots 0x22 to 0x28 are empty proxies as on the other chains. The non reverting targets of the sixteen shape sweep are the same as on OP Mainnet except the governance token, which is an empty proxy on Base.",
+     "source": "https://mainnet.base.org/",
+     "relevance": "none"
+    },
+    {
+     "delta": "Initialize logs in 80 windows of 1,000 blocks spread over the last 6,000,000 blocks: 466 pools, of which 62 have no hook. The most frequent hooks are 0xbdf938149ac6a781f94faa0ed45e6a0e984c6544 (119), 0x0469a4bd3724dc86c9542f4694c976da13c450c0 (95), 0xb429d62f8f3bffb98cdb9569533ea23bf0ba28cc (88), 0x5e320ea6278107968c119942e57d876c5f922acc (33) and 0xbb7784a4d481184283ed89619a3e3ed143e1adc0 (21). An initialize call from an account without code with invented currencies, with ETH and an invented currency, and with WETH and an invented currency reverts inside each of the five hooks. Their ERC-6909 claims are zero except 43,724,245,515 wei of WETH and 110 units of USDC held by 0xb429.",
+     "source": "https://base.gateway.tenderly.co",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L1",
+   "summary": "Unichain shares the Lagoon target date of 11 January 2027 with OP Mainnet. The two chains form one interop dependency set. The client build is the one cycle 2 read.",
+   "deltas": [
+    {
+     "delta": "The interop preparation notice names Unichain (chain id 130) and OP Mainnet as the first mainnet dependency set, with activation targeted for 11 January 2027 pending governance approval. Other OP Stack chains activate Lagoon on their own schedule.",
+     "source": "https://docs.optimism.io/notices/interop-prep",
+     "relevance": "high"
+    },
+    {
+     "delta": "web3_clientVersion still reports op-reth/v2.9.0-rc.1-72fcf947.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L2",
+   "summary": "The Lagoon state changes described for OP Mainnet apply to Unichain from the same date: sender fee credits after execution, a messenger that calls any target for any account, and ETH delivery by self-destruct.",
+   "deltas": [
+    {
+     "delta": "Under Lagoon a block on Unichain can contain executing messages that refer to initiating messages on OP Mainnet, and it becomes safe only when those messages have reached the same safety level.",
+     "source": "https://docs.optimism.io/notices/interop-prep",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L3",
+   "summary": "Unichain has no legacy ETH view and no governance token contract. The trigger probe found no pooled token whose balance at the PoolManager a public call can raise.",
+   "deltas": [
+    {
+     "delta": "0x4200000000000000000000000000000000000042 has no code on Unichain. A call with any data succeeds with empty return data, so a take in that currency id would record a debt and move nothing, and sync reverts because balanceOf returns no data.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "The trigger probe ran over 4,562 tokens with a balance at the PoolManager. No balance changed.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 130,
+   "lens": "L4",
+   "summary": "The predeploy namespace on Unichain matches OP Mainnet except for the missing governance token. Of the three most used hooks, two refuse pools opened by strangers and the third is open and keeps no balance or claim at the PoolManager.",
+   "deltas": [
+    {
+     "delta": "Implementation slots are set at the same addresses as on OP Mainnet, with the same implementations at 0x2c and 0x2d. WETH has 2,865 bytes. Slots 0x22 to 0x28 and 0x30 are empty proxies. The sixteen shape sweep gave the same non reverting targets as on OP Mainnet without the governance token.",
+     "source": "https://mainnet.unichain.org",
+     "relevance": "low"
+    },
+    {
+     "delta": "All 7,811 Initialize logs of the chain were read: 2,290 pools have no hook. The most used hooks are ClankerHookStaticFee 0xbc6e5abda425309c2534bc2bc92562f5419ce8cc (1,310 pools), PrediXHookProxyV2 0x2ea5eac8a4e31f0889e86fc135c5eae8e0b16ae0 (1,034) and UniMemeHook 0xb4960cd4f9147f9e37a7aa9005df7156f61e4444 (777). The first two revert on initialize from an ordinary account. UniMemeHook has no initialize callback and accepts any pool.",
+     "source": "https://unichain.gateway.tenderly.co",
+     "relevance": "low"
+    },
+    {
+     "delta": "Verified source of UniMemeHook: afterSwap computes 0.7 percent of the unspecified amount of that swap, pays it out with take in the pool's own currency to the token creator, up to three referrers and the fee recipient, and returns the same total as its delta. The hook holds no ERC-6909 claims for ETH, WETH or USDC and no ETH. Its referral registry lets the first caller who passes 32 bytes of hookData become the referrer of a token creator, in any pool that uses the hook.",
+     "source": "https://unichain.blockscout.com/api/v2/smart-contracts/0xb4960cd4f9147f9e37a7aa9005df7156f61e4444",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L1",
+   "summary": "Nothing new under this lens. Zora reports the same client build as in cycle 2 and has no Lagoon date.",
+   "deltas": [
+    {
+     "delta": "web3_clientVersion still reports conduit-op-reth/v2.5.1-8f0ccac. The interop notice covers OP Mainnet and Unichain only, and other OP Stack chains set their own Lagoon time in the superchain registry.",
+     "source": "https://docs.optimism.io/notices/interop-prep",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L2",
+   "summary": "Nothing new under this lens. No transaction type or system write has been added on Zora since cycle 2.",
+   "deltas": []
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L3",
+   "summary": "Zora keeps the legacy ETH view with the same read only behaviour as OP Mainnet. The trigger probe found nothing among the 41 tokens the PoolManager holds.",
+   "deltas": [
+    {
+     "delta": "LegacyERC20ETH returned 0.1515 ETH for balanceOf(PoolManager), equal to the native balance, and reverted on the other fifteen call shapes.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    },
+    {
+     "delta": "The trigger probe ran over 41 tokens with a balance at the PoolManager. No balance changed.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 7777777,
+   "lens": "L4",
+   "summary": "The predeploy namespace on Zora matches OP Mainnet. The governance token address holds the token code with a zero balance for the PoolManager. Hooks are rare.",
+   "deltas": [
+    {
+     "delta": "Implementation slots are set at the same addresses as on OP Mainnet, including 0x2c and 0x2d. 0x42 holds 10,346 bytes of governance token code: transfer of 0 returns true, transfer of 1 reverts, balanceOf(PoolManager) is 0.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    },
+    {
+     "delta": "All 73 Initialize logs since block 25434534 were read: 62 pools have no hook and no hook serves more than two pools. The hook with two pools, 0xb30d1cfc07e6e2036776bc1cfa74090c8e1f0044, has afterSwap with a returned delta only, accepts initialize from any account, and holds no ERC-6909 claims and no ETH.",
+     "source": "https://rpc.zora.energy/",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L1",
+   "summary": "Nothing new under this lens. World Chain reports world-chain/v2.8.2-9596311 as in cycle 2.",
+   "deltas": []
+  },
+  {
+   "chainId": 480,
+   "lens": "L2",
+   "summary": "The parallel path that validates flashblocks was read to the end at the deployed tag. Every transaction runs in its own EVM instance over its own State object, and the merged result must reproduce the sequencer's access list, receipts root, state root and block hash.",
+   "deltas": [
+    {
+     "delta": "In crates/validator/src/execution_strategy.rs at v2.8.2, execute_workers maps each (index, transaction) pair to a closure that builds a new State (with the parent state provider, the committed bundle as cached prestate and the received block access list), sets the access list index, creates a new EVM with create_evm and calls execute_transaction_without_commit. Transient storage lives in the journal of that EVM instance, so no worker can see transient writes of another transaction.",
+     "source": "https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/crates/validator/src/execution_strategy.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "The worker outputs are sorted by index and committed one by one into a canonical executor that rebuilds the access list. A mismatch of the access list hash, the receipts root, the state root or the block hash returns an error for the flashblock. A sequential strategy in the same file executes with execute_transaction_with_commit_condition on one State.",
+     "source": "https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/crates/validator/src/execution_strategy.rs",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L3",
+   "summary": "The trigger probe found no token among the 851 on the explorer holdings list whose balance at the PoolManager a public call can raise. The full list of pool currencies could not be built.",
+   "deltas": [
+    {
+     "delta": "The trigger probe ran over 851 tokens. No balance changed.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "low"
+    },
+    {
+     "delta": "The public endpoint limits eth_getLogs to a range of 100 blocks, and the chain has 38,041,061 blocks. The Initialize history was not read.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 480,
+   "lens": "L4",
+   "summary": "The predeploy namespace on World Chain matches the other chains. Nothing new.",
+   "deltas": [
+    {
+     "delta": "Implementation slots are set at the same addresses as on OP Mainnet, including 0x2c and 0x2d. 0x42 holds 10,346 bytes of governance token code with a zero balance for the PoolManager. The sixteen shape sweep gave the same non reverting targets.",
+     "source": "https://worldchain-mainnet.g.alchemy.com/public",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L1",
+   "summary": "Nothing new under this lens. Ink reports the same client build as in cycle 2 and has no Lagoon date of its own yet.",
+   "deltas": [
+    {
+     "delta": "web3_clientVersion still reports op-reth/v2.9.0-rc.1-72fcf947. The interop notice says that OP Stack chains outside the first dependency set activate Lagoon on their own schedule and get a dependency set that contains only themselves.",
+     "source": "https://docs.optimism.io/notices/interop-prep",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L2",
+   "summary": "Nothing new under this lens.",
+   "deltas": []
+  },
+  {
+   "chainId": 57073,
+   "lens": "L3",
+   "summary": "The trigger probe found no pooled token on Ink whose balance at the PoolManager a public call can raise.",
+   "deltas": [
+    {
+     "delta": "The trigger probe ran over 3,438 tokens with a balance at the PoolManager. No balance changed.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 57073,
+   "lens": "L4",
+   "summary": "The predeploy namespace on Ink matches OP Mainnet. No interop predeploy has an implementation.",
+   "deltas": [
+    {
+     "delta": "Implementation slots are set at the same addresses as on OP Mainnet, including 0x2c and 0x2d. WETH has 2,865 bytes. 0x42 holds 10,346 bytes of governance token code with a zero balance for the PoolManager. Slots 0x22 to 0x28 and 0x30 are empty proxies. The sixteen shape sweep gave the same non reverting targets as on OP Mainnet.",
+     "source": "https://rpc-gel.inkonchain.com",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L1",
+   "summary": "Nothing new under this lens. Soneium reports the same client build as in cycle 2 and has no Lagoon date of its own yet.",
+   "deltas": [
+    {
+     "delta": "web3_clientVersion still reports op-reth/v2.9.0-rc.1-72fcf947. The interop notice says that OP Stack chains outside the first dependency set activate Lagoon on their own schedule and get a dependency set that contains only themselves.",
+     "source": "https://docs.optimism.io/notices/interop-prep",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L2",
+   "summary": "Nothing new under this lens.",
+   "deltas": []
+  },
+  {
+   "chainId": 1868,
+   "lens": "L3",
+   "summary": "The trigger probe found no pooled token on Soneium whose balance at the PoolManager a public call can raise.",
+   "deltas": [
+    {
+     "delta": "The trigger probe ran over 70 tokens with a balance at the PoolManager. No balance changed.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 1868,
+   "lens": "L4",
+   "summary": "The predeploy namespace on Soneium matches OP Mainnet. No interop predeploy has an implementation.",
+   "deltas": [
+    {
+     "delta": "Implementation slots are set at the same addresses as on OP Mainnet, including 0x2c and 0x2d. WETH has 2,865 bytes. 0x42 holds 10,346 bytes of governance token code with a zero balance for the PoolManager. Slots 0x22 to 0x28 and 0x30 are empty proxies. The sixteen shape sweep gave the same non reverting targets as on OP Mainnet.",
+     "source": "https://rpc.soneium.org",
+     "relevance": "low"
+    }
+   ]
+  }
+ ],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L4",
+   "check": "Lead L-333. Which addresses from 0x4200000000000000000000000000000000000000 to 0x42000000000000000000000000000000000000ff hold an implementation today, and what each returns to sixteen call shapes with the PoolManager as msg.sender: empty calldata with 0 and with 1 wei, transfer(address,uint256) with amount 0 and 1, balanceOf(PoolManager), the ten IHooks selectors with zeroed arguments, and unlockCallback(bytes). The PoolManager code was replaced by a 36 byte forwarding stub through a state override and the call came from a separate account.",
+   "result": "On all seven chains the same targets do not revert: WETH 0x06 (accepts every shape, returns true for transfer and a balance for balanceOf, empty data otherwise), the four fee vaults 0x11, 0x19, 0x1a and 0x1b and L2ToL1MessagePasser 0x16 (empty calldata with and without value only), L1BlockNumber 0x13 (returns the 32 byte L1 block number for every shape), and the governance token 0x42 where it has code. Every other implemented predeploy reverts on all sixteen shapes: 0x00, 0x02, 0x07, 0x0f, 0x10, 0x12, 0x14, 0x15, 0x17, 0x18, 0x20, 0x21, 0x2c, 0x2d and BaseTime 0x30 on Base. Against src/: a transfer through L1BlockNumber fails the check at src/types/Currency.sol:68 because the returned word is the block number and never 1, sync on it stores a number that does not change inside a transaction so settle credits 0 (src/PoolManager.sol:358-360), and as a hook its 32 byte answer does not start with the hook selector (src/libraries/Hooks.sol:152). The fee vaults and the message passer accept a native payout while the caller stays debited (src/PoolManager.sol:294-295), which is the case of F-048. What a vault does with the ETH afterwards was not read, and the PoolManager has no call shape that could take it back. No interop predeploy (0x22 to 0x28, 0x30) has an implementation on any of the seven chains, so SuperchainETHBridge and ETHLiquidity cannot be called today: a value call or a transfer call from the PoolManager reverts in the proxy and changes no balance anywhere.",
+   "source": "eth_call with state override and eth_getStorageAt of the EIP-1967 implementation slot on https://mainnet.optimism.io, https://mainnet.base.org/, https://mainnet.unichain.org, https://rpc.zora.energy/, https://worldchain-mainnet.g.alchemy.com/public, https://rpc-gel.inkonchain.com and https://rpc.soneium.org on 23 November 2026"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L4",
+   "check": "Whether any address from 0x4200..0100 to 0x4200..07ff holds an implemented predeploy that earlier sweeps of 0x00 to 0x2f missed.",
+   "result": "No. A loop contract placed by state override called each of the 2,048 addresses of the namespace with empty calldata and recorded success, code presence and return data length. Outside 0x00 to 0xff every address on every chain reverted with the 132 byte error of a proxy without implementation. Inside 0x00 to 0xff the implementation slot was read directly. The only chain specific slots are 0x30 on Base (BaseTime), 0x2c and 0x2d (absent on Base), and 0x42 (token code on OP Mainnet, Zora, World Chain, Ink and Soneium, an empty proxy on Base, no code on Unichain). The loop test above 0xff rests on the revert length, so an implemented predeploy that reverts with exactly 132 bytes on empty calldata would look empty.",
+   "source": "eth_call with state override on the seven RPC endpoints of state/networks.json on 23 November 2026"
+  },
+  {
+   "chainIds": [
+    10,
+    130
+   ],
+   "lens": "L4",
+   "check": "Upcoming fork, Lagoon on OP Mainnet and Unichain (target 11 January 2027). What the interop predeploys will answer when the PoolManager is made to call them through take, sync or a hook call, judged from their source because they are not deployed yet.",
+   "result": "ETHLiquidity has burn() (payable, bridge only), mint(uint256) (bridge only), fund() (payable, any caller, reverts on zero value) and setPaused, and no receive or fallback. SuperchainETHBridge has sendETH(address,uint256), relayETH and refundETH and no receive or fallback. SuperchainTokenBridge has sendERC20 and relayERC20. None of the three has the selector of transfer(address,uint256), balanceOf(address), an IHooks function or unlockCallback, and a Solidity contract without fallback reverts on an unknown selector and on empty calldata. The PoolManager can only send those shapes (src/types/Currency.sol:48, 60-73, 94, src/libraries/Hooks.sol:134, src/PoolManager.sol:110), so every call from it to these three contracts would revert. This was read from the develop branch and from op-contracts v4.0.0, which may differ from the bytecode that the fork installs.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L2/ETHLiquidity.sol"
+  },
+  {
+   "chainIds": [
+    10,
+    130
+   ],
+   "lens": "L2",
+   "check": "Upcoming fork, Lagoon. SuperchainETHBridge.relayETH and refundETH deliver ETH with a constructor that self-destructs, so ETH can reach the PoolManager without a call and without msg.value. Does an ordinary account gain a credit it did not pay for.",
+   "result": "No. Native credit is msg.value of a settle call and nothing else (src/PoolManager.sol:353-354), so ETH that arrives by self-destruct gives no native credit to anyone and stays as surplus. An ERC-20 credit is the rise of balanceOf between sync and settle (src/PoolManager.sol:358-360), and on Unichain no ERC-20 address reports the native balance. The ETH is burned on the other chain by the account that called sendETH, so the sender pays the full amount that arrives. An attacker cannot make a third party's relay land at the PoolManager, because the recipient is fixed by the sender of the message. Forced ETH was already possible on every chain through SELFDESTRUCT, so the fork adds a second route and no new effect.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L2/SuperchainETHBridge.sol"
+  },
+  {
+   "chainIds": [
+    10,
+    7777777
+   ],
+   "lens": "L3",
+   "check": "Faces of the native asset: LegacyERC20ETH. Walk sync, settle, take, mint and burn across address(0) and the legacy id in every order, including the forced ETH route that Lagoon adds on OP Mainnet, public protocol fee collection on OP Mainnet, and zero amounts.",
+   "result": "No order gives a gain. 1. sync(legacy) then settle with value reverts with NonzeroNativeValue (src/PoolManager.sol:356). 2. sync(legacy), then ETH forced in (SELFDESTRUCT today, relayETH after Lagoon), then settle with no value: the settler is credited the forced amount under the legacy id. That credit can be minted as a claim, burned back or cleared (src/PoolManager.sol:310-336) and can never leave, because take calls transfer on the legacy contract and it reverts (src/types/Currency.sol:73, 82-86). The forced ETH stays in the PoolManager as surplus. 3. take of native amount a, then sync(legacy), then a forced back in, then settle: native debt a and legacy credit a. The native debt must still be paid with msg.value. 4. sync(legacy), then anything that lowers the native balance (a native take, or a native fee collection through the fee controller, which the check at src/ProtocolFees.sol:49 does not block for address(0)), then settle: the checked subtraction at src/PoolManager.sol:360 reverts. 5. sync(legacy), sync(address(0)), settle with value v: the second sync resets the currency slot (src/PoolManager.sol:283), the credit is v in native, and a later sync(legacy) reads the balance that already includes v. 6. sync(legacy) and settle with no inflow: paid is 0, _accountDelta returns early (src/PoolManager.sol:369) and the slot is reset. 7. take(legacy, to, 0) reverts as well, since transfer of 0 reverts on chain. One inflow is credited once under one id, and only the native id can be paid out. On chain at block 159909409 the legacy contract returned the native balance for balanceOf(PoolManager) on both chains and reverted on the other fifteen shapes.",
+   "source": "eth_call with state override on https://mainnet.optimism.io and https://rpc.zora.energy/ on 23 November 2026"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L3",
+   "check": "Faces of the native asset: the WETH predeploy, after the sixteen shape sweep. Walk the orders that use the fact that WETH accepts every selector and mints to msg.sender on a value call.",
+   "result": "Value is conserved. take(address(0), WETH, a) debits the caller a in native (src/PoolManager.sol:294) and makes WETH mint a to the PoolManager. If the same caller called sync(WETH) before, settle credits a under the WETH id (src/PoolManager.sol:358-364); if not, the WETH is surplus and the caller still owes a. In both cases the native balance fell by a and the WETH balance rose by a, and the caller owes a native. With amount 0 nothing moves and nothing is owed. WETH returns empty data for the hook selectors, which fails the length check at src/libraries/Hooks.sol:152, so it cannot serve as a hook. WETH has no function that lets a third party move the PoolManager's balance without an allowance, and the PoolManager never approves. This repeats the cycle 2 clearance with the full shape list and adds nothing new.",
+   "source": "eth_call with state override on the seven RPC endpoints on 23 November 2026; https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/WETH98.sol"
+  },
+  {
+   "chainIds": [
+    10
+   ],
+   "lens": "L3",
+   "check": "Faces, tokens with more than one entry point on OP Mainnet: the Synthetix synths sUSD, sETH, sBTC and sLINK, whose proxy forwards to a target contract that reports the same balances.",
+   "result": "Same result as the SNX clearance of cycle 2. target() of each proxy was read, balanceOf(PoolManager) is equal at proxy and target, and transfer(address,uint256) with amount 0 and with amount 1 called by the PoolManager at the target reverts with an Error(string). A take under the target id therefore always reverts (src/types/Currency.sol:82-86) and no debt can exist in that id. sync(target) works, so a payment made through the proxy can be credited under the target id, and that credit cannot be paid out. The single sync slot (src/libraries/CurrencyReserves.sol:27-32) gives one credit per payment. The PoolManager holds 2 wei of sETH, 30,687.3 SNX and none of the other three.",
+   "source": "https://mainnet.optimism.io"
+  },
+  {
+   "chainIds": [
+    130
+   ],
+   "lens": "L3",
+   "check": "Faces: the governance token address 0x4200000000000000000000000000000000000042 on Unichain, which has no code while five sibling chains hold token code there.",
+   "result": "It behaves as any address without code. take succeeds, records a debt in that id and moves nothing (src/types/Currency.sol:64-74, src/PoolManager.sol:294). sync reverts because the balanceOf call returns no data (src/types/Currency.sol:94). No positive delta can arise in that id without a pool that someone funded, so nothing can be minted or settled against it. If a later fork installs code at that address, no claim or credit from before the fork can exist under its id.",
+   "source": "https://mainnet.unichain.org"
+  },
+  {
+   "chainIds": [
+    10,
+    130
+   ],
+   "lens": "L2",
+   "check": "Upcoming fork, Lagoon. Any account can make L2ToL2CrossDomainMessenger call the PoolManager with chosen calldata and value. Can that caller identity take funds or leave state that hurts other users.",
+   "result": "No. unlock from the messenger calls unlockCallback on the messenger (src/PoolManager.sol:110), which has no such function and no fallback, so the call reverts. take, settle, settleFor, mint, burn, clear, swap, modifyLiquidity and donate revert outside an unlock (src/PoolManager.sol:96-99). If an attacker relays a message from inside its own unlock callback, a take or mint by the messenger records a debt under the messenger's address (src/PoolManager.sol:294, 326) and the attacker's unlock cannot return until someone pays it with settleFor (src/PoolManager.sol:112). ERC-6909 transfer, approve and setOperator sent by the messenger act on the messenger's own claims only (src/ERC6909.sol:25-64), and burn needs an allowance or operator approval from the holder (src/ERC6909Claims.sol:13-22). Claims or positions that someone records under the messenger's address can be moved by every account, so that address must never be used as a holder. The owner of the PoolManager is a different address on both chains (state/networks.json).",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L2/L2ToL2CrossDomainMessenger.sol"
+  },
+  {
+   "chainIds": [
+    10,
+    130
+   ],
+   "lens": "L2",
+   "check": "Lead L-091, first half. Do the sequencer defined gas refunds of Lagoon credit only the transaction sender, and can the credit reach the PoolManager or show up as a balance rise between a sync and a settle.",
+   "result": "The specification credits tx.from with refund times effective gas price plus the operator fee difference, and debits the block beneficiary, the base fee vault and the operator fee vault. It applies the settlement after the EVM frame of the transaction has finished. The PoolManager has code and no delegation, so it cannot be tx.from of a signed transaction, and a deposit gets no refund. Because the credit is applied after execution, no sync and settle of that transaction can see it, including through the legacy ETH view on OP Mainnet. The specification is marked as not final.",
+   "source": "https://specs.optimism.io/protocol/lagoon/sdm.html"
+  },
+  {
+   "chainIds": [
+    10,
+    130
+   ],
+   "lens": "L3",
+   "check": "Lead L-091, second half. What the SuperchainTokenBridge can do to balances of tokens that implement crosschainBurn once Lagoon activates it.",
+   "result": "sendERC20 calls crosschainBurn(msg.sender, amount), so the bridge burns only from the account that called it. The PoolManager cannot call sendERC20, because it only sends transfer, balanceOf, hook selectors, unlockCallback and empty calldata. relayERC20 is callable by the messenger only and calls crosschainMint(to, amount) for the recipient named on the source chain. A balance of the PoolManager in such a token can rise without a transfer call and cannot fall. A rise between a sync and a settle is credited to the settler (src/PoolManager.sol:358-364), and it is paid for by the burn on the other chain, as with any transfer in. Read at op-contracts v4.0.0; the file is not at that path on the develop branch.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-contracts/v4.0.0/packages/contracts-bedrock/src/L2/SuperchainTokenBridge.sol"
+  },
+  {
+   "chainIds": [
+    480
+   ],
+   "lens": "L2",
+   "check": "Lead L-192. Does the parallel validation path for flashblocks in the World Chain node run each transaction on its own journal, and what happens when a result disagrees with the access list.",
+   "result": "Yes. At the deployed tag v2.8.2, execute_workers runs a rayon parallel map in which every (index, transaction) pair builds a new revm State, sets the block access list index, creates a new EVM instance with create_evm and executes that one transaction without commit. Transient storage is part of the journal of an EVM instance, so each transaction starts with an empty transient map and no worker shares one with another. The outputs are sorted by index and committed in order into a canonical executor that rebuilds the access list. If the access list hash, the receipts root, the state root or the block hash differs from the sequencer's, the function returns an error and the flashblock is rejected. This path validates flashblocks on nodes that follow the sequencer. The sequential strategy in the same file runs on one State through the OP executor that cycle 2 read.",
+   "source": "https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/crates/validator/src/execution_strategy.rs"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L1",
+   "check": "Lead L-193. Has any chain of this unit moved block execution from revm to the evm2 engine.",
+   "result": "No. The seven endpoints report the same client builds as in cycle 2 (op-reth v2.9.0-rc.1-72fcf947 on Unichain, Ink and Soneium, a dev build on OP Mainnet, reth v2.5.2 with base v1.5.6 on Base, conduit-op-reth v2.5.1 on Zora, world-chain v2.8.2). The Base workspace at v1.5.6 pins evm2 at one commit for the crate base-common-evm2, whose README says it is intentionally not wired into the node. The readings of cycle 2 therefore still describe the engine that executes blocks. The question returns when a release notes the switch.",
+   "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm2/README.md"
+  },
+  {
+   "chainIds": [
+    10
+   ],
+   "lens": "L1",
+   "check": "Cycle 2 gap: OP Mainnet had no client reading of its own because the official endpoint reports a dev build.",
+   "result": "A third party endpoint serving OP Mainnet (https://op-pokt.nodies.app) reports op-reth/v2.4.2-f863ff4c. In op-revm at the tag op-reth/v2.4.2 the handler calls journal.commit_tx() at the end of a transaction (line 388), discard_tx() on a transaction error (line 457), and for a failed deposit calls checkpoint_revert on the first checkpoint, bumps the nonce, adds the mint and calls commit_tx() (lines 478-491). The workspace pins revm 41.0.0. This is one more released build that follows the chain with the transient storage boundary cycle 2 described. The build of the sequencer itself remains unknown.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.4.2/rust/op-revm/src/handler.rs"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "check": "Cycle 3 gap and leads L-119 and L-214: can an account without a role cause a balance write on a B20 token, which would change the PoolManager's balance outside its own transfer calls (assumption A2).",
+   "result": "No. In the Stablecoin logic v3 and the Asset logic v3 at the deployed tag, set_balance is reached only from move_balance, burn_inner, mint and batchMint. transfer moves from the caller. transferFrom checks the allowance of the source first. mint and batchMint check the Mint role unless the factory is creating that token in the same call. burn checks the Burn role and burns the caller's own balance. burnBlocked checks the BurnBlocked role and that the account is blocked. seizeWithMemo checks the Seize role. A transfer from an account to itself subtracts and adds the same amount. The Asset multiplier is applied in scaledBalanceOf and balanceOfUI only, and balanceOf returns the stored balance, so a multiplier update by the operator role does not move the number that sync and settle read (src/PoolManager.sol:285, 359). What remains is the issuer class already recorded in F-027.",
+   "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_stablecoin/logic/v3.rs"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L1",
+   "check": "Upcoming fork, Everest on Base (no date). Does it add a precompile, a token variant or an address that starts to answer calls, which could turn a currency id without code into a live token.",
+   "result": "Not in the source as of today. The precompile provider at v1.5.6 maps Denim, Everest and Zenith to the Cobalt set and says they introduce no new precompiles. The B20 variant table on the main branch still has Asset (0) and Stablecoin (1) only. The main branch has B20 logic versions v1 to v3 and no v4. A B20 address with a valid variant that was never created reverts on every call (cycle 2), so no debt can be recorded against it before creation, and an address with another variant byte is an account without code where no positive delta can arise. This answers the cycle 2 lead about a third variant for now.",
+   "source": "https://raw.githubusercontent.com/base/base/main/crates/common/precompiles/src/b20_factory/variant.rs"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L2",
+   "check": "Upcoming fork, Everest on Base. Can the PoolManager be named as sender or payer of a Base Transaction (type 0x79), so that the protocol debits or credits its ETH balance outside a call.",
+   "result": "No. The executor at v1.5.6 states that before Zenith there is no keystore and authorization is pure secp256k1 recovery, and Base documents Zenith as a gate it does not schedule. Sender and payer are the accounts that the signatures recover to. The fee is taken from the payer before the calls and the surplus is returned to the payer after them. An address with contract code and no private key cannot take either role. Phases share one transaction and one transient map, which cycle 3 already judged. The file has moved on the main branch (HTTP 404 at the v1.5.6 path), so this must be read again on the release that carries the Everest timestamp.",
+   "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/eip8130.rs"
+  },
+  {
+   "chainIds": [
+    8453,
+    10
+   ],
+   "lens": "L3",
+   "check": "Lead L-195. Which tokens held by the PoolManager on Base and OP Mainnet raise a holder's balance through a call that any account can make, and who may trigger the USD+ payout on Base.",
+   "result": "None found. A read only probe called 70 public functions on each token contract (40 without arguments such as rebase, accrue, poke, harvest, distribute, sync, update, claim, drip, checkpoint, and 30 with the PoolManager as address argument such as claim, claimFor, getReward, updateReward, user_checkpoint, claim_rewards) and compared balanceOf(PoolManager) before and after inside one eth_call. It covered 1,594 tokens on OP Mainnet and 9,108 on Base and no balance changed. A control contract in the same call changed as expected. For USD+ on Base, changeSupply reverts with 'Caller is not the EXCHANGER', payout() on the exchange reverts for an account without a role, and the PoolManager holds 112.37 USD+. The probe calls the token contract only. A token whose balance is computed from another contract (an exchange, a vault, an oracle) is covered only if the token itself exposes the trigger.",
+   "source": "eth_call with state override on https://mainnet.optimism.io and https://base.gateway.tenderly.co on 23 November 2026"
+  },
+  {
+   "chainIds": [
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L3",
+   "check": "The same trigger probe on the other five chains of the unit, as asked by lead L-317 for World Chain.",
+   "result": "No balance changed for 4,562 tokens on Unichain, 3,438 on Ink, 851 on World Chain, 70 on Soneium and 41 on Zora. The token lists are those of the cycle 4 balance unit: full Initialize history on Unichain, Ink, Soneium and Zora, and the explorer holdings page on World Chain.",
+   "source": "eth_call with state override on https://mainnet.unichain.org, https://rpc-gel.inkonchain.com, https://worldchain-mainnet.g.alchemy.com/public, https://rpc.soneium.org and https://rpc.zora.energy/ on 23 November 2026"
+  },
+  {
+   "chainIds": [
+    8453,
+    130,
+    7777777
+   ],
+   "lens": "L4",
+   "check": "Lead L-316 for Base, Unichain and Zora. For the most used hooks: does initialize by an ordinary account with its own currencies succeed, and does the hook hold ERC-6909 claims or balances that a callback could move.",
+   "result": "Base (sample of 466 pools from 80 windows of 1,000 blocks): the five most frequent hooks, 0xbdf938149ac6a781f94faa0ed45e6a0e984c6544, 0x0469a4bd3724dc86c9542f4694c976da13c450c0, 0xb429d62f8f3bffb98cdb9569533ea23bf0ba28cc, 0x5e320ea6278107968c119942e57d876c5f922acc and 0xbb7784a4d481184283ed89619a3e3ed143e1adc0, all revert inside the hook when an account without code calls initialize with invented currencies, with ETH and an invented currency, or with WETH and an invented currency, each with the fee and tick spacing of a real pool of that hook. Their claims for ETH, WETH and USDC are zero except dust at 0xb429 (4.4e-8 WETH and 0.00011 USDC). Unichain (all 7,811 pools): ClankerHookStaticFee and PrediXHookProxyV2 revert in the same test. UniMemeHook accepts any pool. Its verified source pays the whole fee out with take inside afterSwap in the currency of the calling pool and returns the same amount as delta, so its deltas net to zero in every pool and it keeps no claim or balance. Its referral registry accepts the first 32 byte hookData for a token creator from any pool that uses the hook, which decides who receives 0.1 percent of later volume out of the platform's share and does not change what swappers or liquidity providers pay. Zora (all 73 pools): 62 pools have no hook, and the one hook with two pools accepts any pool and holds no claims. No hook was found that pays from its own claims in a stranger's pool. The sources of the Base hooks were not read, and a hook that rejects a direct initialize may still open pools through its own factory.",
+   "source": "eth_getLogs and eth_call on https://base.gateway.tenderly.co, https://unichain.gateway.tenderly.co and https://rpc.zora.energy/; https://unichain.blockscout.com/api/v2/smart-contracts/0xb4960cd4f9147f9e37a7aa9005df7156f61e4444"
+  },
+  {
+   "chainIds": [
+    10,
+    130
+   ],
+   "lens": "L3",
+   "check": "Upcoming fork, Lagoon. Relays of cross-chain messages are permissionless. If tokens or ETH addressed to the PoolManager arrive by a relay, who gets the credit.",
+   "result": "Whoever calls sync before the relay and settle after it in the same unlock (src/PoolManager.sol:279-288, 349-364). Core never expects a payment to arrive in a separate step: a payer in core calls sync, pays and settles inside one callback. A cross-chain design that sends tokens straight to the PoolManager and settles in a later message would hand the payment to the first account that executes the relay inside its own unlock. No such router exists today because interop is not active. This is a rule for periphery written after the fork and is recorded as a lead.",
+   "source": "https://specs.optimism.io/interop/predeploys.html"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    10,
+    130
+   ],
+   "lens": "L4",
+   "question": "After Lagoon activates on OP Sepolia and Unichain Sepolia (target 10 December 2026), and again on OP Mainnet and Unichain (target 11 January 2027): which implementations sit behind 0x4200..0022 to 0x4200..0028 and 0x4200..0030, and what does each return to the sixteen call shapes with the PoolManager as msg.sender? Confirm from the deployed bytecode that ETHLiquidity, SuperchainETHBridge and SuperchainTokenBridge have no receive or fallback and none of the selectors the PoolManager can send.",
+   "why": "The clearance of this cycle was read from source on the develop branch and from op-contracts v4.0.0, because the contracts are not deployed. A fallback or a payable receive in the installed version would make one of them a native payout recipient that books value to the PoolManager, the shape of F-048.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "question": "Build the list of all pool currencies of the Base PoolManager from the full Initialize history with an archive log source that allows wide ranges (an indexer export or a paid endpoint), then rerun the reconcile script and the trigger probe of this cycle over it.",
+   "why": "Public sources cannot do it: the Tenderly gateway caps eth_getLogs at 1,000 blocks without an access code, mainnet.base.org answered 'request limit reached', and base.blockscout.com answers HTTP 403. Base has about 61 million blocks and the largest pool count of the unit. The tested list holds the 9,108 tokens that moved in one day.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    480
+   ],
+   "lens": "L3",
+   "question": "Build the list of all pool currencies of the World Chain PoolManager from the full Initialize history. The public endpoint caps eth_getLogs at 100 blocks.",
+   "why": "The tested list is the explorer holdings page with 851 tokens. A pooled token that the explorer does not index was never tested.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L4",
+   "question": "For the Base hooks 0xbdf938149ac6a781f94faa0ed45e6a0e984c6544, 0x0469a4bd3724dc86c9542f4694c976da13c450c0, 0xb429d62f8f3bffb98cdb9569533ea23bf0ba28cc and 0x5e320ea6278107968c119942e57d876c5f922acc: which contract is allowed to initialize pools, can an ordinary account reach that path with a paired currency of its own choice, and what do beforeSwap and afterSwap of 0xb429 and 0x5e32 (both return deltas) do with the hook's ERC-6909 claims?",
+   "why": "A direct initialize from an ordinary account reverts in all four, which rules out the simplest case only. The sources were not read because the Base explorer API was not reachable. 0xb429 already holds small WETH and USDC claims at the PoolManager.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L3",
+   "question": "For the pooled tokens whose balanceOf reads a second contract (an exchange, a vault, a rate provider or an oracle): which of those second contracts has a public function that raises the reported balance of every holder? List them by tracing balanceOf(PoolManager) for the tokens with the largest balances on the endpoints that serve debug_traceCall.",
+   "why": "The trigger probe of this cycle called 70 functions on the token contract itself and found nothing on 19,664 tokens. A rebase that is triggered on another contract, as with USD+ and its exchange, is outside that probe. A public trigger would let a caller run sync, the trigger and settle and take the whole increase (src/PoolManager.sol:279-288, 349-364).",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    10,
+    130
+   ],
+   "lens": "L4",
+   "question": "Once interop is live, do any routers, intent settlers or bridges on OP Mainnet or Unichain send tokens or ETH to the PoolManager in one cross-chain message and call settle in a later step or a later message?",
+   "why": "Relays are permissionless. An account that executes such a relay inside its own unlock, after its own sync, is credited the payment (src/PoolManager.sol:279-288, 349-364). Core is safe, so this concerns periphery that will be written for the fork.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L2",
+   "question": "When Everest gets an activation time, read the Base Transaction executor again on the release that carries it: does sender and payer authorization still require a secp256k1 signature of that account, and does gas-limit billing change who is debited?",
+   "why": "The file crates/common/evm/src/eip8130.rs exists at v1.5.6 and returns HTTP 404 on the main branch, so the code has moved or changed since the reading of this cycle. A payer that can be named without its own signature would let the protocol debit an arbitrary account's ETH.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    10
+   ],
+   "lens": "L1",
+   "question": "Which op-reth commit does the OP Mainnet sequencer run? The official endpoint and publicnode both report op-reth/v0.0.0-dev-unknown.",
+   "why": "Two released builds that follow the chain have now been read (commit 72fcf947 in cycle 2 and tag op-reth/v2.4.2 in this cycle). The block producer of the chain with the most value in this unit is still unidentified.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-333",
+   "outcome": "cleared",
+   "answer": "On all seven chains the implementation slot is set at 0x00, 0x02, 0x07, 0x0f, 0x10 to 0x1b, 0x20 and 0x21. 0x2c (ConditionalDeployer) and 0x2d (L2DevFeatureFlags) are set on six chains and empty on Base. 0x30 is set on Base only (BaseTime). WETH at 0x06 and the governance token at 0x42 are plain contracts (0x42 is an empty proxy on Base and has no code on Unichain). No interop predeploy is implemented anywhere: 0x22 CrossL2Inbox, 0x23 L2ToL2CrossDomainMessenger, 0x24 SuperchainETHBridge, 0x25 ETHLiquidity, 0x26 and 0x27 the SuperchainERC20 factory and beacon, 0x28 SuperchainTokenBridge and 0x30 UndeliveredMessageExporter are proxies without implementation and revert on every shape, so a value call or a transfer call from the PoolManager to SuperchainETHBridge or ETHLiquidity changes no balance at any address today. The sixteen shapes through a forwarding stub gave the same non reverting targets on every chain: WETH, the four fee vaults and L2ToL1MessagePasser (empty calldata only), L1BlockNumber (every shape, returns the L1 block number) and the governance token. None of them credits msg.sender in a ledger that another address reports, apart from WETH, whose balance is its own ledger. From source, the interop contracts that Lagoon will install on OP Mainnet and Unichain have no receive or fallback and none of the selectors the PoolManager can send. A lead asks for the same sweep on the live contracts after activation."
+  },
+  {
+   "leadId": "L-091",
+   "outcome": "cleared",
+   "answer": "The Lagoon specification credits the refund to tx.from only, after the EVM frame of the transaction has ended, and debits the block beneficiary and two fee vaults. The PoolManager cannot be tx.from, and a credit applied after execution cannot fall between a sync and a settle, also not through the legacy ETH view on OP Mainnet. The SuperchainTokenBridge burns only from the caller of sendERC20 and mints to the recipient named on the source chain, so a balance of the PoolManager in a token with crosschainBurn can rise and cannot fall. SuperchainETHBridge pays out by self-destruct, which adds a second route for forced ETH and no credit for anyone. Lagoon is targeted for 11 January 2027 on OP Mainnet and Unichain. The specification is not final and Zora, Ink and Soneium have no date."
+  },
+  {
+   "leadId": "L-316",
+   "outcome": "cleared",
+   "answer": "Answered for Base, Unichain and Zora. The five most frequent hooks in a Base sample and the two most used hooks on Unichain revert when an ordinary account calls initialize with its own currencies. UniMemeHook on Unichain and the only repeated hook on Zora accept any pool, hold no ERC-6909 claims and no ETH, and UniMemeHook pays its fee out inside the same callback in the currency of the calling pool. No hook was found that pays from its own claims on a callback from a stranger's pool. The sources of the Base hooks were not read and a lead asks for them. Robinhood Chain, Elysium, X Layer and Monad are not part of this unit."
+  },
+  {
+   "leadId": "L-192",
+   "outcome": "cleared",
+   "answer": "At world-chain v2.8.2 the parallel flashblock validation builds a new State and a new EVM instance for every transaction and executes it without commit, so each transaction has its own journal and an empty transient map. The results are committed in index order and the access list hash, receipts root, state root and block hash must match the sequencer's, otherwise the flashblock is rejected with an error. No re-execution with shared transient state exists in that file."
+  },
+  {
+   "leadId": "L-193",
+   "outcome": "cleared",
+   "answer": "No chain of the unit runs evm2. All seven endpoints report the client builds of cycle 2, and the Base crate base-common-evm2 is documented as not wired into the node. The question is open again when a release moves block execution to that engine."
+  },
+  {
+   "leadId": "L-195",
+   "outcome": "cleared",
+   "answer": "No token was found. The trigger probe called 70 public functions on each of 1,594 tokens on OP Mainnet and 9,108 on Base and no balance of the PoolManager changed. The USD+ payout on Base is not public: changeSupply needs the exchanger and payout() on the exchange reverts for an account without a role. The PoolManager holds 112.37 USD+. The Base list covers tokens that moved in one day, and triggers that live on a second contract are outside the probe."
+  },
+  {
+   "leadId": "L-317",
+   "outcome": "inconclusive",
+   "answer": "The full Initialize history could not be read on Base or World Chain. The Tenderly gateway for Base caps eth_getLogs at 1,000 blocks, mainnet.base.org refused with a request limit, base.blockscout.com returns HTTP 403, and the World Chain endpoint caps the range at 100 blocks. The second half of the lead was done: the window independent test (balanceOf, 70 public calls, balanceOf again, in one eth_call) ran over 9,108 tokens on Base and 851 on World Chain with no change, and also over the lists of the other five chains of the unit. BNB Smart Chain and X Layer are not part of this unit."
+  },
+  {
+   "leadId": "L-291",
+   "outcome": "inconclusive",
+   "answer": "For Base the list of tokens that never moved in the window cannot be built from public endpoints, for the reasons given under L-317. A full scan at 1,000 blocks per request would need tens of thousands of requests. The trigger probe over the 9,108 known tokens found no balance that a public call raises. BNB Smart Chain and X Layer are not part of this unit."
+  }
+ ]
+}

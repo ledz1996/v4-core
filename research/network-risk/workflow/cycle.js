@@ -92,16 +92,23 @@ Then spot-check the three "cleared" items where a mistake would cost the most. A
 Output: write ${DIR}/${id}.verdicts.json in the "verdicts" format from SCHEMA.md with "unit": "${id}" and one verdict per finding index (an empty "verdicts" array if there are no findings; still do the spot checks). Run \`python3 ${ROOT}/tools/validate.py verdicts ${DIR}/${id}.verdicts.json\` until it prints OK. Return the summary object; "findings" is the number confirmed, "inScope" the number confirmed with an unprivileged actor, and the headline names the strongest confirmed in-scope finding or says none survived.`
 }
 
+// A cycle that lost agents to an outage is finished with a second run: "done" lists what to keep.
+const keepR = new Set((plan.done && plan.done.research) || [])
+const keepV = new Set((plan.done && plan.done.verify) || [])
+const kept = (id, kind) => ({ file: `${DIR}/${id}.${kind}.json`, validated: true, findings: -1, inScope: -1, headline: 'kept from the earlier run of this cycle' })
+const RESUME = `
+An earlier attempt at this unit may have left scripts and raw data in ${DIR}/<unit id>.work/. If that directory exists, read what is there first and build on it instead of collecting the same data again.`
+
 const jobs = [
-  ...plan.units.map(u => ({ id: u.id, prompt: researchPrompt(u) })),
-  ...plan.code.map(c => ({ id: c.id, prompt: codePrompt(c) })),
+  ...plan.units.map(u => ({ id: u.id, prompt: researchPrompt(u) + RESUME })),
+  ...plan.code.map(c => ({ id: c.id, prompt: codePrompt(c) + RESUME })),
 ]
-log(`Cycle ${plan.cycle}: ${plan.units.length} network units, ${plan.code.length} code readings, each followed by a verifier, then one critic (${jobs.length * 2 + 1} agents)`)
+log(`Cycle ${plan.cycle}: ${plan.units.length} network units, ${plan.code.length} code readings, each followed by a verifier, then one critic (${jobs.length * 2 + 1 - keepR.size - keepV.size} agents to run)`)
 
 const results = await pipeline(
   jobs,
-  j => agent(j.prompt, { label: `research:${j.id}`, phase: 'Research', schema: SUMMARY }),
-  (r, j) => agent(verifyPrompt(j.id), { label: `verify:${j.id}`, phase: 'Verify', schema: SUMMARY })
+  j => keepR.has(j.id) ? kept(j.id, 'research') : agent(j.prompt, { label: `research:${j.id}`, phase: 'Research', schema: SUMMARY }),
+  (r, j) => (keepV.has(j.id) ? Promise.resolve(kept(j.id, 'verdicts')) : agent(verifyPrompt(j.id), { label: `verify:${j.id}`, phase: 'Verify', schema: SUMMARY }))
     .then(v => ({ id: j.id, research: r, verify: v })),
 )
 
@@ -122,7 +129,9 @@ Produce the work list for the next cycle, with the threat model in mind (ordinar
 5. Blind spots: ways an ordinary account could take or lock other users' funds that no unit examined. Look at the list P1 to P8 in ASSUMPTIONS.md and ask which lever was never tried against which network feature. Look at the cleared items and ask which clearance rests on an assumption nobody tested.
 Write leads as concrete questions a researcher can answer in one sitting. Mark "high" only those that could end in an in-scope critical or high finding.
 
-Output: write ${DIR}/critic.json in the "critic" format from SCHEMA.md. Run \`python3 ${ROOT}/tools/validate.py critic ${DIR}/critic.json\` until it prints OK. Return the summary object; "findings" is the number of leads, "inScope" the number marked high, and the headline is the most important lead.`,
+${plan.done ? `A critic file from an earlier, partial run of this cycle exists at ${DIR}/critic.json. Read it first. Keep every lead, gap and duplicate in it that is still open, remove what the files written since then have settled, and add what those files show. The result replaces the old file.
+
+` : ''}Output: write ${DIR}/critic.json in the "critic" format from SCHEMA.md. Run \`python3 ${ROOT}/tools/validate.py critic ${DIR}/critic.json\` until it prints OK. Return the summary object; "findings" is the number of leads, "inScope" the number marked high, and the headline is the most important lead.`,
   { label: 'critic', phase: 'Critic', schema: SUMMARY })
 
 return { cycle: plan.cycle, dir: DIR, units: done, dropped, critic }

@@ -1,0 +1,128 @@
+{
+ "unit": "theme-shared-hooks",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "All chain facts were re-run on 23 November 2026 with my own scripts. Hook identity: VERSION() returns klik-multichain-1 on 0x1d06faa7ff674ccfd8a5736c0c0973cb0a8fa0cc (Ethereum, 10031 bytes), 0x41b82571eaaed65f18ad3428f066cd23b9b3a0cc (Robinhood Chain) and 0x50995539e4afaca479bb59b0d795d94e0efea0cc (Tempo), and klik-anypair-1 on 0x6d01769ab90674d0d56b155f57003284e1b460cc (Ethereum, 8082 bytes), 0x5b0a864213d49f23ed2a6635cc42b3b4fe7720cc (Base), 0x9463925bdeee2be5eade2a60857442b4a15ca0cc (Unichain), 0x71b7a448b96a01de73b0caf1267d33558d2620cc (Ink and Arbitrum One), 0xb2c964edbac922f006a09bd293b6c42ee147e0cc (Avalanche) and 0xdd1e195f536e5375ada2eeb179270ac23af8e0cc (Monad). The low 14 bits of every address are 0x20cc. Open initialize: eth_call of PoolManager.initialize from 0x00000000000000000000000000000000c0ffee02 with a PoolKey that pairs a launched token with 0x1111111111111111111111111111111111111112 returns tick 0 on all eleven hook addresses (two fee and tick spacing variants each). On 0xcba49142a75da64a679f32a159f4316f11a7e0cc it reverts in beforeInitialize, as the finding says. Per token ledger paid in the currency of the calling pool: debug_traceCall of beforeSwap from the PoolManager address with the foreign PoolKey shows the hook calling burn(hook, 0x1111..1112, amount) with amount equal to pendingClaims(token) on Ethereum (23876031656686502 and 2079850173284467176091326), Unichain (143394835225437444), Robinhood Chain (333714925697516922), Monad (54489710721685566614) and Tempo (230765). The same test on afterSwap shows mint(hook, 0x1111..1112, 10000000000000000), one percent of the output. The calls end in ManagerLocked (0x54e3ca0d) because the test runs outside unlock. Frozen pools: the Ethereum Quoter returns WrappedError(hook, beforeSwap, Panic(0x11)) for exactly the seven pool ids listed, succeeds for 63 pools and fails with pool errors for 5. A debug_traceCall of the quote for pool 0x8699a47d shows the revert inside PoolManager.burn(hook, WLFI, 39205855192377918360) while the hook holds 2551319276869624230 WLFI claims. The payout step has been executed on chain, which the finding had only derived. Ethereum transaction 0xd903d0ada1874646896a5191a2ef25accec3c3db1333914542b6ad9a8c96bfed (block 26330140, sender 0x6356bab9f082de9abf08856ce61b71d294630964 through contract 0xbd499416061f78beceb10ac00fdecf0232b38208): a swap in pool (0x8312053433a327011a5ba4f9e1fd7a694a4c56c0, 0xfd23280b87514ce09dcb47965f1c5465847422eb) makes the hook mint 85325615158209763 claims of 0x83120534, and the next swap in pool (SPCXon, 0xfd23280b) makes the hook call burn(hook, SPCXon, 85325615158209763) and take the same amount, then transfer 51195369094925857 SPCXon (60 percent) to 0x81ee2b6bcfcf9a614036578e5e4f2b02e507da5a and 34130246063283906 (40 percent) to factory 0xb6da931df2ed2c80db47923d4eb46fd913ee01c3, followed by factory call 0xf3937729. Seven blocks earlier, transaction 0x2781482aa9a322fc7ff55550085c4746cb52026776625dead8c7ab9a528979f3 from the same sender created token 0x83120534 with CREATE2, launched 0xfd23280b through factory function 0xec3e64ef and then initialized the second pool itself with tick spacing 100. This one transaction accounts for the whole Ethereum shortfall: pending fees in SPCXon and 0x8b748678 pools (79607629840677756 plus 13516371654516515) minus the claims held in the two currencies (7798353546842757 plus 32790141751) equals 85325615158209763. On Unichain, transaction 0x2b6aab1368b9266b585e655377e5a9431b822e4ff4657fec34166824e372a82e (block 60794133) shows the hook minting 10000000000000000 claims of 0x29f2f95c696e93939d8ce77819377d16bd0dcc04 and then burning 10000000000000000 UNI claims in a swap of another pool, which is the 0.01 UNI difference the finding reports. Fee accrual needs no liquidity: in Ethereum transaction 0x6f7afaab99a4ad2ab4f7c77cf1953b649e1e69d7da2a521f57a1c2eb4ad4b266 a swap with amountSpecified -36547344002485468501 in a pool whose Swap event shows zero amounts makes the hook mint 365473440024854685 claims in beforeSwap. Tempo: debug_traceTransaction of 0x36bf56c1 and 0xa23224d5 shows mint(hook, pathUSD, 0x2d5067) and then burn, take, a transfer of 1781821 to 0x81ee2b6b and a transfer of 1187882 to the factory that ends out of gas. launchEnabled() is 1, creatorFees(DUCK) is 2846234 and the factory holds 2946234 pathUSD. Networks without a traced burn: the Ink, Arbitrum One and Avalanche hooks differ from the traced Unichain hook in 13 runs of exactly 20 bytes (embedded addresses), and the Base hook 0x5b0a8642 differs from the traced Ethereum hook 0x6d01769a in 11 runs of 20 or 32 bytes, so the logic is the same code. The Base hook 0x64746dca (VERSION b20-stock-1, 9873 bytes) accepted the foreign initialize, and its swap path was not traced. Launch through the factory is public: 26 distinct senders called factory 0xb6da931d directly in the transactions that created the pools of the first Ethereum hook. Not re-checked: the pool counts on the eight networks other than Ethereum (83 and 59 on Ethereum were recounted from Initialize logs), and the USD values, apart from one DexScreener request that returned about 132 USD per SPCXon.",
+   "codeCheck": "initialize has no caller check and calls beforeInitialize with the caller and the caller's PoolKey (src/PoolManager.sol:117-142, src/libraries/Hooks.sol:178-182), so the hook alone decides whether a second pool of a token exists. Flags 0x20cc are beforeInitialize, beforeSwap, afterSwap and the two swap return delta flags (src/libraries/Hooks.sol:29-45). No liquidity flag is set, so modifyLiquidity never calls the hook (src/libraries/Hooks.sol:195-206 and 209-245) and anyone can add or remove liquidity in any of these pools. swap calls the hook before the pool is touched (src/PoolManager.sol:202, src/libraries/Hooks.sol:248-282) and a hook revert is bubbled up (src/libraries/Hooks.sol:137), so a failing burn in beforeSwap blocks every swap of that pool. burn credits the caller and then subtracts the claim balance with checked arithmetic (src/PoolManager.sol:332-336, src/ERC6909Claims.sol:13-22, src/ERC6909.sol:85-87). A burn above the balance reverts with Panic(0x11), which is the error the Quoter returns. burn followed by take of the same amount nets the hook's delta to zero (src/PoolManager.sol:291-297), so the count check at the end of unlock (src/PoolManager.sol:112) does not stop the payout. mint accepts any recipient and debits the caller (src/PoolManager.sol:322-329), so any account can give the hook claims of a currency it issues, which lets the burn in a foreign pool succeed. No guard in src/ was missed: the PoolManager has no notion of which pool a claim balance of a hook was earned in, and none of the checks named in the task (msg.value in _settle, synced currency in collectProtocolFees, int128 casts, hook return data length) lies on this path. The PoolManager behaves as written. The fault is in the hook, which was read through traces and bytecode comparison because no verified source was fetched.",
+   "corrections": "The actor value unprivileged is right: every step (public factory launch, initialize, mint of claims to the hook, swap) was done by an ordinary account in the transactions cited, and the affected pools use a hook and tokens the attacker did not write. Severity medium is right on the SCHEMA scale: the loss is confined to the fee claims and the swaps of one hook family, the claims are worth tens of USD, and liquidity removal does not call the hook. Corrections. (1) Step 6 is no longer a derivation. It ran on Ethereum in transaction 0xd903d0ad at block 26330140 and moved 85325615158209763 SPCXon claims (about 11 USD) that backed the pending fees of other tokens. Evidence for that step is primary. (2) Step 7 can name the cause: that transaction explains the whole Ethereum shortfall, and transaction 0x2b6aab13 explains the 0.01 UNI on Unichain. (3) The three frozen Ethereum pools that hold liquidity (0x227260ac, 0x02ae580f, 0x9415295f on the first hook) are frozen as a result of that transaction, because they share the SPCXon claim balance it drained. (4) The two frozen pools on the second Ethereum hook have zero liquidity (StateView getLiquidity returns 0 for 0x1d3f0654 and 0x8699a47d). They were initialized inside contract creation transactions sent by 0x02dcd01d534477b5e76628a7284e7fa71c7a7ed7 and 0x3a15cf422307e922645d671cb247e76e8b1ec50d, so no user funds sit in them. (5) The preconditions understate the freeze. An account does not need liquidity or a token of its own launch to freeze the pool of another creator's token T: it initializes a pool of T against a currency it issues, mints that currency's claims to the hook for the current pendingClaims(T), and swaps there with a large specified amount. pendingClaims(T) then exceeds the hook's claims in the real quote currency and the real pool reverts with Panic(0x11) until someone mints the missing claims to the hook or resets the entry through another pool. I did not simulate this sequence end to end. Each step is shown separately by the transactions above. (6) The doubt about launch on Tempo can be narrowed: on Ethereum the launch function is called by many unrelated senders. The Tempo factory was not tested. (7) The Base hook 0x64746dca (b20-stock-1) should stay marked as open initialize only.",
+   "sources": [
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "Blocks 26,477,055 to 26,477,077. VERSION, factory, code length and pendingClaims of the three Ethereum hooks. eth_call of initialize with a foreign PoolKey from an ordinary account. PoolManager.balanceOf(hook, currency). Quoter 0x99bd42B2B22e531f283b7F8a86dFf631EB16A9D1 quoteExactInputSingle for all 75 pools with pending fees: 7 return Panic(0x11) from beforeSwap, 63 succeed, 5 fail with pool errors. StateView getLiquidity. eth_getTransactionByHash for the 142 pool creation transactions."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "debug_traceTransaction of 0xd903d0ada1874646896a5191a2ef25accec3c3db1333914542b6ad9a8c96bfed, 0x2781482aa9a322fc7ff55550085c4746cb52026776625dead8c7ab9a528979f3 and 0x6f7afaab99a4ad2ab4f7c77cf1953b649e1e69d7da2a521f57a1c2eb4ad4b266. debug_traceCall of beforeSwap and afterSwap with a foreign PoolKey on both Ethereum hooks, and of the Quoter call for pool 0x8699a47d."
+    },
+    {
+     "url": "https://mainnet.gateway.tenderly.co",
+     "supports": "eth_getLogs of the PoolManager: 142 Initialize logs that name the two hooks (83 and 59), and ERC-6909 Transfer logs with the hook as sender or receiver for SPCXon (659 mints summing to 4722954873472029123, 561 burns summing to 4715156519925186366), 0x8b748678 and 0x83120534."
+    },
+    {
+     "url": "https://unichain.gateway.tenderly.co",
+     "supports": "eth_getLogs and receipt of 0x2b6aab1368b9266b585e655377e5a9431b822e4ff4657fec34166824e372a82e: mint of 10000000000000000 claims of 0x29f2f95c to the hook and burn of 10000000000000000 UNI claims in the same transaction."
+    },
+    {
+     "url": "https://unichain.drpc.org",
+     "supports": "debug_traceCall of the Unichain hook with a foreign PoolKey: burn(hook, 0x1111..1112, 143394835225437444)."
+    },
+    {
+     "url": "https://mainnet.unichain.org",
+     "supports": "Block 64,679,413. VERSION and code length (9123 bytes) of hook 0x9463925b, pendingClaims of token 0x91f02d95 (143394835225437444), and eth_call of initialize with a foreign PoolKey from an ordinary account, which succeeds."
+    },
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "Block 50,412,123. Foreign initialize succeeds. debug_traceCall shows burn(hook, 0x1111..1112, 230765). debug_traceTransaction of 0x36bf56c1 and 0xa23224d5. launchEnabled, creatorFees(DUCK) and the factory's pathUSD balance."
+    },
+    {
+     "url": "https://robinhood.drpc.org",
+     "supports": "debug_traceCall of hook 0x41b82571 with a foreign PoolKey: burn(hook, 0x1111..1112, 333714925697516922)."
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com",
+     "supports": "Block 121,321,933. VERSION klik-multichain-1 and code length 10031 of hook 0x41b82571, pendingClaims of token 0xff661ebb (333714925697516922), and eth_call of initialize with a foreign PoolKey from an ordinary account, which succeeds. The code differs from the Ethereum hook 0x1d06faa7 in 10 runs of 20 bytes, as does the Tempo hook."
+    },
+    {
+     "url": "https://rpc.monad.xyz",
+     "supports": "Foreign initialize succeeds and debug_traceCall shows burn(hook, 0x1111..1112, 54489710721685566614)."
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "Block 61,187,085. Foreign initialize succeeds on 0x5b0a8642 and 0x64746dca. eth_getCode of 0x5b0a8642 differs from the Ethereum hook 0x6d01769a in 11 runs of 20 or 32 bytes."
+    },
+    {
+     "url": "https://rpc-gel.inkonchain.com",
+     "supports": "Block 61,929,362. Foreign initialize succeeds. eth_getCode differs from the Unichain hook in 13 runs of 20 bytes."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc",
+     "supports": "Block 526,771,799. Foreign initialize succeeds. eth_getCode differs from the Unichain hook in 13 runs of 20 bytes."
+    },
+    {
+     "url": "https://api.avax.network/ext/bc/C/rpc",
+     "supports": "Block 101,154,224. Foreign initialize succeeds. eth_getCode differs from the Unichain hook in 13 runs of 20 bytes."
+    },
+    {
+     "url": "https://api.dexscreener.com/latest/dex/tokens/0xc9eef266834730340a55b6cc24621b31baf55581",
+     "supports": "SPCXon trades at about 132 USD in the pairs with the most liquidity, so the 0.0853 SPCXon moved in transaction 0xd903d0ad was worth about 11 USD."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "FeeHookV3 at 0x0d62529346ac2c61f5c0582210d01214687bc0cc (5,116 pools, no initialize flag, both return delta flags, 5.31 ETH held): can a pool created by a stranger move the ETH that the hook owes to creators and partners?",
+   "agrees": true,
+   "note": "Read contracts/FeeHookV3.sol from Sourcify (exact match for 0x0d62529346ac2c61f5c0582210d01214687bc0cc on chain 1). _beforeSwap and _afterSwap call _accrue(token, fee) and poolManager.take(currency0, hook, fee) with the same fee and return that fee as the hook delta, so the swapper of that pool pays it in ETH. In _accrue the credits to creator recipients, partner, module recipient and protocol wallet add up to the fee in every branch, and with no registered creator the whole fee goes to the protocol wallet. claim() pays ethOwed[msg.sender] only and zeroes it before the call. The registration functions require token.factory() == msg.sender and write per token entries. A fee above the int128 range reverts in take (src/PoolManager.sol:294, src/libraries/SafeCast.sol:56-59), so the unchecked int128 cast in the hook cannot under-report the delta. A pool from a stranger adds ETH equal to what it credits and cannot debit an existing ethOwed entry."
+  },
+  {
+   "check": "Clanker hooks (ClankerHookStaticFeeV2, ClankerHookStaticFee, ClankerHookDynamicFee; 0x6c24d0bc... on Ethereum, 0xb429d62f... on Base, 0xbc6e5abd... on Unichain, 0xf7ac6695... and 0xfd213be7... on Arbitrum One, 0x48b8f6ad... on Robinhood Chain, 0xc5d30902... on BNB Smart Chain, 0x94f802a9... on Monad): they hold ERC-6909 claims and offer initializePoolOpen to every caller. Can a pool opened by a stranger take those claims?",
+   "agrees": true,
+   "note": "Read src/hooks/ClankerHookV2.sol and ClankerHookStaticFeeV2.sol from Sourcify for 0x48b8f6ad3a1b4aa477314c9a23035b8f84dde8cc on Robinhood Chain and confirmed that the Base deployment 0xb429d62f8f3bffb98cdb9569533ea23bf0ba28cc has the same two source files. _beforeInitialize always reverts, and the PoolManager skips it only when the hook is the caller (src/libraries/Hooks.sol:171-182). initializePoolOpen writes clankerIsToken0 before poolManager.initialize, and a call for an existing pool reverts with PoolAlreadyInitialized (src/libraries/Pool.sol:101), so the roles of an existing pool cannot be flipped. _hookFeeClaim burns the hook's whole claim balance of the fee currency and takes it to the immutable factory address, which is the only exit for claims. Every fee mint equals the delta the hook returns. Open pools have no locker, MEV module or extension, so no external contract runs inside their callbacks. The older ClankerHookStaticFee and ClankerHookDynamicFee deployments were not read, as the item says."
+  },
+  {
+   "check": "Doppler initializer hooks (DopplerHookInitializer 0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544 with 244,744 pools on Robinhood Chain, 0xf0d631d54c7e1040ccfa1c2ed737973d6a652544 on Arc and BNB Smart Chain, 0xbdf938149ac6a781f94faa0ed45e6a0e984c6544 and DecayMulticurveInitializerHook 0xbb7784a4d481184283ed89619a3e3ed143e1adc0 on Base, 0x580ca49389d83b019d07e17e99454f2f218e2dc0 on Monad): the hook owns the positions of every pool and holds collected fees. Can a pool from a stranger reach them?",
+   "agrees": true,
+   "note": "Read src/initializers/DopplerHookInitializer.sol and src/base/FeesManager.sol from Sourcify for 0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544 on Robinhood Chain. _beforeInitialize requires sender == address(this) (line 497), initialize and exitLiquidity require the Airlock as caller, and _afterSwap moves no funds unless getAsset[poolId] maps to a state with an enabled module. collectFees reverts for a pool that is not in status Locked, and cumulated fees, last checkpoints and shares are all stored under the pool id. One remark outside the cleared question: for pools with a module, _afterSwap calls take, sync(feeCurrency) and settleFor inside the swap, which replaces any currency the swapper had synced before swapping. That affects only a swapper who syncs before the swap, and it is listed here for the record."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1,
+    130,
+    8453,
+    57073,
+    42161,
+    4663,
+    43114,
+    143,
+    4217
+   ],
+   "lens": "L4",
+   "question": "List every transaction on the nine networks in which a Klik hook burns claims of one currency for an amount it minted in another currency, starting from Ethereum 0xd903d0ada1874646896a5191a2ef25accec3c3db1333914542b6ad9a8c96bfed (sender 0x6356bab9f082de9abf08856ce61b71d294630964, contract 0xbd499416061f78beceb10ac00fdecf0232b38208) and Unichain 0x2b6aab1368b9266b585e655377e5a9431b822e4ff4657fec34166824e372a82e. Did the launcher of 0xfd23280b87514ce09dcb47965f1c5465847422eb collect the 34130246063283906 SPCXon credited by factory call 0xf3937729, and do the deployers 0x690193287a9f3e0095adae116f4260818332ce0a, 0x888ddf6a86fd6e6da39395cd3f333ecba55ff364, 0x02dcd01d534477b5e76628a7284e7fa71c7a7ed7 and 0x3a15cf422307e922645d671cb247e76e8b1ec50d, which created second pools on both Ethereum hooks, belong to the hook author or to third parties?",
+   "why": "The payout step of the finding has been used on Ethereum and three pools with liquidity are frozen because of it. Whether the creator share was withdrawn decides if this was a test by the author or a theft, and a count over all networks gives the realised loss.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1,
+    130,
+    8453,
+    57073,
+    42161,
+    4663,
+    43114,
+    143,
+    4217
+   ],
+   "lens": "L4",
+   "question": "Who owns the liquidity positions of the Klik launch pools (for example the three frozen SPCXon pools with liquidity 153845604096252485200300 on Ethereum), can the owner remove them, and how much quote currency do the pools of the nine networks hold in total?",
+   "why": "An ordinary account can raise pendingClaims of any launched token from a pool without liquidity and stop swaps in that token's real pool. If the positions are locked in the factory, the quote currency paid in by buyers stays in the PoolManager with no swap path, and the severity of the finding should be judged on that amount.",
+   "priority": "medium"
+  }
+ ]
+}
