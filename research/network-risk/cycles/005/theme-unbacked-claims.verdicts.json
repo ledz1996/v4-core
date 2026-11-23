@@ -1,0 +1,201 @@
+{
+ "unit": "theme-unbacked-claims",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "All chain facts were re-run on 23 November 2026 against https://mainnet.base.org/ and https://base.gateway.tenderly.co. Token source: the Sourcify record for 0xf0197f10ea542a67914ecc0ec5304dc9df1faf6f is an exact match for DeadToken (solc 0.8.30). Dead.sol line 58 sets IDLE_PERIOD to 7,776,000 seconds and line 61 sets MIN_CLAIMER_BALANCE to 1,000,000 tokens of 18 decimals. claimIdleTokens (lines 388 to 420) checks the caller's balance, the pool whitelist and the idle period, then moves 50 percent of the target's balance to the caller, burns 40 percent and sends 10 percent to three platform addresses. _update (lines 563 to 578) sets lastTransferTime for the sender, and for a receiver only when its balance was zero. Transaction: the receipt of 0xc32384b25be1e5d29cd5e978fc5f531359ddd8dcae67a1ff89204e98c27d0d2b (block 58,594,779, timestamp 1794909331, status 1, 78 logs) shows 1,000,000 DEAD sent by pair 0x098a1a39a006ea83c86fd8da991c0e7134eaf68c to 0x25bead0f62a7c234e89691e4519ca5e74079cf3f, five Transfer logs with the PoolManager as sender (7,449.89 to the claimer, 5,959.91 to the zero address, 744.99, 446.99 and 298.00 to the platform addresses), a TokensClaimed log with target PoolManager and amount 14,899.783090229956530365, and no log of the PoolManager. balanceOf(PoolManager) is 14,899.783090229956 at block 58,594,778 and 0 at block 58,594,779 on both endpoints, and 1,660.03 at the latest block. lastTransferTime(PoolManager) was 1784165391 one block before the claim and is 1795149430 now. whiteListedPool(PoolManager) and pendingPoolWhitelist(PoolManager) are 0 at both blocks. Read-only test of the call itself at block 58,594,778: claimIdleTokens(PoolManager) from an address without DEAD reverts with InsufficientBalanceToClaim (0xb347e4bf), and from the pair, which holds more than 1,000,000 DEAD, it succeeds. At the latest block the same call reverts with TokensNotIdleLongEnough (0x22ba57ac) and getTimeUntilClaimable(PoolManager) returns 7,493,182 seconds. The link the finding left open is now closed. The pools that hold DEAD are three pools of USDC and DEAD without a hook, with static fees of 25, 60 and 70 percent: 0x18fca1729428c26f554c4f431a551e05404b0d6b8ae9ae518966e5a9e9371121, 0x625f17175b0939fcc2a97f35335877998f53d7c43beddd4c9c0ae733237e7bdb and 0xa20d780775626e7ae792654039daf1d3dc44da5099b4d582da277b1392994cfa. I read their parameters from PositionManager.poolKeys and their state from StateView. A read-only Quoter call that sells 1,000,000 USDC into each pool returns the DEAD the pool would pay out: 11,091.73, 83.85 and 195.27 DEAD at block 58,594,778, the same three figures at block 58,594,779 when the PoolManager held 0 DEAD, and 12,223.30, 97.47 and 229.93 DEAD at the latest block. The three pools therefore record at least 12,550.71 DEAD payable to swappers today while the PoolManager holds 1,660.03 DEAD. Value: the 25 percent pool stood at tick 358,751 before the claim, which is about 3,800 DEAD per USDC, so the 14,899.78 DEAD were worth about 4 USD.",
+   "codeCheck": "The path needs no call into the PoolManager, so no guard in src/ can act on it. The token balance is read in two places only: sync (src/PoolManager.sol:285) and _settle (src/PoolManager.sol:359), both through balanceOfSelf (src/types/Currency.sol:90-96). No per currency total exists in storage; pool amounts are numbers in pool state and protocol fees are a counter (src/ProtocolFees.sol:21, 66-70). take debits the caller and then calls transfer on the currency (src/PoolManager.sol:291-297), and Currency.transfer reverts with ERC20TransferFailed when the token call fails or returns false (src/types/Currency.sol:64-74, 82-86). DeadToken is an OpenZeppelin ERC-20 and reverts on a short balance, so a take of more DEAD than the PoolManager holds reverts, and with it the swap or liquidity removal that needs it. collectProtocolFees pays with the same transfer (src/ProtocolFees.sol:54-56). Deltas are stored per target and currency (src/libraries/CurrencyDelta.sol:10-16, src/PoolManager.sol:368-378), so the shortfall cannot be drawn from another currency. A caller with a positive DEAD delta can still close it with mint or clear (src/PoolManager.sol:310-329). The checks named in the task do not apply: the msg.value check, the synced currency check in collectProtocolFees and the delta count check at the end of unlock all run inside PoolManager calls, and this balance change happens in a call from a third contract to the token.",
+   "corrections": "Actor unprivileged is right: the claimer needs 1,000,000 DEAD for one call, borrowed it from a pair inside one transaction, and is neither the token owner 0x485f77d6362f5922fcb63a40aaa4fd79d26ec905 nor the admin 0x6f8b4f05434df0f1af51f3e27a34b36dc8fbbac3. Four points need fixing. First, the contract created by the transaction is 0x120df14514851c4fbec63d374703b0b7ef7fd71e according to the receipt; the claimer 0x25bead0f62a7c234e89691e4519ca5e74079cf3f is a second contract deployed inside the same transaction. Second, the nine pool ids in the raw file and the pool named in the impact text are the pools on the swap routes, and five of them do not hold DEAD according to PositionManager.poolKeys (0x9f6013f1 pairs USDC with 0xc1a36ca099c37ded68f0d6be608fb00767238aa4, 0x90333bb0 and 0xec746b81 pair WETH with USDC, 0xbd976d4c and 0x24662c76 pair USDC with two other tokens); a sixth, 0xcfd23695, has no PositionManager record and I could not read its currencies. The DEAD pools are the three listed in the fact check, and 0x18fca172 is one of them, so the conclusion holds. Third, the finding gives no value. At the pool price the amount taken is about 4 USD, and the shortfall against what the three pools would pay out is about 10,900 DEAD today, under 3 USD. Fourth, the 136 TokensClaimed logs come from two transactions by two claimers (3 logs in block 58,594,779 and 133 logs in block 58,617,833), so the word routine overstates it. The title says the claimer takes the whole balance; the claimer receives half and the whole balance leaves the PoolManager. The cause is a rule of one token and has nothing to do with how Base differs from Ethereum, as the finding says. Medium stands because the loss is confined to the pools of one token and the path is closed until about 18 February 2027 unless no DEAD payout happens before then.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/8453/0xf0197f10ea542a67914ecc0ec5304dc9df1faf6f?fields=sources,compilation,abi",
+     "supports": "Exact match record for DeadToken. Dead.sol lines 58, 61, 315 to 324, 388 to 420 and 563 to 578 as quoted in the fact check."
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "eth_getTransactionReceipt and eth_getTransactionByHash for 0xc32384b25be1e5d29cd5e978fc5f531359ddd8dcae67a1ff89204e98c27d0d2b; balanceOf(PoolManager) on DEAD at blocks 58,594,778 and 58,594,779; block timestamp 1794909331; eth_getCode of the claimer and the created contract."
+    },
+    {
+     "url": "https://base.gateway.tenderly.co",
+     "supports": "eth_call at block 58,594,778 and at the latest block: lastTransferTime, whiteListedPool, pendingPoolWhitelist, getPoolWhitelistStatus, isClaimable, getTimeUntilClaimable, ADMIN, isAdminBurned, owner, and claimIdleTokens(PoolManager) with the from field set to an address without DEAD and to the pair. PositionManager.poolKeys, StateView.getSlot0 and getLiquidity for the three DEAD pools, and Quoter.quoteExactInputSingle for each pool at blocks 58,594,778, 58,594,779 and latest. Receipts of 0xa8ea9d2bb73793d900d43d5d592b91176e4991e9628baf3e23d7653488b139de and 0x1df363f427c9c1528ea8f2f45539e2f32496141865f951a671a43d3513c533fb, whose Swap logs name the DEAD pools."
+    },
+    {
+     "url": "src/PoolManager.sol:279-297",
+     "supports": "sync reads the balance and take pays with a token transfer after debiting the caller."
+    },
+    {
+     "url": "src/types/Currency.sol:55-96",
+     "supports": "transfer reverts when the token call fails; balanceOfSelf is the only balance read."
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "I re-ran one case of each form and the pool state behind the impact text. Ethereum, TRUMP MAGA 0xf211b655431c10e72c1caeae37688ae9f7f7a549: transaction 0xa6ce9d53504d62a54600498895c8671eb13fb8f312cdbb9d3a4fa345f0d89003 (block 26,465,460) is a transfer call by a holder, has two logs, none from the PoolManager, and one of them is Transfer(PoolManager, 0xdead, 776,894.03 MAGA). balanceOf(PoolManager) is 776,894.0285837858 one block earlier and 0 at the block and today. The Sourcify record (status match) shows transfer() calling only _beforeTokenTransfer (lines 505 to 508), which emits the log and calls the controller with selector 0x2bfad8d5 (line 652), and cap() emitting Transfer logs for the controller (lines 680 to 688). The source goes further than the finding says: balanceOf itself returns the controller's answer when that answer is below the maximum (line 493), so the PoolManager's MAGA balance is whatever the unverified controller reports. debug_traceTransaction on https://eth.drpc.org shows the token calling controller 0xa8b0cdcb011c82ca0b3c981868d78f84f06e0c65, which calls token function 0x20bd4fca. StateView and PositionManager.poolKeys confirm that pools 0x4686f189f97040979482293941fa47fb9d4379de767e25518dd90dd26a1a4baf (fee 1 percent, liquidity 52,818,877,641,898,785) and 0x03762bf00ac14b0110e854caa875d620cae2a843525c566a8964a4ad33054b62 (fee 70 percent, liquidity 1,320,363,208,123,135,774) pair ETH with MAGA and have no hook. Ethereum helper: transaction 0xb8a295249493a05eb8b86202111683ad838bbd1a32b970fcfa7629394155d9ef calls 0xd8e11826e82619bf49c58c05f26c8e00b0b64ea4 with selector 0x73ed6b13 and holds no PoolManager log. Elysium, CLU 0x13c83fd2df0ae8c7b462d344a458275d1f6b5b82: transaction 0x0d470f854fb59f4ad2b4c8bcb8dfcafc55a63bcd3f6083cbaf983209d48ed41d (block 4,589,428) is transferFrom sent by 0xd27d278469aa24b5e8ed3af8675d5f6c2548f884 and moves 30,639,051.89 CLU from the PoolManager to 0xdead; the balance is 30,639,996.93 one block earlier and 945.04 at the block. Today a read-only transferFrom(PoolManager, other, 1000) reverts with ERC20InsufficientAllowance (0xfb8f41b2) from an unrelated address and returns true from 0xd27d2784 while allowance(PoolManager, 0xd27d2784) is 0. The PoolManager holds 644,887,349.55 CLU today, so that account can move all of it now. Unichain, ELX 0x6836567f23a137f2ed07576826b0d2579b416b6d: transaction 0xe276007551f292449d6db401530312f9fc55143bf84228ece62ca57ffe4f10dc (block 10,638,254) moves 2,253,186,633,332 base units from the PoolManager to 0xdead with no PoolManager log, and the balance goes to 0. Polygon, SNI: balanceOf(PoolManager) is 1 base unit. Counts: I did not repeat the log search. The researcher's result files hold 54,048 rows and 78 flagged tokens on Ethereum (53 with a balance fall, 20 of them to zero, 25 spoof) and 29,326 rows and 97 flagged tokens on BNB Smart Chain (91 with a balance fall).",
+   "codeCheck": "The PoolManager makes two kinds of call to a currency: transfer(address,uint256) in Currency.transfer (src/types/Currency.sol:60-74, reached from take at src/PoolManager.sol:295 and from collectProtocolFees at src/ProtocolFees.sol:56) and balanceOf in balanceOfSelf (src/types/Currency.sol:94, reached from src/PoolManager.sol:285 and 359). A search of src/ outside src/test finds no approve and no transferFrom on a currency. A fall of the PoolManager's balance in a transaction without one of its transfers is therefore the token's own doing. take reverts when the token transfer fails (src/types/Currency.sol:82-86). mint and clear close a positive delta without a token transfer (src/PoolManager.sol:310-329), so a caller can leave with the other currency and a claim or nothing for the token side. If such a token lowers the balance between sync and settle, the subtraction at src/PoolManager.sol:360 is checked arithmetic and reverts, so the author gains no credit from a fall. The shortfall stays in the token's own currency id because deltas are stored per target and currency (src/libraries/CurrencyDelta.sol:10-16).",
+   "corrections": "Actor pool-creator is right: in every case I checked the balance moved through a path the token's author built (a controller that answers balanceOf, a transferFrom that skips the allowance for one account, a helper with a self-written allowance). The mechanism text was published with unfilled placeholders (%s) in the Ethereum and BNB Smart Chain counts. The values in the researcher's files are: Ethereum 54,048 rows over 1,277 tokens, 78 flagged, 53 with a balance fall and 25 spoof; BNB Smart Chain 29,326 rows over 1,801 tokens, 97 flagged, 91 with a balance fall; helper 0xd8e11826e82619bf49c58c05f26c8e00b0b64ea4 for 12 Ethereum tokens (selector 0x73ed6b13 for 18 through four helpers); selector 0x73ed6b13 for 18 BNB Smart Chain tokens, 15 of them through 0xa25c886dced0e8fc0129082bf597381ea073c925. The MAGA record on Sourcify is a match and not an exact match. For CLU the read-only test sets the caller and the origin to the same address, so it cannot tell whether the flag is read for tx.origin or for msg.sender; the finding's reading of the bytecode on that point is unconfirmed. Two of the four Polygon tokens and one of the five Arbitrum One tokens have no pool, so they show the token behaviour and no pool loss. Who loses is narrower than the text suggests: after such a burn a purchase of the token reverts, holders can still sell into the pool, and the party short of tokens is whoever provided liquidity, which for these tokens is often the author. Medium is the upper bound.",
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0xf211b655431c10e72c1caeae37688ae9f7f7a549?fields=sources,abi",
+     "supports": "TRUMP_MAGA_Token.sol: balanceOf at line 493 asks the controller, transfer at lines 505 to 508, _beforeTokenTransfer at line 652, cap at lines 680 to 688."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "Receipts of 0xa6ce9d53504d62a54600498895c8671eb13fb8f312cdbb9d3a4fa345f0d89003 and 0xb8a295249493a05eb8b86202111683ad838bbd1a32b970fcfa7629394155d9ef; balanceOf(PoolManager) on MAGA at blocks 26,465,459, 26,465,460 and latest; StateView.getSlot0 and getLiquidity and PositionManager.poolKeys for the ten MAGA pools."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "debug_traceTransaction of 0xa6ce9d53504d62a54600498895c8671eb13fb8f312cdbb9d3a4fa345f0d89003: token to controller 0xa8b0cdcb011c82ca0b3c981868d78f84f06e0c65 (selector 0x2bfad8d5), controller back to the token (selector 0x20bd4fca)."
+    },
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz",
+     "supports": "CLU: receipt of 0x0d470f854fb59f4ad2b4c8bcb8dfcafc55a63bcd3f6083cbaf983209d48ed41d, balanceOf(PoolManager) at blocks 4,589,427, 4,589,428 and latest, allowance, the two eth_call tests of transferFrom, eth_getCode (1,823 bytes)."
+    },
+    {
+     "url": "https://mainnet.unichain.org",
+     "supports": "ELX: receipt of 0xe276007551f292449d6db401530312f9fc55143bf84228ece62ca57ffe4f10dc and balanceOf(PoolManager) at blocks 10,638,253, 10,638,254 and latest."
+    },
+    {
+     "url": "https://polygon.drpc.org",
+     "supports": "SNI 0xdc685acc53ca2a760029cab2f6a587482aa9cf57: balanceOf(PoolManager) returns 1."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-unbacked-claims.work/raw/burns_1_validated.json:1",
+     "supports": "The counts used to fill the placeholders; burns_56_validated.json holds the BNB Smart Chain rows."
+    },
+    {
+     "url": "src/types/Currency.sol:60-96",
+     "supports": "transfer and balanceOf are the only calls the PoolManager makes on a currency."
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "Re-run on https://arb1.arbitrum.io/rpc and https://arbitrum.gateway.tenderly.co. Transaction 0x077516739f49e38972552537bbc49fe61e542dd6ca0b3d4d0ada8c3cf1de8fe6 (block 455,597,235, timestamp 1776970267) is sent by 0x43f285d7d53cc3e7bd4914d3e57ec90f58f510ff to the token with selector 0x79cc6790, burnFrom(PoolManager, 40,000e18). It has one log, Transfer(PoolManager, zero address, 40,000), and no PoolManager log; balanceOf(PoolManager) is 44,024.91 one block earlier and 4,024.91 at the block. Transaction 0x86afa98aa0369719d0faeda5dce5a1708fd6acc0e054b75f4287523b4f54e8c9 (block 455,604,741, timestamp 1776972143) burns 1,000 PUSD the same way; the balance goes from 1,509.05 to 509.05. owner() returns 0x43f285d7, name() returns Pleasing USD, the proxy implementation slot holds 0x89ec479a783ff3747f2f0d3c2a292c5986cec099, and the owner account carries an EIP-7702 delegation to 0x63c0c19a282a1b52b07dd5a65b58948a07dae32b. burnFrom(PoolManager, 1) from an unrelated address reverts with Ownable: caller is not the owner. The finding's reading of the blacklist is wrong, and what I found instead makes the case worse. blackList(PoolManager) returns 0 at blocks 455,597,234, 455,597,235, 455,604,740 and 455,604,741, and a read-only burnFrom(PoolManager, 1) from the owner at block 455,597,234 succeeds. The burn therefore needed the owner and nothing else. A search by halving finds that blackList(PoolManager) turns to 1 at block 455,607,037 (timestamp 1776972718, ten minutes after the second burn), in transaction 0x3c0ba45ad6ef5aac6a362f71172134e54f76db41536343e12600db9f174f10c1 from the owner with selector 0x85c1e21d. It is still 1 today. Today a read-only transfer of PUSD from the PoolManager reverts with the text blacklist, and so does a transfer from the owner to the PoolManager. The owner's burnFrom reverts today for the same reason. Since 23 April 2026 the Arbitrum One PoolManager can neither pay out nor receive PUSD. It holds 14.14 PUSD. The pool file is consistent with chain data where I sampled it: thirteen pools, twelve without a hook, eight with liquidity, ten created between blocks 455,516,336 and 455,554,073 with fees of 9 to 80 percent.",
+   "codeCheck": "take pays PUSD with a token transfer and reverts when the token call reverts (src/PoolManager.sol:291-297, src/types/Currency.sol:64-74, 82-86), so every swap that buys PUSD and every removal that takes PUSD has reverted since the blacklist entry, whatever the balance. A payment of PUSD into the PoolManager also reverts in the token, so no settle of PUSD can be funded (src/PoolManager.sol:349-365). Holders of positions can still close the PUSD side with mint or clear (src/PoolManager.sol:310-329) and take the other currency, if the router they use offers those actions. The burns themselves bypass the PoolManager: balances are read only in sync and _settle (src/PoolManager.sol:285, 359) and nothing in core compares the token balance with what pools record. The loss cannot spread to other currencies because deltas are per currency (src/libraries/CurrencyDelta.sol:10-16).",
+   "corrections": "Actor issuer is right. Preconditions: the sentence that the burn needs the PoolManager on the token's blacklist is wrong; the PoolManager was not on the list at either burn and was put on it ten minutes after the second one. Effect should be both: 41,000 PUSD of the PoolManager's balance were destroyed, and the PUSD side of every pool has been frozen since block 455,607,037 because the token rejects transfers from and to the PoolManager. This is a live freeze of the kind recorded in F-036 and F-056 and belongs in the table of pooled tokens that reject PoolManager transfers today. The finding says eight pools still show liquidity; none of them can pay PUSD out. The pools created in the hours before the burns carry fees of 9 to 80 percent and two older ones 88 and 95 percent, which suggests the owner acted against these pools; I did not establish who provided their liquidity. Medium stands for a token with a supply of 644,376 PUSD.",
+   "sources": [
+    {
+     "url": "https://arb1.arbitrum.io/rpc",
+     "supports": "Receipts and inputs of 0x077516739f49e38972552537bbc49fe61e542dd6ca0b3d4d0ada8c3cf1de8fe6 and 0x86afa98aa0369719d0faeda5dce5a1708fd6acc0e054b75f4287523b4f54e8c9; block 455,607,037 with transaction 0x3c0ba45ad6ef5aac6a362f71172134e54f76db41536343e12600db9f174f10c1; owner(), name(), totalSupply(), blackList(address) for five addresses; eth_call tests of burnFrom and transfer at the latest block; implementation slot and owner code."
+    },
+    {
+     "url": "https://arbitrum.gateway.tenderly.co",
+     "supports": "Archive reads: balanceOf(PoolManager) and blackList(PoolManager) at blocks 455,516,000, 455,597,234, 455,597,235, 455,604,740, 455,604,741, 455,700,000, 470,000,000 and 500,000,000, the search for the first block with blackList(PoolManager) equal to 1, and burnFrom from the owner and transfer from the PoolManager simulated at block 455,597,234."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-unbacked-claims.work/raw/pools_42161_0xc8fb643d.json:1",
+     "supports": "The thirteen PUSD pools with fee, hook, creation block and liquidity."
+    },
+    {
+     "url": "src/PoolManager.sol:291-297",
+     "supports": "take pays with a token transfer and fails when the token rejects it."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Parts (b) and (d) of lead L-318, as a census. For a recent window on each network: every ERC-20 Transfer log with the PoolManager as sender or recipient, every wrapper Deposit log that names it, and every PoolManager log. A row is flagged when the transaction holds no Swap, ModifyLiquidity or Donate log and the PoolManager pays out or mints more of a token than it receives or burns as claims. With ordinary tokens core cannot produce such a row (src/PoolManager.sol:112, 291-297, 322-336, 349-365).",
+   "agrees": false,
+   "note": "Two of the 393 flagged BNB Smart Chain rows are real payouts and were labelled spoof. I fetched one transaction for each of the 134 flagged tokens: 132 call the token itself with selector 0x7111a994 as the item says, one (symbol BNB, 0xd5faf509697c68b81689b2576f9d7d60919cec23) sits in a transaction with 932 logs in which the token emits Transfer logs for many unrelated senders through a helper call, and one is sSAC 0x0ae7cd10f94fd16a6f9a29a372708718144c46f8, the staked token of F-066. Transactions 0xf1c329b6e3e3fa7747c3907e7d449c536977f0e44b79c10db31ff4153b9f098d (block 135,090,214) and 0x27598a81864c463522634ec554d1e69a255353a9d4d6cf7438471a44ebd6ca1e (block 135,186,213, 95,999 blocks later) are sent by 0x2d68a551e7c8ecf7312ee083a16e736dce2347d5 to contract 0x0b675fb382e0c986d724fd6cbb51837b3ae30e8a. The receipts show sSAC rebase logs for epochs 365 and 366 and then Transfer(PoolManager, contract) of 2,537,988,815 and 2,537,578,241 base units (2.538 sSAC each) with no transfer in and no claim mint. The trace of the first shows unlock, unlockCallback, sync(sSAC), rebase() on 0x99954eb0b159514d608f64c89a2c5bbe9f42120b, settle() returning 2,537,988,815 and take(sSAC, contract, 2,537,988,815). balanceOf(PoolManager) is 2,288,789,971,990 one block before and at block 135,090,214, and the supply ratio between the two epochs is 1.0011093, which equals the amount paid out divided by the balance. So the item's sentence that no row shows a payout of the surplus of a rebase by take is false: the sSAC rebase on the PoolManager balance is being paid out by take on BNB Smart Chain, once per epoch, to an ordinary account. The amount is surplus that no pool records, as in F-066. The Arbitrum One part of the item holds: all 18 flagged rows sit in transaction 0x02406d5002860901fb1fb63a42343854cd05f790ff70e90cd588a1861f8a0d28, each amount equals protocolFeesAccrued of that token one block earlier, and the counter is 0 afterwards (1,011 for USDC from a later swap in the block). I did not re-check OP Mainnet, Polygon or Arc."
+  },
+  {
+   "check": "Whether the public rebase triggers known from cycle 4 were booked as claims anywhere else: sNVB and sSAC on BNB Smart Chain (the earlier search covered 1,344,000 blocks), USDI and AMPL on Ethereum.",
+   "agrees": false,
+   "note": "Wrong for sSAC for the reason given above. The item rests on claim mints and on the one day census, and the census did flag the two sSAC payouts; they were filed under spoof logs. sNVB 0x6d6c16a3cbd318f3000e33cfd27662cf00f7e7c1 shows no Transfer with the PoolManager as sender in blocks 134,062,858 to 135,262,858 on https://bsc-rpc.publicnode.com, so for sNVB the item holds over that range. In the same range sSAC has five payout transactions; the two above have no pool event and the other three hold Swap or ModifyLiquidity logs. I did not search earlier blocks or the Ethereum tokens."
+  },
+  {
+   "check": "Claim mints of the native id 0 in transactions without a pool event. They leave no Transfer log, so each sampled one was compared with the transaction value, with Withdrawal logs and burn style withdrawals of wrappers in the receipt, with the native transfer logs that Arc emits at 0xfffffffffffffffffffffffffffffffffffffffe, and otherwise traced.",
+   "agrees": true,
+   "note": "I closed two of the five open rows. Arbitrum One transaction 0xafc5839bd5db054a69d72b1268c6ecd3de3956ae991aaa6aeb707bfc42339f88 (block 508,491,210, the row the researcher did not check): the sender's balance falls by 0.070003419305344 ETH, which is the 0.07 ETH mint plus the fee of 0.000003419305344 ETH, and the PoolManager's balance rises by exactly 0.07 ETH in that block; the sender carries an EIP-7702 delegation. BNB Smart Chain transaction 0x9506028176c0c542a0faad3c128a09d8bded4f91045b9ffd91329366bc787d7b (block 131,608,355): the PoolManager's native balance rises by 13,754,448,270,265 wei over the block, which is the mint amount to the wei. No trace was served for either, so the path of the value inside the transaction is unseen. Two BNB Smart Chain rows of about 0.000016 BNB stay open. The code agrees with the rule used: a native credit comes only from msg.value in _settle (src/PoolManager.sol:352-354) or from a pool operation."
+  },
+  {
+   "check": "Part (a) of lead L-318. Every ERC-6909 Transfer log of the PoolManager with the zero address as sender (claim mints, src/ERC6909.sol:79-83, src/interfaces/external/IERC6909Claims.sol:14), over the whole history where the endpoint serves it. For each pair of caller and currency id, receipts of sample transactions were read and the mint was tested against the receipt: ERC-20 Transfer logs of that currency into and out of the PoolManager, wrapper Deposit logs that name the PoolManager, ERC-6909 burns of the same id, and Swap, ModifyLiquidity or Donate logs.",
+   "agrees": true,
+   "note": "I agree with the result as far as the method reaches, and the reach is shorter than the text suggests. In the sample files most mint rows are classed pool, which means the transaction holds a Swap, ModifyLiquidity or Donate log and the mint was not tested: 45,277 of 48,939 rows on Ethereum, 10,401 of 10,782 on Unichain, all 440 on HyperEVM. I tested a random sample of such rows against the Swap logs in their receipts. HyperEVM: 12 of 12 mints equal a positive swap amount plus the net transfer in. Unichain: 13 of 17 mints are equal to or bounded by swap outputs and transfers; the other 4 rows (transactions 0xe5f63adf9abc and 0x80ad0fb09d46, by their first bytes) hold 14 and 37 ModifyLiquidity logs and no swap, and a liquidity removal log carries no amounts, so logs cannot confirm them. Nothing I saw contradicts the item. The receipt rule is the same rule that classed the sSAC payouts correctly as flagged, so the weak points are the pool class and the labels applied afterwards."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "priority": "high",
+   "question": "Record the sSAC payouts on BNB Smart Chain under F-066 and establish how far they go: list every transaction in which the PoolManager pays out sSAC 0x0ae7cd10f94fd16a6f9a29a372708718144c46f8 or sNVB 0x6d6c16a3cbd318f3000e33cfd27662cf00f7e7c1 in a block where the token's rebase log appears, over the whole history, and sum the amounts.",
+   "why": "The research file cleared this twice and labelled the two rows spoof. Transactions 0xf1c329b6e3e3fa7747c3907e7d449c536977f0e44b79c10db31ff4153b9f098d and 0x27598a81864c463522634ec554d1e69a255353a9d4d6cf7438471a44ebd6ca1e show sync, rebase, settle and take of 2.538 sSAC each by an ordinary account, at epochs 365 and 366. F-066 says the path was unused on BNB Smart Chain. The call enters through lock(bytes) on a second contract, 0x238a358808379702088667322f80ac48bad5e6c4, which calls the taker back and pays it 999,471 base units of sSAC in the same transaction, so a second pool contract with a lock and callback design appears to be used the same way. I did not identify that contract."
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "priority": "high",
+   "question": "Re-read every row the census flagged and the research file explained by a label (393 on BNB Smart Chain, 50 on Polygon, 126 on Arc, 17 on OP Mainnet), with one rule: a row is spoof only when balanceOf(PoolManager) is unchanged by the transfer, and a row is a rebase payout when the amount equals the balance rise since sync. Then run the same census over the whole history for every token whose balance changes without transfers.",
+   "why": "One of 134 flagged tokens on BNB Smart Chain was a real payout filed as spoof on the strength of the call pattern of the other 132. The census covers 0.5 to 30 days and skips every transaction that holds a pool event, so a capture that sits next to a swap, or that happened before the window, is unseen."
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L3",
+   "priority": "medium",
+   "question": "Add PUSD 0xc8fb643d18f1e53698cfda5c8fdf0cdc03c1dbec to the list of pooled tokens that reject transfers from the PoolManager today, and test whether a holder of a position in the eight PUSD pools with liquidity can withdraw the other currency through the deployed PositionManager.",
+   "why": "blackList(PoolManager) has been 1 since block 455,607,037 and transfers from and to the PoolManager revert with the text blacklist. The finding recorded the burn and missed the freeze."
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    480,
+    57073,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "priority": "medium",
+   "question": "Test the claim mints that sit in transactions with a pool event: for a sample per network, compare each mint with the Swap amounts of the receipt, and trace the ones that hold only ModifyLiquidity logs.",
+   "why": "About nine in ten sampled mint rows were counted as explained because the transaction holds a pool event. On Unichain 4 of 17 such rows that I tested cannot be confirmed from logs."
+  }
+ ]
+}

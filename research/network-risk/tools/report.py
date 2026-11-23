@@ -20,6 +20,7 @@ def card(f, level="###"):
            f"What differs on the network: {f['difference']}", "", f"How it meets the code: {f['mechanism']}", "",
            f"What is at risk: {f['impact']}", "", f"What it takes: {f['preconditions']}", "", f"What can be done: {f['mitigations']}", ""]
     if f.get("extends"): out += [f"This entry adds to {f['extends']}.", ""]
+    if f.get("severityNote"): out += [f["severityNote"], ""]
     if v.get("corrections"): out += [f"Second reviewer's corrections: {v['corrections']}", ""]
     out += ["Code: " + ", ".join(f"`{r}`" for r in f["coreRefs"]) + ".", ""]
     out += ["Sources:", ""] + [f"- {s['url']} ({s['supports']})" for s in f["sources"]] + [""]

@@ -14,6 +14,9 @@ def push4(code):
             n = op - 0x5f; v = b[i + 1:i + 1 + n]
             if n == 4: out.add(v.hex())
             elif n > 4 and len(v) == n and v[4:] == bytes(n - 4): out.add(v[:4].hex())   # left aligned selector constant
+            # the optimizer writes a constant with trailing zero bits as a shorter constant and a shift (0x08c379a0 is PUSH3 461bcd PUSH1 e5 SHL)
+            if n <= 4 and i + 1 + n + 2 < len(b) and b[i + 1 + n] == 0x60 and b[i + 1 + n + 2] == 0x1b and 0xe0 <= b[i + 1 + n + 1] <= 0xff:
+                out.add(((int.from_bytes(v, 'big') << (b[i + 1 + n + 1] - 0xe0)) & 0xffffffff).to_bytes(4, 'big').hex())
             i += 1 + n
         else: i += 1
     return out

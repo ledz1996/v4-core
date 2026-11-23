@@ -33,6 +33,8 @@ def main():
     # cycles/NNN/extends.json links a finding to an earlier one when the agent did not: {"<unit>:<findingIndex>": "F-xxx"}
     ext = load(f"{cdir}/extends.json") if os.path.exists(f"{cdir}/extends.json") else {}
     plan = load(f"{cdir}/plan.json") if os.path.exists(f"{cdir}/plan.json") else {}
+    # cycles/NNN/severity.json sets one severity for findings of a class the critic showed to be rated unevenly: {"<unit>:<findingIndex>": {"severity": "medium", "note": "..."}}
+    sev = load(f"{cdir}/severity.json") if os.path.exists(f"{cdir}/severity.json") else {}
     recheck = {u["id"]: set(u.get("recheckIds", [])) for u in plan.get("units", [])}
     units_done = []
     for rp in sorted(glob.glob(f"{cdir}/*.research.json")):
@@ -48,6 +50,9 @@ def main():
             entry["actor"] = actors.get(f"{unit}:{i}", f.get("actor", "unclassified"))
             entry["severity"] = v["severity"] if v else f["severity"]
             entry["proposedSeverity"] = f["severity"]
+            if f"{unit}:{i}" in sev:
+                entry["severityNote"] = f'Rated {entry["severity"]} by the verifier. ' + sev[f"{unit}:{i}"]["note"]
+                entry["severity"] = sev[f"{unit}:{i}"]["severity"]
             entry["status"] = status
             event = {"cycle": cycle, "unit": unit, "status": status, "severity": entry["severity"]}
             if v:

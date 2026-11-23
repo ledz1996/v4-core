@@ -1,0 +1,142 @@
+{
+ "unit": "established-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I repeated the chain queries on Polygon. At block 97,816,436 balanceOf(PoolManager) returned 74,818.963182106767473444 EURe at 0x18ec0A6E18E5bc3784fDd3a3634b31245ab704F6 (V1) and the same figure at 0xE0aEa583266584DafBB3f9C3211d5588c73fEa8d (V2). With Multicall3 code placed at the PoolManager address by state override, a transfer of 1 EURe through V2 and a transfer of 3 EURe through V1 each returned a 32 byte true and each lowered the reading at both addresses by the amount. getController() on V1 returns the V2 address, getFrontend() on V2 returns the V1 address, and owner() returns 0x8001ea269cb9715bf7acff89c664ffc134a519ec on both. V2 is a 170 byte ERC-1967 proxy whose implementation slot holds 0xd1cfa02a1785f3ca0a5602b18649b7ca5439681b. I read the verified sources on Sourcify, which the finding did not cite. V1 (contract PolygonPosEUR, file TokenFrontend.sol) forwards transfer, transferFrom, approve, balanceOf and totalSupply to the controller, and setController is restricted to the owner and requires that the new controller names this frontend and has the same ticker. The V2 implementation (PolygonControllerToken) hard codes the V1 address as frontend for ticker EUR, accepts the forwarded calls only from that frontend, and can be replaced by the owner through upgradeToAndCall. So the issuer can end the shared ledger from either side, as the finding says. The Initialize logs of the PoolManager name the V1 address in 21 pools and the V2 address in 27 pools. StateView reports active liquidity in 2 of the 21 and in 14 of the 27. protocolFeesAccrued is 2.2750 EURe under the V1 id and 81.11 EURe under the V2 id. An eth_call of collect((address,uint256)[]) on the fee controller 0x59e84309afa65f084f9c03668583d231afb12cc6 from an arbitrary sender succeeded for both ids, and the controller's TOKEN_JAR is 0xc6ae6373cecc9e595a6c8b9fe581925a8c84f70a. The Monerium notice in the CryptoCompare copy states that V1 keeps its address and operates with the V2 contracts behind it, lists the Polygon, Gnosis and Ethereum address pairs, and dates the Polygon upgrade to 18 August 2024. The Monerium help article says both versions coexist for now. On Ethereum the PoolManager holds 4,188.4737 EURe, read identically at both Ethereum addresses. I measured what the finding left open. The 207 ModifyLiquidity logs of the 21 V1 pools leave three open ranges, which at current prices are owed about 1.53 EURe in total. No ERC-6909 Transfer event with the V1 id was ever emitted, so no claim exists under that id. Together with the 2.27 EURe of fees, the funds recorded under the V1 id are about 4 EURe plus uncollected position fees. Not confirmed by me: the upgrade block height 60,733,237, and the whitepaper sentences about delegated state and the audit note, because my fetch of that page returned only its first parts.",
+   "codeCheck": "A currency is its address. Deltas are stored per target and currency address (src/libraries/CurrencyDelta.sol:10-16), claims use uint160 of the address as id (src/types/Currency.sol:110-118, src/PoolManager.sol:322-336) and protocol fees are a mapping per currency (src/ProtocolFees.sol:21). sync stores one currency and one reserve figure (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32), and a second sync replaces the first. _settle credits the synced currency with balance now minus the stored reserve, with a checked subtraction, and then clears the synced currency (src/PoolManager.sol:358-361). take records the debit before it transfers (src/PoolManager.sol:294-295). unlock reverts while any delta is non-zero (src/PoolManager.sol:112). I walked the two ids looking for a double credit. A credit under either id needs a rise of the shared balance inside that id's own sync window, and every such rise is counted once because only one window can be open. A take under one id followed by a settle under the other leaves the first debit standing, and the unlock check forces the caller to pay it. A take or a fee collection under the other id between sync and settle lowers the measured rise, so the settling caller is credited less or the subtraction at src/PoolManager.sol:360 reverts. mint and burn only move a delta of their own id into or out of a claim. I found no order that credits one payment twice or pays out an amount that was not debited. The guard in collectProtocolFees compares the synced currency with the collected currency by address (src/ProtocolFees.sol:48-52), so it does not cover the other face. The collection can only shorten the settle of the party that synced, and a payer who syncs, pays and settles with no call to foreign code in between cannot be interleaved. The EURe token calls only the Monerium validator during a transfer. If V1 stopped forwarding, Currency.transfer would revert at src/types/Currency.sol:82-86 for the V1 id and balanceOf at src/types/Currency.sol:94 would fail or read another ledger. src/ has no function that moves a pool balance, a claim or accrued fees from one currency id to another. I found no guard that the finding missed.",
+   "corrections": "The actor value issuer is right. Severity should be low. The impact text speaks of an unknown share of about 62,750 EURe, and the measured share under the V1 id is about 4 EURe (1.53 EURe in three open ranges, 2.27 EURe of protocol fees, no ERC-6909 claims). The PoolManager balance has since grown to about 75,886 EURe and the V2 fees to 81.11 EURe. The same address pair exists on Ethereum, so the hazard is a property of the token and does not follow from a Polygon network difference. The Polygon specific part is that V1 is also a PoS bridge child token with deposit for the depositor role and withdraw for the holder, and neither can be used against the PoolManager by an ordinary account. The lead that asks for the split of the balance between the two ids is answered by these figures.",
+   "sources": [
+    {
+     "url": "rpc https://polygon-bor-rpc.publicnode.com (bor v2.11.1), eth_call with state override, eth_getBalance, eth_getCode and eth_getStorageAt, blocks 97816436 to 97817199 on 2026-11-23",
+     "supports": "Equal balanceOf(PoolManager) at both EURe addresses, both readings lowered by a transfer through either address, 32 byte true from both, getController, getFrontend, owner, implementation slot, protocolFeesAccrued for both ids, StateView liquidity and slot0 of the 48 pools, collect on the fee controller from an arbitrary sender"
+    },
+    {
+     "url": "rpc https://polygon.gateway.tenderly.co eth_getLogs on the PoolManager 0x67366782805870060151383f4bbff9dab53e5cd6, blocks 60000000 to latest on 2026-11-23",
+     "supports": "21 Initialize logs with the V1 address and 27 with the V2 address, 207 ModifyLiquidity logs in the V1 pools, no ERC-6909 Transfer log with the V1 id"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0x18ec0A6E18E5bc3784fDd3a3634b31245ab704F6?fields=abi,sources,compilation",
+     "supports": "Verified source of V1: TokenFrontend forwards to the controller with the caller as argument, setController is owner only and checks getFrontend and ticker, PolygonPosTokenFrontend adds deposit for the depositor role and withdraw"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0xd1cfa02a1785f3ca0a5602b18649b7ca5439681b?fields=abi,sources,compilation",
+     "supports": "Verified source of the V2 implementation: getFrontend is hard coded per ticker, the withCaller functions accept only the frontend, mint, burn and recover need a system account, upgrades need the owner"
+    },
+    {
+     "url": "https://resources.cryptocompare.com/asset-management/20566/1755852548854.pdf",
+     "supports": "Monerium notice: V1 keeps its address and operates with V2 behind it, address pairs for Polygon, Gnosis and Ethereum, Polygon upgrade on 18 August 2024"
+    },
+    {
+     "url": "https://help.monerium.com/article/10-v2-contracts",
+     "supports": "Both versions coexist for now because some liquidity providers still rely on V1"
+    },
+    {
+     "url": "rpc https://ethereum-rpc.publicnode.com eth_call balanceOf(PoolManager) on 0x3231Cb76718CDeF2155FC47b5286d82e6eDA273f and 0x39b8B6385416f4cA36a20319F70D28621895279D, latest block on 2026-11-23",
+     "supports": "4,188.4737 EURe at both Ethereum addresses"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "I fetched the client files from the master branch of bnb-chain/bsc. CHANGELOG.md schedules mainnet Jenner in v1.8.2 for 2026-12-08 02:30:00 UTC and lists pull 3829, the rename of the seizure exemption policy, under v1.8.1. params/config.go sets JennerTime to 1796697000 for mainnet and 1793241000 for Chapel. core/vm/evm.go resolves the token range and three singleton addresses to native code once IsJenner is true. core/vm/cas20_token.go lines 175 to 189: transfer rejects a read only frame, reverts with ContractPaused when the transfer bit is set, calls move, emits the log and returns a 32 byte true. Lines 239 to 269: move checks the sender policy and then the receiver policy before it reads the balance, so a policy failure reverts for every amount including zero, and on success it writes the source slot and the recipient slot and nothing else. core/vm/cas20_admin.go lines 507 to 553: seizeWithMemo needs SEIZE_ROLE and an unpaused seize feature, reverts with AccountNotSeizable when the SEIZE_EXEMPT policy authorizes the source, and policy id 0 authorizes every account, so a token with default settings has no seizable account. updatePolicy at line 579 needs the default admin role. core/vm/cas20_asset.go does not override balanceOf, and the multiplier appears only in scaledBalanceOf, balanceOfUI, totalSupplyUI and the conversion views. core/vm/cas20_activation.go: activate and deactivate need the registry admin, and the admin is set only by a caller equal to the GovHub address. core/vm/cas20_errors.go lines 55 to 63 and core/vm/contracts_stateful.go lines 113 to 124: the out of gas flag is sticky and every exit of a token call returns ErrOutOfGas when it is set. On Chapel (Geth v1.8.1, block 144,390,653, timestamp 1795430470, after the Chapel fork time) the factory 0xCA5F000000000000000000000000000000000000 has emitted 33 CAS20Created logs. isActivated returns true for bsc.cas20_asset, bsc.cas20_stablecoin and bsc.policy_registry. Token 0xca52000000000000000001217954ab5467577565 reports policy 0x0100000000000007 for TRANSFER_SENDER_POLICY, and transfer of 0 and of 1 from an unlisted address both revert with 0xa43fec12, the selector of PolicyForbids(bytes32,uint64), followed by the scope hash and that policy id. The same token already has SEIZE_EXEMPT_POLICY bound to 0x0100000000000001, so issuers on the testnet do configure the seizure lane. For 18 tokens with default transfer policies, a transfer from a holder with Multicall3 code placed at the holder address returned a 32 byte true and moved exactly the amount, a zero amount returned true, and an amount above the balance reverted with 0xdb42144d (InsufficientBalance). A call with value reverted with 0x6fb1b0e9 (NonPayable). A gas sweep of balanceOf for a holder of 15 tokens of 0xca5200000000000000000069e5bbadfec8b9075a, from 22,100 gas, just above the intrinsic floor, to 23,700 gas in steps of 25, gave out of gas for every value below the full cost and the correct balance above it, and never a successful zero. On mainnet (Geth v1.8.2, block 135,257,313, timestamp 1795430720, 14.7 days before the fork) the token range, the factory, both registries, 0x2007 and 0x70 hold no code, answer transfer and balanceOf with success and empty data, and sync on the deployed PoolManager reverts for each of them. No pool, claim or fee can therefore exist under these ids before the fork. Not confirmable today: mainnet behaviour after activation, whether the administrator opens token creation, and which tokens will be pooled.",
+   "codeCheck": "Currency.transfer accepts a call that does not revert and returns 32 bytes holding 1 (src/types/Currency.sol:64-74), which is what a CAS20 transfer returns. A revert from the token reaches src/types/Currency.sol:82-86, so take (src/PoolManager.sol:291-297) and collectProtocolFees (src/ProtocolFees.sol:56) revert when the pause bit is set or a transfer policy leaves the PoolManager out. A closed receiver policy makes every payment to the PoolManager revert, and settle then credits nothing (src/PoolManager.sol:358-360). balanceOf is a high level static call (src/types/Currency.sol:94), so a failed or empty answer reverts sync and cannot store a false reserve. A seizure lowers the token balance of the PoolManager and writes no delta. src/ has no function that reconciles pool records with the real balance, so later takes fail with InsufficientBalance once the requests exceed what is left, and a seizure between a sync and its settle makes the subtraction at src/PoolManager.sol:360 revert. initialize makes no call to either currency (src/PoolManager.sol:117-142), so a pool can be created for any created CAS20 address. I found no entry point in the token code that an account without a role can use to change the balance of another holder: transferFrom and its memo variants need an allowance of the source, and permit needs an ECDSA signature of the owner with no contract signature path.",
+   "corrections": "The actor value issuer is right, and an ordinary account can reach this only with a token it created itself. The correction to the earlier text of F-007 is accurate: the scopes are SEIZE_EXEMPT_POLICY and SEIZE_RECEIVER_POLICY, and an account is seizable only after the admin binds the exemption lane to a policy that does not authorize it. Small differences in my repeat: I tested 18 tokens where the finding names 12, and the Chapel token with the sender policy also has its seizure exemption lane bound. None of this applies on mainnet before 2026-12-08 and before the administrator opens token creation.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_token.go",
+     "supports": "transfer at lines 175 to 189 and move at lines 239 to 269: pause check, sender and receiver policy before the balance read, two slot writes, 32 byte true"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_admin.go",
+     "supports": "seizeWithMemo at lines 507 to 553 with the SEIZE_EXEMPT test, updatePolicy at line 579 restricted to the default admin role, pause restricted to PAUSE_ROLE"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_asset.go",
+     "supports": "balanceOf is not overridden by the Asset variant"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_errors.go",
+     "supports": "finishCAS20Metered returns ErrOutOfGas when the frame ran out of gas"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/contracts_stateful.go",
+     "supports": "chargeGas refuses every charge after the first failure and marks the frame out of gas"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_activation.go",
+     "supports": "feature switch worked by an admin that only the GovHub address can appoint"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_permit.go",
+     "supports": "permit recovers an ECDSA signer and supports no contract signatures; the memo variants reuse transfer and transferFrom"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/CHANGELOG.md",
+     "supports": "v1.8.2 schedules mainnet Jenner for 2026-12-08 02:30:00 UTC; v1.8.1 lists pull 3829"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/params/config.go",
+     "supports": "JennerTime 1796697000 on mainnet and 1793241000 on Chapel"
+    },
+    {
+     "url": "rpc https://bsc-testnet-dataseed.bnbchain.org (Chapel, chain id 97, Geth v1.8.1), eth_call with state override, blocks 144390653 to 144392420 on 2026-11-23",
+     "supports": "policy ids and PolicyForbids reverts of token 0xca52000000000000000001217954ab5467577565, activation flags, exact transfers for 18 tokens, NonPayable on value, gas sweep of balanceOf"
+    },
+    {
+     "url": "rpc https://bsc-testnet-rpc.publicnode.com eth_getLogs, blocks 139517803 to 144390737 on 2026-11-23",
+     "supports": "33 CAS20Created logs of the factory and Transfer logs used to find holders"
+    },
+    {
+     "url": "rpc https://bsc-dataseed1.bnbchain.org (Geth v1.8.2), eth_call, eth_getCode and eth_getBlockByNumber at block 135257313 on 2026-11-23",
+     "supports": "block time 14.7 days before JennerTime, no code at the CAS20 addresses, 0x2007 and 0x70, sync on the PoolManager reverts for them"
+    }
+   ]
+  },
+  {
+   "findingIndex": 2,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "The Initialize logs of the Polygon PoolManager name 0x0000000000000000000000000000000000001010 exactly once: transaction 0xc379c9cb2f0c0b51fd792c8983c2b6ec091f7a23c3d85ba11bd077415886e443 at block 70,895,654, pool id 0x79d1ed6dc35a3472253c1a5f4b13edfc1481e3b4bd70189c481cbf04b34cbf73, currency1 0x5eb10e40c4969dba42f344eb0cc2cd1a4bb3ad21, fee 3000, tick spacing 60, no hook. StateView reports zero liquidity for it, the PoolManager holds none of the other token, and protocolFeesAccrued for 0x1010 is zero. At block 97,816,608 eth_getBalance(PoolManager) and balanceOf(PoolManager) on 0x1010 both return 3,064,824.134955069793283705 POL. Called from the PoolManager address at the top level, and again as an inner frame with Multicall3 code placed at the PoolManager address and another account as sender, transfer of 0 returns a 32 byte true, transfer of 1 and of 1 POL return a 32 byte zero, balanceOf is unchanged, and the unlockCallback selector and empty calldata revert. A 1 wei call with empty calldata to the PoolManager reverts, and 0x1010.transfer(PoolManager, 1) with value 1 reverts, so 0x1010 cannot push POL into the PoolManager. sync(0x1010) on the deployed PoolManager succeeds. I rebuilt the currency list from all 20,316 Initialize logs: 7,457 token addresses, of which 6,772 have a non-zero PoolManager balance at block 97,817,048. 0x1010 is the only one whose balance equals the native balance. I repeated eight of the sixteen call shapes of the stub sweep and did not repeat the ten hook selectors.",
+   "codeCheck": "sync(0x1010) stores the native balance as the reserve (src/PoolManager.sol:285-286, src/types/Currency.sol:94). While 0x1010 is synced, _settle rejects any msg.value (src/PoolManager.sol:356) and credits balance minus reserve with a checked subtraction (src/PoolManager.sol:358-360). settle and settleFor are the only payable functions (src/PoolManager.sol:300, src/PoolManager.sol:305) and src/ has no receive or fallback function, so inside the window the native balance can rise only through a forced transfer. sync(address(0)) clears only the synced currency (src/PoolManager.sol:281-283, src/libraries/CurrencyReserves.sol:17-21), and the next sync(0x1010) reads the balance again, so a native payment is never inside a 0x1010 window. take(0x1010, to, amount) calls transfer with zero value (src/types/Currency.sol:73), the token answers a zero word for any non-zero amount, the test at src/types/Currency.sol:68 fails and the call reverts at src/types/Currency.sol:82-86. I tried to turn the mirror into a gain. A native take, then sync(0x1010), then a forced return of the same POL gives a 0x1010 credit and leaves the native debit, which only msg.value can clear. A native fee collection between sync(0x1010) and settle is not stopped by the address comparison at src/ProtocolFees.sol:49, and it lowers the balance so that the settle reverts at src/PoolManager.sol:360 unless the settler adds its own POL. A 0x1010 credit can be cleared, minted as a claim or swapped in a pool that nobody else has funded, and it cannot be paid out. Native settlement never reads a balance (src/PoolManager.sol:353-354), so the 3.06 million POL held for address(0) pools are not reachable through the second id.",
+   "corrections": "Nothing wrong in the mechanism. The figure 6,772 is the number of pooled currencies with a non-zero balance, out of 7,457 token addresses. The actor value unprivileged is formally right because any account can do every step, and the only party that can lose is the account that forces its own POL in. No user who did nothing unusual is exposed, so this entry is not a path to funds of others.",
+   "sources": [
+    {
+     "url": "rpc https://polygon.gateway.tenderly.co eth_getLogs on the PoolManager 0x67366782805870060151383f4bbff9dab53e5cd6, blocks 60000000 to latest on 2026-11-23",
+     "supports": "One Initialize log with 0x1010 as a currency, and the full list of 20,316 Initialize logs"
+    },
+    {
+     "url": "rpc https://polygon-bor-rpc.publicnode.com (bor v2.11.1), eth_call with state override, eth_getBalance, eth_getCode and eth_getStorageAt, blocks 97816436 to 97817199 on 2026-11-23",
+     "supports": "Native balance equals balanceOf on 0x1010, transfer answers at the top level and as an inner frame, reverts on unlockCallback, empty calldata and value transfers into the PoolManager, zero liquidity and zero fees for the pool, balance census of 7,457 currencies"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Can a CAS20 balanceOf call that runs short of gas return zero, so that sync records a false zero reserve and settle credits the whole balance?",
+   "agrees": true,
+   "note": "A wrong answer here would let any account take the whole CAS20 balance of the PoolManager after the fork. I read cas20_storage.go, cas20_gas.go, cas20_errors.go and contracts_stateful.go on master. getWord returns a zero word when the read cannot be paid, chargeGas marks the frame out of gas and refuses every later charge, and runCAS20Token leaves only through finishCAS20Metered, which returns ErrOutOfGas when the mark is set. On Chapel a gas sweep of balanceOf for a holder of 15 tokens of 0xca5200000000000000000069e5bbadfec8b9075a gave out of gas for every gas value between 22,100 and the full cost, and the correct balance above it. No value gave a successful zero. The sweep used top level calls in steps of 25 gas and did not run the deployed PoolManager bytecode against a starved inner frame. The source reading covers that case, since the precompile code is the same for both."
+  },
+  {
+   "check": "Can an ordinary account move the PoolManager's EURe through the forwarding functions of the two EURe addresses?",
+   "agrees": true,
+   "note": "A wrong answer would expose about 75,886 EURe. The verified sources on Sourcify show that the V2 withCaller functions accept only the V1 frontend, that V1 passes msg.sender as the caller, that mint, burn and recover need a system account, and that permit needs an ECDSA signature of the owner. With Multicall3 code placed at an ordinary account at block 97,816,991 I sent 17 call shapes to each address with the PoolManager as source: the five withCaller functions, transferFrom, recover, burnFrom, burn, mintTo, mint, setController, deposit, permit, upgradeToAndCall, setValidator and claimOwnership. Every shape reverted at V2. At V1 they reverted or fell into the fallback, which returns success with no data. Afterwards the PoolManager balance, the test account balance, the allowance, the V1 controller and both owners were unchanged."
+  },
+  {
+   "check": "Faces on Polygon: walk of sync, settle, take, mint, burn and protocol fee collection across the two EURe addresses and across address(0) and 0x1010, in every order, for an ordinary caller.",
+   "agrees": true,
+   "note": "A wrong answer would expose 3.06 million POL or the EURe balance. I redid the walk from the source. Only one sync window can be open (src/libraries/CurrencyReserves.sol:27-32), a token settle credits only the rise inside its own window (src/PoolManager.sol:358-361), a native settle credits msg.value and is refused while a token is synced (src/PoolManager.sol:353-356), take debits before it pays (src/PoolManager.sol:294-295) and unlock demands that every delta returns to zero (src/PoolManager.sol:112). A payment is therefore credited under one id at most, and a payout under either id is debited in full. For POL the second id cannot pay out at all, because 0x1010 answers transfer without value with false. The census of 6,772 non-zero balances confirms that 0x1010 is the only currency that mirrors the native balance, and a one unit transfer test of the 478 members of equal balance groups of up to 12 tokens found the EURe pair as the only shared ledger. I skipped 2,726 members of groups whose balance is between 1 and a few base units, where a shared ledger would carry no value. This was a source walk and a balance test. I did not run a simulated unlock."
+  },
+  {
+   "check": "Lead L-241: does Jenner add a system call or a transaction type that runs user-chosen code with caller 0xfffffffffffffffffffffffffffffffffffffffe and non-zero value, and does the probe of finding F-058 still return the same words?",
+   "agrees": true,
+   "note": "A wrong answer would let a caller credit itself any msg.value in settle. core/vm/evm.go skips the balance check and the value transfer only when the caller is the system address. core/state_processor.go uses that address as sender in ProcessBeaconBlockRoot, ProcessParentBlockHash and processRequestsSystemCall, each with zero value and a fixed target. Parlia builds its system messages with the block coinbase as sender. I also read core/paymentlanemeta, which the cleared item left unread: callGetter makes a STATICCALL from the zero address to 0x2007 on a snapshot that is reverted afterwards. The CAS20 code makes no call to another account. I did not repeat the F-058 probe itself."
+  }
+ ],
+ "leads": []
+}

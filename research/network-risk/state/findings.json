@@ -566,6 +566,651 @@
    ]
   },
   {
+   "title": "QANX and seventeen tokens of one generator family count locked units in balanceOf and let any holder assign them, so the PoolManager's transferable balance can be swapped for units it can never send",
+   "chainIds": [
+    1,
+    56,
+    137
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A5",
+    "A6"
+   ],
+   "effect": "freeze",
+   "difference": "The cause is a token design and the three networks are where pools hold such tokens today. Two contracts named QANX (0xaaa7a10a8ee237ea61e8ac46c50a8db8bcc1baaa on Ethereum, 0xaaa9214f675316182eaa21c85f0ca99160cc3aaa on Ethereum and BNB Smart Chain) return _balances plus the locked amount from balanceOf, and their transferLocked function lets any holder send an amount to any recipient under a lock whose end date the sender chooses. Seventeen tokens built with one token generator (contract name MainToken with FreezableToken: WOZX, IZI, RKME, EXO, EAT, MNTO, ZITI, LED, GHD, YF4 and DXF on Ethereum, ELV on BNB Smart Chain, CARR, WELT, BLITZ, ALGB and HITT on Polygon) return the plain balance plus freezingBalance from balanceOf, and their freezeTo function lets any holder move its own tokens into the frozen balance of any address. In both designs transfer spends the unlocked part only. The trial sweep of this unit found no such token on the other eighteen networks.",
+   "mechanism": "1. sync stores balanceOf(PoolManager) for the currency without any lock check (src/PoolManager.sol:279-288). _settle credits the caller with balanceOf now minus the stored figure (src/PoolManager.sol:358-364). take pays out with a plain transfer call (src/PoolManager.sol:291-297, src/types/Currency.sol:60-75). The credit is therefore counted in units of balanceOf and the payout is made in transferable units. 2. Inside one unlock (src/PoolManager.sol:104-114) a caller takes an amount X of the token, which the PoolManager pays from its transferable balance, then calls sync, then calls transferLocked(PoolManager, X, far date, far date, 0) on QANX or freezeTo(PoolManager, X, far date) on a generator token, then calls settle. balanceOf(PoolManager) is back at its old value, so settle credits X and the debt from the take is cleared. All deltas are zero and unlock returns. The caller needs no tokens of its own and pays gas only. X can be the whole transferable balance. 3. After that the PoolManager reports the same balance and can send X less. Every take of that currency beyond the remaining transferable balance reverts with the wrapped ERC20TransferFailed error, for every pool, every ERC-6909 claim and the protocol fees of that currency, because all of them share one holder address. 4. How long it lasts. In the generator tokens only the holder can release frozen units (releaseOnce and releaseAll act on msg.sender, MainToken.sol lines 479 to 516 in the WOZX source), and the PoolManager has no function that calls them, so the units stay frozen whatever date was chosen. In the old QANX contract unlock(account) can be called by anyone after hardLockUntil, a uint32 the sender chooses, so the lock can run to the year 2106. In the newer QANX contract the dates are uint64. 5. Read-only test. I placed a measuring stub at the PoolManager address by state override and ran one eth_call per token: the PoolManager address sends an amount to an ordinary account A, A calls the function with the PoolManager as recipient, and the stub then reads balances and tries two transfers. Old QANX on Ethereum at block 26,476,590 with the whole balance of 21,210,277.639 QANX: balanceOf(PoolManager) is 21,210,277.639 after the call, A holds 0, a transfer of the full balance is refused and the reported balance stays in place. With one third of the balance the transfer of balance minus amount is accepted and the transfer of the full balance is refused. The newer QANX gave the same result with 3,512.31 QANX on Ethereum and 10,297.83 QANX on BNB Smart Chain (block 135,237,759). freezeTo gave the same result on DXF, WOZX and ZITI on Ethereum, on ELV on BNB Smart Chain and on all five Polygon tokens. The other eight Ethereum generator tokens share the selector set of WOZX and were not run one by one. I did not send the sequence through the PoolManager itself.",
+   "impact": "Liquidity providers and claim holders of every pool in the affected token lose access to the amount that was swapped for locked units, up to the whole pooled balance, and nobody gains it. Amounts today: 21,210,277.64 old QANX at the Ethereum PoolManager in pools from 6 Initialize logs. coins.llama.fi values that at about 204,500 USD because it gives both QANX contracts the price 0.00964 USD, and this figure should not be relied on: QANplatform replaced the old contract after the bridge wallet attack of 11 October 2022, distributed the new token by a snapshot of that date and states that only the new token is supported, and DexScreener lists no pair for the old contract. The old balance is therefore worth little or nothing. Newer QANX: 3,512.31 on Ethereum (about 34 USD) and 10,297.83 on BNB Smart Chain (about 99 USD), in pools from 21 Initialize logs on Ethereum. Generator tokens: 2,158,038.8 EXO (about 182 USD at the DexScreener price), 2,297,431 CARR (about 70 USD at the coins.llama.fi price), 3,062.3 YF4, which is 10.2 percent of that token's supply, and fourteen others without a price. The freezingBalanceOf(PoolManager) and lockedBalanceOf(PoolManager) readings are zero for all of them today, so nobody has done this yet. The new deployment starts empty and the same exposure appears as soon as a pool lists a token of this kind.",
+   "preconditions": "A pool or claim balance in a token whose balanceOf includes units that transfer cannot move and whose lock function is open to any holder. No role, hook or attacker made token is needed. For the old QANX contract the recipient must have no lock yet, because the contract allows one lock per address. Link I could not confirm: the behaviour of the eight Ethereum generator tokens that were covered by their family representative only. The search used function names from a public signature database, which named 85,092 of 137,912 selectors, and a fixed set of argument patterns, so a lock function with an unlisted name or unusual arguments would have been missed.",
+   "mitigations": "Core cannot tell locked units from transferable ones, because it reads balanceOf only (src/types/Currency.sol:90-96). Interfaces and routers should refuse or flag currencies that expose transferLocked, freezeTo, freezingBalanceOf, lockedBalanceOf or actualBalanceOf. Liquidity providers should not pool these tokens. For the old QANX contract anyone can protect the PoolManager by sending it a lock of one base unit with a far end date, since a second lock on the same address is refused while the first exists. The newer QANX contract adds to an existing lock and has no such protection. A hook cannot prevent the sequence, because take, sync and settle do not call hooks.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:60-75",
+    "src/types/Currency.sol:90-96",
+    "src/PoolManager.sol:104-114"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:279-288",
+     "supports": "sync has no modifier and stores balanceOf(PoolManager) for the named currency in transient storage."
+    },
+    {
+     "url": "src/PoolManager.sol:349-365",
+     "supports": "_settle credits the recipient with reservesNow minus reservesBefore, both read through balanceOf."
+    },
+    {
+     "url": "src/types/Currency.sol:60-75",
+     "supports": "take pays out through a plain transfer(address,uint256) call and requires success with empty or true return data."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0xaaa7a10a8ee237ea61e8ac46c50a8db8bcc1baaa?fields=sources,compilation,abi",
+     "supports": "Verified source QANX.sol: balanceOf returns _balances[account] + _locks[account].tokenAmount (line 449); transferLocked is external with no caller check and requires that the recipient has no lock (lines 453 to 496); _transfer spends _balances only (lines 304 to 311); unlock(account) needs block.timestamp above hardLockUntil (lines 535 to 557)."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/56/0xaaa9214f675316182eaa21c85f0ca99160cc3aaa?fields=sources,compilation,abi",
+     "supports": "Verified source of the newer QANX: balanceOf returns _balances plus the locked amount (lines 219 to 221); transferLocked is external with no caller check (lines 126 to 129); _applyLock adds the amount to an existing lock and takes uint64 dates (lines 331 to 345)."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x34950ff2b487d9e5282c5ab342d08a2f712eb79f?fields=sources,compilation,abi",
+     "supports": "Verified source MainToken.sol of WOZX: balanceOf returns super.balanceOf plus freezingBalance (lines 409 to 411); freezeTo is public, debits msg.sender and credits the frozen balance of _to (lines 461 to 474); releaseOnce and releaseAll act on msg.sender only (lines 479 to 516)."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0x9b765735c82bb00085e9dbf194f20e3fa754258e?fields=sources,compilation,abi",
+     "supports": "Verified source of CARR on Polygon with the same balanceOf, actualBalanceOf, freezeTo and releaseOnce functions (lines 1602, 1611, 1655 and 1673)."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call with state override at block 26,476,590: results of the transferLocked and freezeTo trials quoted in the mechanism; lockedBalanceOf(PoolManager) = 0 and unlockedBalanceOf(PoolManager) = 21210277639004215943409937 on old QANX; balance 3512306929336679797160 on the newer QANX."
+    },
+    {
+     "url": "https://bsc-dataseed1.bnbchain.org",
+     "supports": "eth_call with state override at block 135,237,759: newer QANX balance 10297830788317901253232 at the PoolManager; after transferLocked from an ordinary account the full transfer is refused and the reported balance is unchanged. Same result for freezeTo on ELV 0x20a2ee8d26aa6a7ce4890c2a44b788c4283356eb."
+    },
+    {
+     "url": "https://polygon.drpc.org",
+     "supports": "eth_call with state override near block 97,810,730: freezeTo trials on CARR, WELT, BLITZ, ALGB and HITT, each ending with the full transfer refused and the transfer of balance minus amount accepted."
+    },
+    {
+     "url": "https://coins.llama.fi/prices/current/ethereum:0xaaa7a10a8ee237ea61e8ac46c50a8db8bcc1baaa,ethereum:0xaaa9214f675316182eaa21c85f0ca99160cc3aaa,bsc:0xaaa9214f675316182eaa21c85f0ca99160cc3aaa",
+     "supports": "Price 0.009642552829640178 USD with confidence 0.99 for both QANX contracts."
+    },
+    {
+     "url": "https://medium.com/qanplatform/qanx-token-relaunch-process-fbdb679d0b57",
+     "supports": "QANplatform announcement of 22 February 2023: a new QANX contract at 0xAAA9214F675316182Eaa21C85f0Ca99160CC3AAA on Ethereum and BNB Smart Chain replaces the old one, new tokens are claimed by holders of a snapshot taken on 11 October 2022, only the new token is supported, and the new contract allows several locked transfers to one address."
+    },
+    {
+     "url": "https://api.dexscreener.com/latest/dex/tokens/0xAAA7A10a8ee237ea61E8AC46C50A8Db8bCC1baaa",
+     "supports": "Reply with pairs null for the old QANX contract. The newer contract has pairs on PancakeSwap and Uniswap v3 near 0.0098 USD."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-assigned-balance.work/raw/freezeto_tokens.json:1",
+     "supports": "Table of the seventeen generator tokens with symbol, decimals, pooled amount, freezingBalanceOf(PoolManager) = 0 and price where one exists."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-assigned-balance.work/assign_sweep.py:1",
+     "supports": "The trial method and the classification rule; results per network are in raw/assign_<chainId>.json.gz."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "proposedSeverity": "high",
+   "severityNote": "Rated high by the verifier. The review rates it medium, in line with F-041 and F-066: the loss is limited to pools of the named tokens, and the amounts at risk today are a few hundred USD.",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "I fetched the four Sourcify records and read them. Old QANX (0xaaa7a10a..., match, QANX.sol): balanceOf returns _balances[account] + _locks[account].tokenAmount (line 449), transferLocked is external with no caller check and requires that the recipient has no lock (lines 453 to 496), _transfer spends _balances only (lines 304 to 311), unlock(account) needs block.timestamp above hardLockUntil (lines 535 to 557). Newer QANX (0xaaa9214f..., same file on chain 1 and chain 56): balanceOf adds the locked amount, transferLocked is external and open, _applyLock adds to an existing lock and takes uint64 dates. WOZX MainToken.sol: balanceOf adds freezingBalance (line 410), freezeTo is public and credits the frozen balance of any address (lines 461 to 474), releaseOnce and releaseAll act on msg.sender (lines 479 to 516). I then repeated the sequence myself with eth_simulateV1 and no stub code: the PoolManager address sends X to an ordinary account, that account calls the lock function with the PoolManager as recipient, and the PoolManager address tries two transfers. Old QANX at Ethereum block 26,477,481 with the whole balance 21210277639004215943409937: balanceOf(PoolManager) is 0 after the send and back at the full figure after transferLocked, the account holds 0, the full transfer reverts with ERC20: transfer amount exceeds balance, and lockedBalanceOf(PoolManager) is 0 today. With one third the transfer of balance minus X passes and the full transfer reverts. Newer QANX gave the same pattern on Ethereum (balance 3512306929336679797160, block 26,477,483) and on BNB Smart Chain (balance 10297830788317901253232, block 135,261,539). freezeTo gave the same pattern on all seventeen generator tokens, which includes the eight Ethereum tokens that the researcher did not run one by one (IZI, RKME, EXO, EAT, MNTO, LED, GHD, YF4), ELV on BNB Smart Chain and the five Polygon tokens near block 97,818,173, and freezingBalanceOf(PoolManager) is 0 for each. coins.llama.fi returned 0.0095 USD for both QANX contracts, DexScreener returned pairs null for the old contract, and the QANplatform post of 22 February 2023 names 0xAAA9214F... as the new contract after the wallet attack of 11 October 2022. I did not recount the Initialize logs or recheck the prices of the generator tokens.",
+    "codeCheck": "sync has no modifier and stores balanceOf(PoolManager) (src/PoolManager.sol:279-288, src/types/Currency.sol:90-96). take debits the caller and pays with a plain transfer call (src/PoolManager.sol:291-297, src/types/Currency.sol:60-75). _settle credits reservesNow minus reservesBefore to the recipient (src/PoolManager.sol:358-364). With the order take, sync, lock transfer, settle the two deltas of the caller cancel, NonzeroDeltaCount is zero and unlock returns (src/PoolManager.sol:104-114). I looked for a guard and found none: nothing compares the synced currency with a take that ran before the sync, the int128 cast only caps the amount, the msg.value check at line 356 does not apply to a token, and the synced-currency check in src/ProtocolFees.sol:49-52 concerns fee collection only. After the sequence every take above the remaining transferable balance reverts through the wrapped ERC20TransferFailed error (src/types/Currency.sol:82-86), and a position holder can still convert the stuck side into an ERC-6909 claim (src/PoolManager.sol:322-329). The PoolManager calls tokens with transfer and balanceOf only, so it can never call releaseOnce or releaseAll, and the generator tokens stay frozen at its address whatever date is chosen.",
+    "corrections": "The statement that nobody gains is incomplete for both QANX contracts. transferLocked lets a sender whose unlocked balance is too small pay from its own locked balance when the new lock is the same or stricter and allowedHops is lower (old QANX lines 471 to 495, newer QANX _transferLocked). A holder of locked QANX with allowedHops of at least 1 can therefore send locked units to the PoolManager between sync and settle and take liquid units for them, which is a gain for that holder at the expense of the pools. I read this in the source and did not search for holders with such locks. The WOZX balance at the PoolManager is 4,364 base units, which is dust. The cause is a token design and has no link to a network difference, so this entry does not answer the question about a network specific weakness. Severity high is kept because an ordinary account can freeze accounted funds for good in pools that exist; the amounts at risk today are a few hundred USD.",
+    "sources": [
+     {
+      "url": "https://sourcify.dev/server/v2/contract/1/0xaaa7a10a8ee237ea61e8ac46c50a8db8bcc1baaa?fields=sources,compilation",
+      "supports": "Old QANX source: balanceOf line 449, transferLocked lines 453 to 496, _transfer lines 304 to 311, unlock lines 535 to 557."
+     },
+     {
+      "url": "https://sourcify.dev/server/v2/contract/56/0xaaa9214f675316182eaa21c85f0ca99160cc3aaa?fields=sources,compilation",
+      "supports": "Newer QANX source, identical on chain 1: balanceOf with locked amount, open transferLocked, _applyLock with uint64 dates, spending of the sender's locked balance."
+     },
+     {
+      "url": "https://sourcify.dev/server/v2/contract/1/0x34950ff2b487d9e5282c5ab342d08a2f712eb79f?fields=sources,compilation",
+      "supports": "WOZX MainToken.sol: balanceOf with freezingBalance, public freezeTo, release functions for msg.sender only."
+     },
+     {
+      "url": "https://ethereum-rpc.publicnode.com",
+      "supports": "eth_simulateV1 at blocks 26,477,481 to 26,477,489: the sequence on old QANX, newer QANX and the eleven Ethereum generator tokens, each ending with the reported balance restored and the full transfer refused."
+     },
+     {
+      "url": "https://bsc-dataseed1.bnbchain.org",
+      "supports": "eth_simulateV1 at blocks 135,261,539 and 135,261,717: the same result for newer QANX and ELV."
+     },
+     {
+      "url": "https://polygon.drpc.org",
+      "supports": "eth_simulateV1 at blocks 97,818,119 and 97,818,173: the same result for CARR, WELT, BLITZ, ALGB and HITT."
+     },
+     {
+      "url": "https://coins.llama.fi/prices/current/ethereum:0xaaa7a10a8ee237ea61e8ac46c50a8db8bcc1baaa,ethereum:0xaaa9214f675316182eaa21c85f0ca99160cc3aaa,bsc:0xaaa9214f675316182eaa21c85f0ca99160cc3aaa",
+      "supports": "Price 0.0095 USD with confidence 0.99 for both QANX contracts."
+     },
+     {
+      "url": "https://medium.com/qanplatform/qanx-token-relaunch-process-fbdb679d0b57",
+      "supports": "New QANX contract address, the attack of 11 October 2022, and the change that allows several locked transfers to one address."
+     },
+     {
+      "url": "https://api.dexscreener.com/latest/dex/tokens/0xAAA7A10a8ee237ea61E8AC46C50A8Db8bCC1baaa",
+      "supports": "Reply with pairs null for the old QANX contract."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "id": "F-078",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "theme-assigned-balance",
+     "status": "confirmed",
+     "severity": "medium"
+    }
+   ]
+  },
+  {
+   "title": "Two pooled tokens on Ethereum let any holder grant revocable vesting tokens to the PoolManager, book the grant as a payment and then revoke it, which removes pooled tokens without a debit",
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A5"
+   ],
+   "effect": "siphon",
+   "difference": "The cause is a token design. The old AdEx token ADX (0x4470bb87d77b963a013db939be332f927f2b992e, contract ADXToken, 4 decimals) and CDT (0x177d39ac676ed1c67a2b268ad7f1e58826e5b0af, contract CDTToken) inherit an early library contract named VestedToken. grantVestedTokens is public: it records a grant for the recipient and transfers the amount to it. The grant can be made revocable, and revokeTokenGrant lets the granter take the unvested part back out of the recipient's balance. This is a balance that an ordinary account can raise for the PoolManager and later pull back. District0x DNT and ESCB carry the same function names and reject the call from an ordinary account, ESCB through a whitelist in its source.",
+   "mechanism": "1. sync, settle and take work as described in the QANX finding (src/PoolManager.sol:279-297, 349-365). 2. Inside one unlock a caller takes X of the token from the PoolManager, calls sync, then calls grantVestedTokens(PoolManager, X, start, cliff, vesting, revokable = true, burnsOnRevoke = false) with dates in the future. The token transfers X to the PoolManager (ADXToken.sol lines 275 to 307), so balanceOf(PoolManager) is back at its old value and settle credits X, which clears the debt of the take. 3. Still inside the callback, or in any later transaction, the caller calls revokeTokenGrant(PoolManager, grantId). The token adds the unvested amount, which is all of X before the cliff, to the caller and subtracts it from the PoolManager (lines 314 to 338). Core records nothing, because no PoolManager function runs. 4. The caller now holds X and owes nothing. The PoolManager balance is lower by X while pools, claims and protocol fees still record the old amounts. X can be the whole pooled balance. 5. Read-only test at Ethereum blocks 26,476,597 to 26,476,600 with a measuring stub at the PoolManager address. ADX with the whole balance of 165,963 base units: after the grant alone balanceOf(PoolManager) is 165,963, the full transfer is refused and the account holds 0; after grant and revoke in one call balanceOf(PoolManager) is 0 and the account holds 165,963. CDT with half of 310.02 CDT: after the grant alone the balance is back at 310.02 and the full transfer is refused; after grant and revoke the PoolManager holds 155.01 and the account 155.01. tokenGrantsCount(PoolManager) is 0 on both today. I did not send the sequence through the PoolManager itself.",
+   "impact": "The whole pooled balance of the token, taken from liquidity providers, claim holders and accrued protocol fees of every pool in it. Today that is 16.5963 old ADX and 310.02 CDT, both without a market price that I could find, so the loss available now is negligible. The size follows the token: any pool that lists a token with open revocable grants can be emptied of that token by anyone, and the new deployment has the same exposure once such a pool exists. If the caller does not revoke, the result is the freeze of the QANX finding, because granted tokens are not transferable before they vest.",
+   "preconditions": "A pool or claim balance in a token with a public grant function whose grants the granter can revoke. The recipient may hold at most 20 grants in this library, which does not hinder a single grant. No role, hook or attacker made token is needed. I searched by function name and by trial, so a clawback function under another name (revoke, cancelVesting, reclaim) on a token that the trial arguments did not fit would have been missed.",
+   "mitigations": "None in core, which cannot see that a balance increase carries a revocation right. Interfaces should refuse or flag currencies that expose grantVestedTokens, revokeTokenGrant or transferableTokens. Liquidity providers should not pool such tokens.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:60-75"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:349-365",
+     "supports": "_settle credits the rise of balanceOf(PoolManager) since sync to the caller, with no view of how the rise came about."
+    },
+    {
+     "url": "src/PoolManager.sol:291-297",
+     "supports": "take debits the caller and transfers before anything is paid in."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x4470bb87d77b963a013db939be332f927f2b992e?fields=sources,compilation,abi",
+     "supports": "Verified source ADXToken.sol: grantVestedTokens is public and ends with transfer(_to, _value) (lines 275 to 307); revokeTokenGrant requires grant.revokable and grant.granter == msg.sender and moves the unvested amount from the holder to the granter (lines 314 to 338); transferableTokens subtracts unvested grants from the balance (lines 347 to 364)."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x177d39ac676ed1c67a2b268ad7f1e58826e5b0af?fields=sources,compilation,abi",
+     "supports": "Verified source CDTToken.sol with the same grantVestedTokens (line 265) and revokeTokenGrant (lines 304 to 328)."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x5e365a320779acc2c72f5dcd2ba8a81e4a34569f?fields=sources,compilation,abi",
+     "supports": "Verified source ESCBCoin.sol: grantVestedTokens requires canCreateGrants[msg.sender] (line 799), which is why the trial failed there."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call with state override at blocks 26,476,597 to 26,476,600: the grant and the grant plus revoke trials on ADX and CDT quoted in the mechanism; the same call reverts on DNT 0x0abdace70d3790235af448c88547603b945604ea and ESCB."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-assigned-balance.work/one.py:1",
+     "supports": "The single trial and the two step trial used for these tokens."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "proposedSeverity": "high",
+   "severityNote": "Rated high by the verifier. The review rates it medium, in line with F-041 and F-066: the loss is limited to pools of two tokens, and 16.6 ADX and 310 CDT are at risk today.",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "I fetched both Sourcify records. ADXToken.sol (match): grantVestedTokens is public, pushes a grant whose granter is msg.sender when revokable is true and then calls transfer(_to, _value) (lines 275 to 307). revokeTokenGrant requires grant.revokable and grant.granter == msg.sender, computes the non vested amount, adds it to the granter and subtracts it from the holder (lines 314 to 338). transferableTokens subtracts non vested grants from the balance and the canTransfer modifier enforces it on transfer (lines 210 to 222, 347 to 364). transfer returns no value. CDTToken.sol has the same two functions (lines 265 to 328). I repeated the test with eth_simulateV1 and no stub. ADX at Ethereum block 26,477,486, whole balance 165,963 base units: after the PoolManager address sends them to an ordinary account and the account grants them back as a revocable grant, balanceOf(PoolManager) is 165,963 and the full transfer from the PoolManager reverts. A revoke by a third account reverts. A revoke by the granter succeeds, after which balanceOf(PoolManager) is 0, the granter holds 165,963 and can transfer them on. CDT at block 26,477,487 with half of 310020428424547839288: the balance is back at the full figure after the grant, the full transfer fails, and after the revoke the PoolManager and the account hold 155010214212273919644 each. tokenGrantsCount(PoolManager) is 0 on both. The same grant call reverts on DNT and ESCB. coins.llama.fi returned no price for either token. I did not read the ESCB source line that the finding cites.",
+    "codeCheck": "take debits the caller and transfers first (src/PoolManager.sol:291-297). The transfer of these two tokens returns no data, which src/types/Currency.sol:68 accepts. sync stores the lowered balance (src/PoolManager.sol:279-288). The grant raises balanceOf(PoolManager) by X through an ordinary token transfer, and _settle credits X (src/PoolManager.sol:358-364), so the caller's delta is zero and unlock returns (src/PoolManager.sol:104-114). The revoke is a call to the token alone. No PoolManager function runs, so pool state, claims and protocolFeesAccrued keep their figures while the token balance is lower by X. I found no guard that sees the revocation right. The order matters: the take must come before the sync, which nothing in the code prevents.",
+    "corrections": "No error found in the mechanism. The amounts at risk today are 16.5963 old ADX and 310.02 CDT with no price at coins.llama.fi, so the loss available now is negligible. The cause is a token design and has no link to a network difference. Severity high is kept on the ground that an ordinary account can remove accounted funds of pools that exist; the rating describes the class and not the value at stake today.",
+    "sources": [
+     {
+      "url": "https://sourcify.dev/server/v2/contract/1/0x4470bb87d77b963a013db939be332f927f2b992e?fields=sources,compilation",
+      "supports": "ADXToken.sol: grantVestedTokens lines 275 to 307, revokeTokenGrant lines 314 to 338, transferableTokens lines 347 to 364, transfer without return value."
+     },
+     {
+      "url": "https://sourcify.dev/server/v2/contract/1/0x177d39ac676ed1c67a2b268ad7f1e58826e5b0af?fields=sources,compilation",
+      "supports": "CDTToken.sol: grantVestedTokens from line 265 and revokeTokenGrant lines 304 to 328."
+     },
+     {
+      "url": "https://ethereum-rpc.publicnode.com",
+      "supports": "eth_simulateV1 at blocks 26,477,486 and 26,477,487: grant, refused full transfer, refused revoke by a third account, revoke by the granter and the balances after it for ADX and CDT; revert of the grant call on DNT and ESCB."
+     },
+     {
+      "url": "https://coins.llama.fi/prices/current/ethereum:0x4470bb87d77b963a013db939be332f927f2b992e,ethereum:0x177d39ac676ed1c67a2b268ad7f1e58826e5b0af",
+      "supports": "No price entry for old ADX or CDT."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "id": "F-079",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "theme-assigned-balance",
+     "status": "confirmed",
+     "severity": "medium"
+    }
+   ]
+  },
+  {
+   "title": "The deployed PositionManager refuses to mint claims, so a position with one currency that cannot leave the PoolManager closes only by forfeiting that side or by placing it in a new position, and the published SDK builds neither call",
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A4",
+    "A6"
+   ],
+   "effect": "freeze",
+   "difference": "Several of the 21 networks hold pooled tokens that refuse a transfer from the PoolManager address under a rule that Ethereum pools rarely meet. ViciCoin on Polygon counts every PoolManager transfer against a daily net outflow limit that any account can use up (F-072). G$ on Celo blocks the PoolManager as sender (F-056). Ten wrapped stock tokens on Monad can be paused by a two signature Safe (F-061). TIP-20 tokens on Tempo carry transfer policies set by their issuers. The PoolManager core can still pay such a currency out as an ERC-6909 claim, but the PositionManager that holds the positions of ordinary users does not expose that route on any of the 21 networks.",
+   "mechanism": "1. A position made through the PositionManager belongs to the PositionManager inside the PoolManager, so its owner can act only through PositionManager.modifyLiquidities and the action list of _handleAction. 2. A removal creates a positive delta in both currencies for the PositionManager. Every delta must be zero when unlock returns (src/PoolManager.sol:104-114). 3. TAKE, TAKE_PAIR and CLOSE_CURRENCY end in PoolManager.take, which calls transfer on the token (src/PoolManager.sol:291-297, src/types/Currency.sol:60-86). When the token refuses, the whole call reverts and the other currency stays in the pool as well. 4. Core offers mint(to, id, amount) to turn a positive delta into a claim without touching the token (src/PoolManager.sol:322-329). The PositionManager does not handle action 0x17 (MINT_6909) or 0x18 (BURN_6909). A read-only modifyLiquidities call with action 0x17 reverts with UnsupportedAction(0x17), data 0x5cda29d7 followed by 0x17, on all 21 networks. SWEEP does not help because the tokens never reach the PositionManager. 5. Two sequences succeed in simulation from the position owner. Sequence A is DECREASE_LIQUIDITY or BURN_POSITION, TAKE of the other currency, then CLEAR_OR_TAKE of the blocked currency with amountMax set to the maximum uint256. That calls PoolManager.clear (src/PoolManager.sol:310-319), which erases the delta. The tokens stay in the PoolManager balance with no delta and no claim behind them, so the provider loses that side for good. Sequence B is DECREASE_LIQUIDITY, TAKE of the other currency, MINT_POSITION_FROM_DELTAS (action 0x05) into a range on the side of the current price that holds only the blocked currency, then CLEAR_OR_TAKE for the rounding remainder. The provider leaves with the other currency and a new position that holds the blocked currency. No sequence leaves the provider with an ERC-6909 claim. 6. The v4 SDK that Uniswap publishes for building these calls ends every removal and every fee collection with TAKE_PAIR, and its Actions enum has the lines for MINT_POSITION_FROM_DELTAS and CLEAR_OR_TAKE commented out, so a front end built on it cannot produce sequence A or B. Simulations: Celo position 178 (G$ and cUSD) at block 83,530,712 and Polygon position 60652 (WETH and VCNT) at block 97,817,338 with the tokens as they are today, Monad position 651334 at block 124,698,657 and Arc position 333954 at block 32,722,324 with one currency replaced by reverting code through an eth_call state override. In all four the six sequences that pay or close the blocked side revert, MINT_6909 reverts with UnsupportedAction, and sequences A and B succeed.",
+   "impact": "For a user who relies on a front end, a block on one token of a pool also locks the other currency of every position in that pool, although core could release it. On Polygon an ordinary account can cause this at will: F-072 shows that one account can keep the shared ViciCoin allowance of 6 VCNT per day at zero, and 8 of the 15 ViciCoin pools have an open position held through the PositionManager. On Celo 5 of 8 G$ pools have such a position and the standard removal reverts today. On Monad a pause of the wrapped stock tokens would put the USDC side of about 7.9 million dollars of pools (figure from F-061) in the same state. A provider who learns of sequence A loses the blocked side. A provider who uses sequence B keeps it as a range position that converts to the other currency if the price crosses the range. No funds move to the attacker.",
+   "preconditions": "A pooled token refuses transfers from the PoolManager. On Polygon any account can bring this about for VCNT by using up the daily allowance. On the other networks it needs the token issuer or its transfer policy. The provider holds the position through the PositionManager and uses a front end that builds removals with TAKE_PAIR. Not confirmed: which calls the hosted Uniswap web application sends for a removal. I read the published SDK, and the application may build its transactions through a server interface whose output I did not capture.",
+   "mitigations": "Add MINT_6909 and BURN_6909 handling with the caller as recipient and payer to the PositionManager that ships with this deployment, or publish a documented exit that uses MINT_POSITION_FROM_DELTAS. Front ends can fall back to sequence B when a simulation of TAKE_PAIR fails, and should warn before sequence A. Providers in pools with a token that has issuer controls or a transfer quota can hold positions through their own contract that calls PoolManager.mint for a side that cannot be paid.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:310-319",
+    "src/PoolManager.sol:322-329",
+    "src/types/Currency.sol:60-86"
+   ],
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e?fields=sources,compilation",
+     "supports": "Verified source of the Ethereum PositionManager (match). src/PositionManager.sol:197-286 lists the handled actions: 0x00 to 0x05, SETTLE_PAIR, TAKE_PAIR, SETTLE, TAKE, CLOSE_CURRENCY, CLEAR_OR_TAKE, SWEEP, WRAP, UNWRAP. Lines 474-484 show _clearOrTake calling poolManager.clear when the credit is at most amountMax. The Actions library defines MINT_6909 as 0x17 and BURN_6909 as 0x18 and the handler has no branch for them."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/Uniswap/sdks/main/sdks/v4-sdk/src/PositionManager.ts",
+     "supports": "removeCallParameters (lines 334-391) encodes BURN_POSITION or DECREASE_LIQUIDITY and then addTakePair. collectCallParameters (lines 413-423) encodes a decrease by zero and addTakePair."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/Uniswap/sdks/main/sdks/v4-sdk/src/utils/v4Planner.ts",
+     "supports": "The Actions enum (lines 30-66) has MINT_POSITION_FROM_DELTAS = 0x05 and CLEAR_OR_TAKE = 0x13 as comments only and has no entry for 0x17 or 0x18."
+    },
+    {
+     "url": "https://forno.celo.org eth_call",
+     "supports": "From owner 0xf18f712b760732cde4d1835673b98b2c7978b3a8 to PositionManager 0xf7965f3981e4d5bc383bfbcb61501763e9068ca9 at block 83,530,712, position 178: decrease then TAKE_PAIR reverts with 0x90bfb865 wrapping the G$ transfer, MINT_6909 reverts with 0x5cda29d7 and 0x17, sequences A and B return without error. Output in research/network-risk/cycles/005/theme-claim-operators.work/raw/exit_42220_178.json."
+    },
+    {
+     "url": "https://polygon-bor-rpc.publicnode.com eth_call",
+     "supports": "From owner 0xb2d3f2324061c3a0acf0453f01a1045ebad1647b to PositionManager 0x1ec2ebf4f37e7363fdfe3551602425af0b3ceef9 at block 97,817,338, position 60652: same result with the ViciCoin transfer as the failing call. Output in research/network-risk/cycles/005/theme-claim-operators.work/raw/exit_137_60652.json. Position 14963 in another ViciCoin pool exits with the normal sequence at block 97,817,667, which shows that the block depends on the amount and the allowance left that day (raw/exit_137_14963.json)."
+    },
+    {
+     "url": "https://rpc.monad.xyz eth_call with state override",
+     "supports": "Position 651334 at block 124,698,657 with the code of currency1 0xe7cd86e13ac4309349f30b3435a9d337750fc82d replaced by 0x5f5ffd: same pattern of reverts and the same two working sequences. Output in research/network-risk/cycles/005/theme-claim-operators.work/raw/exitovr_143_651334.json. Arc position 333954 at block 32,722,324 gave the same result (raw/exitovr_5042_333954.json)."
+    },
+    {
+     "url": "eth_call on the rpc endpoint of each network in state/networks.json (https://avalanche.drpc.org for Avalanche); results in research/network-risk/cycles/005/theme-claim-operators.work/raw/posm_actions.json",
+     "supports": "eth_call of modifyLiquidities with each action number 0 to 25 on the PositionManager of all 21 networks: actions 23 and 24 revert with UnsupportedAction on every network. The PositionManager has 23,877 bytes on 19 networks and 19,965 bytes on Elysium and HyperEVM."
+    },
+    {
+     "url": "src/PoolManager.sol:322",
+     "supports": "Core mints a claim against a positive delta without calling the token, so the missing route is in the periphery."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "proposedSeverity": "medium",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "PositionManager source. I fetched the Sourcify record of 0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e on Ethereum (creation and runtime match, solc 0.8.26). In src/PositionManager.sol, _handleAction (lines 197 to 286) has branches for INCREASE_LIQUIDITY, INCREASE_LIQUIDITY_FROM_DELTAS, DECREASE_LIQUIDITY, MINT_POSITION, MINT_POSITION_FROM_DELTAS, BURN_POSITION, SETTLE_PAIR, TAKE_PAIR, SETTLE, TAKE, CLOSE_CURRENCY, CLEAR_OR_TAKE, SWEEP, WRAP and UNWRAP and ends with revert UnsupportedAction(action). _clearOrTake (lines 474 to 484) calls poolManager.clear when the credit is at most amountMax. src/libraries/Actions.sol defines MINT_6909 as 0x17 and BURN_6909 as 0x18 under the comment that they are not supported in the position manager or router. Chain. On 2026-11-23 I sent eth_call of modifyLiquidities with the single action 0x17 from an unrelated account to the PositionManager of each of the 21 networks, using the endpoints in networks.json. All 21 revert with 0x5cda29d7 followed by 0x17. I computed 0x5cda29d7 as the selector of UnsupportedAction(uint256). Action 0x18 gives the same error with 0x18 on 20 networks. The Avalanche endpoint rate limited that one call. eth_getCode returns 23,877 bytes on 19 networks and 19,965 bytes on Elysium and HyperEVM. Simulations from the position owner, built with my own encoder. Celo, https://forno.celo.org, blocks 83,532,678 and 83,533,160, position 178 (G$ and cUSD, owner 0xf18f712b760732cde4d1835673b98b2c7978b3a8): decrease with TAKE_PAIR, with TAKE of each side and with CLOSE_CURRENCY all revert with 0x90bfb865 carrying the G$ address and selector a9059cbb. MINT_6909 reverts with UnsupportedAction(0x17). Leaving the G$ delta open reverts with 0x5212cba1. Decrease or burn, TAKE of cUSD and CLEAR_OR_TAKE of G$ with the maximum amount return without error. Decrease, TAKE of cUSD, MINT_POSITION_FROM_DELTAS into ticks -106690 to 887270 and CLEAR_OR_TAKE return without error, and a multicall that reads the result shows new token 605 with liquidity 100,918,514,712,628,699,620 owned by the same account and the old token at zero. The same calls from an unrelated account revert with NotApproved. Polygon, https://polygon.drpc.org, blocks 97,818,649 to 97,818,969, position 60652 (WETH and VCNT): the full removal shows the same pattern, and sequence B leaves new token 159444 with liquidity 1,034,117,479,046,245,712. transferLimitAmountRemaining(PoolManager) was 6.1256 VCNT at that time, so nobody had used up the allowance. Removals of 50, 10 and 2 percent of position 60652 with TAKE_PAIR succeed today, and position 14963 exits in full. The full removal of 60652 fails today because its VCNT side is larger than the allowance. I then found the storage slot of the daily total of the PoolManager in the plugin 0xf58fed40fba1ab7aa7ffc160b863bedd998386a7 with a prestate trace of a 1 VCNT transfer (slot 0x177da5a421dc5b34775004a7c8f5481d6125d6eba1e5f5ef95b99364e3e7eb64) and set it to minus 6 VCNT by state override. With that override transferLimitAmountRemaining returns 0, a transfer of one base unit from the PoolManager reverts with 0x1b97a875, a 2 percent removal of 60652 and the full removal of 14963 with TAKE_PAIR revert, and sequences A and B still succeed. That state is the one F-072 shows an ordinary account can produce with about 6.13 VCNT of net outflow per day. Monad, https://rpc.monad.xyz, block 124,707,777, position 651334 with the code of 0xe7cd86e13ac4309349f30b3435a9d337750fc82d replaced by 0x5f5ffd: same pattern. SDK. I fetched PositionManager.ts and utils/v4Planner.ts from the main branch of Uniswap/sdks. removeCallParameters (lines 334 to 399) adds a burn or a decrease and then addTakePair. collectCallParameters (lines 407 to 430) adds a decrease by zero and addTakePair. The Actions enum (lines 30 to 66) has INCREASE_LIQUIDITY_FROM_DELTAS, MINT_POSITION_FROM_DELTAS, CLEAR_OR_TAKE and WRAP as comments and no entry for 0x17 or 0x18. Not rechecked: the counts of ViciCoin and G$ pools with PositionManager positions (8 of 15 and 5 of 8), the 7.9 million dollar figure taken from F-061, the Arc simulation, and which calldata the hosted Uniswap web application sends for a removal.",
+    "codeCheck": "I traced the path in this repository. modifyLiquidity records the position under msg.sender (src/PoolManager.sol:161) and credits the removal to msg.sender (line 183), so a position made through a periphery contract can be closed only by that contract. unlock reverts with CurrencyNotSettled when any delta is left (src/PoolManager.sol:112), which matches the 0x5212cba1 revert seen when the blocked side is left open. take debits the caller and then calls currency.transfer (src/PoolManager.sol:291-297). The ERC-20 branch makes the call at src/types/Currency.sol:64-73 and reverts with the wrapped error when the token call fails or returns anything other than nothing or a 32 byte true (lines 82-86). The wrapped error carries the token address and selector a9059cbb, which is the revert data seen on Celo, Polygon and Monad. One failed take reverts the whole modifyLiquidities call, so the other currency stays in the pool too. clear requires the amount to equal the caller's positive delta and then erases it with no token call and no claim (src/PoolManager.sol:310-319). mint debits the caller's delta and calls _mint with no token call (src/PoolManager.sol:322-329, src/ERC6909.sol:79-83), so core can pay a blocked currency as a claim. I looked for a guard that changes this and found none: the msg.value check in _settle (line 356), the synced currency check in collectProtocolFees (src/ProtocolFees.sol:49-52) and the int128 casts (src/libraries/SafeCast.sol:56-59) play no part in a removal. Core behaves as written. The missing route is in the PositionManager, which is outside src/.",
+    "corrections": "The actor value unprivileged is right for Polygon (chain 137) alone, where F-072 lets any account use up the ViciCoin allowance. On the other 20 networks in chainIds a token must first refuse transfers from the PoolManager, and that needs the token issuer (G$ on Celo, the wrapped stock tokens on Monad, TIP-20 policies on Tempo). The chainIds list should be read as where the PositionManager lacks the action, and the unprivileged trigger exists on one network. The Polygon evidence needs one change. Position 60652 fails to close in full today because its VCNT side exceeds the 6 VCNT daily allowance, with 6.1256 VCNT of allowance still open. Removals of 50, 10 and 2 percent succeed with TAKE_PAIR, which the SDK can build through liquidityPercentage. The block for every size appears only after the allowance is used up, which I reproduced with a state override. The freeze applies to providers who rely on interface-built calldata. An owner who sends modifyLiquidities by hand can leave with the other currency through sequence B at any time, or by INCREASE_LIQUIDITY_FROM_DELTAS into another position of the same pool. No funds reach the attacker. The amounts under the unprivileged trigger are small: the PoolManager on Polygon held 11.35 VCNT, about 206 USD. The finding is about periphery code and a third party token rule. It does not follow from a difference between a network and Ethereum, and the same PositionManager behaviour exists on Ethereum. It overlaps F-072, F-056 and F-061 and adds to them the fact that the paired currency is locked for interface users. SDK line numbers: removeCallParameters ends at line 399 and collectCallParameters spans lines 407 to 430 in the file I fetched. Unconfirmed link: what the hosted Uniswap interface sends for a removal.",
+    "sources": [
+     {
+      "url": "https://sourcify.dev/server/v2/contract/1/0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e?fields=sources,compilation",
+      "supports": "Verified PositionManager source: _handleAction at src/PositionManager.sol:197-286 has no branch for 0x17 or 0x18, _clearOrTake at lines 474-484, Actions.sol defines MINT_6909 and BURN_6909 as unsupported."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/Uniswap/sdks/main/sdks/v4-sdk/src/PositionManager.ts",
+      "supports": "removeCallParameters and collectCallParameters end with addTakePair."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/Uniswap/sdks/main/sdks/v4-sdk/src/utils/v4Planner.ts",
+      "supports": "Actions enum lines 30-66: MINT_POSITION_FROM_DELTAS and CLEAR_OR_TAKE are comments, no 0x17 or 0x18."
+     },
+     {
+      "url": "https://forno.celo.org",
+      "supports": "eth_call from the owner of position 178 at blocks 83,532,678 and 83,533,160: TAKE_PAIR, TAKE and CLOSE_CURRENCY revert with the wrapped G$ transfer error, MINT_6909 reverts with UnsupportedAction(0x17), sequences A and B succeed, B leaves token 605 with liquidity."
+     },
+     {
+      "url": "https://polygon.drpc.org",
+      "supports": "eth_call and debug_traceCall at blocks 97,818,649 to 97,818,969: full removal of position 60652 reverts, partial removals succeed, allowance remaining 6.1256 VCNT, and with the daily total overridden to minus 6 VCNT every TAKE_PAIR removal reverts while sequences A and B succeed."
+     },
+     {
+      "url": "https://rpc.monad.xyz",
+      "supports": "eth_call with code override of 0xe7cd86e13ac4309349f30b3435a9d337750fc82d at block 124,707,777: same pattern for position 651334."
+     },
+     {
+      "url": "rpc endpoints of the 21 networks in research/network-risk/state/networks.json",
+      "supports": "eth_call of modifyLiquidities with action 0x17 reverts with 0x5cda29d7 and 0x17 on all 21 PositionManagers. Code length 23,877 bytes on 19 networks and 19,965 on Elysium and HyperEVM."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "extends": "F-072",
+   "id": "F-083",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "theme-claim-operators",
+     "status": "confirmed",
+     "severity": "medium"
+    }
+   ]
+  },
+  {
+   "title": "The Klik fee hooks keep one pending fee amount per token and burn it in the currency of whichever pool of that token swaps next, and they accept a pool of the token against any currency from any account",
+   "chainIds": [
+    1,
+    8453,
+    130,
+    57073,
+    42161,
+    4663,
+    43114,
+    143,
+    4217
+   ],
+   "lens": "L4",
+   "assumptions": [
+    "A6"
+   ],
+   "effect": "both",
+   "difference": "None. The behaviour does not depend on the network. It comes from one family of third party fee hooks (VERSION strings klik-multichain-1 and klik-anypair-1) that launch pads deployed on nine of the 21 networks. The PoolManager code behaves as written.",
+   "mechanism": "1. The hook charges a fee on swaps of a launched token and holds it as ERC-6909 claims at the PoolManager. It records the amount in pendingClaims(token), one number per token. In Tempo transaction 0x36bf56c18219aeb53b5f8a04f6f2fa4c062ccf81c67c1966c202635fc7073fbc the hook mints 0x2d5067 claims of pathUSD to itself inside beforeSwap. 2. At the next swap the hook pays the pending amount out. In Tempo transaction 0xa23224d5f477539161486a82ab2430469d6c08ec74e56ae67800d949595f913d beforeSwap calls PoolManager.burn(hook, pathUSD, 0x2d5067), then take(pathUSD, hook, 0x2d5067), then transfers 60 percent to the platform treasury and calls transfer for the rest to the factory. The trace marks that last inner call as out of gas and the swap continues. 3. The currency of that burn is read from the PoolKey of the swap. I called beforeSwap from the PoolManager address with a PoolKey that pairs a launched token with the codeless address 0x1111111111111111111111111111111111111112 and traced it with debug_traceCall. On six deployments the hook calls PoolManager.burn(hook, 0x1111111111111111111111111111111111111112, amount), and the amount equals pendingClaims(token), which was accrued in another currency: 23876031656686502 and 2079850173284467176091326 on the two Ethereum hooks, 143394835225437444 on Unichain, 333714925697516922 on Robinhood Chain, 54489710721685566614 on Monad and 230765 on Tempo. The afterSwap fee is minted in the same way: on Tempo the trace shows mint(hook, 0x1111111111111111111111111111111111111112, 10000000000000000). 4. The hook does not restrict who creates pools. PoolManager.initialize accepts any PoolKey that names the hook (src/PoolManager.sol:117-142) and calls beforeInitialize (src/libraries/Hooks.sol:178-182). An eth_call of initialize from an ordinary account with a launched token and the foreign currency succeeds on all eleven hook addresses listed under sources. The hooks have no liquidity flags, so anyone can add liquidity to such a pool. 5. First consequence, a swap freeze that exists today. When a token has pools against two currencies, fees accrued in the first are looked for in the second. If the hook holds fewer claims of the second currency than the pending amount, burn reverts on the checked subtraction (src/ERC6909.sol:85-87, src/PoolManager.sol:332-336) and beforeSwap reverts, so every swap of that pool reverts. The deployed Quoter on Ethereum returns the PoolManager error wrapped around Panic(0x11) from beforeSwap for seven pools: 0x227260acd3c0fa351a1360f11e8408f5fca8f099ce3b34e0dd8d886f61fdc228, 0x02ae580f824b1e9407c9063e08e7d2e29262a73917db4da9ac9acc23155403e8, 0x2256de11213c69f6a404cd2b973d79782e5a888114ef86b932768c99deb288e6, 0x9415295f90547e1b1ec7bed8e5396158003ca5889ad0fc9687a1014171d1fb29 and 0x1dc6439eb8e3e653d053533fd0a14c5a67b9aae60369885807cc0a8f5e2971a8 on hook 0x1d06faa7ff674ccfd8a5736c0c0973cb0a8fa0cc, and 0x1d3f06543054f9035578cf564802fd565fd424c1812dba91d841f61d0098246b and 0x8699a47da36461ce75bff3cdf0e6370bfb054203d1ebc7aae1a858f784b264fe on hook 0x6d01769ab90674d0d56b155f57003284e1b460cc. For the last one the token 0xe07befffcc37771dd3a5250fdd3b9a0798e415cc has 39205855192377918360 pending, the hook holds 39205855192377928360 claims of currency 0x29ef66e020e391aad7a8b1b5897af599251893b5 from the token's other pool, and only 2551319276869624230 claims of WLFI, the currency of the pool that fails. The same Quoter call succeeds for 63 other pools of the two hooks, and five pools without liquidity fail with the Quoter's own NotEnoughLiquidity or price limit errors. 6. Second consequence, which I derived from the traces and did not run. An account that creates a pool of token T against a currency it issues can grow pendingClaims(T) by any amount at no cost, because the fee is a share of its own swap in its own currency. A later swap in a pool of T against a valuable currency then burns that amount from claims the hook holds for the pending fees of other tokens and pays it to the platform treasury and to the fee receiver of T through the factory. The other tokens keep their pendingClaims entries, the hook no longer holds the claims, and their pools fail as in step 5. In the opposite direction, a swap in a pool of T against a worthless currency after the hook was given that many worthless claims (PoolManager.mint accepts any recipient, src/PoolManager.sol:322-329) clears pendingClaims(T) and pays T's receivers in the worthless currency. 7. The books already disagree on two hooks. On Ethereum hook 0x1d06faa7ff674ccfd8a5736c0c0973cb0a8fa0cc the pending amounts of tokens whose pool uses SPCXon (0xc9eef266834730340a55b6cc24621b31baf55581) sum to 79607629840677756 and the hook holds 7798353546842757 claims of it. On Unichain the pending amounts in UNI sum to 272597197961328745 against 262597197961328745 claims. I did not trace which transactions caused the difference.",
+   "impact": "Fees that the hooks hold as ERC-6909 claims for token creators and platforms, and the ability to swap in the affected pools. The claims are small today: about 16 USD and 17 USD at DexScreener prices on the two Ethereum hooks (44 and 23 tokens with pending fees), 0.26 UNI on Unichain, claims in 14 tokenised stock currencies on Robinhood Chain worth about 12 USD for the six that have a price, 54.49 MON on Monad and 0.230765 pathUSD on Tempo, where the factory holds a further 2.946234 pathUSD of creator fees. Seven Ethereum pools cannot be swapped today. Three of the five on the first hook have liquidity (153845604096252485200300 units each), the other two have none, and the liquidity of the two on the second hook was not read. Liquidity providers are not locked in, because the hooks have no liquidity callbacks and removal does not call them. Holders of the launched tokens lose the route through the frozen pool. The hooks serve 83 and 59 pools on Ethereum, 46 on Base, 30 on Unichain, 14 on Ink, 7 on Arbitrum One, 34 on Robinhood Chain, 11 on Avalanche, 15 on Monad and 2 on Tempo.",
+   "preconditions": "None for the freeze: it follows from a second pool of a token against another currency, which any account can create with initialize, and it has already happened on Ethereum. To gain from the payout the account must be the fee receiver of a token launched through the same factory. On Tempo launchEnabled() is true, but I did not confirm that launch has no caller restriction, and the path from creditCreatorFee to collectFees in the factory was read from selectors only. The burn was traced on Ethereum, Unichain, Robinhood Chain, Monad and Tempo. On Base, Ink, Arbitrum One and Avalanche no token of the sampled pools had pending fees, so only the open initialize was confirmed there. The Base hook 0x5b0a864213d49f23ed2a6635cc42b3b4fe7720cc has the code length of the traced Ethereum hook (8082 bytes, 232 bytes differ), and the Ink, Arbitrum One and Avalanche hooks have the code length of the traced Unichain and Monad hooks (9123 bytes). The newer Ethereum hook 0xcba49142a75da64a679f32a159f4316f11a7e0cc (klik-anypair-direct-dividends-2, 254 pools) reverts a foreign initialize with \"only factory initializes\" and returned a zero delta for the foreign PoolKey.",
+   "mitigations": "The PoolManager deployer cannot change this, and the PoolManager code is not at fault. The hook author can record pending fees per pool id or per token and currency, burn only in the recorded currency, and reject initialize from any caller other than the factory, as the newer hook does. A frozen pool swaps again once someone mints the missing claims to the hook. Interfaces should not route through a second pool of a Klik token. Liquidity providers can withdraw at any time.",
+   "coreRefs": [
+    "src/PoolManager.sol:117-142",
+    "src/libraries/Hooks.sol:178-182",
+    "src/libraries/Hooks.sol:248-282",
+    "src/PoolManager.sol:322-336",
+    "src/ERC6909.sol:85-87",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "Block 50,407,629. debug_traceCall of hook 0x50995539e4afaca479bb59b0d795d94e0efea0cc beforeSwap from the PoolManager with PoolKey (0x1111111111111111111111111111111111111112, DUCK 0xe20ece42bc8181a9786a177e3ee0de832c4a55a5, fee 0, tick spacing 200): the hook calls burn(hook, 0x1111..1112, 230765), and pendingClaims(DUCK) is 230765 with 230765 pathUSD claims held. eth_call of initialize from 0x00000000000000000000000000000000c0ffee01 succeeds for that PoolKey and for six other pairings of DUCK. debug_traceTransaction of 0x36bf56c1... and 0xa23224d5... shows the mint, burn, take and transfer sequence. launchEnabled() of factory 0x20839c453a0ed8bcab1095ea068669469098297c is 1 and creatorFees(DUCK) is 2846234."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "Block 26,476,872. debug_traceCall of beforeSwap on hooks 0x1d06faa7ff674ccfd8a5736c0c0973cb0a8fa0cc and 0x6d01769ab90674d0d56b155f57003284e1b460cc with a foreign PoolKey: burn(hook, 0x1111..1112, pendingClaims(token)) with the amounts quoted in the mechanism."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "Block 26,476,900. eth_call of initialize with a foreign PoolKey succeeds on both hooks. pendingClaims per token and PoolManager.balanceOf(hook, currency) for all pools of the hooks. eth_call of Quoter 0x99bd42B2B22e531f283b7F8a86dFf631EB16A9D1 quoteExactInputSingle with 1000 units for each pool with pending fees: seven pools return UnexpectedRevertBytes wrapping WrappedError(hook, beforeSwap, Panic(0x11)), 63 succeed. StateView getLiquidity for the affected pools."
+    },
+    {
+     "url": "https://unichain.drpc.org",
+     "supports": "Block 64,676,953. Hook 0x9463925bdeee2be5eade2a60857442b4a15ca0cc: foreign initialize succeeds, trace shows burn(hook, 0x1111..1112, 143394835225437444), pending in UNI 272597197961328745 against 262597197961328745 claims."
+    },
+    {
+     "url": "https://robinhood.drpc.org",
+     "supports": "Block 121,299,159. Hook 0x41b82571eaaed65f18ad3428f066cd23b9b3a0cc: foreign initialize succeeds, trace shows burn(hook, 0x1111..1112, 333714925697516922). 19 tokens have pending fees in 14 currencies."
+    },
+    {
+     "url": "https://rpc.monad.xyz",
+     "supports": "Block 124,680,901. Hook 0xdd1e195f536e5375ada2eeb179270ac23af8e0cc: foreign initialize succeeds, trace shows burn(hook, 0x1111..1112, 54489710721685566614), the pending amount of the one token with fees, accrued in native MON."
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "Block 61,179,406. eth_call of initialize with a foreign PoolKey succeeds on hooks 0x5b0a864213d49f23ed2a6635cc42b3b4fe7720cc (VERSION klik-anypair-1, 8082 bytes) and 0x64746dca345c5652bc251597bd99562216a7a0cc (VERSION b20-stock-1, answers pendingClaims)."
+    },
+    {
+     "url": "https://rpc-gel.inkonchain.com",
+     "supports": "Block 61,927,655. Hook 0x71b7a448b96a01de73b0caf1267d33558d2620cc (VERSION klik-anypair-1, 9123 bytes): eth_call of initialize with a foreign PoolKey succeeds."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc",
+     "supports": "Block 526,765,253. Hook 0x71b7a448b96a01de73b0caf1267d33558d2620cc: eth_call of initialize with a foreign PoolKey succeeds."
+    },
+    {
+     "url": "https://avalanche.drpc.org",
+     "supports": "Block 101,152,343. Hook 0xb2c964edbac922f006a09bd293b6c42ee147e0cc (VERSION klik-anypair-1, 9123 bytes): eth_call of initialize with a foreign PoolKey succeeds."
+    },
+    {
+     "url": "https://api.dexscreener.com/latest/dex/tokens/0xc9eef266834730340a55b6cc24621b31baf55581",
+     "supports": "Prices used for the value estimates, one request per currency, median of pairs with more than 5,000 USD of liquidity."
+    },
+    {
+     "url": "src/PoolManager.sol:117",
+     "supports": "initialize has no access control and calls the hook with the caller's PoolKey."
+    },
+    {
+     "url": "src/ERC6909.sol:85",
+     "supports": "_burn subtracts with overflow checks, so a burn above the balance reverts."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "proposedSeverity": "medium",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "All chain facts were re-run on 23 November 2026 with my own scripts. Hook identity: VERSION() returns klik-multichain-1 on 0x1d06faa7ff674ccfd8a5736c0c0973cb0a8fa0cc (Ethereum, 10031 bytes), 0x41b82571eaaed65f18ad3428f066cd23b9b3a0cc (Robinhood Chain) and 0x50995539e4afaca479bb59b0d795d94e0efea0cc (Tempo), and klik-anypair-1 on 0x6d01769ab90674d0d56b155f57003284e1b460cc (Ethereum, 8082 bytes), 0x5b0a864213d49f23ed2a6635cc42b3b4fe7720cc (Base), 0x9463925bdeee2be5eade2a60857442b4a15ca0cc (Unichain), 0x71b7a448b96a01de73b0caf1267d33558d2620cc (Ink and Arbitrum One), 0xb2c964edbac922f006a09bd293b6c42ee147e0cc (Avalanche) and 0xdd1e195f536e5375ada2eeb179270ac23af8e0cc (Monad). The low 14 bits of every address are 0x20cc. Open initialize: eth_call of PoolManager.initialize from 0x00000000000000000000000000000000c0ffee02 with a PoolKey that pairs a launched token with 0x1111111111111111111111111111111111111112 returns tick 0 on all eleven hook addresses (two fee and tick spacing variants each). On 0xcba49142a75da64a679f32a159f4316f11a7e0cc it reverts in beforeInitialize, as the finding says. Per token ledger paid in the currency of the calling pool: debug_traceCall of beforeSwap from the PoolManager address with the foreign PoolKey shows the hook calling burn(hook, 0x1111..1112, amount) with amount equal to pendingClaims(token) on Ethereum (23876031656686502 and 2079850173284467176091326), Unichain (143394835225437444), Robinhood Chain (333714925697516922), Monad (54489710721685566614) and Tempo (230765). The same test on afterSwap shows mint(hook, 0x1111..1112, 10000000000000000), one percent of the output. The calls end in ManagerLocked (0x54e3ca0d) because the test runs outside unlock. Frozen pools: the Ethereum Quoter returns WrappedError(hook, beforeSwap, Panic(0x11)) for exactly the seven pool ids listed, succeeds for 63 pools and fails with pool errors for 5. A debug_traceCall of the quote for pool 0x8699a47d shows the revert inside PoolManager.burn(hook, WLFI, 39205855192377918360) while the hook holds 2551319276869624230 WLFI claims. The payout step has been executed on chain, which the finding had only derived. Ethereum transaction 0xd903d0ada1874646896a5191a2ef25accec3c3db1333914542b6ad9a8c96bfed (block 26330140, sender 0x6356bab9f082de9abf08856ce61b71d294630964 through contract 0xbd499416061f78beceb10ac00fdecf0232b38208): a swap in pool (0x8312053433a327011a5ba4f9e1fd7a694a4c56c0, 0xfd23280b87514ce09dcb47965f1c5465847422eb) makes the hook mint 85325615158209763 claims of 0x83120534, and the next swap in pool (SPCXon, 0xfd23280b) makes the hook call burn(hook, SPCXon, 85325615158209763) and take the same amount, then transfer 51195369094925857 SPCXon (60 percent) to 0x81ee2b6bcfcf9a614036578e5e4f2b02e507da5a and 34130246063283906 (40 percent) to factory 0xb6da931df2ed2c80db47923d4eb46fd913ee01c3, followed by factory call 0xf3937729. Seven blocks earlier, transaction 0x2781482aa9a322fc7ff55550085c4746cb52026776625dead8c7ab9a528979f3 from the same sender created token 0x83120534 with CREATE2, launched 0xfd23280b through factory function 0xec3e64ef and then initialized the second pool itself with tick spacing 100. This one transaction accounts for the whole Ethereum shortfall: pending fees in SPCXon and 0x8b748678 pools (79607629840677756 plus 13516371654516515) minus the claims held in the two currencies (7798353546842757 plus 32790141751) equals 85325615158209763. On Unichain, transaction 0x2b6aab1368b9266b585e655377e5a9431b822e4ff4657fec34166824e372a82e (block 60794133) shows the hook minting 10000000000000000 claims of 0x29f2f95c696e93939d8ce77819377d16bd0dcc04 and then burning 10000000000000000 UNI claims in a swap of another pool, which is the 0.01 UNI difference the finding reports. Fee accrual needs no liquidity: in Ethereum transaction 0x6f7afaab99a4ad2ab4f7c77cf1953b649e1e69d7da2a521f57a1c2eb4ad4b266 a swap with amountSpecified -36547344002485468501 in a pool whose Swap event shows zero amounts makes the hook mint 365473440024854685 claims in beforeSwap. Tempo: debug_traceTransaction of 0x36bf56c1 and 0xa23224d5 shows mint(hook, pathUSD, 0x2d5067) and then burn, take, a transfer of 1781821 to 0x81ee2b6b and a transfer of 1187882 to the factory that ends out of gas. launchEnabled() is 1, creatorFees(DUCK) is 2846234 and the factory holds 2946234 pathUSD. Networks without a traced burn: the Ink, Arbitrum One and Avalanche hooks differ from the traced Unichain hook in 13 runs of exactly 20 bytes (embedded addresses), and the Base hook 0x5b0a8642 differs from the traced Ethereum hook 0x6d01769a in 11 runs of 20 or 32 bytes, so the logic is the same code. The Base hook 0x64746dca (VERSION b20-stock-1, 9873 bytes) accepted the foreign initialize, and its swap path was not traced. Launch through the factory is public: 26 distinct senders called factory 0xb6da931d directly in the transactions that created the pools of the first Ethereum hook. Not re-checked: the pool counts on the eight networks other than Ethereum (83 and 59 on Ethereum were recounted from Initialize logs), and the USD values, apart from one DexScreener request that returned about 132 USD per SPCXon.",
+    "codeCheck": "initialize has no caller check and calls beforeInitialize with the caller and the caller's PoolKey (src/PoolManager.sol:117-142, src/libraries/Hooks.sol:178-182), so the hook alone decides whether a second pool of a token exists. Flags 0x20cc are beforeInitialize, beforeSwap, afterSwap and the two swap return delta flags (src/libraries/Hooks.sol:29-45). No liquidity flag is set, so modifyLiquidity never calls the hook (src/libraries/Hooks.sol:195-206 and 209-245) and anyone can add or remove liquidity in any of these pools. swap calls the hook before the pool is touched (src/PoolManager.sol:202, src/libraries/Hooks.sol:248-282) and a hook revert is bubbled up (src/libraries/Hooks.sol:137), so a failing burn in beforeSwap blocks every swap of that pool. burn credits the caller and then subtracts the claim balance with checked arithmetic (src/PoolManager.sol:332-336, src/ERC6909Claims.sol:13-22, src/ERC6909.sol:85-87). A burn above the balance reverts with Panic(0x11), which is the error the Quoter returns. burn followed by take of the same amount nets the hook's delta to zero (src/PoolManager.sol:291-297), so the count check at the end of unlock (src/PoolManager.sol:112) does not stop the payout. mint accepts any recipient and debits the caller (src/PoolManager.sol:322-329), so any account can give the hook claims of a currency it issues, which lets the burn in a foreign pool succeed. No guard in src/ was missed: the PoolManager has no notion of which pool a claim balance of a hook was earned in, and none of the checks named in the task (msg.value in _settle, synced currency in collectProtocolFees, int128 casts, hook return data length) lies on this path. The PoolManager behaves as written. The fault is in the hook, which was read through traces and bytecode comparison because no verified source was fetched.",
+    "corrections": "The actor value unprivileged is right: every step (public factory launch, initialize, mint of claims to the hook, swap) was done by an ordinary account in the transactions cited, and the affected pools use a hook and tokens the attacker did not write. Severity medium is right on the SCHEMA scale: the loss is confined to the fee claims and the swaps of one hook family, the claims are worth tens of USD, and liquidity removal does not call the hook. Corrections. (1) Step 6 is no longer a derivation. It ran on Ethereum in transaction 0xd903d0ad at block 26330140 and moved 85325615158209763 SPCXon claims (about 11 USD) that backed the pending fees of other tokens. Evidence for that step is primary. (2) Step 7 can name the cause: that transaction explains the whole Ethereum shortfall, and transaction 0x2b6aab13 explains the 0.01 UNI on Unichain. (3) The three frozen Ethereum pools that hold liquidity (0x227260ac, 0x02ae580f, 0x9415295f on the first hook) are frozen as a result of that transaction, because they share the SPCXon claim balance it drained. (4) The two frozen pools on the second Ethereum hook have zero liquidity (StateView getLiquidity returns 0 for 0x1d3f0654 and 0x8699a47d). They were initialized inside contract creation transactions sent by 0x02dcd01d534477b5e76628a7284e7fa71c7a7ed7 and 0x3a15cf422307e922645d671cb247e76e8b1ec50d, so no user funds sit in them. (5) The preconditions understate the freeze. An account does not need liquidity or a token of its own launch to freeze the pool of another creator's token T: it initializes a pool of T against a currency it issues, mints that currency's claims to the hook for the current pendingClaims(T), and swaps there with a large specified amount. pendingClaims(T) then exceeds the hook's claims in the real quote currency and the real pool reverts with Panic(0x11) until someone mints the missing claims to the hook or resets the entry through another pool. I did not simulate this sequence end to end. Each step is shown separately by the transactions above. (6) The doubt about launch on Tempo can be narrowed: on Ethereum the launch function is called by many unrelated senders. The Tempo factory was not tested. (7) The Base hook 0x64746dca (b20-stock-1) should stay marked as open initialize only.",
+    "sources": [
+     {
+      "url": "https://ethereum-rpc.publicnode.com",
+      "supports": "Blocks 26,477,055 to 26,477,077. VERSION, factory, code length and pendingClaims of the three Ethereum hooks. eth_call of initialize with a foreign PoolKey from an ordinary account. PoolManager.balanceOf(hook, currency). Quoter 0x99bd42B2B22e531f283b7F8a86dFf631EB16A9D1 quoteExactInputSingle for all 75 pools with pending fees: 7 return Panic(0x11) from beforeSwap, 63 succeed, 5 fail with pool errors. StateView getLiquidity. eth_getTransactionByHash for the 142 pool creation transactions."
+     },
+     {
+      "url": "https://eth.drpc.org",
+      "supports": "debug_traceTransaction of 0xd903d0ada1874646896a5191a2ef25accec3c3db1333914542b6ad9a8c96bfed, 0x2781482aa9a322fc7ff55550085c4746cb52026776625dead8c7ab9a528979f3 and 0x6f7afaab99a4ad2ab4f7c77cf1953b649e1e69d7da2a521f57a1c2eb4ad4b266. debug_traceCall of beforeSwap and afterSwap with a foreign PoolKey on both Ethereum hooks, and of the Quoter call for pool 0x8699a47d."
+     },
+     {
+      "url": "https://mainnet.gateway.tenderly.co",
+      "supports": "eth_getLogs of the PoolManager: 142 Initialize logs that name the two hooks (83 and 59), and ERC-6909 Transfer logs with the hook as sender or receiver for SPCXon (659 mints summing to 4722954873472029123, 561 burns summing to 4715156519925186366), 0x8b748678 and 0x83120534."
+     },
+     {
+      "url": "https://unichain.gateway.tenderly.co",
+      "supports": "eth_getLogs and receipt of 0x2b6aab1368b9266b585e655377e5a9431b822e4ff4657fec34166824e372a82e: mint of 10000000000000000 claims of 0x29f2f95c to the hook and burn of 10000000000000000 UNI claims in the same transaction."
+     },
+     {
+      "url": "https://unichain.drpc.org",
+      "supports": "debug_traceCall of the Unichain hook with a foreign PoolKey: burn(hook, 0x1111..1112, 143394835225437444)."
+     },
+     {
+      "url": "https://mainnet.unichain.org",
+      "supports": "Block 64,679,413. VERSION and code length (9123 bytes) of hook 0x9463925b, pendingClaims of token 0x91f02d95 (143394835225437444), and eth_call of initialize with a foreign PoolKey from an ordinary account, which succeeds."
+     },
+     {
+      "url": "https://rpc.mainnet.tempo.xyz",
+      "supports": "Block 50,412,123. Foreign initialize succeeds. debug_traceCall shows burn(hook, 0x1111..1112, 230765). debug_traceTransaction of 0x36bf56c1 and 0xa23224d5. launchEnabled, creatorFees(DUCK) and the factory's pathUSD balance."
+     },
+     {
+      "url": "https://robinhood.drpc.org",
+      "supports": "debug_traceCall of hook 0x41b82571 with a foreign PoolKey: burn(hook, 0x1111..1112, 333714925697516922)."
+     },
+     {
+      "url": "https://rpc.mainnet.chain.robinhood.com",
+      "supports": "Block 121,321,933. VERSION klik-multichain-1 and code length 10031 of hook 0x41b82571, pendingClaims of token 0xff661ebb (333714925697516922), and eth_call of initialize with a foreign PoolKey from an ordinary account, which succeeds. The code differs from the Ethereum hook 0x1d06faa7 in 10 runs of 20 bytes, as does the Tempo hook."
+     },
+     {
+      "url": "https://rpc.monad.xyz",
+      "supports": "Foreign initialize succeeds and debug_traceCall shows burn(hook, 0x1111..1112, 54489710721685566614)."
+     },
+     {
+      "url": "https://mainnet.base.org/",
+      "supports": "Block 61,187,085. Foreign initialize succeeds on 0x5b0a8642 and 0x64746dca. eth_getCode of 0x5b0a8642 differs from the Ethereum hook 0x6d01769a in 11 runs of 20 or 32 bytes."
+     },
+     {
+      "url": "https://rpc-gel.inkonchain.com",
+      "supports": "Block 61,929,362. Foreign initialize succeeds. eth_getCode differs from the Unichain hook in 13 runs of 20 bytes."
+     },
+     {
+      "url": "https://arb1.arbitrum.io/rpc",
+      "supports": "Block 526,771,799. Foreign initialize succeeds. eth_getCode differs from the Unichain hook in 13 runs of 20 bytes."
+     },
+     {
+      "url": "https://api.avax.network/ext/bc/C/rpc",
+      "supports": "Block 101,154,224. Foreign initialize succeeds. eth_getCode differs from the Unichain hook in 13 runs of 20 bytes."
+     },
+     {
+      "url": "https://api.dexscreener.com/latest/dex/tokens/0xc9eef266834730340a55b6cc24621b31baf55581",
+      "supports": "SPCXon trades at about 132 USD in the pairs with the most liquidity, so the 0.0853 SPCXon moved in transaction 0xd903d0ad was worth about 11 USD."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "id": "F-084",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "theme-shared-hooks",
+     "status": "confirmed",
+     "severity": "medium"
+    }
+   ]
+  },
+  {
+   "title": "Any holder of 1,000,000 DEAD can take the PoolManager's whole DEAD balance on Base after 90 days without a payout, and one account did so on 17 November 2026",
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A6",
+    "A5"
+   ],
+   "effect": "siphon",
+   "difference": "The cause is a token rule, and Base is where the token and its pools are. DeadToken at 0xf0197f10ea542a67914ecc0ec5304dc9df1faf6f lets any caller who holds 1,000,000 DEAD call claimIdleTokens(target) and move the whole balance of an address that has sent no DEAD for 90 days: half to the caller, 40 percent burned and 10 percent to three platform addresses. The token keeps a whitelist of pool addresses that are exempt, and the Uniswap v4 PoolManager is not on it. Earlier cycles recorded balances that rise through a public trigger (F-041, F-066, F-067). This is a public trigger that lowers a balance that pools have recorded.",
+   "mechanism": "1. Core keeps no per currency total. A pool's reserves are numbers in pool state, and the only place the token balance is read is sync and settle (src/PoolManager.sol:279-288, 349-365). When the balance falls without a take, every later take of that currency draws on less than pools record, and the transfer in take reverts once the balance is too low (src/PoolManager.sol:291-297, src/types/Currency.sol:60-86). 2. DeadToken updates lastTransferTime only for the sender of a transfer, and for a receiver whose balance was zero (verified source Dead.sol lines 563 to 578). The PoolManager is a sender only when a take pays DEAD out. A quiet period of 90 days without a DEAD payout makes the whole pooled balance claimable (lines 388 to 420: balance check of the caller at 390, whitelist check at 394, idle check at 398, 50 percent to the caller at 405 and 413, 40 percent burned at 406 and 414). 3. Observed: transaction 0xc32384b25be1e5d29cd5e978fc5f531359ddd8dcae67a1ff89204e98c27d0d2b in Base block 58,594,779 (17 November 2026, 09:55:31 UTC) is a contract creation by 0x5f21bfbe94a4774fc6fb88ac84d47538422f7976. The new contract 0x25bead0f62a7c234e89691e4519ca5e74079cf3f receives 1,000,000 DEAD from the pair 0x098a1a39a006ea83c86fd8da991c0e7134eaf68c, emits three TokensClaimed logs (targets 0x50ddc37e9060fda26cc5fe2f521fe9d01bc29810 for 18,583.25 DEAD, the PoolManager for 14,899.78 DEAD and 0xaa2e244d93fd4d0d8a6c6d525de06468d77be7b3 for 13,444.75 DEAD) and returns 1,003,009.03 DEAD to the pair. The PoolManager emitted no log in that transaction. Its DEAD balance was 14,899.783090229956530365 at block 58,594,778 and 0 at block 58,594,779. lastTransferTime(PoolManager) one block earlier was 1784165391, which is 10,743,940 seconds (124 days) before the block. 4. The PoolManager took no part in the call. No sync, settle, take or unlock is needed, so no check in core can see it. 5. The balance does not come back. Three later swaps paid 88.41, 699.16 and 872.46 DEAD into the PoolManager, which holds 1,660.03 DEAD today. Those tokens are recorded by pools as well, so the gap of 14,899.78 DEAD stays.",
+   "impact": "14,899.78 DEAD left the PoolManager: 7,449.89 to the claimer, 5,959.91 burned and 1,489.98 to the three platform addresses. I found no price source for DEAD and did not value it. The liquidity of the pools on the routes of the DEAD swaps before and after the claim is unchanged across the claim block (for example pool id 0x18fca1729428c26f554c4f431a551e05404b0d6b8ae9ae518966e5a9e9371121 holds liquidity 319,322,205,084,229 at block 58,594,778 and today), so pools still record the DEAD that was taken. Liquidity providers and buyers in the DEAD pools lose: a swap or a removal that must pay out more DEAD than the PoolManager holds reverts. The loss is limited to currency DEAD, because deltas, takes and settles are kept per currency (src/PoolManager.sol:368-378). Pools in other tokens are not touched. The token saw 136 TokensClaimed logs since block 56,000,000, so claiming idle holders is routine for this token.",
+   "preconditions": "A DEAD balance of 1,000,000 for the length of one call, which the observed account borrowed from a pair inside its creation transaction. No DEAD payout from the PoolManager for 90 days. The PoolManager stays off the token's pool whitelist (whiteListedPool(PoolManager) returns 0 and getPoolWhitelistStatus(PoolManager) returns false, false and 0). After the claim the timer restarted when the PoolManager received DEAD into a zero balance at timestamp 1795149430 (20 November 2026), and getTimeUntilClaimable(PoolManager) returned 7,502,995 seconds at my read, so the balance becomes claimable again on about 18 February 2027 unless a take pays DEAD out before then. I did not read the PoolKey of the DEAD pools (the Base log endpoint serves 1,000 blocks per request), so the list of pools comes from the Swap logs of the transactions that moved DEAD, and I did not send any transaction.",
+   "mitigations": "The token admin can put the PoolManager on the pool whitelist with setWhiteListPool, which takes effect after a 60 minute timelock (Dead.sol lines 315 to 324 and 355 to 382). Any account can restart the timer by causing a DEAD payout from the PoolManager, for example a swap that buys a small amount of DEAD. Liquidity providers should not pool a token that lets third parties move idle balances. Interfaces can find such tokens with the search of this unit: an ERC-20 Transfer log with the PoolManager as sender in a transaction where the PoolManager emitted no log. Core cannot prevent it, because the token moves the balance without calling the PoolManager.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:368-378",
+    "src/types/Currency.sol:60-86"
+   ],
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/8453/0xf0197f10ea542a67914ecc0ec5304dc9df1faf6f?fields=sources,compilation,abi",
+     "supports": "Exact match record for DeadToken (solc 0.8.30). Dead.sol: IDLE_PERIOD 7,776,000 seconds (line 58), MIN_CLAIMER_BALANCE 1e6 * 10**18 (line 61), claimIdleTokens(address) at lines 388 to 420, _update at lines 563 to 578 sets lastTransferTime for the sender and for a receiver with a zero balance."
+    },
+    {
+     "url": "https://base.gateway.tenderly.co",
+     "supports": "eth_getTransactionReceipt and eth_getTransactionByHash for 0xc32384b25be1e5d29cd5e978fc5f531359ddd8dcae67a1ff89204e98c27d0d2b: creation transaction, block 58,594,779, five DEAD Transfer logs with the PoolManager as sender (7,449.89 to the new contract, 5,959.91 to the zero address, 744.99, 446.99 and 298.00 to three addresses), TokensClaimed topic 0xa86305abc2db271df4609aa86a8d044bc11fb36939841bfdad6c1ab2b26e9471 with target PoolManager and amount 14,899.783090229956530365, no log of the PoolManager. eth_call at blocks 58,594,778 and 58,594,779: balanceOf(PoolManager) 14,899.78 and 0, lastTransferTime(PoolManager) 1784165391, block timestamp 1794909331. eth_call at the latest block: whiteListedPool(PoolManager) 0, isClaimable(PoolManager) 0, getTimeUntilClaimable(PoolManager) 7,502,995, balanceOf(PoolManager) 1,660.03, StateView.getLiquidity for nine pool ids at block 58,594,778 and latest."
+    },
+    {
+     "url": "https://base-rpc.publicnode.com",
+     "supports": "eth_getLogs on the DEAD token from block 56,000,000: 136 TokensClaimed logs, three of them in the transaction above; nine Transfer logs that name the PoolManager since block 57,000,000 (one payment in before the claim, five out in the claim, three payments in after it)."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-unbacked-claims.work/raw/base_DEAD_claims.json:1",
+     "supports": "The TokensClaimed logs."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-unbacked-claims.work/raw/base_DEAD_pools.json:1",
+     "supports": "DEAD transfers that touch the PoolManager, the pool ids in those transactions and their liquidity before the claim and today."
+    },
+    {
+     "url": "src/PoolManager.sol:291-297",
+     "supports": "take debits the caller and calls transfer on the currency; a balance that is too low makes that call revert."
+    },
+    {
+     "url": "src/PoolManager.sol:349-365",
+     "supports": "The token balance is read only in sync and settle; nothing compares it with what pools record."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "proposedSeverity": "medium",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "All chain facts were re-run on 23 November 2026 against https://mainnet.base.org/ and https://base.gateway.tenderly.co. Token source: the Sourcify record for 0xf0197f10ea542a67914ecc0ec5304dc9df1faf6f is an exact match for DeadToken (solc 0.8.30). Dead.sol line 58 sets IDLE_PERIOD to 7,776,000 seconds and line 61 sets MIN_CLAIMER_BALANCE to 1,000,000 tokens of 18 decimals. claimIdleTokens (lines 388 to 420) checks the caller's balance, the pool whitelist and the idle period, then moves 50 percent of the target's balance to the caller, burns 40 percent and sends 10 percent to three platform addresses. _update (lines 563 to 578) sets lastTransferTime for the sender, and for a receiver only when its balance was zero. Transaction: the receipt of 0xc32384b25be1e5d29cd5e978fc5f531359ddd8dcae67a1ff89204e98c27d0d2b (block 58,594,779, timestamp 1794909331, status 1, 78 logs) shows 1,000,000 DEAD sent by pair 0x098a1a39a006ea83c86fd8da991c0e7134eaf68c to 0x25bead0f62a7c234e89691e4519ca5e74079cf3f, five Transfer logs with the PoolManager as sender (7,449.89 to the claimer, 5,959.91 to the zero address, 744.99, 446.99 and 298.00 to the platform addresses), a TokensClaimed log with target PoolManager and amount 14,899.783090229956530365, and no log of the PoolManager. balanceOf(PoolManager) is 14,899.783090229956 at block 58,594,778 and 0 at block 58,594,779 on both endpoints, and 1,660.03 at the latest block. lastTransferTime(PoolManager) was 1784165391 one block before the claim and is 1795149430 now. whiteListedPool(PoolManager) and pendingPoolWhitelist(PoolManager) are 0 at both blocks. Read-only test of the call itself at block 58,594,778: claimIdleTokens(PoolManager) from an address without DEAD reverts with InsufficientBalanceToClaim (0xb347e4bf), and from the pair, which holds more than 1,000,000 DEAD, it succeeds. At the latest block the same call reverts with TokensNotIdleLongEnough (0x22ba57ac) and getTimeUntilClaimable(PoolManager) returns 7,493,182 seconds. The link the finding left open is now closed. The pools that hold DEAD are three pools of USDC and DEAD without a hook, with static fees of 25, 60 and 70 percent: 0x18fca1729428c26f554c4f431a551e05404b0d6b8ae9ae518966e5a9e9371121, 0x625f17175b0939fcc2a97f35335877998f53d7c43beddd4c9c0ae733237e7bdb and 0xa20d780775626e7ae792654039daf1d3dc44da5099b4d582da277b1392994cfa. I read their parameters from PositionManager.poolKeys and their state from StateView. A read-only Quoter call that sells 1,000,000 USDC into each pool returns the DEAD the pool would pay out: 11,091.73, 83.85 and 195.27 DEAD at block 58,594,778, the same three figures at block 58,594,779 when the PoolManager held 0 DEAD, and 12,223.30, 97.47 and 229.93 DEAD at the latest block. The three pools therefore record at least 12,550.71 DEAD payable to swappers today while the PoolManager holds 1,660.03 DEAD. Value: the 25 percent pool stood at tick 358,751 before the claim, which is about 3,800 DEAD per USDC, so the 14,899.78 DEAD were worth about 4 USD.",
+    "codeCheck": "The path needs no call into the PoolManager, so no guard in src/ can act on it. The token balance is read in two places only: sync (src/PoolManager.sol:285) and _settle (src/PoolManager.sol:359), both through balanceOfSelf (src/types/Currency.sol:90-96). No per currency total exists in storage; pool amounts are numbers in pool state and protocol fees are a counter (src/ProtocolFees.sol:21, 66-70). take debits the caller and then calls transfer on the currency (src/PoolManager.sol:291-297), and Currency.transfer reverts with ERC20TransferFailed when the token call fails or returns false (src/types/Currency.sol:64-74, 82-86). DeadToken is an OpenZeppelin ERC-20 and reverts on a short balance, so a take of more DEAD than the PoolManager holds reverts, and with it the swap or liquidity removal that needs it. collectProtocolFees pays with the same transfer (src/ProtocolFees.sol:54-56). Deltas are stored per target and currency (src/libraries/CurrencyDelta.sol:10-16, src/PoolManager.sol:368-378), so the shortfall cannot be drawn from another currency. A caller with a positive DEAD delta can still close it with mint or clear (src/PoolManager.sol:310-329). The checks named in the task do not apply: the msg.value check, the synced currency check in collectProtocolFees and the delta count check at the end of unlock all run inside PoolManager calls, and this balance change happens in a call from a third contract to the token.",
+    "corrections": "Actor unprivileged is right: the claimer needs 1,000,000 DEAD for one call, borrowed it from a pair inside one transaction, and is neither the token owner 0x485f77d6362f5922fcb63a40aaa4fd79d26ec905 nor the admin 0x6f8b4f05434df0f1af51f3e27a34b36dc8fbbac3. Four points need fixing. First, the contract created by the transaction is 0x120df14514851c4fbec63d374703b0b7ef7fd71e according to the receipt; the claimer 0x25bead0f62a7c234e89691e4519ca5e74079cf3f is a second contract deployed inside the same transaction. Second, the nine pool ids in the raw file and the pool named in the impact text are the pools on the swap routes, and five of them do not hold DEAD according to PositionManager.poolKeys (0x9f6013f1 pairs USDC with 0xc1a36ca099c37ded68f0d6be608fb00767238aa4, 0x90333bb0 and 0xec746b81 pair WETH with USDC, 0xbd976d4c and 0x24662c76 pair USDC with two other tokens); a sixth, 0xcfd23695, has no PositionManager record and I could not read its currencies. The DEAD pools are the three listed in the fact check, and 0x18fca172 is one of them, so the conclusion holds. Third, the finding gives no value. At the pool price the amount taken is about 4 USD, and the shortfall against what the three pools would pay out is about 10,900 DEAD today, under 3 USD. Fourth, the 136 TokensClaimed logs come from two transactions by two claimers (3 logs in block 58,594,779 and 133 logs in block 58,617,833), so the word routine overstates it. The title says the claimer takes the whole balance; the claimer receives half and the whole balance leaves the PoolManager. The cause is a rule of one token and has nothing to do with how Base differs from Ethereum, as the finding says. Medium stands because the loss is confined to the pools of one token and the path is closed until about 18 February 2027 unless no DEAD payout happens before then.",
+    "sources": [
+     {
+      "url": "https://sourcify.dev/server/v2/contract/8453/0xf0197f10ea542a67914ecc0ec5304dc9df1faf6f?fields=sources,compilation,abi",
+      "supports": "Exact match record for DeadToken. Dead.sol lines 58, 61, 315 to 324, 388 to 420 and 563 to 578 as quoted in the fact check."
+     },
+     {
+      "url": "https://mainnet.base.org/",
+      "supports": "eth_getTransactionReceipt and eth_getTransactionByHash for 0xc32384b25be1e5d29cd5e978fc5f531359ddd8dcae67a1ff89204e98c27d0d2b; balanceOf(PoolManager) on DEAD at blocks 58,594,778 and 58,594,779; block timestamp 1794909331; eth_getCode of the claimer and the created contract."
+     },
+     {
+      "url": "https://base.gateway.tenderly.co",
+      "supports": "eth_call at block 58,594,778 and at the latest block: lastTransferTime, whiteListedPool, pendingPoolWhitelist, getPoolWhitelistStatus, isClaimable, getTimeUntilClaimable, ADMIN, isAdminBurned, owner, and claimIdleTokens(PoolManager) with the from field set to an address without DEAD and to the pair. PositionManager.poolKeys, StateView.getSlot0 and getLiquidity for the three DEAD pools, and Quoter.quoteExactInputSingle for each pool at blocks 58,594,778, 58,594,779 and latest. Receipts of 0xa8ea9d2bb73793d900d43d5d592b91176e4991e9628baf3e23d7653488b139de and 0x1df363f427c9c1528ea8f2f45539e2f32496141865f951a671a43d3513c533fb, whose Swap logs name the DEAD pools."
+     },
+     {
+      "url": "src/PoolManager.sol:279-297",
+      "supports": "sync reads the balance and take pays with a token transfer after debiting the caller."
+     },
+     {
+      "url": "src/types/Currency.sol:55-96",
+      "supports": "transfer reverts when the token call fails; balanceOfSelf is the only balance read."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "id": "F-085",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "theme-unbacked-claims",
+     "status": "confirmed",
+     "severity": "medium"
+    }
+   ]
+  },
+  {
    "title": "Polygon system token at 0x1010 mirrors the PoolManager native balance and cannot be paid out by take",
    "chainIds": [
     137
@@ -2383,6 +3028,216 @@
     {
      "cycle": 4,
      "unit": "theme-shared-transaction",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
+   "title": "One Polygon pool already uses the native token contract 0x1010 as a currency, it holds no liquidity, and the inner frame tests leave the finding unchanged",
+   "chainIds": [
+    137
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A3",
+    "A4"
+   ],
+   "effect": "freeze",
+   "difference": "Polygon has a genesis contract at 0x0000000000000000000000000000000000001010 whose balanceOf returns the native POL balance of an account and whose transfer returns false unless msg.value equals the amount. Ethereum has no ERC-20 face of its native asset in the protocol.",
+   "mechanism": "1. The precondition that someone initializes a pool with 0x1010 has been met once. Pool 0x79d1ed6dc35a3472253c1a5f4b13edfc1481e3b4bd70189c481cbf04b34cbf73 pairs 0x1010 with the token 0x5eb10e40c4969dba42f344eb0cc2cd1a4bb3ad21 since block 70,895,654. It has zero liquidity, the PoolManager holds none of the other token, and no protocol fee accrued under 0x1010. 2. From a forwarding stub at the PoolManager address, called by another account, 0x1010 answered transfer of 0 with true, transfer of 1 with false, balanceOf under STATICCALL with the native balance, and reverted on value calls, on the ten hook selectors and on unlockCallback. This equals the top level results of cycles 1 and 2, so take of a non-zero amount still fails the success test at src/types/Currency.sol:64-74. 3. Among all 6,772 currencies that the PoolManager holds, 0x1010 is the only one whose balanceOf equals the native balance, so no second address measures POL. 4. Walk across the two ids. sync(0x1010) records the native balance. A native settle with value then reverts at src/PoolManager.sol:356. sync(address(0)) clears the synced currency (src/PoolManager.sol:281-283), and a later sync(0x1010) reads the balance again, so the stored reserve is never older than the last native credit. A native take or a native fee collection between sync(0x1010) and settle lowers the balance and makes settle revert at src/PoolManager.sol:360. A credit under 0x1010 therefore still needs POL that reached the PoolManager without a call, and it still cannot be paid out.",
+   "impact": "Unchanged. POL forced into the PoolManager and booked under 0x1010 cannot leave as that currency. The one existing pool holds nothing. Pools that hold POL under address(0) are not affected.",
+   "preconditions": "A custom contract must force POL into the PoolManager between sync and settle. The actor loses its own funds. No path takes funds of other users.",
+   "mitigations": "Interfaces and indexers on Polygon should refuse 0x0000000000000000000000000000000000001010 as a pool currency and should flag the existing pool. The probe of 0x1010 should be repeated after every Bor fork, because forks can replace genesis contract code and recent forks were distributed privately.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:349-365",
+    "src/types/Currency.sol:60-75",
+    "src/types/Currency.sol:90-96"
+   ],
+   "sources": [
+    {
+     "url": "rpc https://polygon.gateway.tenderly.co eth_getLogs for Initialize with 0x1010 as currency0 or currency1, blocks 60000000 to 97807856 on 2026-11-23",
+     "supports": "exactly one pool, initialized in transaction 0xc379c9cb2f0c0b51fd792c8983c2b6ec091f7a23c3d85ba11bd077415886e443 at block 70895654"
+    },
+    {
+     "url": "rpc https://polygon-bor-rpc.publicnode.com (bor v2.11.1), eth_call with state override, 2026-11-23, blocks 97807369 to 97808355",
+     "supports": "stub sweep of 0x1010 with 16 call shapes; StateView getLiquidity and getSlot0 for the pool; balance census of 7,456 currencies; group test in which moving other tokens did not change the 0x1010 reading"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "The Initialize logs of the Polygon PoolManager name 0x0000000000000000000000000000000000001010 exactly once: transaction 0xc379c9cb2f0c0b51fd792c8983c2b6ec091f7a23c3d85ba11bd077415886e443 at block 70,895,654, pool id 0x79d1ed6dc35a3472253c1a5f4b13edfc1481e3b4bd70189c481cbf04b34cbf73, currency1 0x5eb10e40c4969dba42f344eb0cc2cd1a4bb3ad21, fee 3000, tick spacing 60, no hook. StateView reports zero liquidity for it, the PoolManager holds none of the other token, and protocolFeesAccrued for 0x1010 is zero. At block 97,816,608 eth_getBalance(PoolManager) and balanceOf(PoolManager) on 0x1010 both return 3,064,824.134955069793283705 POL. Called from the PoolManager address at the top level, and again as an inner frame with Multicall3 code placed at the PoolManager address and another account as sender, transfer of 0 returns a 32 byte true, transfer of 1 and of 1 POL return a 32 byte zero, balanceOf is unchanged, and the unlockCallback selector and empty calldata revert. A 1 wei call with empty calldata to the PoolManager reverts, and 0x1010.transfer(PoolManager, 1) with value 1 reverts, so 0x1010 cannot push POL into the PoolManager. sync(0x1010) on the deployed PoolManager succeeds. I rebuilt the currency list from all 20,316 Initialize logs: 7,457 token addresses, of which 6,772 have a non-zero PoolManager balance at block 97,817,048. 0x1010 is the only one whose balance equals the native balance. I repeated eight of the sixteen call shapes of the stub sweep and did not repeat the ten hook selectors.",
+    "codeCheck": "sync(0x1010) stores the native balance as the reserve (src/PoolManager.sol:285-286, src/types/Currency.sol:94). While 0x1010 is synced, _settle rejects any msg.value (src/PoolManager.sol:356) and credits balance minus reserve with a checked subtraction (src/PoolManager.sol:358-360). settle and settleFor are the only payable functions (src/PoolManager.sol:300, src/PoolManager.sol:305) and src/ has no receive or fallback function, so inside the window the native balance can rise only through a forced transfer. sync(address(0)) clears only the synced currency (src/PoolManager.sol:281-283, src/libraries/CurrencyReserves.sol:17-21), and the next sync(0x1010) reads the balance again, so a native payment is never inside a 0x1010 window. take(0x1010, to, amount) calls transfer with zero value (src/types/Currency.sol:73), the token answers a zero word for any non-zero amount, the test at src/types/Currency.sol:68 fails and the call reverts at src/types/Currency.sol:82-86. I tried to turn the mirror into a gain. A native take, then sync(0x1010), then a forced return of the same POL gives a 0x1010 credit and leaves the native debit, which only msg.value can clear. A native fee collection between sync(0x1010) and settle is not stopped by the address comparison at src/ProtocolFees.sol:49, and it lowers the balance so that the settle reverts at src/PoolManager.sol:360 unless the settler adds its own POL. A 0x1010 credit can be cleared, minted as a claim or swapped in a pool that nobody else has funded, and it cannot be paid out. Native settlement never reads a balance (src/PoolManager.sol:353-354), so the 3.06 million POL held for address(0) pools are not reachable through the second id.",
+    "corrections": "Nothing wrong in the mechanism. The figure 6,772 is the number of pooled currencies with a non-zero balance, out of 7,457 token addresses. The actor value unprivileged is formally right because any account can do every step, and the only party that can lose is the account that forces its own POL in. No user who did nothing unusual is exposed, so this entry is not a path to funds of others.",
+    "sources": [
+     {
+      "url": "rpc https://polygon.gateway.tenderly.co eth_getLogs on the PoolManager 0x67366782805870060151383f4bbff9dab53e5cd6, blocks 60000000 to latest on 2026-11-23",
+      "supports": "One Initialize log with 0x1010 as a currency, and the full list of 20,316 Initialize logs"
+     },
+     {
+      "url": "rpc https://polygon-bor-rpc.publicnode.com (bor v2.11.1), eth_call with state override, eth_getBalance, eth_getCode and eth_getStorageAt, blocks 97816436 to 97817199 on 2026-11-23",
+      "supports": "Native balance equals balanceOf on 0x1010, transfer answers at the top level and as an inner frame, reverts on unlockCallback, empty calldata and value transfers into the PoolManager, zero liquidity and zero fees for the pool, balance census of 7,457 currencies"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "extends": "F-008",
+   "id": "F-077",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "established-l1",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
+   "title": "TITHE on Robinhood Chain pays accrued holder rewards to the PoolManager when any account calls claimFor, and 10,002.56 TITHE can be booked through sync and settle today",
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A5"
+   ],
+   "effect": "siphon",
+   "difference": "This is a further token for the class recorded for Ethereum, Polygon, BNB Smart Chain and Avalanche, found on Robinhood Chain with an amount that is due now. TITHE 0x3751b9250a90342e47173bd3a7c7de4f297c060a is a dividend paying token (functions magnifiedRewardPerShare, withdrawableRewardOf, excludedFromRewards, claimFor(address[])). The PoolManager is not excluded from rewards and claimFor has no caller check.",
+   "mechanism": "1. sync, settle and take work as in the earlier findings of this class (src/PoolManager.sol:279-297, 349-365). 2. A caller runs sync(TITHE), then TITHE.claimFor([PoolManager]), then settle inside one unlock. The token transfers the accrued reward to the PoolManager, settle credits the rise to the caller, and take pays it out. 3. Read-only test at block 121,278,927 with a measuring stub at the PoolManager address: claimFor([PoolManager]) called by an ordinary account succeeds and raises balanceOf(PoolManager) by 10,002.5557 TITHE, from 97,123.82 to 107,126.38 after one third of the balance had been moved out for the test. The caller's own balance does not change. The source is not on Sourcify, so the reading of the functions rests on selector names and on this simulation.",
+   "impact": "10,002.56 TITHE today, 6.9 percent of the 145,685.74 TITHE that the PoolManager holds, plus whatever accrues later. I found no price for TITHE. Without a caller the reward stays outside pool accounting, so liquidity providers do not receive it in either case. Four sampled tokens on Robinhood Chain share this selector set.",
+   "preconditions": "A pool or claim balance in a token that pays holder rewards on a call anyone can make. The other tokens with claimFor or similar functions that the sweep tried on the 21 networks changed nothing at the time of the call, which shows only that no amount was due then.",
+   "mitigations": "None in core. A hook or keeper can run the same bracket and donate the proceeds to the pool (src/PoolManager.sol:256-276).",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:349-365",
+     "supports": "_settle credits the whole rise of balanceOf(PoolManager) since sync."
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com",
+     "supports": "eth_call with state override at block 121,278,927: balances before and after claimFor([PoolManager]) quoted in the mechanism; symbol TITHE, 18 decimals, balanceOf(PoolManager) 145685737169972676053750, totalSupply 704,300,000."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/4663/0x3751b9250a90342e47173bd3a7c7de4f297c060a?fields=sources,compilation,abi",
+     "supports": "Reply 404, no verified source for TITHE."
+    },
+    {
+     "url": "https://api.4byte.sourcify.dev/signature-database/v1/lookup",
+     "supports": "Names of the selectors found in the TITHE code: claimFor(address[]), withdrawableRewardOf(address), magnifiedRewardPerShare(), excludedFromRewards(address)."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "Queries on https://rpc.mainnet.chain.robinhood.com (client nitro v3.13.0-rc.9) at block 121,368,672. TITHE 0x3751b925... has symbol TITHE and 18 decimals, balanceOf(PoolManager) is 145685737169972676053750, withdrawableRewardOf(PoolManager) is 10002555720378059060354 and excludedFromRewards(PoolManager) is 0. eth_simulateV1 without any override: claimFor([PoolManager]) sent from an ordinary account returns 10002555720378059060354 and emits a Transfer of that amount from the token contract to the PoolManager. balanceOf(PoolManager) rises to 155688292890350735114104, the caller's balance stays 0, withdrawableRewardOf(PoolManager) falls to 0, and the PoolManager address can then send out its old balance and a further 10,000 TITHE. The amount is the same as at the researcher's block 121,278,927, so no new reward was distributed in between. I did not check the price, the pools that hold TITHE or the three other tokens said to share the selector set. The token source is not verified, so the reading rests on the simulation.",
+    "codeCheck": "sync(TITHE) stores the balance, the claim raises it by a transfer from the token contract, and _settle credits the rise to whoever calls settle (src/PoolManager.sol:279-288, 358-364). The caller can take that amount or mint a claim (src/PoolManager.sol:291-297, 322-329). The reward was never recorded for a pool, a position or a claim, so no accounted balance falls. Without a caller the reward stays at the token contract, and after a claim outside a sync window it sits in the PoolManager as surplus that the next sync and settle cannot credit.",
+    "corrections": "Nothing wrong in the mechanism. This is one more token of the class in F-041, F-060, F-066 and F-067 and should be filed as a variant of that class. What is taken is unaccounted surplus, and the token has no price that I found.",
+    "sources": [
+     {
+      "url": "https://rpc.mainnet.chain.robinhood.com",
+      "supports": "eth_call and eth_simulateV1 at block 121,368,672: readings of TITHE and the effect of claimFor([PoolManager]) from an ordinary account."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "extends": "F-041",
+   "id": "F-081",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "theme-assigned-balance",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
+   "title": "Any account can lower the PoolManager balance of XAMP through a public negative rebase, and 37 unpriced pooled tokens expose burn or transfer functions without a caller check",
+   "chainIds": [
+    1,
+    130,
+    42161,
+    137,
+    4663,
+    143,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2"
+   ],
+   "effect": "degrade",
+   "difference": "Token designs again. XAMP 0xf911a7ec46a2c6fa49193212fe4a2a9b95851c27 on Ethereum has an owner contract 0x8ceb211a7567cf399e1ee01e6974bf4a13b64c04 whose rebase() any account can call and which cuts every balance. The other tokens have burn(address,uint256), burnFrom without an allowance check, or transfer functions that move another holder's balance, open to any caller.",
+   "mechanism": "1. A balance that falls without a take leaves pools recording more than the PoolManager holds, and the last holders to withdraw cannot be paid (src/PoolManager.sol:291-297 pays from one shared balance). A fall between sync and settle makes the subtraction at src/PoolManager.sol:360 revert, so it cannot be turned into credit. 2. XAMP: in a read-only trial at block 26,476,665 an ordinary account called rebase() on the owner contract and balanceOf(PoolManager) fell by 1.0 percent, and the account's own balance fell by the same share. 3. The trial sweep found tokens where a call by an ordinary account lowered the PoolManager balance with no fee involved: 10 on Ethereum (for example directTransfer on 0x1d4214081985ad20aa3ca93a2206ae792635cbec and a public _transfer on 0x28c78083f81818e151d84f1103c1c34598281c55, which moved the amount to the caller, and burnFrom on 0x1a7ebb948e9d2a93f7117c693b35003a929c9d84), 9 on Unichain, 7 on Arbitrum One, 5 on Polygon, 3 on Robinhood Chain and 1 each on Monad, Arc and HyperEVM. Most are test tokens with an open burn(address,uint256).",
+   "impact": "647.02 XAMP at the PoolManager, without a price. None of the 37 other tokens has a price at coins.llama.fi. Holders of these tokens can lose them at any address, so the PoolManager adds nothing to the hazard. The entry is recorded so that the class is not searched again.",
+   "preconditions": "A pool in such a token. The flaw sits in the token and its author chose it or missed it.",
+   "mitigations": "None in core. Interfaces can flag tokens whose balance a third party can lower.",
+   "coreRefs": [
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:358-361",
+     "supports": "paid is reservesNow minus reservesBefore with a checked subtraction, so a fall of the balance between sync and settle reverts."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call with state override at block 26,476,665: after rebase() on 0x8ceb211a7567cf399e1ee01e6974bf4a13b64c04 from an ordinary account, the XAMP balance at the PoolManager address is 639,906,832,242 against 646,370,537,619 in the baseline trial."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-assigned-balance.work/raw/summary.json:1",
+     "supports": "Count of tokens per network in the class lowered after comparison with a baseline trial; details per token in raw/assign_<chainId>.json.gz."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "eth_simulateV1 at Ethereum block 26,477,497. XAMP 0xf911a7ec... has 9 decimals and owner 0x8ceb211a.... rebase() on that owner contract, sent from an ordinary account, succeeds with three logs and balanceOf(PoolManager) falls from 647017555174 to 640547379622, which is 1.0 percent. A second rebase() in the same block reverts, so the cut is limited per period. I ran the three named examples. directTransfer(PoolManager, caller, amount) on 0x1d4214... (symbol PNDX) moved the whole PoolManager balance of 3221609151992631643015 to the ordinary caller. _transfer(PoolManager, caller, amount) on 0x28c780... (symbol HPNE) moved 951380006741755555889104 to the caller. burnFrom(PoolManager, amount) on 0x1a7ebb... burned the PoolManager balance of 23935. coins.llama.fi has no price for these three and returns 0.0009 USD for XAMP with confidence 0.94, which makes the 647.02 XAMP worth less than one dollar. I did not rerun the tokens on the seven other networks; the counts match raw/summary.json of the work directory.",
+    "codeCheck": "take pays every pool, claim and fee of a currency from one balance (src/PoolManager.sol:291-297, src/types/Currency.sol:60-75), so a fall of that balance without a take leaves the last withdrawals unpaid. _settle is checked arithmetic, so a fall between sync and settle reverts at src/PoolManager.sol:360 and cannot become a credit. The code has no step that would let the PoolManager add to the loss or prevent it.",
+    "corrections": "actor: unprivileged. Any account can call rebase() on the XAMP owner contract and the open burn and transfer functions of the other tokens, and the attacker does not need to be the author of the token, which is what the schema asks for pool-creator. The finding also says XAMP has no price, while coins.llama.fi now returns 0.0009 USD. For PNDX and HPNE the caller receives the tokens of the PoolManager, so the effect for those two is a removal and not only a degradation. Severity low stays: the same call empties any other holder of these tokens, the PoolManager code plays no part, and none of the tokens has a market value that I could find.",
+    "sources": [
+     {
+      "url": "https://ethereum-rpc.publicnode.com",
+      "supports": "eth_simulateV1 at block 26,477,497: rebase() on 0x8ceb211a7567cf399e1ee01e6974bf4a13b64c04 from an ordinary account and the XAMP balance of the PoolManager before and after; directTransfer on PNDX, _transfer on HPNE and burnFrom on 0x1a7ebb948e9d2a93f7117c693b35003a929c9d84."
+     },
+     {
+      "url": "https://coins.llama.fi/prices/current/ethereum:0xf911a7ec46a2c6fa49193212fe4a2a9b95851c27,ethereum:0x1d4214081985ad20aa3ca93a2206ae792635cbec,ethereum:0x28c78083f81818e151d84f1103c1c34598281c55,ethereum:0x1a7ebb948e9d2a93f7117c693b35003a929c9d84",
+      "supports": "Price 0.0009 USD for XAMP and no entry for the other three tokens."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "extends": "F-069",
+   "id": "F-082",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "theme-assigned-balance",
      "status": "confirmed",
      "severity": "low"
     }
@@ -4447,6 +5302,82 @@
    ]
   },
   {
+   "title": "Three issuers have blocked the Ethereum PoolManager address and two pooled tokens are paused, so yUSD, yETH, xSolvBTC, KITE and NTX held for pools cannot leave today",
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A6"
+   ],
+   "effect": "freeze",
+   "difference": "This is an observed state of the hazard that the stablecoin findings describe for Ethereum. The full balance transfer test of this unit ran over 60,024 currencies of the Ethereum PoolManager and 1,119 refused. Six of the refusals carry a price above 100,000 USD at coins.llama.fi. Five of them have an issuer cause, a block on the PoolManager address or a pause of the token. The sixth, VIBESTR 0xd0cc2b0efb168bfe1f94a948d8df70fa10257196 (about 150,000 USD), rejects every nonzero transfer made outside its own trading flow, which belongs to the author gated class recorded in earlier cycles.",
+   "mechanism": "1. take pays with transfer from the single PoolManager address (src/PoolManager.sol:291-297, src/types/Currency.sol:60-75). 2. eth_call with from set to the PoolManager at block 26,476,678. yUSD 0x19ebd191f7a24ece672ba13a302212b5ef7f35cb and yETH 0x8464f6ecae1ea58ec816c13f964030eab8ec123a revert with the message blacklisted for every amount including zero, in both directions, while a zero transfer between two other accounts succeeds. xSolvBTC 0xd9d920aa40f578ab794426f5c90f6c731d159def reverts with error 0xbb70159d carrying the PoolManager address, and isBlacklisted(PoolManager) returns true while it returns false for another account. KITE 0x904567252d8f48555b7447c67dca23f0372e16be reverts with EnforcedPause (0xd93c0665) and NTX 0xf0d33beda4d734c72684b5f9abbebf715d0a7935 with the message ERC20Pausable: token transfer while paused, for every sender. 3. Every take of these five currencies reverts, and for the three blocked tokens a payment into the PoolManager reverts as well, so settle cannot complete. A position holder can still remove liquidity and turn the delta of the stuck currency into an ERC-6909 claim (src/PoolManager.sol:322-329) and take the other currency.",
+   "impact": "Balances at the Ethereum PoolManager and their value at coins.llama.fi prices: 677,988 yUSD (about 677,000 USD), 62.69 yETH (about 102,000 USD), 3.2104 xSolvBTC (about 197,000 USD), 3,755,211 KITE (about 530,000 USD) and 95,177,682 NTX (about 163,000 USD). The sum is about 1.67 million USD that liquidity providers and claim holders of these pools cannot withdraw until the issuer lifts the block or the pause. I did not check since when each state holds or how many pools are affected.",
+   "preconditions": "An issuer or token admin decision. No unprivileged party can cause or lift it. Whether the yUSD and yETH block is an entry for the PoolManager address or a rule that covers a class of addresses is not confirmed, because the tokens answer none of the usual list getters. The prices come from one service and were not cross checked.",
+   "mitigations": "None in core. Interfaces should mark pools whose currency rejects transfers from the PoolManager. The new deployment has a new address, so these blocks do not carry over, and the same issuers can block it in the same way.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:60-75",
+    "src/PoolManager.sol:322-329"
+   ],
+   "sources": [
+    {
+     "url": "src/types/Currency.sol:60-75",
+     "supports": "take calls transfer on the token with the PoolManager as sender and reverts when the token reverts."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call at block 26,476,678 with from set to the PoolManager and to two other accounts: the revert data and the isBlacklisted readings quoted in the mechanism; balanceOf(PoolManager) of the five tokens."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-assigned-balance.work/raw/xfer_1.json.gz:1",
+     "supports": "Full balance transfer test at blocks 26,476,612 to 26,476,613: 60,024 currencies tested, 1,119 refused."
+    },
+    {
+     "url": "https://coins.llama.fi/prices/current/ethereum:0x19ebd191f7a24ece672ba13a302212b5ef7f35cb",
+     "supports": "Prices used for the five values, fetched in bulk through research/network-risk/cycles/005/theme-assigned-balance.work/prices.py."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "issuer",
+   "severity": "high",
+   "proposedSeverity": "high",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "eth_call at Ethereum block 26,477,490 with from set to the PoolManager. yUSD and yETH revert with the message blacklisted for the full balance, for 1 unit and for 0, and a zero transfer from another account to the PoolManager reverts the same way while a zero transfer between two other accounts returns true. xSolvBTC reverts with 0xbb70159d followed by the PoolManager address in both directions, isBlacklisted(PoolManager) returns true and isBlacklisted of another account returns false. KITE reverts with 0xd93c0665 for every sender and paused() returns true. NTX reverts with ERC20Pausable: token transfer while paused for every sender and paused() returns true. Balances at the PoolManager: 677,988.17 yUSD, 62.6887 yETH, 3.2104 xSolvBTC, 3,755,210.9 KITE, 95,177,682.4 NTX. coins.llama.fi prices give about 677,000, 102,000, 194,000, 517,000 and 178,000 USD, 1.67 million USD in total. VIBESTR rejects nonzero transfers from the PoolManager with a four byte reason and accepts zero, as the finding says. I found no issuer statement on why YieldFi or Solv block this address. A search returned a third party page that records freeze controls for yUSD and nothing on the PoolManager. Whether the YieldFi block names the PoolManager or a class of addresses stays unconfirmed, as the finding states.",
+    "codeCheck": "take and collectProtocolFees pay through one transfer call from the PoolManager address and revert when the token reverts (src/PoolManager.sol:291-297, src/ProtocolFees.sol:54-56, src/types/Currency.sol:60-86). For the three blocking tokens a transfer into the PoolManager reverts as well, so the balance cannot rise between sync and settle and no credit in these currencies can be created by payment (src/PoolManager.sol:358-364). A position holder can remove liquidity and mint claims for the stuck currency, because mint moves no tokens (src/PoolManager.sol:322-329), and can take the other currency.",
+    "corrections": "The actor issuer is right. No ordinary account can cause or lift these states. This is an observed state of the hazard already recorded in F-011 and F-056 and should be merged into the table of live cases that the cycle 4 critic asked for. The xSolvBTC value is about 194,000 USD at the price I fetched, against 197,000 USD in the finding.",
+    "sources": [
+     {
+      "url": "https://ethereum-rpc.publicnode.com",
+      "supports": "eth_call at block 26,477,490 with from set to the PoolManager and to a second account: revert data, paused() and isBlacklisted readings, and balanceOf(PoolManager) for yUSD, yETH, xSolvBTC, KITE, NTX and VIBESTR."
+     },
+     {
+      "url": "https://coins.llama.fi/prices/current/ethereum:0x19ebd191f7a24ece672ba13a302212b5ef7f35cb,ethereum:0x8464f6ecae1ea58ec816c13f964030eab8ec123a,ethereum:0xd9d920aa40f578ab794426f5c90f6c731d159def,ethereum:0x904567252d8f48555b7447c67dca23f0372e16be,ethereum:0xf0d33beda4d734c72684b5f9abbebf715d0a7935,ethereum:0xd0cc2b0efb168bfe1f94a948d8df70fa10257196",
+      "supports": "Prices 0.998, 1631.29, 60582.44, 0.1376, 0.001867 and 0.000521 USD for the six tokens."
+     },
+     {
+      "url": "https://pharos.watch/stablecoin/yusd-yieldfi/",
+      "supports": "Third party record that the yUSD issuer or an admin can freeze individual holders and that the reviewed redemption route is suspended."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "extends": "F-011",
+   "id": "F-080",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "theme-assigned-balance",
+     "status": "confirmed",
+     "severity": "high"
+    }
+   ]
+  },
+  {
    "title": "A Stylus program used as a hook or token stops answering calls on expiry or a Stylus version change, and activation is blocked",
    "chainIds": [
     42161
@@ -5633,6 +6564,344 @@
     {
      "cycle": 4,
      "unit": "theme-balance-reconcile",
+     "status": "confirmed",
+     "severity": "medium"
+    }
+   ]
+  },
+  {
+   "title": "Jenner client source and the Chapel testnet show how a CAS20 issuer can block or seize the PoolManager balance, and seizure needs one more step than first recorded",
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A4",
+    "A6"
+   ],
+   "effect": "both",
+   "difference": "BNB Smart Chain activates Jenner at timestamp 1796697000 (2026-12-08 02:30 UTC). The client then runs CAS20 tokens as native code behind addresses that start with 0xCA52. Each token carries roles for mint, burn, seize, pause and metadata, a pause mask per feature, and six policy lanes that point at shared allowlists and blocklists in a policy registry. The standard is live on the Chapel testnet since 2026-10-29. Ethereum has no token logic in the client.",
+   "mechanism": "1. transfer checks the pause bit, then the sender policy and the receiver policy, then debits the sender and credits the recipient by the amount and returns a 32 byte true (core/vm/cas20_token.go lines 175 to 189 and 239 to 269). The PoolManager accepts that answer (src/types/Currency.sol:64-74). 2. A policy that does not authorize the sender makes transfer revert with PolicyForbids for every amount, zero included. On Chapel the token 0xca52000000000000000001217954ab5467577565 has sender policy 0x0100000000000007, and transfer of 0 and of 1 from an unlisted contract address both reverted with selector 0xa43fec12. If the token admin binds TRANSFER_SENDER_POLICY to a list that leaves the PoolManager out, if the admin of that list removes the PoolManager, or if PAUSE_ROLE pauses the transfer feature, then every take and every protocol fee collection in that token reverts (src/types/Currency.sol:82-86, src/PoolManager.sol:291-297, src/ProtocolFees.sol:56). 3. A receiver policy that leaves the PoolManager out makes every payment to it revert, so settle credits nothing (src/PoolManager.sol:358-360). The transfer reverts and the amount is not diverted to another account. 4. seizeWithMemo needs SEIZE_ROLE and an unpaused seize feature, and it refuses a source that the SEIZE_EXEMPT policy authorizes (core/vm/cas20_admin.go lines 507 to 553). The default policy id 0 authorizes every account, so with default settings no account can be seized. The admin must first bind SEIZE_EXEMPT_POLICY to a list that leaves the PoolManager out. After that an account with SEIZE_ROLE can move the PoolManager balance to any allowed receiver without a take, and the pools still record the old amounts. The earlier text of this finding named a scope SEIZE_HOLDER_POLICY and a blocklist that contains the PoolManager. The client names the scopes SEIZE_EXEMPT_POLICY and SEIZE_RECEIVER_POLICY, and the test is the inverse: exemption must be withdrawn. 5. balanceOf returns the raw balance. The Asset multiplier is applied only by the UI selectors, so it causes no rebase at the PoolManager. A call that cannot pay for a storage read ends with an out of gas error and does not return a zero balance (core/vm/cas20_errors.go lines 55 to 63), so sync cannot record a false zero. 6. Token creation and policy creation are closed until an administrator appointed through GovHub 0x1007 activates them (core/vm/cas20_activation.go). On Chapel all three features are active.",
+   "impact": "All reserves, ERC-6909 claims and protocol fees that the PoolManager holds in an affected CAS20 token. A policy change or a pause freezes them until the issuer reverses it. A seizure after the exemption is withdrawn is a loss for the liquidity providers of those pools. None of this applies today on mainnet because no CAS20 token can exist before the fork and before activation.",
+   "preconditions": "Jenner activates, the activation administrator opens token creation on mainnet, a CAS20 token is created and pooled, and the roles of that token act as described. An ordinary account can do this only with a token it issued itself, which harms only those who pool that token.",
+   "mitigations": "Before a CAS20 token is listed, read policyId for the six scopes, isPaused for the four features, and the holders of SEIZE_ROLE, PAUSE_ROLE and the admin role. A token whose sender or receiver policy is an allowlist cannot be pooled unless the PoolManager and the routers are on it. Prefer tokens whose SEIZE_EXEMPT policy is the default and whose admin role was renounced. After 2026-12-08 repeat the Chapel checks of this cycle on mainnet.",
+   "coreRefs": [
+    "src/types/Currency.sol:60-75",
+    "src/types/Currency.sol:82-86",
+    "src/types/Currency.sol:90-96",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:349-365",
+    "src/ProtocolFees.sol:44-57"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_token.go",
+     "supports": "dispatch, transfer, transferFrom and move: pause check, sender and receiver policy checks, debit and credit, 32 byte true"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_admin.go",
+     "supports": "roles, policy scopes, pause, mint, burn, seizeWithMemo with the SEIZE_EXEMPT test, updatePolicy restricted to the admin role"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_asset.go",
+     "supports": "balanceOf is not overridden by the Asset variant; the multiplier is applied in scaledBalanceOf, balanceOfUI and totalSupplyUI"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_errors.go",
+     "supports": "finishCAS20Metered returns ErrOutOfGas when the frame ran out of gas, before any return data is used"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_activation.go",
+     "supports": "features are switched by an admin that only GovHub can appoint; deactivation does not reach existing tokens"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/CHANGELOG.md",
+     "supports": "v1.8.2 schedules mainnet Jenner for 2026-12-08 02:30 UTC; v1.8.1 renamed the CAS20 seizure exemption policy (pull 3829)"
+    },
+    {
+     "url": "rpc https://bsc-testnet-dataseed.bnbchain.org (Chapel, chain id 97, Geth v1.8.1, Jenner active since 2026-10-29), eth_call with state override, blocks 144360009 to 144364040 on 2026-11-23",
+     "supports": "33 CAS20Created logs; transfers from contract holders of 12 tokens return true and move exactly the amount; PolicyForbids on transfers of 0 and 1 from an unlisted address for a token with a sender policy; isActivated true for three features"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "issuer",
+   "severity": "medium",
+   "proposedSeverity": "medium",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "I fetched the client files from the master branch of bnb-chain/bsc. CHANGELOG.md schedules mainnet Jenner in v1.8.2 for 2026-12-08 02:30:00 UTC and lists pull 3829, the rename of the seizure exemption policy, under v1.8.1. params/config.go sets JennerTime to 1796697000 for mainnet and 1793241000 for Chapel. core/vm/evm.go resolves the token range and three singleton addresses to native code once IsJenner is true. core/vm/cas20_token.go lines 175 to 189: transfer rejects a read only frame, reverts with ContractPaused when the transfer bit is set, calls move, emits the log and returns a 32 byte true. Lines 239 to 269: move checks the sender policy and then the receiver policy before it reads the balance, so a policy failure reverts for every amount including zero, and on success it writes the source slot and the recipient slot and nothing else. core/vm/cas20_admin.go lines 507 to 553: seizeWithMemo needs SEIZE_ROLE and an unpaused seize feature, reverts with AccountNotSeizable when the SEIZE_EXEMPT policy authorizes the source, and policy id 0 authorizes every account, so a token with default settings has no seizable account. updatePolicy at line 579 needs the default admin role. core/vm/cas20_asset.go does not override balanceOf, and the multiplier appears only in scaledBalanceOf, balanceOfUI, totalSupplyUI and the conversion views. core/vm/cas20_activation.go: activate and deactivate need the registry admin, and the admin is set only by a caller equal to the GovHub address. core/vm/cas20_errors.go lines 55 to 63 and core/vm/contracts_stateful.go lines 113 to 124: the out of gas flag is sticky and every exit of a token call returns ErrOutOfGas when it is set. On Chapel (Geth v1.8.1, block 144,390,653, timestamp 1795430470, after the Chapel fork time) the factory 0xCA5F000000000000000000000000000000000000 has emitted 33 CAS20Created logs. isActivated returns true for bsc.cas20_asset, bsc.cas20_stablecoin and bsc.policy_registry. Token 0xca52000000000000000001217954ab5467577565 reports policy 0x0100000000000007 for TRANSFER_SENDER_POLICY, and transfer of 0 and of 1 from an unlisted address both revert with 0xa43fec12, the selector of PolicyForbids(bytes32,uint64), followed by the scope hash and that policy id. The same token already has SEIZE_EXEMPT_POLICY bound to 0x0100000000000001, so issuers on the testnet do configure the seizure lane. For 18 tokens with default transfer policies, a transfer from a holder with Multicall3 code placed at the holder address returned a 32 byte true and moved exactly the amount, a zero amount returned true, and an amount above the balance reverted with 0xdb42144d (InsufficientBalance). A call with value reverted with 0x6fb1b0e9 (NonPayable). A gas sweep of balanceOf for a holder of 15 tokens of 0xca5200000000000000000069e5bbadfec8b9075a, from 22,100 gas, just above the intrinsic floor, to 23,700 gas in steps of 25, gave out of gas for every value below the full cost and the correct balance above it, and never a successful zero. On mainnet (Geth v1.8.2, block 135,257,313, timestamp 1795430720, 14.7 days before the fork) the token range, the factory, both registries, 0x2007 and 0x70 hold no code, answer transfer and balanceOf with success and empty data, and sync on the deployed PoolManager reverts for each of them. No pool, claim or fee can therefore exist under these ids before the fork. Not confirmable today: mainnet behaviour after activation, whether the administrator opens token creation, and which tokens will be pooled.",
+    "codeCheck": "Currency.transfer accepts a call that does not revert and returns 32 bytes holding 1 (src/types/Currency.sol:64-74), which is what a CAS20 transfer returns. A revert from the token reaches src/types/Currency.sol:82-86, so take (src/PoolManager.sol:291-297) and collectProtocolFees (src/ProtocolFees.sol:56) revert when the pause bit is set or a transfer policy leaves the PoolManager out. A closed receiver policy makes every payment to the PoolManager revert, and settle then credits nothing (src/PoolManager.sol:358-360). balanceOf is a high level static call (src/types/Currency.sol:94), so a failed or empty answer reverts sync and cannot store a false reserve. A seizure lowers the token balance of the PoolManager and writes no delta. src/ has no function that reconciles pool records with the real balance, so later takes fail with InsufficientBalance once the requests exceed what is left, and a seizure between a sync and its settle makes the subtraction at src/PoolManager.sol:360 revert. initialize makes no call to either currency (src/PoolManager.sol:117-142), so a pool can be created for any created CAS20 address. I found no entry point in the token code that an account without a role can use to change the balance of another holder: transferFrom and its memo variants need an allowance of the source, and permit needs an ECDSA signature of the owner with no contract signature path.",
+    "corrections": "The actor value issuer is right, and an ordinary account can reach this only with a token it created itself. The correction to the earlier text of F-007 is accurate: the scopes are SEIZE_EXEMPT_POLICY and SEIZE_RECEIVER_POLICY, and an account is seizable only after the admin binds the exemption lane to a policy that does not authorize it. Small differences in my repeat: I tested 18 tokens where the finding names 12, and the Chapel token with the sender policy also has its seizure exemption lane bound. None of this applies on mainnet before 2026-12-08 and before the administrator opens token creation.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_token.go",
+      "supports": "transfer at lines 175 to 189 and move at lines 239 to 269: pause check, sender and receiver policy before the balance read, two slot writes, 32 byte true"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_admin.go",
+      "supports": "seizeWithMemo at lines 507 to 553 with the SEIZE_EXEMPT test, updatePolicy at line 579 restricted to the default admin role, pause restricted to PAUSE_ROLE"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_asset.go",
+      "supports": "balanceOf is not overridden by the Asset variant"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_errors.go",
+      "supports": "finishCAS20Metered returns ErrOutOfGas when the frame ran out of gas"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/contracts_stateful.go",
+      "supports": "chargeGas refuses every charge after the first failure and marks the frame out of gas"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_activation.go",
+      "supports": "feature switch worked by an admin that only the GovHub address can appoint"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20_permit.go",
+      "supports": "permit recovers an ECDSA signer and supports no contract signatures; the memo variants reuse transfer and transferFrom"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/CHANGELOG.md",
+      "supports": "v1.8.2 schedules mainnet Jenner for 2026-12-08 02:30:00 UTC; v1.8.1 lists pull 3829"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/params/config.go",
+      "supports": "JennerTime 1796697000 on mainnet and 1793241000 on Chapel"
+     },
+     {
+      "url": "rpc https://bsc-testnet-dataseed.bnbchain.org (Chapel, chain id 97, Geth v1.8.1), eth_call with state override, blocks 144390653 to 144392420 on 2026-11-23",
+      "supports": "policy ids and PolicyForbids reverts of token 0xca52000000000000000001217954ab5467577565, activation flags, exact transfers for 18 tokens, NonPayable on value, gas sweep of balanceOf"
+     },
+     {
+      "url": "rpc https://bsc-testnet-rpc.publicnode.com eth_getLogs, blocks 139517803 to 144390737 on 2026-11-23",
+      "supports": "33 CAS20Created logs of the factory and Transfer logs used to find holders"
+     },
+     {
+      "url": "rpc https://bsc-dataseed1.bnbchain.org (Geth v1.8.2), eth_call, eth_getCode and eth_getBlockByNumber at block 135257313 on 2026-11-23",
+      "supports": "block time 14.7 days before JennerTime, no code at the CAS20 addresses, 0x2007 and 0x70, sync on the PoolManager reverts for them"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "extends": "F-007",
+   "id": "F-076",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "established-l1",
+     "status": "confirmed",
+     "severity": "medium"
+    }
+   ]
+  },
+  {
+   "title": "Token contracts have burned or moved the PoolManager's balance of their own token on six networks, and hookless pools with active liquidity now record tokens the PoolManager does not hold",
+   "chainIds": [
+    1,
+    56,
+    137,
+    130,
+    99901,
+    42161
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A6"
+   ],
+   "effect": "both",
+   "difference": "The cause is token code written by the token's author, on the networks where pool creation is cheapest and most used. These tokens can change balanceOf(PoolManager) without any call from the PoolManager: a transferFrom that skips the allowance for chosen senders, an allowance from the PoolManager that the token writes by itself, a controller contract that rewrites balances, or an owner burn. F-069 recorded tokens whose balance falls with time. These fall in one transaction, to zero in 20 of the 53 confirmed cases on Ethereum.",
+   "mechanism": "1. The PoolManager can only call transfer and balanceOf on a currency (src/types/Currency.sol:60-73, 94). It never approves anyone. A fall of its balance in a transaction where it emits no log is therefore the token's own doing. 2. Search: every ERC-20 Transfer log with the PoolManager as sender and the zero address, 0x...dEaD, 0xdead000000000000000042069420694206942069 or address 1 as recipient, over the block ranges in the sources. For each token, receipts of up to six such transactions were read, and for tokens with a hit where the PoolManager emitted no log, every hit. Each flagged token was then checked by balanceOf(PoolManager) one block before and at the block of one example. 3. Results. Ethereum: %s rows over %s tokens, %s tokens flagged, %s confirmed by a balance fall and %s that only emit a log (spoof tokens). BNB Smart Chain: %s rows, %s tokens, %s flagged, %s confirmed. Polygon: 5 flagged, 4 confirmed, of which PolySata and SNI have pools and two are spam tokens without a pool. Unichain: 13 flagged, 1 confirmed (ELX), 12 spoof. Elysium: 3 flagged and confirmed (CLU, EMBR, BLOB). Arbitrum One: 5 flagged and confirmed, one of them the issuer burn of PUSD that is filed as its own finding. 4. Forms seen. (a) A helper contract reads balanceOf(PoolManager) and calls transferFrom(PoolManager, 0xdead, amount) on the token; the token logs Approval(PoolManager, helper, 0) afterwards, so it had written an allowance in the PoolManager's name. Ethereum helper 0xd8e11826e82619bf49c58c05f26c8e00b0b64ea4 with selector 0x73ed6b13 did this for %s of the confirmed tokens, and the same selector appears for %s confirmed tokens on BNB Smart Chain (15 of them through 0xa25c886dced0e8fc0129082bf597381ea073c925). (b) An externally owned account calls transferFrom(PoolManager, 0xdead, amount) on the token directly. For CLU on Elysium I read the runtime bytecode: after the balance update the transfer routine loads a flag for tx.origin and, when it is set, returns true at once, which skips the allowance spending in transferFrom. A read-only transferFrom(PoolManager, other, 1000) reverts with ERC20InsufficientAllowance from an unrelated address and succeeds from the original sender 0xd27d278469aa24b5e8ed3af8675d5f6c2548f884. (c) TRUMP MAGA on Ethereum (verified source): transfer() only calls _beforeTokenTransfer, which emits the log and forwards to an unverified controller (lines 505 to 508 and 652), and cap() lets that controller emit any Transfer log (lines 680 to 688). In transaction 0xa6ce9d53504d62a54600498895c8671eb13fb8f312cdbb9d3a4fa345f0d89003 a holder's transfer of 90,100 MAGA made the controller call token function 0x20bd4fca, and the PoolManager's balance went from 776,894.03 MAGA to 0. Nine such events since block 21,818,333 removed 25,231,970 MAGA. (d) Owner functions such as burn(address,uint256) and burnFrom(address,uint256). 5. Effect in core: take pays out with transfer and reverts when the balance is too low (src/PoolManager.sol:291-297, src/types/Currency.sol:60-86). A holder of a positive delta in that token can still close it with mint or clear (src/PoolManager.sol:310-329), so a removal of liquidity can succeed when the caller gives up or defers the token side.",
+   "impact": "Pools that still have active liquidity while the PoolManager holds none of the token: TRUMP MAGA on Ethereum (balance 0; pools 0x4686f189f970... with liquidity 52,818,877,641,898,785 and 0x03762bf00ac1... with 1,320,363,208,123,135,774, both paired with ETH and without a hook), MEME 0x05f226755b11cb3666340551ebbaa615cdfefdd6 and BITCOIN 0x37d299d9900209c3566254cfe59bfe6ff8f8c295 on Ethereum, ELX 0x6836567f23a137f2ed07576826b0d2579b416b6d on Unichain, and SNI 0xdc685acc53ca2a760029cab2f6a587482aa9cf57 on Polygon with a balance of 1 base unit. For the other confirmed tokens I checked the balance fall and not the pools. Buyers of such a token cannot be paid, and liquidity providers cannot take the token side. Whoever holds the token outside the PoolManager can still sell it into the pool for the other currency. The amounts are in tokens without a price source, so I did not value them. The shortfall stays inside each token's own currency id; pools of other tokens are not affected. The victims chose a pool with a token written by the party that gains.",
+   "preconditions": "A pool in a token whose author kept a path to the PoolManager's balance. The actor is the token author or an account the token treats as privileged. For form (c) the trigger was an ordinary holder's transfer, and the rule sits in a controller whose code is not public. On BNB Smart Chain the Initialize query failed (limit exceeded), so the number of pools per token is not known there. The Base, World Chain and Robinhood Chain searches cover recent windows only (blocks from 57,500,000, 34,000,000 and 109,000,000) and X Layer 400,000 blocks. Monad, OP Mainnet, Avalanche, Ink, Celo, Arc, Soneium, Zora, MegaETH, Tempo and HyperEVM were searched over the whole history and have no confirmed case. The search sees burns only. A forced transfer to an ordinary recipient shows up only in the census windows of this unit (0.5 to 30 days per network), where none was found.",
+   "mitigations": "Core cannot stop a token from changing its own ledger. Interfaces and routers can flag a token when balanceOf(PoolManager) falls in a transaction without a PoolManager log, which the scripts scan_burns.py, classify_burns.py and validate_burns.py in the work directory detect. Liquidity providers in such a pool can still recover the other currency with a router that closes the token side by mint or clear. A deployer who wants a hard guarantee needs per currency reserve accounting, which this code does not have.",
+   "coreRefs": [
+    "src/types/Currency.sol:60-86",
+    "src/types/Currency.sol:90-96",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:310-319",
+    "src/PoolManager.sol:322-329"
+   ],
+   "sources": [
+    {
+     "url": "https://mainnet.gateway.tenderly.co",
+     "supports": "eth_getLogs with topics Transfer, PoolManager, four burn recipients over blocks 21,688,329 to 26,476,425: 54,048 rows, 1,277 tokens. Receipts, balanceOf(PoolManager) before and at the block for the 78 flagged tokens, Initialize logs per token, StateView.getLiquidity and getSlot0 for the MAGA, MEME and BITCOIN pools."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "debug_traceTransaction for 0xb8a295249493a05eb8b86202111683ad838bbd1a32b970fcfa7629394155d9ef (helper 0xd8e11826... calls balanceOf(PoolManager) and transferFrom(PoolManager, 0xdead, 5,000,000,000) on SPCX) and for 0xa6ce9d53504d62a54600498895c8671eb13fb8f312cdbb9d3a4fa345f0d89003 (MAGA transfer, controller 0xa8b0cdcb011c82ca0b3c981868d78f84f06e0c65 calls token function 0x20bd4fca)."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0xf211b655431c10e72c1caeae37688ae9f7f7a549?fields=sources,abi",
+     "supports": "Verified source TRUMP_MAGA_Token.sol: transfer at lines 505 to 508, _beforeTokenTransfer at line 652, cap at lines 680 to 688. The controller 0xa8b0cdcb011c82ca0b3c981868d78f84f06e0c65 and its implementation have no record."
+    },
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz",
+     "supports": "CLU 0x13c83fd2df0ae8c7b462d344a458275d1f6b5b82: transaction 0x0d470f854fb59f4ad2b4c8bcb8dfcafc55a63bcd3f6083cbaf983209d48ed41d is transferFrom(PoolManager, 0xdead, 30,639,051.89 CLU) sent by an externally owned account; balanceOf(PoolManager) 30,639,996.93 at block 4,589,427 and 945.04 at block 4,589,428; allowance(PoolManager, sender) 0; eth_getCode (1,823 bytes) and the two eth_call tests of transferFrom. EMBR and BLOB went from 113,252,552.87 and 113,247,370.33 to 0 in the same way."
+    },
+    {
+     "url": "https://bsc-mainnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3",
+     "supports": "eth_getLogs for the burn recipients over blocks 45,369,483 to head on BNB Smart Chain: 29,326 rows over 1,801 tokens."
+    },
+    {
+     "url": "https://bsc-mainnet.public.blastapi.io",
+     "supports": "balanceOf(PoolManager) before and at the block for the 97 flagged tokens on BNB Smart Chain: 91 fell."
+    },
+    {
+     "url": "https://unichain.gateway.tenderly.co",
+     "supports": "ELX 0x6836567f23a137f2ed07576826b0d2579b416b6d: balance 2,253,186,633,332 to 0 in transaction 0xe276007551f292449d6db401530312f9fc55143bf84228ece62ca57ffe4f10dc, one hookless pool with liquidity 996,133,074,871 today."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-unbacked-claims.work/raw/burns_1_validated.json:1",
+     "supports": "Per token rows for Ethereum: balance before and after, sender, called contract, selector, number of pools. The files burns_56, burns_137, burns_130, burns_99901 and burns_42161 hold the other networks."
+    },
+    {
+     "url": "src/types/Currency.sol:60-73",
+     "supports": "The only state changing call the PoolManager makes on a currency is transfer(address,uint256)."
+    },
+    {
+     "url": "src/PoolManager.sol:310-329",
+     "supports": "clear and mint close a positive delta without a token transfer."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "pool-creator",
+   "severity": "medium",
+   "proposedSeverity": "medium",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "I re-ran one case of each form and the pool state behind the impact text. Ethereum, TRUMP MAGA 0xf211b655431c10e72c1caeae37688ae9f7f7a549: transaction 0xa6ce9d53504d62a54600498895c8671eb13fb8f312cdbb9d3a4fa345f0d89003 (block 26,465,460) is a transfer call by a holder, has two logs, none from the PoolManager, and one of them is Transfer(PoolManager, 0xdead, 776,894.03 MAGA). balanceOf(PoolManager) is 776,894.0285837858 one block earlier and 0 at the block and today. The Sourcify record (status match) shows transfer() calling only _beforeTokenTransfer (lines 505 to 508), which emits the log and calls the controller with selector 0x2bfad8d5 (line 652), and cap() emitting Transfer logs for the controller (lines 680 to 688). The source goes further than the finding says: balanceOf itself returns the controller's answer when that answer is below the maximum (line 493), so the PoolManager's MAGA balance is whatever the unverified controller reports. debug_traceTransaction on https://eth.drpc.org shows the token calling controller 0xa8b0cdcb011c82ca0b3c981868d78f84f06e0c65, which calls token function 0x20bd4fca. StateView and PositionManager.poolKeys confirm that pools 0x4686f189f97040979482293941fa47fb9d4379de767e25518dd90dd26a1a4baf (fee 1 percent, liquidity 52,818,877,641,898,785) and 0x03762bf00ac14b0110e854caa875d620cae2a843525c566a8964a4ad33054b62 (fee 70 percent, liquidity 1,320,363,208,123,135,774) pair ETH with MAGA and have no hook. Ethereum helper: transaction 0xb8a295249493a05eb8b86202111683ad838bbd1a32b970fcfa7629394155d9ef calls 0xd8e11826e82619bf49c58c05f26c8e00b0b64ea4 with selector 0x73ed6b13 and holds no PoolManager log. Elysium, CLU 0x13c83fd2df0ae8c7b462d344a458275d1f6b5b82: transaction 0x0d470f854fb59f4ad2b4c8bcb8dfcafc55a63bcd3f6083cbaf983209d48ed41d (block 4,589,428) is transferFrom sent by 0xd27d278469aa24b5e8ed3af8675d5f6c2548f884 and moves 30,639,051.89 CLU from the PoolManager to 0xdead; the balance is 30,639,996.93 one block earlier and 945.04 at the block. Today a read-only transferFrom(PoolManager, other, 1000) reverts with ERC20InsufficientAllowance (0xfb8f41b2) from an unrelated address and returns true from 0xd27d2784 while allowance(PoolManager, 0xd27d2784) is 0. The PoolManager holds 644,887,349.55 CLU today, so that account can move all of it now. Unichain, ELX 0x6836567f23a137f2ed07576826b0d2579b416b6d: transaction 0xe276007551f292449d6db401530312f9fc55143bf84228ece62ca57ffe4f10dc (block 10,638,254) moves 2,253,186,633,332 base units from the PoolManager to 0xdead with no PoolManager log, and the balance goes to 0. Polygon, SNI: balanceOf(PoolManager) is 1 base unit. Counts: I did not repeat the log search. The researcher's result files hold 54,048 rows and 78 flagged tokens on Ethereum (53 with a balance fall, 20 of them to zero, 25 spoof) and 29,326 rows and 97 flagged tokens on BNB Smart Chain (91 with a balance fall).",
+    "codeCheck": "The PoolManager makes two kinds of call to a currency: transfer(address,uint256) in Currency.transfer (src/types/Currency.sol:60-74, reached from take at src/PoolManager.sol:295 and from collectProtocolFees at src/ProtocolFees.sol:56) and balanceOf in balanceOfSelf (src/types/Currency.sol:94, reached from src/PoolManager.sol:285 and 359). A search of src/ outside src/test finds no approve and no transferFrom on a currency. A fall of the PoolManager's balance in a transaction without one of its transfers is therefore the token's own doing. take reverts when the token transfer fails (src/types/Currency.sol:82-86). mint and clear close a positive delta without a token transfer (src/PoolManager.sol:310-329), so a caller can leave with the other currency and a claim or nothing for the token side. If such a token lowers the balance between sync and settle, the subtraction at src/PoolManager.sol:360 is checked arithmetic and reverts, so the author gains no credit from a fall. The shortfall stays in the token's own currency id because deltas are stored per target and currency (src/libraries/CurrencyDelta.sol:10-16).",
+    "corrections": "Actor pool-creator is right: in every case I checked the balance moved through a path the token's author built (a controller that answers balanceOf, a transferFrom that skips the allowance for one account, a helper with a self-written allowance). The mechanism text was published with unfilled placeholders (%s) in the Ethereum and BNB Smart Chain counts. The values in the researcher's files are: Ethereum 54,048 rows over 1,277 tokens, 78 flagged, 53 with a balance fall and 25 spoof; BNB Smart Chain 29,326 rows over 1,801 tokens, 97 flagged, 91 with a balance fall; helper 0xd8e11826e82619bf49c58c05f26c8e00b0b64ea4 for 12 Ethereum tokens (selector 0x73ed6b13 for 18 through four helpers); selector 0x73ed6b13 for 18 BNB Smart Chain tokens, 15 of them through 0xa25c886dced0e8fc0129082bf597381ea073c925. The MAGA record on Sourcify is a match and not an exact match. For CLU the read-only test sets the caller and the origin to the same address, so it cannot tell whether the flag is read for tx.origin or for msg.sender; the finding's reading of the bytecode on that point is unconfirmed. Two of the four Polygon tokens and one of the five Arbitrum One tokens have no pool, so they show the token behaviour and no pool loss. Who loses is narrower than the text suggests: after such a burn a purchase of the token reverts, holders can still sell into the pool, and the party short of tokens is whoever provided liquidity, which for these tokens is often the author. Medium is the upper bound.",
+    "sources": [
+     {
+      "url": "https://sourcify.dev/server/v2/contract/1/0xf211b655431c10e72c1caeae37688ae9f7f7a549?fields=sources,abi",
+      "supports": "TRUMP_MAGA_Token.sol: balanceOf at line 493 asks the controller, transfer at lines 505 to 508, _beforeTokenTransfer at line 652, cap at lines 680 to 688."
+     },
+     {
+      "url": "https://ethereum-rpc.publicnode.com",
+      "supports": "Receipts of 0xa6ce9d53504d62a54600498895c8671eb13fb8f312cdbb9d3a4fa345f0d89003 and 0xb8a295249493a05eb8b86202111683ad838bbd1a32b970fcfa7629394155d9ef; balanceOf(PoolManager) on MAGA at blocks 26,465,459, 26,465,460 and latest; StateView.getSlot0 and getLiquidity and PositionManager.poolKeys for the ten MAGA pools."
+     },
+     {
+      "url": "https://eth.drpc.org",
+      "supports": "debug_traceTransaction of 0xa6ce9d53504d62a54600498895c8671eb13fb8f312cdbb9d3a4fa345f0d89003: token to controller 0xa8b0cdcb011c82ca0b3c981868d78f84f06e0c65 (selector 0x2bfad8d5), controller back to the token (selector 0x20bd4fca)."
+     },
+     {
+      "url": "https://rpc.elysium.kinetiq.xyz",
+      "supports": "CLU: receipt of 0x0d470f854fb59f4ad2b4c8bcb8dfcafc55a63bcd3f6083cbaf983209d48ed41d, balanceOf(PoolManager) at blocks 4,589,427, 4,589,428 and latest, allowance, the two eth_call tests of transferFrom, eth_getCode (1,823 bytes)."
+     },
+     {
+      "url": "https://mainnet.unichain.org",
+      "supports": "ELX: receipt of 0xe276007551f292449d6db401530312f9fc55143bf84228ece62ca57ffe4f10dc and balanceOf(PoolManager) at blocks 10,638,253, 10,638,254 and latest."
+     },
+     {
+      "url": "https://polygon.drpc.org",
+      "supports": "SNI 0xdc685acc53ca2a760029cab2f6a587482aa9cf57: balanceOf(PoolManager) returns 1."
+     },
+     {
+      "url": "research/network-risk/cycles/005/theme-unbacked-claims.work/raw/burns_1_validated.json:1",
+      "supports": "The counts used to fill the placeholders; burns_56_validated.json holds the BNB Smart Chain rows."
+     },
+     {
+      "url": "src/types/Currency.sol:60-96",
+      "supports": "transfer and balanceOf are the only calls the PoolManager makes on a currency."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "extends": "F-069",
+   "id": "F-086",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "theme-unbacked-claims",
+     "status": "confirmed",
+     "severity": "medium"
+    }
+   ]
+  },
+  {
+   "title": "The owner of Pleasing USD burned 41,000 PUSD out of the Arbitrum One PoolManager balance with an owner only burnFrom",
+   "chainIds": [
+    42161
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A6"
+   ],
+   "effect": "freeze",
+   "difference": "F-036 and F-028 record that an issuer can block or burn the single address that holds every pool's balance. This is a case where an issuer did it. PUSD at 0xc8fb643d18f1e53698cfda5c8fdf0cdc03c1dbec on Arbitrum One is an upgradeable token whose owner can call burnFrom(address,uint256) on any holder.",
+   "mechanism": "1. On 23 April 2026 the owner 0x43f285d7d53cc3e7bd4914d3e57ec90f58f510ff sent burnFrom(PoolManager, 40,000 PUSD) in block 455,597,235 (transaction 0x077516739f49e38972552537bbc49fe61e542dd6ca0b3d4d0ada8c3cf1de8fe6) and burnFrom(PoolManager, 1,000 PUSD) in block 455,604,741 (transaction 0x86afa98aa0369719d0faeda5dce5a1708fd6acc0e054b75f4287523b4f54e8c9). The PoolManager's balance went from 44,024.91 to 4,024.91 PUSD and from 1,509.05 to 509.05 PUSD. 2. The PoolManager emitted no log in either transaction. Pool state was not changed, so pools kept recording the burned tokens. 3. A read-only burnFrom(PoolManager, 1) from an unrelated address reverts with the text Ownable: caller is not the owner. From the owner it reverts today with the text blacklist, so the burn needs the target on a list that the owner controls. 4. Thirteen pools name PUSD, ten of them created between blocks 455,516,336 and 455,554,073, in the hours before the burns, with fees of 9 to 80 percent. Eight still show liquidity. The PoolManager holds 14.14 PUSD today.",
+   "impact": "41,000 PUSD of the PoolManager's balance was destroyed. The first burn took 40,000 of the 44,024.91 PUSD it held. I did not establish who the liquidity providers were or why the owner acted, and I found no price source. Whoever held a position or a claim in PUSD at that time could no longer be paid in full by take. The other currencies of those pools were not touched by the burn.",
+   "preconditions": "Control of the token owner account, and the PoolManager on the token's blacklist at the time of the call. The implementation behind the proxy was not read; the statements about the owner check and the blacklist rest on the revert texts of two eth_call tests and on the two transactions.",
+   "mitigations": "None in core. Pool creators and liquidity providers should treat an owner burn function as a risk to every pool of that token, and interfaces can show it. The search of this unit lists such burns after the fact.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:60-86",
+    "src/PoolManager.sol:349-365"
+   ],
+   "sources": [
+    {
+     "url": "https://arbitrum.gateway.tenderly.co",
+     "supports": "eth_getLogs for Transfer logs from the PoolManager to the zero address and burn addresses over blocks 290,687,174 to 526,750,362: 89 rows, 16 tokens. Transactions 0x077516739f49e38972552537bbc49fe61e542dd6ca0b3d4d0ada8c3cf1de8fe6 and 0x86afa98aa0369719d0faeda5dce5a1708fd6acc0e054b75f4287523b4f54e8c9: input selector 0x79cc6790 with the PoolManager and 40,000 and 1,000 tokens, one Transfer log each to the zero address, block timestamps 1776970267 and 1776972143. balanceOf(PoolManager) one block before and at each block. owner() of the token. The two eth_call tests of burnFrom. name() returns Pleasing USD. Initialize logs that name the token and StateView.getLiquidity for each pool."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-unbacked-claims.work/raw/burns_42161_validated.json:1",
+     "supports": "The five Arbitrum One tokens whose PoolManager balance fell in a transaction without a PoolManager log: PUSD, demo token 1, AVB, ARBROKER and DEFI."
+    },
+    {
+     "url": "research/network-risk/cycles/005/theme-unbacked-claims.work/raw/pools_42161_0xc8fb643d.json:1",
+     "supports": "The thirteen pools that name PUSD with fee, hook, creation block, liquidity and tick."
+    },
+    {
+     "url": "src/PoolManager.sol:291-297",
+     "supports": "take pays with a token transfer, which fails when the balance is short."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "issuer",
+   "severity": "medium",
+   "proposedSeverity": "medium",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "Re-run on https://arb1.arbitrum.io/rpc and https://arbitrum.gateway.tenderly.co. Transaction 0x077516739f49e38972552537bbc49fe61e542dd6ca0b3d4d0ada8c3cf1de8fe6 (block 455,597,235, timestamp 1776970267) is sent by 0x43f285d7d53cc3e7bd4914d3e57ec90f58f510ff to the token with selector 0x79cc6790, burnFrom(PoolManager, 40,000e18). It has one log, Transfer(PoolManager, zero address, 40,000), and no PoolManager log; balanceOf(PoolManager) is 44,024.91 one block earlier and 4,024.91 at the block. Transaction 0x86afa98aa0369719d0faeda5dce5a1708fd6acc0e054b75f4287523b4f54e8c9 (block 455,604,741, timestamp 1776972143) burns 1,000 PUSD the same way; the balance goes from 1,509.05 to 509.05. owner() returns 0x43f285d7, name() returns Pleasing USD, the proxy implementation slot holds 0x89ec479a783ff3747f2f0d3c2a292c5986cec099, and the owner account carries an EIP-7702 delegation to 0x63c0c19a282a1b52b07dd5a65b58948a07dae32b. burnFrom(PoolManager, 1) from an unrelated address reverts with Ownable: caller is not the owner. The finding's reading of the blacklist is wrong, and what I found instead makes the case worse. blackList(PoolManager) returns 0 at blocks 455,597,234, 455,597,235, 455,604,740 and 455,604,741, and a read-only burnFrom(PoolManager, 1) from the owner at block 455,597,234 succeeds. The burn therefore needed the owner and nothing else. A search by halving finds that blackList(PoolManager) turns to 1 at block 455,607,037 (timestamp 1776972718, ten minutes after the second burn), in transaction 0x3c0ba45ad6ef5aac6a362f71172134e54f76db41536343e12600db9f174f10c1 from the owner with selector 0x85c1e21d. It is still 1 today. Today a read-only transfer of PUSD from the PoolManager reverts with the text blacklist, and so does a transfer from the owner to the PoolManager. The owner's burnFrom reverts today for the same reason. Since 23 April 2026 the Arbitrum One PoolManager can neither pay out nor receive PUSD. It holds 14.14 PUSD. The pool file is consistent with chain data where I sampled it: thirteen pools, twelve without a hook, eight with liquidity, ten created between blocks 455,516,336 and 455,554,073 with fees of 9 to 80 percent.",
+    "codeCheck": "take pays PUSD with a token transfer and reverts when the token call reverts (src/PoolManager.sol:291-297, src/types/Currency.sol:64-74, 82-86), so every swap that buys PUSD and every removal that takes PUSD has reverted since the blacklist entry, whatever the balance. A payment of PUSD into the PoolManager also reverts in the token, so no settle of PUSD can be funded (src/PoolManager.sol:349-365). Holders of positions can still close the PUSD side with mint or clear (src/PoolManager.sol:310-329) and take the other currency, if the router they use offers those actions. The burns themselves bypass the PoolManager: balances are read only in sync and _settle (src/PoolManager.sol:285, 359) and nothing in core compares the token balance with what pools record. The loss cannot spread to other currencies because deltas are per currency (src/libraries/CurrencyDelta.sol:10-16).",
+    "corrections": "Actor issuer is right. Preconditions: the sentence that the burn needs the PoolManager on the token's blacklist is wrong; the PoolManager was not on the list at either burn and was put on it ten minutes after the second one. Effect should be both: 41,000 PUSD of the PoolManager's balance were destroyed, and the PUSD side of every pool has been frozen since block 455,607,037 because the token rejects transfers from and to the PoolManager. This is a live freeze of the kind recorded in F-036 and F-056 and belongs in the table of pooled tokens that reject PoolManager transfers today. The finding says eight pools still show liquidity; none of them can pay PUSD out. The pools created in the hours before the burns carry fees of 9 to 80 percent and two older ones 88 and 95 percent, which suggests the owner acted against these pools; I did not establish who provided their liquidity. Medium stands for a token with a supply of 644,376 PUSD.",
+    "sources": [
+     {
+      "url": "https://arb1.arbitrum.io/rpc",
+      "supports": "Receipts and inputs of 0x077516739f49e38972552537bbc49fe61e542dd6ca0b3d4d0ada8c3cf1de8fe6 and 0x86afa98aa0369719d0faeda5dce5a1708fd6acc0e054b75f4287523b4f54e8c9; block 455,607,037 with transaction 0x3c0ba45ad6ef5aac6a362f71172134e54f76db41536343e12600db9f174f10c1; owner(), name(), totalSupply(), blackList(address) for five addresses; eth_call tests of burnFrom and transfer at the latest block; implementation slot and owner code."
+     },
+     {
+      "url": "https://arbitrum.gateway.tenderly.co",
+      "supports": "Archive reads: balanceOf(PoolManager) and blackList(PoolManager) at blocks 455,516,000, 455,597,234, 455,597,235, 455,604,740, 455,604,741, 455,700,000, 470,000,000 and 500,000,000, the search for the first block with blackList(PoolManager) equal to 1, and burnFrom from the owner and transfer from the PoolManager simulated at block 455,597,234."
+     },
+     {
+      "url": "research/network-risk/cycles/005/theme-unbacked-claims.work/raw/pools_42161_0xc8fb643d.json:1",
+      "supports": "The thirteen PUSD pools with fee, hook, creation block and liquidity."
+     },
+     {
+      "url": "src/PoolManager.sol:291-297",
+      "supports": "take pays with a token transfer and fails when the token rejects it."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "extends": "F-036",
+   "id": "F-087",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "theme-unbacked-claims",
      "status": "confirmed",
      "severity": "medium"
     }
@@ -7289,6 +8558,115 @@
     {
      "cycle": 4,
      "unit": "theme-transfer-quota",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
+   "title": "Monerium EURe sits in the Polygon PoolManager under two currency ids that share one balance, and the issuer can retire the legacy address",
+   "chainIds": [
+    137
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A4",
+    "A6"
+   ],
+   "effect": "freeze",
+   "difference": "On Polygon the e-money token EURe answers at two addresses that share one ledger. The V2 token is an ERC-1967 proxy at 0xE0aEa583266584DafBB3f9C3211d5588c73fEa8d. The V1 address 0x18ec0A6E18E5bc3784fDd3a3634b31245ab704F6 (name Monerium EUR emoney) has forwarded transfer, transferFrom, approve and balanceOf to V2 since the upgrade of 2024-08-18 at block 60,733,237. Both addresses report the same balance for every holder, and a transfer through either one lowers the balance read at both. The same pair exists on Ethereum (V1 0x3231Cb76718CDeF2155FC47b5286d82e6eDA273f, V2 0x39b8B6385416f4cA36a20319F70D28621895279D). The PoolManager code treats every address as a separate currency with a separate balance.",
+   "mechanism": "1. A currency id is the token address, and deltas, ERC-6909 claims and accrued protocol fees are recorded per address (src/types/Currency.sol:110-118, src/libraries/CurrencyDelta.sol:10-41, src/ProtocolFees.sol:21). 2. On Polygon 27 pools were initialized with the V2 address and 21 pools with the V1 address. At block 97,808,450 fourteen of the V2 pools and two of the V1 pools had active liquidity, the PoolManager held one balance of 62,752.2 EURe, and protocolFeesAccrued was 77.59 EURe under the V2 id and 2.27 EURe under the V1 id. 3. Walk of the ordinary caller across the two ids. sync stores one currency and one reserve figure (src/libraries/CurrencyReserves.sol:27-32), so two snapshots cannot be open at once. A payment between sync and settle is credited once, to the id that is synced at that moment (src/PoolManager.sol:349-365). A take debits its own id and lowers the shared balance (src/PoolManager.sol:291-297). Example: take 100 EURe under the V1 id, sync the V2 id, send the 100 EURe back, settle. The caller now holds a credit of 100 under the V2 id and still owes 100 under the V1 id, so the sum of credits equals the sum paid in. A take or a fee collection under one id between sync and settle of the other id lowers the measured rise, which under-credits the settling caller or reverts at src/PoolManager.sol:360. mint and burn use separate ids (src/PoolManager.sol:322-336). No order of sync, settle, take, mint and burn credits one payment twice, so the two ledgers stay jointly covered by the one balance. 4. The hazard sits with the issuer. The V1 address and the V2 proxy have the same owner, 0x8001ea269cb9715bf7acff89c664ffc134a519ec. getController() on the V1 address returns the V2 address, and the V1 bytecode holds the selector of setController(address). If Monerium disconnects the V1 address, points it at another controller or changes how V2 serves its frontend, transfer and balanceOf at the V1 address fail or stop following the shared ledger. take for the V1 id then reverts at src/types/Currency.sol:82-86, and sync for the V1 id fails or reads another figure. The tokens stay in the PoolManager and remain payable only under the V2 id, to parties that hold V2 deltas. Core has no function that converts a pool balance or a claim from one currency id to another. 5. The guard in collectProtocolFees compares addresses (src/ProtocolFees.sol:48-52), so it does not stop a collection of V2 fees while the V1 id is synced. The fee controller on Polygon lets any account trigger collection. The effect stays inside the transaction of the party that is settling and costs that party the collected amount or a revert.",
+   "impact": "Funds owed under the V1 id: an unknown share of about 62,750 EURe, in 21 pools of which two have active liquidity, plus 2.27 EURe of accrued protocol fees. If the V1 address stops working these funds cannot leave the PoolManager until the issuer restores it. Liquidity providers could still remove liquidity and hold ERC-6909 claims of the V1 id, which have no payout path. Indexers and risk tools that read balanceOf per currency id count this balance twice. No funds of other pools are affected and no ordinary account gains anything.",
+   "preconditions": "Monerium, through the owner account of both contracts, must change or disconnect the V1 address or upgrade V2. Monerium states that V1 continues to be supported and that it works with protocols to move liquidity to V2. No ordinary account can trigger the freeze. The split of the balance between the two ids was not computed.",
+   "mitigations": "Interfaces, routers and token lists on Polygon should offer only the V2 address 0xE0aEa583266584DafBB3f9C3211d5588c73fEa8d and warn on pools that use 0x18ec0A6E18E5bc3784fDd3a3634b31245ab704F6. Liquidity providers in V1 pools can move to V2 pools while both addresses work. Indexers should treat the two ids as one balance. The deployment notes for Polygon and Ethereum should name both pairs.",
+   "coreRefs": [
+    "src/types/Currency.sol:60-75",
+    "src/types/Currency.sol:82-86",
+    "src/types/Currency.sol:110-118",
+    "src/libraries/CurrencyDelta.sol:10-41",
+    "src/libraries/CurrencyReserves.sol:27-32",
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:322-336",
+    "src/PoolManager.sol:349-365",
+    "src/ProtocolFees.sol:44-57"
+   ],
+   "sources": [
+    {
+     "url": "rpc https://polygon-bor-rpc.publicnode.com (bor v2.11.1), eth_call with state override, 2026-11-23, blocks 97808115 to 97808450",
+     "supports": "Multicall3 code at the PoolManager address: balanceOf(PoolManager) equal at both addresses; transfer of 1 EURe through V2 and of 3 EURe through V1 each lowered both readings; both transfers returned a 32 byte true; getController() on V1 returns the V2 address, getFrontend() on V2 returns the V1 address, owner() is 0x8001ea269cb9715bf7acff89c664ffc134a519ec on both; StateView liquidity for the 48 pools; protocolFeesAccrued for both ids"
+    },
+    {
+     "url": "rpc https://polygon.gateway.tenderly.co eth_getLogs for the Initialize event of the PoolManager, blocks 60000000 to 97807907 on 2026-11-23",
+     "supports": "20,315 Initialize logs, of which 27 name the V2 address and 21 name the V1 address as a currency"
+    },
+    {
+     "url": "https://resources.cryptocompare.com/asset-management/20566/1755852548854.pdf",
+     "supports": "Monerium notice on the V2 token contracts, in a copy hosted by CryptoCompare: V1 keeps its address and operates with the V2 contracts behind it, both always show the same balance, the Polygon, Gnosis and Ethereum address pairs, upgrade dates and block heights, continued support for V1"
+    },
+    {
+     "url": "https://help.monerium.com/article/10-v2-contracts",
+     "supports": "Monerium states that both versions coexist for now because some liquidity providers still rely on the V1 contracts"
+    },
+    {
+     "url": "https://monerium.com/assets/whitepapers/eure/EURe-WP-static.xhtml",
+     "supports": "V1 token addresses delegate state management to V2 contracts; blacklist features; audit finding that the token frontend can impersonate anyone was fixed partially"
+    },
+    {
+     "url": "rpc https://ethereum-rpc.publicnode.com eth_call balanceOf(PoolManager) on 0x3231Cb76718CDeF2155FC47b5286d82e6eDA273f and 0x39b8B6385416f4cA36a20319F70D28621895279D, latest block on 2026-11-23",
+     "supports": "The Ethereum PoolManager holds 4,188.47 EURe, read identically at the V1 and the V2 address"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "issuer",
+   "severity": "low",
+   "proposedSeverity": "medium",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 5,
+    "factCheck": "I repeated the chain queries on Polygon. At block 97,816,436 balanceOf(PoolManager) returned 74,818.963182106767473444 EURe at 0x18ec0A6E18E5bc3784fDd3a3634b31245ab704F6 (V1) and the same figure at 0xE0aEa583266584DafBB3f9C3211d5588c73fEa8d (V2). With Multicall3 code placed at the PoolManager address by state override, a transfer of 1 EURe through V2 and a transfer of 3 EURe through V1 each returned a 32 byte true and each lowered the reading at both addresses by the amount. getController() on V1 returns the V2 address, getFrontend() on V2 returns the V1 address, and owner() returns 0x8001ea269cb9715bf7acff89c664ffc134a519ec on both. V2 is a 170 byte ERC-1967 proxy whose implementation slot holds 0xd1cfa02a1785f3ca0a5602b18649b7ca5439681b. I read the verified sources on Sourcify, which the finding did not cite. V1 (contract PolygonPosEUR, file TokenFrontend.sol) forwards transfer, transferFrom, approve, balanceOf and totalSupply to the controller, and setController is restricted to the owner and requires that the new controller names this frontend and has the same ticker. The V2 implementation (PolygonControllerToken) hard codes the V1 address as frontend for ticker EUR, accepts the forwarded calls only from that frontend, and can be replaced by the owner through upgradeToAndCall. So the issuer can end the shared ledger from either side, as the finding says. The Initialize logs of the PoolManager name the V1 address in 21 pools and the V2 address in 27 pools. StateView reports active liquidity in 2 of the 21 and in 14 of the 27. protocolFeesAccrued is 2.2750 EURe under the V1 id and 81.11 EURe under the V2 id. An eth_call of collect((address,uint256)[]) on the fee controller 0x59e84309afa65f084f9c03668583d231afb12cc6 from an arbitrary sender succeeded for both ids, and the controller's TOKEN_JAR is 0xc6ae6373cecc9e595a6c8b9fe581925a8c84f70a. The Monerium notice in the CryptoCompare copy states that V1 keeps its address and operates with the V2 contracts behind it, lists the Polygon, Gnosis and Ethereum address pairs, and dates the Polygon upgrade to 18 August 2024. The Monerium help article says both versions coexist for now. On Ethereum the PoolManager holds 4,188.4737 EURe, read identically at both Ethereum addresses. I measured what the finding left open. The 207 ModifyLiquidity logs of the 21 V1 pools leave three open ranges, which at current prices are owed about 1.53 EURe in total. No ERC-6909 Transfer event with the V1 id was ever emitted, so no claim exists under that id. Together with the 2.27 EURe of fees, the funds recorded under the V1 id are about 4 EURe plus uncollected position fees. Not confirmed by me: the upgrade block height 60,733,237, and the whitepaper sentences about delegated state and the audit note, because my fetch of that page returned only its first parts.",
+    "codeCheck": "A currency is its address. Deltas are stored per target and currency address (src/libraries/CurrencyDelta.sol:10-16), claims use uint160 of the address as id (src/types/Currency.sol:110-118, src/PoolManager.sol:322-336) and protocol fees are a mapping per currency (src/ProtocolFees.sol:21). sync stores one currency and one reserve figure (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32), and a second sync replaces the first. _settle credits the synced currency with balance now minus the stored reserve, with a checked subtraction, and then clears the synced currency (src/PoolManager.sol:358-361). take records the debit before it transfers (src/PoolManager.sol:294-295). unlock reverts while any delta is non-zero (src/PoolManager.sol:112). I walked the two ids looking for a double credit. A credit under either id needs a rise of the shared balance inside that id's own sync window, and every such rise is counted once because only one window can be open. A take under one id followed by a settle under the other leaves the first debit standing, and the unlock check forces the caller to pay it. A take or a fee collection under the other id between sync and settle lowers the measured rise, so the settling caller is credited less or the subtraction at src/PoolManager.sol:360 reverts. mint and burn only move a delta of their own id into or out of a claim. I found no order that credits one payment twice or pays out an amount that was not debited. The guard in collectProtocolFees compares the synced currency with the collected currency by address (src/ProtocolFees.sol:48-52), so it does not cover the other face. The collection can only shorten the settle of the party that synced, and a payer who syncs, pays and settles with no call to foreign code in between cannot be interleaved. The EURe token calls only the Monerium validator during a transfer. If V1 stopped forwarding, Currency.transfer would revert at src/types/Currency.sol:82-86 for the V1 id and balanceOf at src/types/Currency.sol:94 would fail or read another ledger. src/ has no function that moves a pool balance, a claim or accrued fees from one currency id to another. I found no guard that the finding missed.",
+    "corrections": "The actor value issuer is right. Severity should be low. The impact text speaks of an unknown share of about 62,750 EURe, and the measured share under the V1 id is about 4 EURe (1.53 EURe in three open ranges, 2.27 EURe of protocol fees, no ERC-6909 claims). The PoolManager balance has since grown to about 75,886 EURe and the V2 fees to 81.11 EURe. The same address pair exists on Ethereum, so the hazard is a property of the token and does not follow from a Polygon network difference. The Polygon specific part is that V1 is also a PoS bridge child token with deposit for the depositor role and withdraw for the holder, and neither can be used against the PoolManager by an ordinary account. The lead that asks for the split of the balance between the two ids is answered by these figures.",
+    "sources": [
+     {
+      "url": "rpc https://polygon-bor-rpc.publicnode.com (bor v2.11.1), eth_call with state override, eth_getBalance, eth_getCode and eth_getStorageAt, blocks 97816436 to 97817199 on 2026-11-23",
+      "supports": "Equal balanceOf(PoolManager) at both EURe addresses, both readings lowered by a transfer through either address, 32 byte true from both, getController, getFrontend, owner, implementation slot, protocolFeesAccrued for both ids, StateView liquidity and slot0 of the 48 pools, collect on the fee controller from an arbitrary sender"
+     },
+     {
+      "url": "rpc https://polygon.gateway.tenderly.co eth_getLogs on the PoolManager 0x67366782805870060151383f4bbff9dab53e5cd6, blocks 60000000 to latest on 2026-11-23",
+      "supports": "21 Initialize logs with the V1 address and 27 with the V2 address, 207 ModifyLiquidity logs in the V1 pools, no ERC-6909 Transfer log with the V1 id"
+     },
+     {
+      "url": "https://sourcify.dev/server/v2/contract/137/0x18ec0A6E18E5bc3784fDd3a3634b31245ab704F6?fields=abi,sources,compilation",
+      "supports": "Verified source of V1: TokenFrontend forwards to the controller with the caller as argument, setController is owner only and checks getFrontend and ticker, PolygonPosTokenFrontend adds deposit for the depositor role and withdraw"
+     },
+     {
+      "url": "https://sourcify.dev/server/v2/contract/137/0xd1cfa02a1785f3ca0a5602b18649b7ca5439681b?fields=abi,sources,compilation",
+      "supports": "Verified source of the V2 implementation: getFrontend is hard coded per ticker, the withCaller functions accept only the frontend, mint, burn and recover need a system account, upgrades need the owner"
+     },
+     {
+      "url": "https://resources.cryptocompare.com/asset-management/20566/1755852548854.pdf",
+      "supports": "Monerium notice: V1 keeps its address and operates with V2 behind it, address pairs for Polygon, Gnosis and Ethereum, Polygon upgrade on 18 August 2024"
+     },
+     {
+      "url": "https://help.monerium.com/article/10-v2-contracts",
+      "supports": "Both versions coexist for now because some liquidity providers still rely on V1"
+     },
+     {
+      "url": "rpc https://ethereum-rpc.publicnode.com eth_call balanceOf(PoolManager) on 0x3231Cb76718CDeF2155FC47b5286d82e6eDA273f and 0x39b8B6385416f4cA36a20319F70D28621895279D, latest block on 2026-11-23",
+      "supports": "4,188.4737 EURe at both Ethereum addresses"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 5,
+   "extends": "F-043",
+   "id": "F-075",
+   "firstCycle": 5,
+   "history": [
+    {
+     "cycle": 5,
+     "unit": "established-l1",
      "status": "confirmed",
      "severity": "low"
     }

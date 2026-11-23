@@ -49,7 +49,9 @@ Cells start at depth 0 and a baseline pass only brings them to depth 2. Reaching
 
 Every research agent, verifier and critic writes leads: concrete open questions with a priority. A lead stays open until an agent answers it with a finding or a clearance. After three inconclusive attempts it is parked.
 
-A finding that names an earlier one in "ref" replaces it only when the plan assigned that recheck to the unit. Otherwise it is kept as its own entry with an "extends" link. `cycles/NNN/skip.json` drops a finding that the critic showed to be a second report of one event.
+A finding that names an earlier one in "ref" replaces it only when the plan assigned that recheck to the unit. Otherwise it is kept as its own entry with an "extends" link. `cycles/NNN/skip.json` drops a finding that the critic showed to be a second report of one event. `cycles/NNN/extends.json` links a finding to an earlier one when the agent did not, `actors.json` applies an actor that a verifier corrected, and `severity.json` sets one severity for findings of a class that was rated unevenly; the verifier's rating stays in the entry.
+
+If a run loses agents to an outage, start the workflow again with the same JSON plus a `done` object that lists the units whose research or verdict file already exists, for example `"done": {"research": ["op-stack-eth"], "verify": []}`. Only the missing agents run, and the critic updates its earlier file.
 
 Findings marked plausible or unverified pull their network family back into the plan until someone confirms or refutes them. Confirmed findings are re-checked after six cycles, because networks upgrade.
 
