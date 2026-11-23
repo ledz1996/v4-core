@@ -1,0 +1,82 @@
+{
+ "cycle": 8,
+ "date": "2026-11-23",
+ "dir": "research/network-risk/cycles/008",
+ "units": [
+  {
+   "id": "ethereum-reference",
+   "title": "Ethereum mainnet reference and cross-chain deployment parity",
+   "chainIds": [
+    1
+   ],
+   "mode": "deepen",
+   "leadIds": [
+    "L-165",
+    "L-294",
+    "L-331",
+    "L-344",
+    "L-363",
+    "L-367",
+    "L-372"
+   ],
+   "recheckIds": [],
+   "lenses": [
+    "L1",
+    "L2",
+    "L3",
+    "L4"
+   ],
+   "angles": [
+    "Sweep. List every precompile, predeploy, system contract, face of the native asset, wrapped native token, bridge, staking and fee contract on this network. For each one, run eth_call with \"from\" set to the PoolManager address for the call shapes P1, P2, P3 and P5 in ASSUMPTIONS.md (empty calldata with zero value, transfer(address,uint256) with zero and nonzero amount, balanceOf(PoolManager), and each IHooks selector), and record what comes back. Follow up on every target that does not revert.",
+    "Transaction types. For every transaction type and execution context this network adds (batches, sponsored or fee-token transactions, deposits, retryables, system calls, account abstraction, delegated accounts), work out what msg.sender, msg.value and transient storage look like inside the PoolManager and walk unlock, sync, settle and take through each."
+   ]
+  },
+  {
+   "id": "established-l1",
+   "title": "Established alternative L1s",
+   "chainIds": [
+    137,
+    56,
+    43114
+   ],
+   "mode": "deepen",
+   "leadIds": [
+    "L-464",
+    "L-160",
+    "L-294",
+    "L-303",
+    "L-331",
+    "L-346"
+   ],
+   "recheckIds": [],
+   "lenses": [
+    "L1",
+    "L2",
+    "L3",
+    "L4"
+   ],
+   "angles": [
+    "Known weaknesses. Collect security advisories, audit reports, bug bounty write-ups, incident post-mortems and open issues for this network's execution client, precompiles and system contracts from the last two years, including behaviour the network calls by design. For each, decide whether an ordinary account could use it against funds in the PoolManager.",
+    "Exits. Can an ordinary account make another user's swap or liquidity removal impossible to include or always revert on this network (gas caps, storage pricing, per-transaction limits, tick crossing cost, special recipients)?"
+   ]
+  }
+ ],
+ "code": [
+  {
+   "id": "core-code-invariants-settlement",
+   "task": "Write down the invariants of flash accounting and custody as the code implies them (for example: for every currency the PoolManager balance is at least pool reserves plus ERC-6909 supply plus accrued protocol fees; deltas sum to zero when unlock returns; a credit exists only after a matching balance increase or msg.value). Then try to break each with sequences of unlock, sync, settle, settleFor, take, clear, mint, burn, the ERC-6909 transfer functions, initialize, swap, modifyLiquidity and donate, issued by one or two ordinary accounts, including re-entry through unlockCallback, hooks, token callbacks and native transfer recipients, and including the same account acting through settleFor and operators."
+  },
+  {
+   "id": "core-code-invariants-bits",
+   "task": "Check every place where the code packs, masks, shifts or casts: Slot0 packing, BalanceDelta and BeforeSwapDelta packing and unpacking, fee and protocol fee fields, hook flag bits and the flag validity rules, tick bitmap word and bit positions, ERC-6909 id to currency conversion, transient slot constants and the hash used for delta slots, assembly memory use and cleanup, and every unchecked block. Recompute constants with python3. For each, ask whether a dirty upper bit, an overlap or a wrong width lets an ordinary account change a value it should not control."
+  },
+  {
+   "id": "theme-hook-transient",
+   "task": "Leads L-549 and L-491. Part one (L-549): a hook that keeps a value in transient storage without a pool id in the slot, or does not reset it before its callback returns, lets one party of a shared transaction change what the next party's swap or liquidity change does. The AGL hook on OP Mainnet and Base is the known case (F-074, F-106), and core's own sync has the same shape (F-071). Take the ten most used hooks on each of the 21 networks from the hook censuses in cycles/005/theme-shared-hooks.work and cycles/006/theme-hook-ledgers.work (start with ZoraV4CoinHook 0xc8d077444625eb300a427a6dfb2b1dbf9b159040, ContentCoinHook 0x9ea932730a7787000042e34390b8e435dd839040 and ClankerHookStaticFeeV2 0xb429d62f8f3bffb98cdb9569533ea23bf0ba28cc on Base, 0x6b1216a40b65c83e9c9e18a562c446697b8cf8ec on Elysium and 0x94f802a9efe4dd542fdbd77a25d9e69a6dc828cc on Monad). For each: does the code contain TSTORE, which transient slots does a swap or a liquidity change write, are they indexed by pool id, and are they reset before the call returns? Read verified source where it exists and the bytecode otherwise. For each hook that leaves a value, simulate by eth_call two swaps in one transaction, the first through a pool that the caller created with the same hook and the second through a pool with other users' liquidity, and compare the second result with the same swap alone. Then repeat with the second swap started from inside the first, through a token of the caller's pool that calls back when it is transferred. Report every case where the second party receives less, pays more, or reverts, and every case where the first party gains. Part two (L-491): for the 20 hooks per network that theme-hook-ledgers ranked by holdings, does the hook have a function that an ordinary account can call and that makes the hook call swap, modifyLiquidity or donate on the PoolManager with a PoolKey, amounts or hookData that the caller chooses? Core skips the callbacks of a hook when the hook itself is the caller (src/libraries/Hooks.sol, the noSelfCall modifier), so state what the skipped callbacks would have enforced and whose positions the hook address owns. For each case say whether funds of liquidity providers or swappers can be taken or locked, and whether the cause is the hook or a property of the network."
+  },
+  {
+   "id": "theme-donation-capture",
+   "task": "Leads L-507 and L-510, which follow from F-104. A donation is shared by whoever holds liquidity in range at the instant of the call (src/PoolManager.sol donate and src/libraries/Pool.sol donate), so liquidity added a moment earlier collects part of it. The open fact is whether any contract that calls donate pays from a balance that built up before the call, on a function open to any account. In that case an ordinary account can add liquidity in range, trigger the payout and remove the liquidity in one transaction, and take fees or rewards that were meant for the standing liquidity providers. List the senders of Donate events of the PoolManager on all 21 networks (start with cycles/007/core-code-audit-walk-b.work/raw/donate_logs.json for Ethereum, Robinhood Chain, Elysium and Arbitrum One, and the BNB Smart Chain donors 0x8c7852bb503b4579c28a6fa2bcf112c7657a6488, 0x15544eba1a7c7054a4bedceb876a7bf1a6ac258b and 0x02c3d34faad49df254b20724e62a36b6a09f6488; count logs on Base, World Chain, X Layer, Polygon, Avalanche and Monad, where nobody has). For each donor contract read the source or the selector list: who may trigger the donate call, where the donated amount comes from, and whether it accrued before the triggering call. For each donor that pays an earlier balance on an open call, simulate by eth_call one unlock that adds a narrow position around the current tick, triggers the donation and removes the position, and report the share of the donation the caller takes and the value at stake. Also check the same pattern for hooks that pay rewards through a positive hook delta or a fee override in afterSwap to liquidity in range. Check each log count on BNB Smart Chain against a second endpoint. Say for each case whether the cause is the donor contract or a property of the network."
+  }
+ ]
+}
