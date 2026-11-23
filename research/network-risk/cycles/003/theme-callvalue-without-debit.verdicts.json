@@ -1,0 +1,153 @@
+{
+ "unit": "theme-callvalue-without-debit",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "I fetched core/vm/evm.go from the master branch of bnb-chain/bsc. isSystemCall at lines 291 to 293 compares the caller with params.SystemAddress, which params/protocol_params.go line 238 sets to 0xfffffffffffffffffffffffffffffffffffffffe. EVM.Call skips CanTransfer at line 314 and skips Transfer at lines 345 to 347 for that caller and still passes the value to the callee contract. CallCode (line 409) and create (line 552) keep the balance check for every caller. I repeated the probe on all 21 endpoints of networks.json on 2026-11-23: eth_call from the system address with value 7, a sender balance of 1000 set by state override, to a 16 byte probe that returns CALLVALUE, SELFBALANCE and BALANCE(CALLER), probe balance 10. BNB Smart Chain (Geth/v1.8.2-4e1c8247-20261104, near block 135,178,626) returned 7, 10 and 1000 in 12 of 12 runs. The same call from an ordinary address returned 7, 17 and 993 there. Nineteen other endpoints returned 7, 17 and 993 for the system address, and Tempo rejected the call with 'value transfer not allowed'. The system address has no code, nonce 0 and balance 0 on BNB Smart Chain. I looked for every use of the address as a caller in the client. core/state_processor.go builds three messages with From params.SystemAddress (lines 353, 380 and 420) and each evm.Call passes common.U2560 as value to a fixed target. consensus/parlia/parlia.go calls getSystemMessage five times (lines 1389, 2069, 2096, 2110 and 2131) and feynmanfork.go twice (lines 54 and 125), always with header.Coinbase as sender. core/state_transition.go lines 702 and 708 only add fees to the address, and distributeIncoming (parlia.go lines 2022 to 2052) moves that balance to the coinbase. The Jenner stateful precompile entry (core/vm/contracts_stateful.go lines 161 to 186) and the CAS20 prologue (core/vm/cas20.go lines 89 to 95) make no outbound call and reject value. A frame whose address is the system address would need code at that address, an EIP-7702 authorization signed for it, or a transaction signed for it. None of these is open to an ordinary account. go-ethereum master (lines 268 to 309), op-geth on the optimism branch (lines 247 to 304) and the head of celo-org/op-geth (lines 264 to 321) hold the same rule. Bor master (lines 326 and 357), the Nitro fork of go-ethereum (lines 264 and 294) and libevm (lines 196 and 219) check and transfer for every caller. go-ethereum's own three system calls pass value zero (core/state_processor.go lines 387 to 487). eth_call of settle() (0x11da60b4) and settleFor(address) (0x3dd45adb) with value 1 from the system address returned 0x54e3ca0d on BNB Smart Chain and on the other endpoints I ran with both selectors (Ethereum, Unichain, Celo, HyperEVM). settle() returned 0x54e3ca0d on 20 endpoints and Tempo rejected the value. eth_getBalance of the BNB Smart Chain PoolManager returned 3,793.5 BNB. The Jenner date is confirmed: params/config.go line 256 sets JennerTime to 1796697000 and the v1.8.2 release notes give 2026-12-08 02:30 UTC. Not confirmed by me: the revm and Monad source lines the finding names for the other clients. Their endpoints behaved as on Ethereum in the probe.",
+   "codeCheck": "settle and settleFor are the only payable functions in src (src/PoolManager.sol:300-307). Both carry onlyWhenUnlocked, which reverts with ManagerLocked unless Lock.isUnlocked() is true (src/PoolManager.sol:96-99). _settle credits paid = msg.value to the recipient when the synced currency is address(0) and reads no balance on that branch (src/PoolManager.sol:349-354 and 364). sync(address(0)) stores no reserves (src/PoolManager.sol:281-283). A native credit can be spent by take, which sends value with call(gas(), to, amount, 0, 0, 0, 0) (src/PoolManager.sol:291-297, src/types/Currency.sol:44-52). So a frame at the PoolManager that reports a value nobody paid would give a real credit, as the finding says. The guards hold for the case at hand. The unlock flag is set only inside unlock, which then calls unlockCallback on msg.sender (src/PoolManager.sol:104-114). A call that starts from the system address begins with the manager locked, and an account without code cannot run a callback. The PoolManager makes three raw calls. The token transfer and the hook call pass value 0 (src/types/Currency.sol:73, src/libraries/Hooks.sol:134) and the native payout uses the PoolManager as caller (src/types/Currency.sol:48), so the PoolManager never calls as the system address. A contract called by the system address with a stated value receives no balance on BNB Smart Chain, so any onward value call to settle would be paid from that contract's own balance. No path from an ordinary account to a native credit follows from this rule.",
+   "corrections": "The mechanism text says the settle and settleFor probe returned ManagerLocked on all 21 networks. On Tempo the endpoint rejects any call that carries value with 'value transfer not allowed', also when the sender balance is set by override, so the count is 20 and one rejection. With value 0 the Tempo PoolManager returns ManagerLocked. The op-geth line range begins at 247 and the Celo range at 264, where isSystemCall is defined. forno.celo.org answered from two client families during my runs (reth/v2.2.0-74cc8bb and Geth/v0.1.0-untagged-c7ed55b8-20260817) and both moved value for the system address in 12 of 12 runs. The actor value governance and the severity info are right: no party can trigger the hazard today and it needs a consensus rule change.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/evm.go",
+     "supports": "isSystemCall at lines 291 to 293. Call skips CanTransfer at line 314 and Transfer at lines 345 to 347 for the system address. CallCode at line 409 and create at line 552 keep the check."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/params/protocol_params.go",
+     "supports": "SystemAddress is 0xfffffffffffffffffffffffffffffffffffffffe (line 238)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/state_processor.go",
+     "supports": "The three messages with From params.SystemAddress (lines 353, 380, 420) call fixed targets with value common.U2560."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/consensus/parlia/parlia.go",
+     "supports": "Every getSystemMessage call uses header.Coinbase as sender (lines 1389, 2069, 2096, 2110, 2131). distributeIncoming moves the system address balance to the coinbase (lines 2022 to 2052)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/consensus/parlia/feynmanfork.go",
+     "supports": "The two further getSystemMessage calls (lines 54 and 125) also use header.Coinbase."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/state_transition.go",
+     "supports": "Transaction fees are added to the system address (lines 702 and 708). The file has no other use of the address."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/contracts_stateful.go",
+     "supports": "runStatefulPrecompiledContract (lines 161 to 186) passes the frame value to the precompile and makes no outbound call."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20.go",
+     "supports": "cas20EnterCall rejects CALLCODE and DELEGATECALL entry and reverts with NonPayable when the frame has value (lines 89 to 95)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/params/config.go",
+     "supports": "JennerTime on mainnet is 1796697000, 2026-12-08 02:30 UTC (line 256)."
+    },
+    {
+     "url": "https://github.com/bnb-chain/bsc/releases/tag/v1.8.2",
+     "supports": "Release notes schedule the mainnet Jenner hard fork for 2026-12-08 02:30:00 UTC."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/core/vm/evm.go",
+     "supports": "Same system caller rule, lines 268 to 309."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/core/state_processor.go",
+     "supports": "The system calls at lines 387 to 487 pass value common.U2560."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/op-geth/optimism/core/vm/evm.go",
+     "supports": "Same rule, lines 247 to 304."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/op-geth/HEAD/core/vm/evm.go",
+     "supports": "Same rule, lines 264 to 321."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/master/core/vm/evm.go",
+     "supports": "CanTransfer at line 326 and Transfer at line 357 run for every caller."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/vm/evm.go",
+     "supports": "CanTransfer at line 264 and Transfer at line 294 run for every caller."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/libevm/main/core/vm/evm.go",
+     "supports": "CanTransfer at line 196 and Transfer at line 219 run for every caller."
+    },
+    {
+     "url": "rpc https://bsc-dataseed1.bnbchain.org eth_call from 0xfffffffffffffffffffffffffffffffffffffffe, value 7, balance override 1000, to a probe placed by state override; eth_getCode, eth_getBalance and eth_getTransactionCount of the system address; eth_getBalance of the PoolManager",
+     "supports": "Probe returned CALLVALUE 7, callee balance 10, sender balance 1000 in 12 of 12 runs near block 135,178,626. System address: no code, balance 0, nonce 0. PoolManager balance 3,793.5 BNB."
+    },
+    {
+     "url": "rpc eth_call of the same probe on the other 20 endpoints of state/networks.json, 2026-11-23",
+     "supports": "Nineteen returned 7, 17 and 993. Tempo rejected the call with 'value transfer not allowed'."
+    },
+    {
+     "url": "rpc eth_call of settle() 0x11da60b4 and settleFor(address) 0x3dd45adb with value 1 from the system address to each PoolManager",
+     "supports": "0x54e3ca0d (ManagerLocked) for settle on 20 endpoints and for settleFor on the five endpoints tested with the right selector. Tempo rejected the value and returned 0x54e3ca0d with value 0."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "On-chain differential for value semantics. A probe contract placed by state override made a CALL with 5 wei, a CALLCODE with 3 wei and a DELEGATECALL to a second probe that returns CALLVALUE, SELFBALANCE and BALANCE(CALLER). Runs: funded sender with value 7, funded sender with value 0, and an unfunded probe.",
+   "agrees": true,
+   "note": "I ran my own differential on all 21 endpoints on 2026-11-23. A probe placed by state override makes CALL with 5 wei to a second probe that returns CALLVALUE, SELFBALANCE and BALANCE(CALLER), then returns the success flag and its own balance. With the caller funded with 100 wei every endpoint returned 5, 15, 95, success 1 and caller balance 95. With the caller balance set to 0, and again with no balance override, every endpoint returned a failed call and no change. Tempo behaved the same in both runs, so its interpreter needs a balance for value and no account in the probe had one. A top-level call with value 7 from an ordinary address moved exactly 7 wei on 20 endpoints and was rejected on Tempo. I did not repeat the CALLCODE and DELEGATECALL legs. The code statement holds: src has three raw calls, all of kind CALL (src/types/Currency.sol:48 and 73, src/libraries/Hooks.sol:134), and no DELEGATECALL or CALLCODE."
+  },
+  {
+   "check": "Whether the PoolManager can be made to call itself with value, which would give a frame with CALLVALUE and no net debit on any client, and whether the deployed contracts accept plain value.",
+   "agrees": true,
+   "note": "Code read: the only value-bearing call is src/types/Currency.sol:48 with empty calldata. src/types/Currency.sol:73 and src/libraries/Hooks.sol:134 pass value 0 and src/PoolManager.sol:110 is a high-level call without value. A search of src outside src/test finds no receive function, no fallback function and only two payable functions, settle and settleFor (src/PoolManager.sol:300-307). A take of native currency to the PoolManager itself therefore reverts in Currency.transfer (src/types/Currency.sol:51-53). A token take with the PoolManager as currency calls selector 0xa9059cbb, which the contract does not implement, since its ERC-6909 transfer takes three arguments. On chain, a call with value 1 and empty calldata from a funded system address reverted with empty data on 20 endpoints and was rejected on Tempo, and settle() with value returned 0x54e3ca0d. I did not repeat the run with the PoolManager as sender."
+  },
+  {
+   "check": "Arc: value in CallFrom subcalls (sender substitution), the Native Coin Authority precompile, blocklist checks on value frames and the 18 versus 6 decimal split as ways to carry or move value without an equal debit.",
+   "agrees": true,
+   "note": "I fetched crates/precompiles/src/call_from.rs and crates/evm/src/evm.rs from the main branch of circlefin/arc-node. frame_init looks the target up in the subcall registry and reverts with 'unauthorized caller' unless the caller is on the allowlist (evm.rs lines 660 to 669). init_subcall rejects every scheme except CALL, rejects a static context, and reverts with 'subcall precompiles do not support value transfers' when the call carries value (lines 896 to 924). It then requires the child caller to equal the calling contract or the transaction signer (lines 946 to 955). decode_child_call builds the child with value CallValue::Transfer(U256::ZERO) and caller set to the decoded sender (call_from.rs lines 122 to 139). check_blocklist_and_create_log reverts a value frame that names the zero address or a blocklisted sender or recipient (evm.rs lines 498 to 550), and extract_call_transfer_params returns nothing for DELEGATECALL, STATICCALL and CALLCODE (lines 248 to 261). On the endpoint (arc/v1, near block 32,652,254) a funded value CALL moved exactly the stated wei and an unfunded one failed. The face at 0x3600000000000000000000000000000000000000 returned the PoolManager native balance cut to 6 decimals. I did not read native_coin_authority.rs line by line, and the build behind arc/v1 is not matched to a commit."
+  },
+  {
+   "check": "Arbitrum family: retryable tickets, ETH deposits, unsigned parent chain messages and the native token mint precompile as sources of value without a debit.",
+   "agrees": true,
+   "note": "tx_processor.go on nitro master: the deposit case mints to the sender and moves the value with core.Transfer (lines 237 to 268), the submit case mints the deposit value and moves the call value into the ticket escrow (lines 322 and 383 to 384), the retry case moves the call value from escrow to the sender before execution (lines 554 to 557) and a failed retry returns it (lines 840 to 842). ArbOwnerPublic at 0x6b returned 0 for getNativeTokenManagementFrom() and an empty array for getAllNativeTokenOwners() on Arbitrum One, Robinhood Chain and Elysium, and ArbSys returned version word 0x74 on all three. The probe with a funded system address moved value normally on the three endpoints. The Elysium sequencer build stays unconfirmed, as the item says."
+  },
+  {
+   "check": "BNB Smart Chain: Parlia system transactions, the fee balance kept at the system address, and the stateful precompiles of the Jenner fork as sources or sinks of value.",
+   "agrees": true,
+   "note": "Confirmed against bnb-chain/bsc master as listed in the verdict sources: fees are credited to the system address and swept to the coinbase before the validator deposit, every Parlia system message is sent from header.Coinbase, and the CAS20 entry rejects value and non-direct calls. The opcode fusion interpreter that an earlier critic note raised for this chain is gone: the v1.8.x changelog records its removal and the flag --vm.opcode.optimize as inert."
+  },
+  {
+   "check": "SELFDESTRUCT to a third party, to self and to the PoolManager: does any client credit the beneficiary without emptying the source, and does a forced credit give anyone a native delta.",
+   "agrees": true,
+   "note": "The code statement is right for currency address(0): a native credit is msg.value and sync(address(0)) stores no balance (src/PoolManager.sol:281-283 and 352-354). One sentence needs a limit. On Celo, Polygon and Arc an ERC-20 face reports the native balance of the PoolManager: on 2026-11-23 the CELO token 0x471EcE3750Da237f93B8E339c536989b8978a438 and 0x0000000000000000000000000000000000001010 returned exactly eth_getBalance of the PoolManager, and 0x3600000000000000000000000000000000000000 returned it cut to 6 decimals. A forced native credit made while such a face is synced is credited to the settler under the face id (src/PoolManager.sol:357-361). The credit equals what the sender gave up, apart from less than one 6 decimal unit on Arc, so the clearance stands. The mirrored ledgers unit of this cycle treats these faces."
+  },
+  {
+   "check": "Tempo: can any transaction form (plain, batched 0x76, sponsored, fee token) carry value, and what does the native branch of settle and take do.",
+   "agrees": true,
+   "note": "The endpoint reports tempo/v1.19.0-697ea97 and I read crates/evm/src/handler.rs at that commit. The gas calculation returns ValueTransferNotAllowedInAATx for any call with value (lines 369 to 374) and validation repeats the test with the comment that all accounts have zero balance (lines 1438 to 1441). On chain a value call was rejected for an ordinary sender and for the system address with a balance override, an inner CALL with 5 wei failed when no balance was overridden, and it moved 5 wei when the caller balance was overridden. settle() with value 0 returned ManagerLocked. Whether any genesis account holds a native balance stays open, as the item and its lead say."
+  },
+  {
+   "check": "Celo and X Layer: can an Ethereum deposit mint the custom gas token for ETH, and do fee currency transactions (Celo) or gasless transactions (X Layer) let value run without a native balance.",
+   "agrees": true,
+   "note": "Partial check. The four liquidity predeploys 0x42...24, 25, 29 and 2a hold 0 on Celo and X Layer, and on the seven OP Stack chains with ETH gas, which also covers the balance statement of the OP Stack item. forno.celo.org answered from two client families (reth/v2.2.0-74cc8bb and Geth/v0.1.0-untagged-c7ed55b8-20260817). In 14 runs both rejected a call to the transfer precompile 0x00000000000000000000000000000000000000fd from an ordinary address and from the PoolManager address, with 'PrecompileError' or 'unable to call transfer from unpermissioned address'. I did not repeat the portal calls on Ethereum, and the item's source reading covers celo-org/op-geth only."
+  },
+  {
+   "check": "HyperEVM: do system transactions from 0x2222222222222222222222222222222222222222 carry value that no EVM account pays, and can one credit the PoolManager.",
+   "agrees": true,
+   "note": "hyper-evm-sync src/run.rs: a system transaction runs through the same apply_tx with base fee 0 and disable_eip3607, value taken from the transaction (lines 123 to 146), and the sender is the native token system address when the input is empty and the linked token's system address otherwise (lines 216 to 232). 0x2222222222222222222222222222222222222222 holds 944,882,201 HYPE and a value call from it to the PoolManager with empty calldata reverted. The PoolManager holds 11.4 HYPE. The closed validator node is unconfirmed, as the item says."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L1",
+   "question": "forno.celo.org answers from a reth based client (reth/v2.2.0-74cc8bb) and from a Geth build (c7ed55b8 of 2026-08-17). Which client produces Celo blocks today, and does the source of the reth based client keep the separate native balance check for the value of a fee currency transaction and the caller restriction of the transfer precompile?",
+   "why": "The unit read celo-org/op-geth only. Both backends rejected a transfer precompile call from an unpermissioned address and moved value normally in my probes, so no difference is known. The value check for fee currency transactions was read in one client, and a second client family on the same chain can differ in a path that a probe through eth_call does not reach.",
+   "priority": "low"
+  }
+ ]
+}

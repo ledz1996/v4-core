@@ -1,0 +1,102 @@
+{
+ "unit": "core-code-tests-replay-core",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "The finding states no chain fact. Its field difference says that the six items are the same on every network, so the fact check is whether the deployed contracts behave as the source reading says. I ran read-only calls on all 21 RPC endpoints of state/networks.json on 2026-11-23 (Ethereum block 26,474,254, Celo 83,493,046, Polygon 97,792,226, Arc 32,649,308, the others at latest). From an unrelated address, sync(address(0)) returned success on all 21, sync of an address without code (0x00000000000000000000000000000000dead0001) reverted with empty data on all 21, settle() and take reverted with ManagerLocked (0x54e3ca0d) on all 21, and a call with empty calldata reverted on all 21. That matches the source: sync has no lock check, balanceOf on an address without code fails in the return decoding, and the contract has no receive or fallback function. For the fifth item I tested the guard on the deployed code. A caller placed by state override opened unlock, called sync(X) and then settle with 1 wei. Every path of that caller ends in a revert, so nothing is credited. With X set to the identity precompile 0x04, which answers balanceOf with its 36 input bytes, all 21 deployed PoolManagers returned NonzeroNativeValue (0xb0ec849e). The same caller with value 0 after sync(X), and with 1 wei after sync(address(0)), got past settle on all 21. With X set to the native face on Celo (0x471EcE3750Da237f93B8E339c536989b8978a438), Polygon (0x0000000000000000000000000000000000001010) and Arc (0x3600000000000000000000000000000000000000), and to USDC on Ethereum, the result was the same. The four interface comments and the two helper remarks are facts of this repository and I read each cited line. Not confirmed: forge is not installed, so I did not run the tests, and I did not exercise take with a currency without code inside an unlock on chain.",
+   "codeCheck": "All six items hold as stated. One. src/interfaces/IHooks.sol:102 says the returned fee is used only if it is at most 1,000,000. src/libraries/Pool.sol:303-305 calls removeOverrideFlagAndValidate when the override flag is set, and src/libraries/LPFeeLibrary.sol:75-78 with 43-45 reverts with LPFeeTooLarge above the maximum. test/DynamicReturnFees.t.sol:151-162 expects that revert, and its comment at line 158 says the large fee is not used. The comment at src/libraries/Hooks.sol:261-262 agrees with the source. Two. IHooks.sol:50 and 81 describe the delta passed to the hook as including the hook delta. src/libraries/Hooks.sol:219-243 encodes the delta it received, which src/PoolManager.sol:171 builds as principal plus fees, and subtracts the hook delta only at lines 230 and 242. src/test/FeeTakingHook.sol:53-91 computes its fee from that value. Three. src/interfaces/IPoolManager.sol:85-86 calls the event amounts the deltas of the pool balance. src/PoolManager.sol:241-250 emits the delta that src/libraries/Pool.sol:451-462 builds, which is negative for the amount paid in, and test/PoolManager.t.sol:500-503 expects -100 and 98. Four. IPoolManager.sol:174 says take reverts if the amount is not available. src/types/Currency.sol:60-74 accepts a call that does not revert and returns no data, with no code size check, so take of a currency without code debits the caller and moves nothing. Five. test/utils/CurrencySettler.sol:20-25 settles native currency without sync and says sync is not required. The comment at src/PoolManager.sol:348 asks for sync first. Lines 353-356 revert with NonzeroNativeValue when a token is synced and value is sent, and test/PoolManager.t.sol:976-989 covers it. Six. src/test/ProtocolFeesImplementation.sol:27-33 has setIsUnlocked and an _isUnlocked override. A search of test/ and src/ finds no call to either, and src/ProtocolFees.sol:44-57 never reads the lock. I traced each item for a path to funds and looked for missed guards. An oversized override fee reverts the swap before any state change in Pool.swap, so it can only stop swaps in the pool of that hook. The delta shown to a liquidity hook does not change the sum: Hooks.sol:230 and 242 subtract the hook delta from the caller delta, and PoolManager.sol:181-183 books both, so caller delta plus hook delta equals principal plus fees. The subtraction goes through the int128 casts of src/types/BalanceDelta.sol:34-46. The event wording touches no accounting. A take of a currency without code leaves the caller with a negative delta in that id (PoolManager.sol:294). sync of the same address reverts, mint adds to the debt (line 326), clear accepts only a positive delta (lines 311-314), and a pool can return that currency only after someone paid it in, so the unlock ends in CurrencyNotSettled (line 112). The native settle revert returns the value to the caller. Fee collection is limited to the controller (ProtocolFees.sol:48) and to protocolFeesAccrued with a checked subtraction (line 55).",
+   "corrections": "No correction to the six items. Two precisions. The fourth item says the comment holds for tokens with code. It holds only for tokens whose transfer reverts or returns false on a shortfall, because Currency.sol:68 also accepts empty return data from a contract with code. The actor value is nominal here. The record describes no loss or freeze. The two operational effects need a hook author for the fee revert and a party that runs earlier in the same transaction for the native settle revert, which F-014 already records.",
+   "sources": [
+    {
+     "url": "src/interfaces/IHooks.sol:50",
+     "supports": "Comment says the delta passed to afterAddLiquidity includes the hook delta. Line 81 says the same for removal and line 102 says an override fee above the maximum is not used."
+    },
+    {
+     "url": "src/libraries/Pool.sol:303-305",
+     "supports": "An override fee is validated and the swap reverts with LPFeeTooLarge above 1,000,000 (with src/libraries/LPFeeLibrary.sol:43-45 and 75-78)."
+    },
+    {
+     "url": "src/libraries/Hooks.sol:219-243",
+     "supports": "The liquidity hook receives the delta before the hook delta is subtracted."
+    },
+    {
+     "url": "src/PoolManager.sol:241-250",
+     "supports": "The Swap event carries the delta returned by Pool.swap, negative for the amount paid in."
+    },
+    {
+     "url": "src/types/Currency.sol:60-74",
+     "supports": "A token transfer counts as successful when the call does not revert and returns nothing, with no code size check."
+    },
+    {
+     "url": "src/PoolManager.sol:348-365",
+     "supports": "Comment asks for sync before a native settle. A settle with value while a token is synced reverts with NonzeroNativeValue."
+    },
+    {
+     "url": "src/ProtocolFees.sol:44-60",
+     "supports": "collectProtocolFees checks the caller and the synced token and never reads the lock. _isUnlocked has no caller."
+    },
+    {
+     "url": "test/DynamicReturnFees.t.sol:151-162",
+     "supports": "The test expects LPFeeTooLarge for an override fee of 1,000,001 and its comment says the fee is not used."
+    },
+    {
+     "url": "test/PoolManager.t.sol:500-503",
+     "supports": "The test expects Swap event amounts -100 and 98 for an exact input of 100."
+    },
+    {
+     "url": "test/utils/CurrencySettler.sol:20-25",
+     "supports": "The helper settles native currency without sync and says sync is not required."
+    },
+    {
+     "url": "src/test/ProtocolFeesImplementation.sol:27-33",
+     "supports": "The test double has a lock toggle and an override that nothing calls."
+    },
+    {
+     "url": "rpc: eth_call on the 21 RPC URLs of research/network-risk/state/networks.json, 2026-11-23, plain calls from 0x00000000000000000000000000000000000a11ce",
+     "supports": "sync(address(0)) succeeds while locked, sync of an address without code reverts, settle and take revert with ManagerLocked 0x54e3ca0d, empty calldata reverts, on all 21 deployed PoolManagers."
+    },
+    {
+     "url": "rpc: eth_call with a state override caller at 0x00000000000000000000000000000000000c0de1 on the 21 RPC URLs, 2026-11-23",
+     "supports": "Inside unlock, settle with 1 wei after sync of a token, of a native face (Celo, Polygon, Arc) or of the identity precompile reverts with NonzeroNativeValue 0xb0ec849e on every deployed PoolManager. Settle with value 0 after that sync and settle with 1 wei after sync(address(0)) are accepted."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-1153.md",
+     "supports": "Transient storage under DELEGATECALL belongs to the calling contract, and under CALL or STATICCALL to the callee. Used for the spot check of the delegatecall clearance."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7.md",
+     "supports": "The call created by DELEGATECALL has the same sender and value as the original call."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md",
+     "supports": "A call to a delegated account loads the code at the delegated address and executes it in the context of the authority."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "test/Sync.t.sol, test/PoolManager.clear.t.sol and the take, settle, mint, burn and fee collection cases of test/PoolManager.t.sol, replayed as action sequences on the transcription with the native ERC-20 face of src/test/NativeERC20.sol modelled as a token whose balance is the native balance.",
+   "agrees": true,
+   "note": "I read src/PoolManager.sol:279-365, src/libraries/CurrencyReserves.sol:15-38 and src/ProtocolFees.sol:44-57 and reached the same result by a separate route. There is one synced currency slot, sync writes currency and reserves together, a face credit is the rise of the balance after that sync, and a native credit is msg.value with no token synced. The contract has two payable functions, settle and settleFor, and both go through the value check at line 356. No function calls out between the read of the synced currency and the credit except the static balanceOf. I wrote my own model of these lines with a native asset that has an ERC-20 face (manager balance, account balance, synced currency, reserves, two deltas, two claim balances; actions: sync of either id, settle with value 0 to 2, take of either id, payment in through the face or a forced send, mint, burn, clear). A breadth-first search to depth 9 visited 122,548 states. None had zero deltas with the account holding more than at the start, and none left the manager with less than the funds of others plus the account's claims. With the value check removed from the model the same search reported 1,226 violating states, so the model can see a double credit. On chain on 2026-11-23 the deployed PoolManagers on Celo, Polygon and Arc returned NonzeroNativeValue (0xb0ec849e) when a state override caller inside unlock called sync on the native face (0x471EcE3750Da237f93B8E339c536989b8978a438, 0x0000000000000000000000000000000000001010, 0x3600000000000000000000000000000000000000) and then settle with 1 wei. balanceOf(PoolManager) on the Celo and Polygon faces equalled eth_getBalance, and on Arc it equalled the native balance divided by 10^12. I did not replay the 30 test sequences one by one, and my model leaves out fee collection, which only the controller can call and which only lowers the balance."
+  },
+  {
+   "check": "test/NoDelegateCall.t.sol, and a function by function reading of src/PoolManager.sol against the two other implementations in the repository, src/test/ProxyPoolManager.sol and src/test/ProtocolFeesImplementation.sol. I compared them by reading. A diff command on the two files was refused by the session's permission layer, so the comparison is by reading only.",
+   "agrees": true,
+   "note": "I read src/NoDelegateCall.sol:14-32 and the modifiers in src/PoolManager.sol. initialize, modifyLiquidity, swap and donate carry noDelegateCall (lines 117, 148, 190, 259). unlock, sync, take, settle, settleFor, clear, mint and burn do not (lines 104, 279, 291, 300, 305, 310, 322, 332). src/test/ProxyPoolManager.sol:151-183 forwards take, settle, settleFor, clear, mint and burn by delegatecall, so the double needs those functions to accept it. Under delegatecall the lock flag, the deltas and the synced currency are read from the transient storage of the calling account, the claims from its storage, and Currency.sol:48 and 73 pay from its balance, so nothing held at the PoolManager address is touched. I tested the two storage rules on chain. A creation payload sent by eth_call to all 21 RPC endpoints on 2026-11-23 wrote 0x1234 to its own transient slot 7 and then read that slot through PoolManager.exttload and storage slot 0 through PoolManager.extsload, once by DELEGATECALL and once by STATICCALL. All 21 returned 0x1234 and 0 for the delegatecalls, and 0 and the stored owner for the static calls. EIP-7 says the call created by DELEGATECALL has the same sender and value as the original call. EIP-7702 says the code is loaded from the delegated address and executed in the context of the authority. EIP-1153 says that under DELEGATECALL the transient storage belongs to the contract that issued it. I fetched the three texts from https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7.md, eip-7702.md and eip-1153.md in the same directory. The probe shows what each RPC node does in its simulation path. I did not read the block production code of the 20 other clients for this point."
+  },
+  {
+   "check": "test/CustomAccounting.t.sol, all nine tests, with the four hook doubles (FeeTakingHook, LPFeeTakingHook, CustomCurveHook, DeltaReturningHook) transcribed and driven through the transcription of Hooks.sol and PoolManager.sol.",
+   "agrees": true,
+   "note": "A mistake here would let the author of a hook draw on funds of other pools, so I traced the sums in the source. I did not rerun the fuzz counts or the two boundary constants. Swap: src/libraries/Hooks.sol:266-279 reads a hook delta only when the hook address has the return delta flag, adds the specified part to the amount with checked arithmetic and reverts if the swap type would flip. Pool.swap then runs on the adjusted amount. Hooks.sol:295-313 builds the hook delta from the specified and unspecified parts, subtracts it from the swap delta, and src/PoolManager.sol:224-226 books the hook delta to the hook and the rest to the caller. The two bookings add up to the delta that Pool.swap returned. Liquidity: Hooks.sol:219-243 subtracts the hook delta from principal plus fees and PoolManager.sol:181-183 books both parts. Every subtraction passes the int128 casts of src/types/BalanceDelta.sol:34-46, a return of the wrong length reverts (Hooks.sol:152, 166, 259), and a hook that calls for itself is skipped with a zero hook delta (Hooks.sol:217, 253, 293). A hook can therefore gain only what the caller of that action in its own pool is charged, and the caller has to settle it before unlock returns (PoolManager.sol:112)."
+  },
+  {
+   "check": "test/ERC6909Claims.t.sol, all 29 tests including the value assertions, on a transcription of ERC6909.sol and ERC6909Claims.sol.",
+   "agrees": true,
+   "note": "I read src/ERC6909.sol:25-48 and 79-89, src/ERC6909Claims.sol:13-22 and src/PoolManager.sol:322-336 and did not rerun the 60,000 rounds. burn reaches _burnFrom, which lowers the allowance with checked arithmetic unless the caller is the holder or an operator or the allowance is 2^256 - 1, and _burn lowers the balance with checked arithmetic. A caller without approval gets a panic revert. transferFrom has the same rule. mint and burn both use the id truncated to 160 bits. The unchecked block at PoolManager.sol:323-328 covers only the negation in that block. Solidity applies unchecked only to the statements written inside the block, so the addition in _mint stays checked. I recomputed the interface id with my own Keccak-256: the XOR of the seven ERC-6909 selectors is 0x0f632fb3."
+  }
+ ],
+ "leads": []
+}

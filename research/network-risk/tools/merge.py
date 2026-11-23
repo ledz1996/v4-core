@@ -28,12 +28,17 @@ def main():
             next_l += 1; stats["leads"] += 1
     # cycles/NNN/actors.json may classify findings written before the actor field existed: {"<unit>:<findingIndex>": "<actor>"}
     actors = load(f"{cdir}/actors.json") if os.path.exists(f"{cdir}/actors.json") else {}
+    # cycles/NNN/skip.json drops findings the critic showed to be a second report of one event: {"<unit>:<findingIndex>": "<reason>"}
+    skip = load(f"{cdir}/skip.json") if os.path.exists(f"{cdir}/skip.json") else {}
+    plan = load(f"{cdir}/plan.json") if os.path.exists(f"{cdir}/plan.json") else {}
+    recheck = {u["id"]: set(u.get("recheckIds", [])) for u in plan.get("units", [])}
     units_done = []
     for rp in sorted(glob.glob(f"{cdir}/*.research.json")):
         res = load(rp); unit = res["unit"]; units_done.append(unit)
         vp = f"{cdir}/{unit}.verdicts.json"
         ver = {v["findingIndex"]: v for v in load(vp)["verdicts"]} if os.path.exists(vp) else {}
         for i, f in enumerate(res.get("findings", [])):
+            if f"{unit}:{i}" in skip: stats["skipped"] = stats.get("skipped", 0) + 1; continue
             v = ver.get(i)
             status = v["verdict"] if v else "unverified"
             stats[status] += 1
@@ -47,11 +52,13 @@ def main():
                 entry["verification"] = {"cycle": cycle, "factCheck": v["factCheck"], "codeCheck": v["codeCheck"], "corrections": v.get("corrections", ""), "sources": v.get("sources", [])}
                 entry["lastVerifiedCycle"] = cycle
             old = by_id.get(f.get("ref", ""))
-            if old:
+            # Only a recheck that the plan assigned to this unit replaces the body of an existing finding.
+            # Any other finding that names a "ref" adds to it (another network, another token) and is kept as its own entry.
+            if old and f["ref"] in recheck.get(unit, set()):
                 hist = old.get("history", []) + [event]
-                # a refutation or confirmation of an existing finding replaces its body; first-seen data is kept
                 old.update(entry); old["history"] = hist; stats["updated"] += 1
             else:
+                if old: entry["extends"] = old["id"]
                 entry.update(id=f"F-{next_f:03d}", firstCycle=cycle, history=[event]); entry.setdefault("lastVerifiedCycle", 0)
                 F.append(entry); by_id[entry["id"]] = entry; next_f += 1; stats["new"] += 1
         for c in res.get("cleared", []):

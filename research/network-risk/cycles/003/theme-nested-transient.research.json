@@ -1,0 +1,262 @@
+{
+ "unit": "theme-nested-transient",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "What the two dangerous shapes would do to this code, so that each network can be judged against them. Shape A: an inner run that starts with an empty transient map and whose storage writes and token transfers are kept. Shape B: an inner run, or a rollback, that drops transient writes while keeping storage writes and token transfers. Walked through unlock, sync, settle, settleFor, take, mint and burn.",
+   "result": "The code has no defence of its own against either shape, so the answer rests on the chain. Shape A: sync needs no lock and stores the currency and the balance in two transient slots (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32). An inner run that sees no unlock flag (src/libraries/Lock.sol:23-27) can call unlock itself (src/PoolManager.sol:105-107), sync, pay, settle and mint a claim (src/PoolManager.sol:322-329), and end with its own counter at zero (src/PoolManager.sol:112). The outer run still holds the older reserves value, so its settle measures the same balance rise again (src/PoolManager.sol:358-360) and credits it a second time. Shape B: take writes the debit to a transient slot and then transfers (src/PoolManager.sol:294-295, src/libraries/CurrencyDelta.sol:32-40). If the debit and the counter increment (src/libraries/NonzeroDeltaCount.sol:18-24) are dropped while the transfer is kept, unlock passes its check at src/PoolManager.sol:112 with the tokens gone. The reverse of shape B, where transient writes survive a rollback that undoes a token transfer, lets a settle credit (src/PoolManager.sol:364) outlive the payment. burn and settleFor follow the same pattern (src/PoolManager.sol:305-307, 332-336). Calls that follow one another at the top level of one transaction (a Tempo type 0x76 batch, the phases of a Base type 0x79 transaction, user operations of one bundle) do not produce either shape: unlock opens and closes inside one call frame (src/PoolManager.sol:104-114), so between two top-level calls the flag is false and every delta is zero, and only the synced currency and reserves can carry over, which earlier cycles cleared. The remaining items of this file answer, network by network, whether shape A or B exists. No network has one that an ordinary contract can start from inside a call.",
+   "source": "src/PoolManager.sol:104-114, 279-297, 300-307, 322-336, 349-364; src/libraries/Lock.sol:10-27; src/libraries/CurrencyDelta.sol:28-41; src/libraries/CurrencyReserves.sol:15-38; src/libraries/NonzeroDeltaCount.sol:12-34"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "On-chain test on all 21 RPC endpoints: does a call from an inner frame to any precompile, predeploy or system address change the caller's transient storage. One 3,640 byte creation payload, sent with eth_call and no to address, stores 0xaa55 in transient slot 1, then calls each of 173 addresses three ways with 20,000 gas (3,000 on HyperEVM): CALL with empty calldata, CALL with transfer(address,uint256), STATICCALL with balanceOf(address). It returns the slot and the loop counter.",
+   "result": "All 21 endpoints returned 0xaa55 and a count of 173. The address list holds the standard precompiles 0x01 to 0x11 and 0x100, the OP Stack predeploys 0x4200..00 to 0x4200..2f, the ArbOS precompiles 0x64 to 0x74 with 0xc8, 0xff and 0xa4b05, the Celo transfer precompile 0xfd and the CELO token, sixteen Tempo precompile and TIP-20 addresses, the Arc range 0x1800..00 to 0x1800..09 and 0x3600..00, the HyperEVM range 0x0800 to 0x0813 with 0x2222..22, 0x3333..33 and 0x5555..55, the BNB Smart Chain and Polygon system contracts 0x1000 to 0x1008, 0x2000 to 0x2006, 0x3000 and 0x1010, the MegaETH system contracts 0x6342..00 to 0x6342..05, the Avalanche ranges 0x0100..00 to 02 and 0x0200..00 to 05, and the two Base precompiles 0x8130..aa01 and aa02. The test uses zeroed arguments, so it shows that no special address resets or replaces the transient map on a plain call. It does not exercise the function of each precompile. The items below cover the features that take specific input.",
+   "source": "eth_call on the rpc URL of each entry in research/network-risk/state/networks.json at the latest block on 2026-11-22 (for example Ethereum near block 26473884, Tempo near 50340613, HyperEVM near 51984554); payload sha256 prefix 519864eafc678a1d"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "On-chain test on all 21 RPC endpoints: is transient storage restored on every way a frame can fail, and is it restored to the earlier nonzero value. The earlier critic probe covered REVERT. This probe creates a child contract and calls it so that the child writes transient slot 1 and then ends with REVERT, with INVALID, by running out of gas in a loop, and with REVERT after a nested call that itself succeeded and wrote slot 2. It then lets a write succeed, repeats the reverting call, and runs the same writes through DELEGATECALL against the parent's own slot.",
+   "result": "All 21 endpoints returned the same 15 words: slot 1 and slot 2 read zero after each of the four failures, slot 1 reads 0x55 after the successful write and still 0x55 after a later reverted write of 0x11, and the parent's slot reads 0xaa after a reverted and after an INVALID delegatecall and 0x55 after a successful one. A settle credit or a take debit written in a frame that fails is therefore undone together with the token transfer of that frame on every network, including the clients that do not use revm or go-ethereum (Tempo with evm2, Monad, HyperEVM). The result describes the RPC node of each network.",
+   "source": "eth_call with no to address on the rpc URL of each entry in research/network-risk/state/networks.json, latest block on 2026-11-22, data 0x61009761014e610400396100976104005ff06101e05260015f535f5f60015f5f6101e0515af15060065f53604061020060015f5f6101e0515af15060025f535f5f60015f5f6101e051620186a0f15060065f53604061024060015f5f6101e0515af15060035f535f5f60015f5f6101e0516200ea60f15060065f53604061028060015f5f6101e0515af15060045f535f5f60015f5f6101e0515af15060065f5360406102c060015f5f6101e0515af15060055f535f5f60015f5f6101e0515af15060065f53604061030060015f5f6101e0515af15060015f535f5f60015f5f6101e0515af15060065f53604061034060015f5f6101e0515af15060aa60015d60015f535f5f60015f6101e0515af45060015c6103805260025f535f5f60015f6101e051620186a0f45060015c6103a05260055f535f5f60015f6101e0515af45060015c6103c0526102006101e0f3608e8060095f395ff35f3560f81c8060011461003e5780600214610047578060031461004e578060041461005957806005146100705780600614610077578060091461008757005b601160015d5f5ffd5b602260015dfe5b603360015d5b610054565b604460015d60095f535f5f60015f5f305af1505f5ffd5b605560015d005b60015c5f5260025c60205260405ff35b609960025d00"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Tempo. Type 0x76 batches, precompiles that might call out to contracts, the storage credit settlement that removes transient slots, T14 configurable accounts and the zone contracts. For each: can a contract start it from inside a call, which transient map does it use, and are transient writes journaled like storage writes.",
+   "result": "No feature gives a second transient map. The mainnet node reports tempo/v1.19.0-697ea97, and the manifest at that commit pins evm2 at revision 66687c18 (the main branch pins e25a95fb today, which is the revision an earlier cleared item quoted). A type 0x76 batch runs every call as a top-level frame with the signer as caller under one checkpoint (handler.rs lines 1277 to 1372, checkpoint at 1289, rollback at 1339), and the calls share one transient map that is not cleared between them. An ordinary contract cannot start a batch. evm2 keeps one transient map per transaction (state/mod.rs line 59), journals each TSTORE (lines 806 to 836), restores it in rollback (lines 891 to 898) and clears it in clear_transaction_state (lines 523 to 539). Every call frame and every precompile call takes a checkpoint from that journal and rolls back on failure (evm/mod.rs lines 1691 to 1795). Tempo precompiles run native code through a storage provider that offers sload, sstore, tload, tstore, events and checkpoints and has no function that calls a contract (precompiles/src/storage/mod.rs lines 92 to 280, dispatch at precompiles/src/lib.rs lines 309 to 342), so no precompile runs caller-chosen code. take_transient_storage removes slots part way through settlement, and its only caller passes the storage credits address 0x1060..00 (state/mod.rs lines 842 to 859, handler/config.rs lines 444 to 455), so PoolManager slots are untouched. T14 is not active on mainnet: eth_getCode at 0xAACC000000000000000000000000000000000000 returned 0x near block 50341036 while the T7 and T8 precompiles return 0xef. The specification of TIP-1107 registers a configurable account before any call runs and outside the rollback checkpoint, and the code does the same (handler.rs line 1693), so it is a top-level step that touches no PoolManager state. Zone contracts are ordinary EVM bytecode on the main chain (ZonePortal implementation 23,994 bytes at 0x5AD1..00, ZoneMessenger 1,858 bytes at 0x5A4D..00, and nextZoneId() on the factory returned 4), so a callback from them is an ordinary call on the same journal, and the zone itself is a separate chain where this PoolManager does not exist. Not confirmed: whether validators run the evm2 JIT backend, and whether its TSTORE path matches the interpreter. Both probes above passed on the public RPC node.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler.rs; https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler/config.rs; https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/lib.rs; https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/storage/mod.rs; https://raw.githubusercontent.com/alloy-rs/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/evm2/src/evm/state/mod.rs; https://raw.githubusercontent.com/alloy-rs/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/evm2/src/evm/mod.rs; https://tips.sh/1107; eth_getCode and eth_call on https://rpc.mainnet.tempo.xyz"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L2",
+   "check": "Base. Type 0x79 Base Transactions, the B20, policy, nonce and transaction context precompiles, and validity transactions. Can any of them run caller-chosen code under another transient map, or drop transient writes while keeping storage writes.",
+   "result": "No. The node reports base/v1.5.6 on reth v2.5.2 and that release builds on revm 42. Type 0x79 belongs to the Everest upgrade, which the Base upgrade page lists with no date for Sepolia or mainnet, and the latest mainnet block held only types 0x7e, 0x2 and 0x0. In the v1.5.6 source each phase takes one journal checkpoint, a failed phase is reverted through it and a completed phase is committed (eip8130.rs lines 1260 to 1344). revm restores transient storage in checkpoint_revert, so a reverted phase loses its transient writes together with its storage writes and transfers. The specification states that every call is dispatched from the sender, so phases are top-level calls and no contract can start one. Phases of one transaction share the transient map, which gives the sender nothing beyond what a contract with several calls has. The Base precompiles reach state through a provider with sload, sstore, tload, tstore, events and checkpoints and no function that calls a contract (precompile-storage/src/provider.rs lines 34 to 140). Validity transactions add inclusion conditions and no execution context.",
+   "source": "https://docs.base.org/specifications/base-transactions; https://docs.base.org/upgrades/overview; https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/eip8130.rs; https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompile-storage/src/provider.rs; web3_clientVersion and eth_getBlockByNumber on https://mainnet.base.org/"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L2",
+   "check": "Arbitrum One, Robinhood Chain and Elysium. Stylus host calls, retryable redeems started with ArbRetryableTx.redeem from inside a call, and the group rollback of the sequencer. Does any of them execute code under a transient map other than the one of the running transaction, or undo transient writes apart from storage writes.",
+   "result": "No. A Stylus program reaches other contracts through closures that call evm.Call, evm.DelegateCall and evm.StaticCall on the EVM that is already running (arbos/programs/api.go lines 186 to 190), and its transient host calls read and write the same StateDB under the acting address (lines 119 to 127). A contract called by a Stylus program therefore sees the PoolManager's lock flag and deltas as any other callee does. redeem only emits RedeemScheduled. The node builds the retry transaction from that log after the scheduling transaction has finished and appends it to the queue as its own transaction (tx_processor.go lines 924 to 950, block_processor.go line 719), and an earlier cleared item showed that every transaction starts with StateDB.Prepare. The group rollback saves a checkpoint for a user transaction and the redeems it scheduled and restores whole transactions (block_processor.go lines 125 to 134 and 583 to 594), so storage, balances and transient state go back together. Not confirmed: Arbitrum One and Robinhood Chain report nitro v3.13.0-rc.9 at commit b72783f, and neither that tag nor that commit is served by raw.githubusercontent.com. I read master and v3.12.0, whose api.go has the same call sites. Elysium reports a locally built binary. Both probes above passed on all three RPC nodes.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/programs/api.go; https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.0/arbos/programs/api.go; https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/tx_processor.go; https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/block_processor.go; web3_clientVersion on https://arb1.arbitrum.io/rpc, https://rpc.mainnet.chain.robinhood.com and https://rpc.elysium.kinetiq.xyz"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "MegaETH. The KeylessDeploy sandbox is the one feature on the 21 networks with shape A: it runs caller-chosen init code in a second EVM with a new journal over live state and merges the resulting state into the parent. Can an ordinary contract start it from inside a call, and is transient state merged back.",
+   "result": "It cannot be started from inside a call, and transient state is not merged. The interceptor returns without acting when the call is inside a sandbox or its depth is not zero (system/intercept.rs lines 295 to 303). The sandbox builds a new context over a database wrapper and runs one transaction in it (sandbox/execution.rs lines 583 to 650), and the sandbox sources never copy transient storage in either direction, so the inner run starts empty and its transient values are dropped. On the public RPC node near block 32592160, eth_call straight to 0x6342000000000000000000000000000000000003 with keylessDeploy(bytes,uint256) and a one byte payload reverted with 0xae1270d3, which is MalformedEncoding() and shows interception at depth zero. The same calldata sent from a creation frame, one level down, failed with return data 0x1894f076, which is NotIntercepted(), the revert of the Solidity stub. A sandbox is therefore the first frame of a transaction whose target is the KeylessDeploy address. The parent has run no contract code before it and runs none after it, so the PoolManager has no transient state in the parent that the sandbox could bypass, and inside the sandbox unlock, sync, settle and take share one map. The latest block held transaction types 0x7e, 0x0 and 0x2, each of which has one top-level call. I did not enumerate the transaction types the node accepts, and the lead below asks for that. Not confirmed: which mega-evm revision mega-reth v2.2.3 pins. I read the main branch, version 1.7.3, and the on-chain result agrees with it.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/system/intercept.rs; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/sandbox/mod.rs; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/sandbox/execution.rs; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/system-contracts/contracts/KeylessDeploy.sol; eth_call on https://mainnet.megaeth.com/rpc with and without a to address"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L2",
+   "check": "Arc. On-chain test of the CallFrom precompile at 0x1800000000000000000000000000000000000003: does the child call it starts see the transient storage of the surrounding transaction, and are the child's transient writes kept. Earlier cycles answered from the main branch source only.",
+   "result": "The child runs on the same map. With state overrides I placed a probe at the Multicall3From address 0x522fAf9A91c41c443c66765030741e4AaCe147D0, which is one of the two callers the precompile accepts, and a counter contract at a second address. The counter returns its transient slot 2 and adds 0x22 to it. The probe called the counter directly, then through callFrom, then directly again. The three readings were 0, 0x22 and 0x44 near block 32640276, both with the helper and with tx.origin as the substituted sender. An empty map for the child would give 0 as the second reading, and dropped child writes would give 0x22 as the third. The same probe at an address outside the allowlist failed at the precompile call. The source agrees: init_subcall rejects callers outside the allowlist, static context, value and a sender that is neither the caller nor the transaction signer, and pushes the child onto the same frame stack with a checkpoint from the same journal (evm.rs lines 884 to 952 and 1031 to 1040), and a failed child is rolled back through that checkpoint (lines 1228 to 1231).",
+   "source": "eth_call with state overrides on https://rpc.mainnet.arc.io; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/call_from.rs; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/execution-config/src/call_from.rs"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L2",
+   "check": "Celo. The fee currency calls debitGasFees and creditGasFees that the node makes around a CIP-64 transaction. Can a contract start them, which transient map do they use, and is anything discarded between them and the main call.",
+   "result": "They are node calls at the top level and use the map of the transaction. The sequencer RPC reports the op-geth fork at commit c7ed55b8. In that source innerExecute calls StateDB.Prepare, which replaces the transient map, at state_transition.go line 602, and the debit runs after it inside preCheck at line 605. The credit runs after the main call has returned (line 824). Both go through evm.CallWithABI on the same EVM and StateDB (contracts/fee_currencies.go lines 88 and 154). Nothing clears transient storage between the debit, the main call and the credit, and no opcode or precompile lets a contract trigger either call. By the time the credit runs, unlock has returned or the main call has reverted, so the flag is false and all deltas are zero (src/PoolManager.sol:112-113). The fee currency is chosen from the governance list, so no caller-chosen code runs in these calls. Whether a listed token calls out to untrusted code during credit stays with the open lead of the Celo unit.",
+   "source": "https://raw.githubusercontent.com/celo-org/op-geth/c7ed55b8/core/state_transition.go; https://raw.githubusercontent.com/celo-org/op-geth/c7ed55b8/contracts/fee_currencies.go; web3_clientVersion on https://forno.celo.org"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "check": "HyperEVM. The sendToEvmWithData action that makes the node call coreReceiveWithData on a linked contract, and CoreWriter. Can an ordinary contract start either from inside a call so that code runs under another transient map.",
+   "result": "No, on the documentation and the public clients. sendToEvmWithData is an action signed on HyperCore and posted to the exchange endpoint. The documentation describes Core to EVM transfers as credited by a system transaction that calls the linked contract as the system address. A system transaction is a transaction of its own, and earlier cycles read in the archive client that each one runs through a single transact call with transient storage cleared at its end. The inner run therefore starts with an empty map because it is a different transaction, and no PoolManager unlock can be open around it. A contract on HyperEVM cannot start one within its own call: transfers back to HyperCore are picked up from Transfer logs after execution, as the documentation states, and CoreWriter at 0x3333333333333333333333333333333333333333 emits a log that HyperCore processes as an action after execution, with a delay of a few seconds for some actions. Both probes above passed on the RPC node, including the calls to 0x3333333333333333333333333333333333333333 and 0x2222222222222222222222222222222222222222. Not confirmed: the validator binary is closed, so the statement that no in-call path exists rests on documentation, on the archive client and on these probes.",
+   "source": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers; https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint; https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/interacting-with-hypercore; eth_call on https://rpc.hyperliquid.xyz/evm"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "check": "Monad. Whether optimistic parallel execution, the call frame model of the client or the staking precompile gives a call a transient map of its own, and whether a failed frame restores transient storage together with storage.",
+   "result": "No. Transient storage is a field of the per-account state object next to storage (account_state.hpp line 70, accessors at lines 126 to 154). The state keeps a version stack per account: entering a frame pushes a version, a write copies the account state into the new version, pop_accept folds it into the parent and pop_reject drops it (state.cpp lines 129 to 183, version_stack.hpp). Storage and transient storage of an account are therefore kept or dropped by the same operation. An earlier cleared item showed that each execution attempt of a transaction builds a new State. The staking contract source contains no call into the EVM host, and precompiles.cpp dispatches only the standard precompiles, so no precompile runs caller-chosen code. Both probes above passed on the RPC node. I did not read the JIT compiler's TSTORE path.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/state.cpp; https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/account_state.hpp; https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/version_stack.hpp; https://raw.githubusercontent.com/category-labs/monad/main/category/execution/monad/staking/staking_contract.cpp; https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/precompiles.cpp"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Avalanche. The nativeAssetCall precompile at 0x0100000000000000000000000000000000000002 transfers an Avalanche native asset and then calls an address chosen by the caller, keeping the original caller as msg.sender. Is it active, and which state does its inner call use.",
+   "result": "It is switched off, and it used the same state when it was active. From the Banff rules on, all three native asset addresses map to DeprecatedContract, whose Run returns ErrExecutionReverted (params/hooks_libevm.go lines 113 to 122, nativeasset/contract.go line 178). eth_call to the address with 84 zero bytes on the public endpoint returned execution reverted. The earlier implementation took a StateDB snapshot and called env.Call on the running EVM (nativeasset/contract.go lines 146 to 171), so its callee shared the transient map of the transaction. The endpoint reports avalanchego 1.15.3, the release I read. No other C-Chain precompile takes a call target.",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/graft/coreth/params/hooks_libevm.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/graft/coreth/nativeasset/contract.go; eth_call on https://api.avax.network/ext/bc/C/rpc"
+  },
+  {
+   "chainIds": [
+    137,
+    56
+   ],
+   "lens": "L2",
+   "check": "Polygon and BNB Smart Chain. Can a precompile or a system contract path run caller-chosen code with a separate transient map, and does the parallel executor of Bor give a task a map that outlives the task.",
+   "result": "No. In Bor v2.11.0 and in BSC v1.8.2 (the version the BSC endpoint reports) a precompile implements RequiredGas, Run(input) and Name, and Run receives only the input bytes (core/vm/contracts.go lines 51 to 55 and 56 to 60), so a precompile has no handle on the EVM and cannot start a call. Both clients replace the transient map in StateDB.Prepare (Bor statedb.go line 3051, BSC statedb.go line 1532). Bor's parallel tasks run ApplyMessage, which calls Prepare, on a state object of their own (parallel_state_processor.go lines 101 to 150 and 451). State sync records and Parlia system transactions run at the top level between user transactions, as earlier cycles recorded. A public Polygon endpoint reports bor v2.11.1-private, one patch above the source I read. Both probes above passed on both networks.",
+   "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/vm/contracts.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/state/statedb.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/parallel_state_processor.go; https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/contracts.go; https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/state/statedb.go"
+  },
+  {
+   "chainIds": [
+    480,
+    196
+   ],
+   "lens": "L2",
+   "check": "World Chain and X Layer. PBH bundles, and the node additions of both chains that I could locate (the World Chain EVM crate and the X Layer bridge intercept crate). Does any of them run user code in a context of its own inside a transaction.",
+   "result": "No. A PBH transaction is a standard OP transaction that targets the PBHEntryPoint contract, and a PBH bundle is a standard ERC-4337 bundle, so every user operation runs as a nested call of one transaction on one journal. The builder checks proofs and orders transactions. The World Chain manifest at tag v2.8.2, the version the endpoint reports, pins revm 43.0.2, and the EVM crate on the main branch holds configuration, an EVM factory, execution wiring and caches, and its lib.rs and factory.rs name no precompile. The X Layer intercept crate inspects the logs of a finished transaction in the payload builder and drops the whole transaction when a bridge event matches, which is a decision about inclusion. The gasless rule of X Layer was covered by an earlier cleared item and I did not read it again. Both nodes keep the revm journal, where transient storage is cleared in commit_tx, discard_tx and finalize and restored in checkpoint_revert (journal/inner.rs lines 141 to 250 and 622 to 638). Both probes above passed on both networks. I did not read every crate of either node.",
+   "source": "https://worldcoin.github.io/world-chain/pbh/txs.html; https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/Cargo.toml; https://raw.githubusercontent.com/worldcoin/world-chain/main/crates/evm/src/factory.rs; https://raw.githubusercontent.com/worldcoin/world-chain/main/crates/evm/src/lib.rs; https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/intercept/src/lib.rs; https://raw.githubusercontent.com/bluealloy/revm/main/crates/context/src/journal/inner.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    130,
+    7777777,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "check": "Ethereum and the OP Stack chains without node additions (OP Mainnet, Unichain, Zora, Ink, Soneium). EIP-7702 delegated accounts, ERC-4337 bundles, deposit transactions, and any frame style transaction type. Is there an execution context with its own transient map inside a transaction.",
+   "result": "No. EIP-1153 defines transient storage as discarded after every transaction and shared by all frames of the transaction. Delegated code under EIP-7702 runs in an ordinary frame at the account's address, and an ERC-4337 bundle is one transaction that calls the EntryPoint contract, so both use the one map. No frame transaction type is live: the latest Ethereum block (26473884) held types 0x0, 0x2, 0x3 and 0x4 and its header has no field beyond the Osaka set, and the latest blocks of the five OP Stack chains held types 0x7e, 0x2 and 0x0. The endpoints report reth or op-reth builds, which keep the revm journal (transient storage at journal/inner.rs line 68, cleared at lines 141 to 250, restored at lines 622 to 638, written at lines 1080 to 1105). Both probes above passed on all six networks. The Unichain PoolManager is a predeploy with other bytecode, and this item speaks about the chain, as the other Unichain items do.",
+   "source": "https://eips.ethereum.org/EIPS/eip-1153; https://raw.githubusercontent.com/bluealloy/revm/main/crates/context/src/journal/inner.rs; eth_getBlockByNumber and web3_clientVersion on the rpc URL of each of the six networks"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "priority": "medium",
+   "question": "Which mega-evm revision does mega-reth v2.2.3 pin, and does any MegaETH specification after REX6, or any planned transaction type with more than one top-level call, let a KeylessDeploy sandbox start while contract code of the same transaction has already run or will still run?",
+   "why": "The sandbox starts with an empty transient map and its state changes are merged into the parent (sandbox/execution.rs lines 583 to 650). The depth check at system/intercept.rs line 301 is the only thing that keeps it apart from a PoolManager unlock or sync in progress. If a sandbox could run between two calls of one transaction, a caller could sync a token outside, pay, settle and mint a claim inside, and settle outside for the same tokens (src/PoolManager.sol:279-288, 349-364, 322-329)."
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "priority": "medium",
+   "question": "When the source of nitro v3.13.0-rc.9 (commit b72783f) is published, do arbos/programs/api.go and arbos/block_processor.go still route Stylus calls through evm.Call on the running StateDB and still restore whole transactions in the group rollback?",
+   "why": "Arbitrum One and Robinhood Chain run this release and raw.githubusercontent.com returns 404 for the tag and the commit, so the clearance for Stylus and for the group rollback rests on master and v3.12.0. A change that gave a Stylus call or a filtered redeem its own state object would separate PoolManager deltas from token transfers (src/PoolManager.sol:291-297)."
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "priority": "low",
+   "question": "After T14 activates on Tempo mainnet, what does a registered configurable account (code 0xef, served by a native shim) return for the IHooks selectors, for balanceOf and for transfer, and can an address with chosen low 14 bits be derived by varying the salt?",
+   "why": "The account address is a hash of a caller-chosen salt and owner list, and the marker is installed outside the rollback checkpoint of the first transaction (https://tips.sh/1107). Hook permissions are the low 14 bits of the address (src/libraries/Hooks.sol:27), and a transfer to an address that answers with empty return data counts as successful (src/types/Currency.sol:64-74). The precompile had no code on mainnet near block 50341036, so this could not be tested."
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L6",
+   "priority": "low",
+   "question": "When Everest gets an activation date, does the release that ships it still run type 0x79 phases only as top-level calls from the sender with one journal checkpoint per phase, and does the Transaction Context precompile keep its values out of the transient slots of other contracts?",
+   "why": "The answer for Base in this cycle is read from v1.5.6, where Everest has no timestamp. The audit competition scope names a later release candidate, so the phase executor can still change before activation. A phase that kept transfers while losing transient writes would break the check at src/PoolManager.sol:112."
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-153",
+   "outcome": "cleared",
+   "answer": "Neither shape exists inside a running call on the ten networks named, and none exists on the other eleven. First shape (copy in, transient writes dropped, transfers kept): no client drops transient writes apart from storage writes. Tempo's evm2, revm, the go-ethereum forks and Monad keep transient writes in the same journal or versioned state as storage, and the revert path probe returned identical results on all 21 endpoints. Second shape (empty map, values written back): no feature writes inner transient values over the outer ones. The candidates the lead listed as unread: Tempo precompiles run native code through a storage provider with no call function. Stylus programs call out through evm.Call on the running StateDB. HyperEVM system calls are separate transactions and CoreWriter requests are processed after execution. The Celo fee calls are top-level node calls after Prepare on the same StateDB. Monad keeps transient storage inside the versioned account state, Bor tasks run ApplyMessage on their own state object, and the Avalanche nativeAssetCall precompile is a deprecated stub. Links I could not confirm: the nitro v3.13.0-rc.9 source that Arbitrum One and Robinhood Chain run, the Elysium build, the HyperEVM validator binary, and the evm2 and Monad JIT paths for TSTORE."
+  },
+  {
+   "leadId": "L-202",
+   "outcome": "cleared",
+   "answer": "Per network answer to the question whether a feature runs caller-chosen code under another transient map inside a running call, or drops or restores transient storage part way while keeping storage writes and transfers. Ethereum 1: no (EIP-1153, revm journal, block types 0x0 to 0x4 only). OP Mainnet 10, Unichain 130, Zora 7777777, Ink 57073, Soneium 1868: no (op-reth on the revm journal, no extra transaction type in the latest blocks). Base 8453: no (type 0x79 is not active and runs only top-level phases with one checkpoint each in v1.5.6, and the precompile provider cannot call contracts). World Chain 480: no (PBH bundles are ordinary ERC-4337 bundles in one transaction). X Layer 196: no (the intercept acts on finished transactions). Celo 42220: no (the fee debit and credit are top-level node calls after StateDB.Prepare on the same StateDB). Arbitrum One 42161, Robinhood Chain 4663, Elysium 99901: no on the master and v3.12.0 source (Stylus calls use evm.Call on the running StateDB, redeems become later transactions), with the deployed v3.13.0-rc.9 source unavailable and the Elysium build unidentified. Polygon 137 and BNB Smart Chain 56: no (precompiles receive input bytes only, Prepare replaces the map per message). Avalanche 43114: no (nativeAssetCall is a deprecated stub since Banff and reverts on chain). Monad 143: no (storage and transient storage sit in one versioned account state). MegaETH 4326: yes for the existence of such a context and no for reaching it from inside a call (the KeylessDeploy sandbox starts empty and merges state, and starts only as the first frame of a transaction, confirmed by eth_call: MalformedEncoding at depth zero, NotIntercepted one level down). Tempo 4217: no (batches are top-level calls under one checkpoint, precompiles cannot call contracts, the only removal of transient slots is for the storage credits address, T14 is not active, zone contracts are ordinary bytecode), with the JIT backend unread. Arc 5042: no (CallFrom child shares the map, measured with state overrides: readings 0, 0x22, 0x44). HyperEVM 999: no on documentation and the archive client (coreReceiveWithData arrives as a system transaction, CoreWriter and transfers to HyperCore are picked up after execution), unknown for the closed validator binary. Two read-only probes ran on all 21 endpoints: 519 calls to 173 special addresses left the caller's transient slot unchanged, and REVERT, INVALID, out of gas, outer revert after inner success and reverted DELEGATECALL all restored transient storage to its earlier value."
+  }
+ ]
+}

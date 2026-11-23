@@ -1,6 +1,6 @@
 # PoolManager network risk report
 
-State on 2026-11-22: cycles 1 and 2 are merged. The ledger holds 52 findings, 332 checks that came out safe, and 200 open leads across the 21 networks. Forty-six agents have worked on it so far, half of them as independent verifiers.
+State on 2026-11-23: cycles 1 to 3 are merged. The ledger holds 60 findings, 420 checks that came out safe, and 236 open leads across the 21 networks. Sixty-one agents have worked on it so far, about half of them as independent verifiers.
 
 ## The question
 
@@ -8,11 +8,11 @@ Can an ordinary account take funds that other users hold in this repository's Po
 
 ## Answer so far
 
-No critical or high finding exists for an ordinary attacker. The planted weakness has not been identified. Every verifier in cycle 2 was asked whether its unit contained it, and each answered no.
+No critical or high finding exists for an ordinary attacker. The planted weakness has not been identified. Cycle 3 closed the three questions that cycle 2 ranked highest, and each came out safe on all 21 networks.
 
-Seventeen findings can be triggered by an ordinary account. They fall into five groups.
+Twenty findings can be triggered by an ordinary account: 3 medium, 13 low and 4 that only record a mismatch between comments or tests and the source. They fall into five groups.
 
-Rebase capture, the only one where an attacker gains (F-041, medium, confirmed on Ethereum). Any account can call `sync`, cause the PoolManager's balance of a token to rise, and call `settle` to be credited the rise. Taking the pooled balance first and repaying the nominal amount works as well. For Ampleforth the public rebase is guarded by `msg.sender == tx.origin`, and an EIP-7702 delegated account passes that check while running code; the verifier simulated this on mainnet. The gain is the positive rebase on whatever the PoolManager holds of that token. Today that is 16 base units of AMPL, and the method reaches only pools in elastic or reward-pushing tokens.
+Rebase capture, the only one where an attacker gains (F-041, medium, confirmed on Ethereum). Any account can call `sync`, cause the PoolManager's balance of a token to rise, and call `settle` to be credited the rise. Taking the pooled balance first and repaying the nominal amount works as well. For Ampleforth the public rebase is guarded by `msg.sender == tx.origin`, and an EIP-7702 delegated account passes that check while running code; the verifier simulated this on mainnet. The gain is the positive rebase on whatever the PoolManager holds of that token. Today that is 16 base units of AMPL, and the method reaches only pools in elastic or reward-pushing tokens. Cycle 3 found a second case on Avalanche (F-060, low): any account can ask Benqi to pay the QI rewards that accrued on the PoolManager's qiAVAX and book the payment as its own. The accrued amount is 14.84 QI and Benqi's reward contract pays nothing today.
 
 Yield that nobody can withdraw (F-012 stETH on Ethereum, F-037 Aave aTokens on Arbitrum One). The balance grows outside pool accounting and core has no function that pays the growth out. Principal is untouched.
 
@@ -22,13 +22,13 @@ Currency ids that take credit and cannot pay out: Polygon's system token at `0x1
 
 Delay without loss. One cheap transaction on MegaETH uses a block's whole budget for new state and the node skips the rest of that block (F-042). A HyperEVM small block holds 3,000,000 gas, which fits about 200 tick crossings in one swap (F-039). A HyperCore transfer runs a linked contract ahead of every signed transaction in the block (F-044). Any account can fill one tick to the liquidity cap for dust and block later deposits on that tick, on every network (F-038). Withdrawals keep working in all four.
 
-The remaining two (F-006, F-014) record places where the source disagrees with its own comments, with no funds involved.
+The remaining four (F-006, F-014, F-054, F-055) record places where the source disagrees with its own comments, tests or test doubles, with no funds involved.
 
-The other 35 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end.
+The other 40 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end. One of them is in force today. The owner of the GoodDollar token put the Celo PoolManager on the token's block list on 11 September 2026, so about 550 million G$ (roughly 60,000 USD) held for pools cannot leave (F-056). An ordinary account can neither set nor lift that block.
 
 ## What has been tested
 
-One balance under two currency ids. Arc (native USDC with 18 decimals and an ERC-20 face with 6), Celo (CELO token), Polygon (`0x1010`), the legacy ETH token on Optimism and Zora, and stHYPE with wstHYPE on HyperEVM, which share one share balance. In each case `sync`, `settle` and `take` were walked across both faces in every order, twice by network researchers and once in a Python model of the settlement code. No order credits one deposit twice. A native credit needs `settle` with value while no token is synced, `settle` rejects value while a token is synced (`src/PoolManager.sol:353-356`), and only one currency can be synced at a time. On Arc the 12 digit truncation gives at most 0.000001 USDC per round against a 20 gwei minimum base fee.
+One balance under two currency ids. Arc (native USDC with 18 decimals and an ERC-20 face with 6), Celo (CELO token), Polygon (`0x1010`), the legacy ETH token on Optimism and Zora, and stHYPE with wstHYPE on HyperEVM, which share one share balance. In each case `sync`, `settle` and `take` were walked across both faces in every order, twice by network researchers and once in a Python model of the settlement code. No order credits one deposit twice. Cycle 3 widened this to every address whose reported balance for the PoolManager could move with another ledger: a sweep of 248 pooled tokens across the 21 networks with zero and dust transfers from the PoolManager address. Wrapped native tokens exchange one for one, and wstETH, sAVAX and qiAVAX mint at their own rate with the caller debited in full. A native credit needs `settle` with value while no token is synced, `settle` rejects value while a token is synced (`src/PoolManager.sol:353-356`), and only one currency can be synced at a time. On Arc the 12 digit truncation gives at most 0.000001 USDC per round against a 20 gwei minimum base fee.
 
 The PoolManager as caller of special addresses. `take` lets anyone make the PoolManager call any address with `transfer(address,uint256)` or with empty calldata, and `initialize` lets anyone name any address as a hook. Cycle 2 ran these call shapes from the PoolManager address against every precompile, predeploy and system contract the researchers could list: all 2,048 predeploy slots on each of the seven OP Stack chains, 122 special addresses on Polygon, BNB Smart Chain and Avalanche, and the full precompile sets of Tempo, Arc, Monad, MegaETH, HyperEVM and the Arbitrum family. Where a call succeeds, the caller owes the full amount, which is the payout-stranding group above.
 
@@ -36,16 +36,23 @@ Opcodes. A verifier deployed nothing and used `eth_call` with init code to run 6
 
 Transient storage across transactions. Read in client source for the OP Stack (op-revm, Base), Bor, BSC, AvalancheGo, Nitro, X Layer and Arc, and tested with `eth_simulateV1` on six OP Stack chains, Polygon and BNB Smart Chain. A second transaction always starts with an empty map. Batch transactions on Tempo and helper contracts on Arc share transient storage only among one sender's own calls.
 
+A run inside a transaction with its own transient storage. `sync` needs no lock, so a network that let a contract start code under a fresh transient map while keeping its transfers could credit one payment twice. Cycle 3 read the client source of Tempo, Base, Nitro, MegaETH, Arc, Celo, Monad, Avalanche, Bor and BSC and ran two probes on all 21 endpoints: 519 calls to 173 special addresses left a transient slot intact, and every kind of revert restored transient storage together with ordinary state. No network offers such a run to an ordinary contract. The MegaETH keyless deploy sandbox has the right shape and starts only as the first frame of a transaction.
+
+Call value without a balance debit. `settle` credits `msg.value`. On BNB Smart Chain a call from the system address `0xff…fe` carries its stated value and moves no balance (F-058), and nothing an ordinary account sends can run with that caller. Every other value-carrying path that was read debits the sender: OP Stack deposits, Nitro retryables, X Layer gasless transactions, Celo fee currency calls, HyperEVM system transactions, Tempo and Arc.
+
 A chain without a native asset. On Tempo `CALLVALUE` is always 0 and value transfers are rejected, so the native branch of `settle` credits 0.
 
-The source itself. Six readings so far: two line by line, a swap trace, a liquidity trace, an attempt to break the custody invariants with a search over call sequences, and a check of every mask, shift, cast and `unchecked` block. Three independent Python transcriptions of the pool math stayed solvent across about 27,000 random operation sequences. The slot constants, error selectors, TickMath and BitMath tables were recomputed from the text.
+The source itself. Eight readings so far: two line by line, a swap trace, a liquidity trace, an attempt to break the custody invariants with a search over call sequences, a check of every mask, shift, cast and `unchecked` block, and two replays of the repository's tests against `src/`. The replays reproduced every concrete vector and revert in the test files on a Python transcription, including 8,920 cases of the v3 comparison run from the bytecode fixture in `test/bin`, and a verifier matched the transcription against 370 quotes and 107 mined swaps on the live networks. Three independent Python transcriptions of the pool math stayed solvent across about 27,000 random operation sequences. The slot constants, error selectors, TickMath and BitMath tables were recomputed from the text.
 
 ## What is open
 
-Three high-priority leads from the cycle 2 critic head the queue.
+The cycle 3 critic put four questions at the head of the queue.
 
-- A nested execution context with its own transient storage. `sync` needs no lock. If any network can run caller-chosen code inside a transaction under a fresh transient map while keeping its token transfers, one payment could be credited twice. Candidates named for checking: Tempo zones and the T14 account type due on 8 December 2026, Base transactions of type 0x79, Stylus host calls and retryable redeems, HyperEVM system calls with data, World Chain bundles, and Celo's fee currency calls. MegaETH's keyless deploy sandbox was checked and is safe.
-- A call that carries value without a matching balance debit. `settle` credits `msg.value` as paid. go-ethereum and BNB Smart Chain skip the balance check for the system caller address; whether anything an ordinary account sends can run with that caller is unchecked.
-- The repository's own tests, comments and test doubles that no reader has yet replayed against `src/`.
+- Tokens whose balance at the PoolManager moves without a transfer. Every such token found so far (AMPL, stETH, aTokens, qiAVAX, G$) turned up by chance in a sample. Comparing the change of `balanceOf(PoolManager)` between two blocks with the Transfer logs in between would list all of them on each network, and it has not been run.
+- Tokens that cap what one address may send in a period. If a pooled token has such a cap, an account that takes the PoolManager's balance and pays it back in the same unlock could use up the cap and block other users' withdrawals for the rest of the period.
+- Hooks that many pools share on Robinhood Chain, Elysium and X Layer. Whether an ordinary account can create its own pool on one of them and reach state that other pools depend on is unchecked.
+- A line by line list of which test or comment guards each statement in the custody path.
 
-Two limits apply to everything above. No compiler is installed here, so nothing was built, and one question depends on that: the Solidity team's bug list marks solc 0.8.26, which `foundry.toml` pins, as affected by a Yul optimizer bug published on 22 October 2026, and the readers found none of its source patterns but could not inspect the optimized output. Second, the chain facts were read from the live official deployments, which may differ from the CTF build once it is deployed.
+One more question is new: several users' calls inside one transaction, as in an ERC-4337 bundle. Transient storage is shared there, so a `sync` left by one user is still set when the next user's call runs.
+
+Three limits apply to everything above. No compiler is installed here, so nothing was built, and two questions depend on that: whether the build matches the size and creation code hash recorded in `snapshots/PoolManagerTest.json`, and whether a Yul optimizer bug published on 22 October 2026, which the Solidity bug list marks as affecting the pinned solc 0.8.26, touches the optimized output. Second, some node software could not be read: the HyperEVM validator is closed, the Nitro release that Arbitrum One and Robinhood Chain run is not public, and the Elysium build is unidentified. Third, the chain facts were read from the live official deployments, which may differ from the CTF build once it is deployed.

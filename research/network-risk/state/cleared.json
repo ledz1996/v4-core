@@ -5309,6 +5309,1726 @@
    "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/tip20/mod.rs (transfer_fee_pre_tx, transfer_fee_post_tx); https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/handler.rs; https://governance.aave.com/t/al-technical-assessment-aave-arc/25638",
    "cycle": 2,
    "unit": "stablecoin-l1"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L4",
+   "check": "Critic gap from cycle 2: repeat the special address sweep with a forwarding stub at the PoolManager address, so that each probe is an inner call whose origin is another account, for every target and for the shapes P1, P2, P3, P5 and P7.",
+   "result": "No target accepts a PoolManager call shape and moves value without an equal debit. Every ArbOS precompile fails on every shape as an inner call too. The only targets whose answer depends on the call depth are 0xc8 and 0xc9, which the node answers itself in a top level RPC call and which are plain addresses on chain (0xc8 holds one byte of code on Arbitrum One), and the CREATE2 deployer, whose balanceOf answer needs a state change and fails under STATICCALL. The targets that accept native value from the PoolManager are addresses without code, the precompiles 0x01 to 0x08 and 0x100, the wrapped native token, the WETH or WHYPE gateway, the three EntryPoints, the PositionManager and the Universal Router. In each case take has already debited the caller the full amount (src/PoolManager.sol:294-295), so the caller is the only party that loses. This is the item recorded as F-048 on other chains.",
+   "source": "https://arb1.arbitrum.io/rpc, https://rpc.mainnet.chain.robinhood.com and https://rpc.elysium.kinetiq.xyz eth_call with code override at the PoolManager address, queried 2026-11-22",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L3",
+   "check": "Lead L-203: can a call frame on a Nitro chain carry CALLVALUE that the caller's balance did not pay, through the system caller rule, deposits, retryables or unsigned parent chain messages.",
+   "result": "No. At the fork commit that Nitro v3.12.4 pins, evm.Call checks the balance and moves the value for every caller, because the system caller branch is disabled on Arbitrum chains until Amsterdam rules (core/vm/evm.go lines 274 to 282 and 322 to 327). On all three live nodes a nested call with 1 ETH from the system address fails when that address holds nothing and moves the balance when it holds 1 ETH. A deposit mints to the sender and moves the value with no call frame (arbos/tx_processor.go lines 237 to 268). A retryable mints the deposit, moves the call value into an escrow account at submission and back to the sender at redeem before an ordinary call (lines 322, 383 to 384 and 554 to 557). Unsigned messages spend the child chain balance of the aliased sender. Native credit in the PoolManager is msg.value (src/PoolManager.sol:352-354), so it is always matched by a balance that moved. The live build v3.13.0-rc.9 is not public. The probe covers its behaviour for the system address, and the consensus-v61 module root covers the rest.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/evm.go and https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/arbos/tx_processor.go; eth_call probes on the three RPC endpoints, queried 2026-11-22",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L2",
+   "check": "Leads L-153 and L-202: does a Stylus host call or a retryable redeem run caller-chosen code inside a running call with a transient storage map other than the caller's, with storage and balance writes kept.",
+   "result": "No. A Stylus program reads and writes transient storage through the same StateDB map as EVM code, under the address of the acting contract, and its calls go through evm.Call on the same journal (arbos/programs/api.go lines 119 to 128 and 186 to 190). The PoolManager never delegates to other code, so no Stylus program can act under its address. ArbRetryableTx.redeem can be called from inside any call, and it only emits an event. The retry runs after the outer transaction as a transaction of its own, and StateDB.Prepare gives it an empty transient map (arbos/tx_processor.go lines 924 to 956, arbos/block_processor.go lines 426 to 436 and 680 to 719, core/state_transition.go line 950, core/state/statedb.go line 1650). An unlock is one call frame (src/PoolManager.sol:104-114), so a redeem can neither run inside it nor see its deltas. The node interface contracts that run nested simulations exist only in RPC calls.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/arbos/programs/api.go, https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/arbos/tx_processor.go and https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/state_transition.go",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L4",
+   "check": "Lead L-166: is there an address that answers balanceOf(PoolManager) from a ledger which a plain value transfer or a zero amount call from the PoolManager raises, and that answers transfer(address,uint256) by releasing value at a rate other than one for one.",
+   "result": "None found among the swept targets. The wrapped native token of each chain has both halves and exchanges one for one, with both legs booked (cycle 2). EntryPoint 0.6, 0.7 and 0.8 credit a deposit ledger on plain value and answer balanceOf from it, and they have no transfer function. The PositionManager answers balanceOf with a count of position tokens and has no transfer(address,uint256). No precompile or system address answers either call. The sweep covers system addresses, the token bridge contracts and the standard deployments listed in the profiles. It does not cover every application contract on the chains.",
+   "source": "https://arb1.arbitrum.io/rpc, https://rpc.mainnet.chain.robinhood.com and https://rpc.elysium.kinetiq.xyz eth_call with code override at the PoolManager address, queried 2026-11-22",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L1",
+   "check": "Lead L-135: does the state of Elysium follow the Nitro state transition code although the documentation names a separate sequencer stack and the RPC node is a local build.",
+   "result": "Yes for the state that the rollup contract accepts. The Elysium rollup on HyperEVM pins wasmModuleRoot 0xc10cd7ec6acaf1c441a3f6bd0900ad20f15855ba775a96f1939118cbc629dc97, the root of the official consensus-v61 replay binary, which the rollups of Arbitrum One and Robinhood Chain pin as well. A sequencer only orders transactions, and each node derives state by executing them. A block that departs from ArbOS 61 semantics would fail validation against that root. The commit of the RPC binary remains unknown, and validation is limited to listed validators, which is an operator matter.",
+   "source": "https://rpc.hyperliquid.xyz/evm eth_call wasmModuleRoot() on 0x508C173dFe5F737B3493195Bf785d71fA76fD217, queried 2026-11-22; https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/Dockerfile line 206",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L2",
+   "check": "Lead L-136: the Elysium Bridge on HyperEVM executes calls chosen by child chain accounts. Can a call to a HyperCore system address or to CoreWriter take HYPE that backs balances on Elysium, including the HYPE in the PoolManager.",
+   "result": "No path found. The Bridge sends native value only as part of an outbox call, and the value of that call equals what the sender burned on Elysium. A withdrawal addressed to 0x2222222222222222222222222222222222222222 would credit the HyperCore account of the Bridge, and any Elysium account could later move that HyperCore balance by a message that makes the Bridge call CoreWriter, since CoreWriter accepts actions from the Bridge address. Only the sender of the misdirected withdrawal loses. No CoreWriter action moves the native balance that an address holds on HyperEVM, and the Bridge has no HyperCore account, no HYPE spot balance and no wrapped HYPE today. I did not read the HyperEVM node source, and I did not test the finalize EVM contract action. A link of a HyperCore token to the Bridge would need the Bridge to answer transfer and to emit Transfer events, which the stock Nitro Bridge does not do.",
+   "source": "https://rpc.hyperliquid.xyz/evm eth_call with from set to 0x503D572157113fAaaD4DbeD2647Bb10b949216B6 and reads of 0x0801 and 0x0810, queried 2026-11-22; https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/interacting-with-hypercore",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L3",
+   "check": "Exits, gas: can an ordinary account make a liquidity removal or a swap of another user exceed the transaction gas limit.",
+   "result": "Removal cannot be made to exceed it. Pool.modifyLiquidity has no loop (src/libraries/Pool.sol:146-238) and all three chains allow 32,000,000 gas per transaction, read from ArbGasInfo. A swap pays for each bitmap word and each initialized tick on its way (src/libraries/Pool.sol:344-430). Measured on Arbitrum One, a sweep from tick -201,872 to the lower bound in a spacing 1 pool, 2,677 bitmap words, costs 6.84M gas, which gives roughly 18M for the whole tick range and stays below the limit. An attacker can add dust positions on many ticks at about 100,000 gas each, which costs about 0.000002 ETH per tick at 0.02 gwei, and can so push a swap that crosses more than roughly 1,200 of them past the limit. The swapper can split the swap, because a swap stops at the price limit the caller passes (src/libraries/Pool.sol:322-338 and 344). Liquidity providers are not blocked. The per tick figures are estimates from the measured totals and were not measured tick by tick.",
+   "source": "https://arb1.arbitrum.io/rpc eth_call to the Quoter 0x8928074CA1b241D8Ec02815881c1Af11E8bC5219 and to ArbGasInfo 0x6c on all three endpoints, queried 2026-11-22",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L3",
+   "check": "Exits, storage pricing: does ArbOS 61 price storage growth apart from computation, so that one account can raise the price of liquidity operations for others.",
+   "result": "Not today. getMultiGasPricingConstraints() returns an empty array on all three chains and getMultiGasBaseFee() returns the same fee in every dimension. Only the single gas constraints apply, and raising the base fee through them means paying for the gas that fills the target, as on Ethereum. The Trail of Bits finding about map iteration order in getMultiGasPricingConstraints has nothing to iterate over while the list is empty, and it concerns consensus and not balances.",
+   "source": "https://arb1.arbitrum.io/rpc, https://rpc.mainnet.chain.robinhood.com and https://rpc.elysium.kinetiq.xyz eth_call to 0x6c, queried 2026-11-22; https://docs.arbitrum.io/audit-reports/2026_07_10_trail_of_bits_arbitrum_arbos_60_61_code_review_final_comprehensive_report.pdf",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L2",
+   "check": "Exits on Robinhood Chain: can an ordinary account, including one on the restricted list, make the transaction filter reject or fail a transaction of another user on a pool without attacker-made hook or token.",
+   "result": "No path found. A transaction is filtered for the addresses it touches itself, and cycle 2 showed that a swap or removal on such a pool calls only the PoolManager, the router, the tokens and the recipient the user chose. Two neighbour effects exist in the client and neither reaches other users today. Before v3.11.0 a filtered transaction caused the sequencer to reject clean transactions behind it in the same block, and the changelog records the fix. A user transaction is rolled back together with the redeems it scheduled when one of them touches a filtered address, and the group never includes another user's transaction. The on-chain list holds transaction hashes that only the filterer account can add. The live build v3.13.0-rc.9 is not public, so I could not confirm that the v3.11.0 fix is unchanged in it.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/CHANGELOG.md lines 356 and 527 and https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/arbos/block_processor.go",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "check": "A2 and A5 for USDG on Robinhood Chain, which pays claimable rewards: can an ordinary account raise balanceOf(PoolManager) without a transfer, enrol the PoolManager, or earn rewards with USDG borrowed from the PoolManager inside one transaction. The PoolManager holds 16.83M USDG.",
+   "result": "No. balanceOf returns the stored balance and rewards are paid only by a claim, which is a transfer from the claim source to a destination named by the claimer or manager of a payout group. The PoolManager is in no payout group and has no pending proposal. Enrolment needs the registrar role, or a proposal by a group's claimer that the account itself accepts by calling acceptRegisterRewardAddress, or a signature of the account that a claimer presents while partner signed registration is switched on. The PoolManager cannot make that call and cannot sign, and partner signed registration is switched off. The multiplier changes only when a daily period boundary passes, and block.timestamp is constant inside a transaction, so shares bought and sold in one transaction earn nothing. A take and return of USDG inside one unlock therefore yields no reward to the borrower. The registrar could enrol the PoolManager. Rewards on its balance would then go to that group's destination and its balance would stay unchanged. That is an issuer action and falls under F-002. I matched the deployed contract to the repository by selectors and views and did not compare bytecode.",
+   "source": "https://rpc.mainnet.chain.robinhood.com eth_call payoutGroupIdOf, getPendingRegistration, isPartnerSignedRegistrationsEnabled, getFacet, queried 2026-11-22; https://raw.githubusercontent.com/paxosglobal/paxos-token-contracts/master/contracts/facets/PayoutGroupFacet.sol, https://raw.githubusercontent.com/paxosglobal/paxos-token-contracts/master/contracts/ClaimableRewardsBase.sol and https://raw.githubusercontent.com/paxosglobal/paxos-token-contracts/master/contracts/lib/MultiplierGrowthLib.sol",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "check": "Exits, token limits: does globalTransferSettings() on USDG set a transfer volume or rate limit that an attacker could use up with USDG borrowed from the PoolManager, which would make later payouts from the PoolManager revert.",
+   "result": "No. The five fields are the reference time and period of the reward multiplier, the switch for partner signed registration, a reserved gap and the pause flag. _transfer reverts only for a zero recipient, a frozen party, an insufficient balance, a pause or an overflow of the packed 64 bit fields, and 64 bits hold 18 trillion USDG. The pause and freeze switches belong to the issuer (F-002).",
+   "source": "https://raw.githubusercontent.com/paxosglobal/paxos-token-contracts/master/contracts/ClaimableRewardsBase.sol lines 473 to 545 and https://raw.githubusercontent.com/paxosglobal/paxos-token-contracts/master/contracts/lib/StorageLib.sol; https://rpc.mainnet.chain.robinhood.com eth_call globalTransferSettings(), queried 2026-11-22",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "Known weaknesses of the last two years in Nitro, ArbOS and the two newer chains, beyond the items cycle 2 cleared: can an ordinary account use any of them against funds in the PoolManager.",
+   "result": "None applies. The Trail of Bits review of ArbOS 60 and 61 has one high finding, a map iteration order that can split consensus, and eight informational ones about gas pricing constraints and an error path of the filter. None moves balances. The retryable ordering hazard that Trail of Bits described in 2024 concerns contracts that send several dependent retryables, and the only parent chain messages the PoolManager depends on are single owner calls. The Stylus bugs behind the activation pause affect liveness according to the Security Council. The two incidents reported on Robinhood Chain were an accounting bug inside an exchange and trading ahead of a bridge solver, both outside the PoolManager. For Elysium I found a third party commentary and no published audit report of its own bridge contracts, and its documentation lists audits among later steps. Timestamps that repeat across blocks, which that commentary notes, do not matter to code that reads no block field.",
+   "source": "https://docs.arbitrum.io/audit-reports/2026_07_10_trail_of_bits_arbitrum_arbos_60_61_code_review_final_comprehensive_report.pdf, https://blog.trailofbits.com/2024/03/01/when-try-try-try-again-leads-to-out-of-order-execution-bugs/, https://forum.arbitrum.foundation/t/security-council-emergency-action-2-10-2026/31530, https://www.cryptotimes.io/2026/11/11/robinhood-chain-dex-arcus-loses-2-23m-to-accounting-bug/, https://kannaudits.com/blog/elysium-security-kinetiq-hyperliquid-l2 and https://elysium.kinetiq.xyz/docs",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L1",
+   "check": "A7 and A4 on Elysium: can any contract run as a Stylus program, which cycle 1 cleared for new activations only.",
+   "result": "No. ArbWasm has logged no ProgramActivated event since genesis and the activation gas is 2^64-1, so no code hash is recorded as active and none can be added by an ordinary account. The Stylus item F-003 does not apply to Elysium while that setting stands.",
+   "source": "https://rpc.elysium.kinetiq.xyz eth_getLogs on 0x0000000000000000000000000000000000000071 from block 0 and eth_call activationGas(), queried 2026-11-22",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L4",
+   "check": "Whether any system contract exists that earlier sweeps did not name: a scan of code sizes over low addresses and over the address patterns that other chains use for predeploys.",
+   "result": "The scan covered 0x0 to 0x10000, 0xa4b00 to 0xa4bff, the 0x4200... range of the OP Stack, the 0x1000..., 0x2000..., 0x0100... and 0x0800... prefixed ranges, the 0x1111..., 0x2222..., 0x3333... and 0x5555... patterns and the top of the address space. Code exists only at the ArbOS precompile addresses 0x64 to 0x69, 0x6b to 0x74, 0xff and 0xa4b05, plus 0xc8 on Arbitrum One. The history contract of EIP-2935 at 0x0000F90827F1C53a10cb7A02335B175320002935 also holds code and reverts on every PoolManager call shape.",
+   "source": "https://arb1.arbitrum.io/rpc, https://rpc.mainnet.chain.robinhood.com and https://rpc.elysium.kinetiq.xyz eth_call of a scanning stub placed by state override and of the forwarding stub, queried 2026-11-22",
+   "cycle": 3,
+   "unit": "arbitrum-family"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/PoolManager.t.sol, every asserted number. Replayed on a Python transcription of Pool, SwapMath, SqrtPriceMath, TickMath, TickBitmap, Position, Hooks and PoolManager, with the TickMath constants parsed from the source file, and with the test routers of src/test transcribed including their require statements.",
+   "result": "All hold. The Swap events at lines 500-503 and 517-527 come out as (-100, 98, 79228162514264329749955861424, 1e18, -1, 3000) for the token pool and the native pool. The event at line 608 comes out as (-10, 8, 79228162514264336880490487708, 1e18, -1, 100). The ERC-6909 amounts are 98 minted, 27 burned for an exact output of 25, and 71 left, for the token and the native case (lines 659-751). Donating 100 and 200 to liquidity of 1e18 gives fee growth 34028236692093846346337 and 68056473384187692692674 (lines 841-864). With the protocol fee at 1000 pips in both directions, a swap of 10000 accrues 10 for exact input, exact output, the opposite direction and the native pool (lines 1041-1171). The fuzz test at lines 779-819 held in 4,000 random runs over protocol fees from 0 to 1000 and amounts from 1 wei to the int256 limits: the accrued fee equals the input times the fee divided by 1e6, rounded down, and nothing accrues in the other currency or on liquidity changes. The router assertions on delta signs and on equality of the returned delta with the transient delta never failed.",
+   "source": "test/PoolManager.t.sol:496-530, 589-611, 659-751, 779-819, 841-864, 1041-1171; src/libraries/Pool.sol:279-463; src/PoolManager.sol:187-253; src/test/PoolSwapTest.sol:48-116",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/PoolManager.t.sol, all 27 expectRevert cases and the hook call assertions, read against the order of checks in the source.",
+   "result": "All name the error the source raises first. A call outside an unlock fails with ManagerLocked before any pool check (src/PoolManager.sol:96-99, 147, 189, 258, 291, 300, 322, 332). Inside an unlock an uninitialized pool fails with PoolNotInitialized before any hook runs (154, 196, 264). A hook that returns a wrong selector gives InvalidHookResponse at the before hook and, once that is fixed, at the after hook (src/libraries/Hooks.sol:152-154). donate on a pool without liquidity gives NoLiquidityToReceiveFees (src/libraries/Pool.sol:468). A token that returns false makes take revert with WrappedError(token, transfer selector, 32 zero bytes, ERC20TransferFailed), and I checked the byte layout written by bubbleUpAndRevertWith against the ABI encoding the test builds (src/libraries/CustomRevert.sol:83-119, src/types/Currency.sol:64-86). The recorded hook arguments match what Hooks.sol encodes: msg.sender first, then the PoolKey, the parameters, the delta before any hook delta, a zero fee delta and the hook data (Hooks.sol:178-245, 256, 300). A second unlock from the callback or from another contract reverts with AlreadyUnlocked (PoolManager.sol:105).",
+   "source": "test/PoolManager.t.sol:96-114, 180-293, 482-494, 532-587, 821-838, 866-886, 917-1039, 1173-1189; src/test/PoolNestedActionsTest.sol:56-63",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/PoolManager.swap.t.sol. The two fuzz tests require a v4 swap to give the same amounts as a Uniswap v3 pool created from the bytecode fixture test/bin/v3Factory.bytecode. I wrote a small EVM interpreter in Python, deployed the fixture in it, created pools through the factory, and compared v3 mint and swap results with the transcription of src for random fees, tick spacings, prices, positions and amounts drawn as the test helpers in src/test/Fuzzers.sol draw them.",
+   "result": "All hold. In 8,920 cases the transcription of src and the v3 pool agreed: 8,639 cases gave equal swap amounts in both currencies and the same price, tick and in range liquidity afterwards, 235 cases had a v3 amount outside int128 and the v4 side reverted with SafeCastOverflow, which is the outcome the test accepts, and 46 cases were skipped by the helper's assume on a zero liquidity bound. 6,320 of the cases used one position and compared the mint amounts as well, and 2,600 used zero to six positions with the tight liquidity bound of the second test. Fees ran from 0 to 999,999, tick spacings from 1 to 16,383, amounts from 1 to 2^127 - 1 in both directions and both swap types, with the price limit one unit inside the price range. No case diverged and no v3 call reverted. The transcription uses the test router's require statements, so the delta signs and the equality of the returned delta with the transient delta were checked in every case. The interpreter has no gas accounting, which does not affect amounts. This is a replay on a transcription and does not test the compiled contract.",
+   "source": "test/PoolManager.swap.t.sol:20-190; test/bin/v3Factory.bytecode; src/test/Fuzzers.sol:16-184; src/libraries/Pool.sol:146-463; src/libraries/SwapMath.sol:20-107",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/PoolManagerInitialize.t.sol, all 14 tests.",
+   "result": "All hold. The fuzz test expects the reverts in the order tick spacing too large, tick spacing too small, currencies out of order or equal, hook address not valid, fee too large, which is the order of src/PoolManager.sol:119-128. The zero hook address with the dynamic fee flag is rejected as HookAddressNotValid before the fee is looked at (src/libraries/Hooks.sol:124-126). The Initialize event carries the tick from getTickAtSqrtPrice and is emitted before afterInitialize (PoolManager.sol:134-141). A second initialize reverts with PoolAlreadyInitialized (src/libraries/Pool.sol:101). The hook receives (msg.sender, PoolKey, sqrtPriceX96) and (msg.sender, PoolKey, sqrtPriceX96, tick). Spacing 32767 is accepted, 32768, 0 and -1 are rejected with the value as argument.",
+   "source": "test/PoolManagerInitialize.t.sol:54-320; src/PoolManager.sol:117-142; src/libraries/Pool.sol:100-107",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/ModifyLiquidity.t.sol. The ffi tests compare modifyLiquidity amounts with a JavaScript reference. I did not run the bundled script. I rebuilt its formula from test/js-scripts/src (sqrt price from 1.0001^tick in decimal arithmetic, then the rounded up amount formulas) in Python and applied the test's one pip tolerance.",
+   "result": "All hold. The fixed case with spacing 32767 gives (-16763964227853053397, -16787892583597717024) from the source formulas and the same from the reference formula. The fixed case with spacing 1 and range 10 to 17 gives (-322770984484567984193, 0) from both. 3,000 random positions drawn as createFuzzyLiquidityParams draws them on the 1:1 pool with spacing 60 were all within one pip. The salt tests follow from the position hash over owner, ticks and salt (src/libraries/Position.sol:48-67): two salts and two routers give four separate positions, and the liquidity read back equals the sum of the deltas for that position only.",
+   "source": "test/ModifyLiquidity.t.sol:54-301; test/js-scripts/src/getModifyLiquidityResult.ts; test/js-scripts/src/utils/shared.ts; src/libraries/Pool.sol:146-238",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/Sync.t.sol, test/PoolManager.clear.t.sol and the take, settle, mint, burn and fee collection cases of test/PoolManager.t.sol, replayed as action sequences on the transcription with the native ERC-20 face of src/test/NativeERC20.sol modelled as a token whose balance is the native balance.",
+   "result": "All 30 replayed sequences behave as the tests state. sync outside an unlock sets the synced currency. The reserves getter returns 0 when no token is synced, also after sync(address(0)), although the stored number stays (src/libraries/TransientStateLibrary.sol:18-21). A settle with no payment applies no delta. A token sent without sync is not credited and a later sync, transfer and settle credits only the later transfer, so the first 10 units stay in the manager (Sync.t.sol:207-253). settleFor credits the named account, for 302 amounts up to 2^127 - 1 and three kinds of taker including the manager itself. A native settle after a token sync reverts with NonzeroNativeValue, and after sync(address(0)) it credits msg.value. A second settle credits nothing. clear reverts with MustClearExactPositiveDelta for a negative delta, for an amount above, below or zero against a positive delta, and for a nonzero amount against a zero delta, and it clears an exact positive delta and lowers the nonzero delta count to 0. collectProtocolFees reverts with ProtocolFeeCurrencySynced for the synced token in both lock states, and an amount of 0 collects everything accrued. With the face token I found no order of sync, settle and take in which one payment is credited twice: a credit under the face id needs a rise of the native balance after sync, and a native credit needs msg.value with no token synced (src/PoolManager.sol:349-364). An exhaustive search to depth 10 over 23 actions of one account inside an unlock (sync of either id, settle with a value of 0 to 2, take of either id, a transfer in through the face, a forced native send, mint and burn of claims of either id, clear) visited 526,043 distinct states and found no state with zero deltas in which the account held more native currency plus claims than at the start.",
+   "source": "test/Sync.t.sol:36-375; test/PoolManager.clear.t.sol:13-227; test/PoolManager.t.sol:917-1171; src/PoolManager.sol:279-365; src/ProtocolFees.sol:44-57; src/test/NativeERC20.sol:27-49",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/CustomAccounting.t.sol, all nine tests, with the four hook doubles (FeeTakingHook, LPFeeTakingHook, CustomCurveHook, DeltaReturningHook) transcribed and driven through the transcription of Hooks.sol and PoolManager.sol.",
+   "result": "All hold. Exact input of 1000 gives 998 out and the hook takes 12, so the swapper receives 986. Exact output of 1000 costs 1002 plus 12. The custom curve hook turns an exact input and an exact output of 123456 into a 1:1 exchange with a zero amount pool swap. The liquidity fee hook receives 543/10000 of the principal on add and on removal, and swapper loss minus hook gain equals the manager gain. The fee revenue fuzz (3,000 runs each for add and remove, donations up to (2^128 - 1)/2 and (2^128 - 1)/3) gives the hook the donated amount or one unit less and never more. The delta fuzz at lines 160-266 held in 20,000 runs: SwapAmountCannotBeZero for a zero amount, HookDeltaExceedsSwapAmount exactly when the hook delta would flip the sign of the amount, the hook balance changes by its delta, the swapper balance by the returned delta, and the two constants -6018336102428409 and 5981737760509662 are the exact limits of the pool in both directions. In every run the caller delta plus the hook delta equals the pool delta.",
+   "source": "test/CustomAccounting.t.sol:73-382; src/libraries/Hooks.sol:209-315; src/PoolManager.sol:145-227; src/test/FeeTakingHook.sol:34-91; src/test/DeltaReturningHook.sol:47-99",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/DynamicFees.t.sol and test/DynamicReturnFees.t.sol, all 22 tests.",
+   "result": "All hold on the transcription. The six expected reverts of DynamicFees.t.sol are raised where the tests say: LPFeeTooLarge(1000001) inside afterInitialize and beforeSwap, wrapped with HookCallFailed, UnauthorizedDynamicLPFeeUpdate for a caller that is not the hook and for a static fee pool, and InvalidFeeForExactOut for an exact output at a fee of 1,000,000 and at 999,999 plus a protocol fee of 1000. The Swap events come out as stated: fee 123 gives (-100, 98, 79228162514264329749955861424, -1), fee 1,000,000 gives (-100, 0, the unchanged price, tick -1), fee 500,000 gives (-100, 49, 79228162514264333632135824623) and (-202, 100, 79228162514264329670727698909), and fee 123 with protocol fee 1000 emits 1123. The fuzz test at DynamicFees.t.sol:286-318 held in 6,000 runs, including the rule that the whole fee goes to the protocol, rounded up, when the LP fee is zero. The return fee fuzz held for 5,015 values of the 24 bit fee: an override above 1,000,000 after removal of the flag reverts with that value, and otherwise the output is within one unit of the input less the fee. A returned fee is not stored, and a static fee pool ignores it (src/libraries/Hooks.sol:263).",
+   "source": "test/DynamicFees.t.sol:68-337; test/DynamicReturnFees.t.sol:55-162; src/libraries/Pool.sol:300-320; src/libraries/LPFeeLibrary.sol:31-78; src/PoolManager.sol:339-346",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/SkipCallsTestHook.t.sol and test/utils/NestedActions.t.sol: a hook that re-enters the manager with the same action must not be called again, and deltas belong to the direct caller.",
+   "result": "All eleven counter expectations hold on the transcription with a re-entering hook double: the counter rises by one per outer action for each of the ten hook flags. The hook's own nested action is accounted to the hook address and skips every hook call (src/libraries/Hooks.sol:171-175, 217, 253, 293). The nested removal leaves the hook owing one unit of each currency from rounding, which satisfies the double's assertion. In the nested action test the executor that calls swap carries the delta (-100, 98) and the contract that called unlock carries none (src/PoolManager.sol:226, src/test/PoolNestedActionsTest.sol:119-143).",
+   "source": "test/SkipCallsTestHook.t.sol:42-212; src/test/SkipCallsTestHook.sol:31-192; test/utils/NestedActions.t.sol:22-41; src/libraries/Hooks.sol:170-335",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/ERC6909Claims.t.sol, all 29 tests including the value assertions, on a transcription of ERC6909.sol and ERC6909Claims.sol.",
+   "result": "All hold in 60,000 random rounds. burnFrom and transferFrom lower a finite allowance by the amount, leave an allowance of 2^256 - 1 unchanged, and do not touch the allowance when the caller is the owner or an operator. A transfer to oneself leaves the balance unchanged. Balance underflow, balance overflow at the receiver, mint overflow and a missing approval all revert, because the arithmetic in ERC6909.sol:25-48 and 79-89 is checked. The unchecked block around the mint in src/PoolManager.sol:323-328 does not reach into _mint. The interface id 0x0f632fb3 in supportsInterface equals the XOR of the seven ERC-6909 selectors, which I recomputed.",
+   "source": "test/ERC6909Claims.t.sol:15-404; src/ERC6909.sol:25-89; src/ERC6909Claims.sol:13-22",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/NoDelegateCall.t.sol, and a function by function reading of src/PoolManager.sol against the two other implementations in the repository, src/test/ProxyPoolManager.sol and src/test/ProtocolFeesImplementation.sol. I compared them by reading. A diff command on the two files was refused by the session's permission layer, so the comparison is by reading only.",
+   "result": "The eight tests hold: a delegatecall into modifyLiquidity, swap or donate of the real manager passes the lock check in the proxy's context and then fails with DelegateCallNotAllowed, because the modifier order is onlyWhenUnlocked then noDelegateCall (src/PoolManager.sol:147-148, 189-190, 258-259, src/NoDelegateCall.sol:24-32). The proxy double differs from the production contract in three places. It puts noDelegateCall on its own unlock, take, settle, settleFor, mint and burn (ProxyPoolManager.sol:58, 151, 156, 163, 176, 181), while the production functions carry only the lock check (PoolManager.sol:104, 291, 300, 305, 322, 332). It emits Initialize after afterInitialize (ProxyPoolManager.sol:90-94), while production emits before (PoolManager.sol:139-141). Its sync is public. The proxy forwards take, settle, mint, burn and clear by delegatecall and expects them to run, so the double is consistent with production functions that accept delegatecall. I checked whether the missing modifier matters for funds. A delegatecall runs PoolManager code against the storage, transient storage and balance of the calling contract. The lock flag, the deltas, the claims and every transfer then belong to that contract. Nothing held by the PoolManager can be reached this way. The same holds for an account that points an EIP-7702 delegation at the PoolManager, because the delegated code runs in the context of that account. EIP-7702 says that CALL loads the code at the delegated address and executes it in the context of the authority, and EIP-7 says that the call created by DELEGATECALL has the same sender and value as the original call. I fetched both texts in this session. I did not test how the client of each network implements DELEGATECALL and delegation, so for the 20 networks other than Ethereum this rests on the two specifications. ProtocolFeesImplementation mirrors ProtocolFees without change and adds a lock toggle that nothing reads.",
+   "source": "test/NoDelegateCall.t.sol:26-82; src/test/ProxyPoolManager.sol:50-222; src/PoolManager.sol:96-142, 279-336; src/NoDelegateCall.sol:10-32; src/test/ProtocolFeesImplementation.sol:10-37; https://eips.ethereum.org/EIPS/eip-7; https://eips.ethereum.org/EIPS/eip-7702",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "test/Extsload.t.sol, test/ProtocolFeesImplementation.t.sol and test/types/Currency.t.sol, read against the source.",
+   "result": "All hold. extsload for a list of slots, for a run of consecutive slots with a length from 0 to 1000, and with trailing bytes appended to the calldata returns an ABI array of the stored words and a length that is a multiple of 32 (src/Extsload.sol:10-63). A length of 0 makes the loop read one slot that the returned range does not include. setProtocolFeeController reverts with the string UNAUTHORIZED for a caller that is not the owner (lib/solmate/src/auth/Owned.sol:19-23). setProtocolFee checks the caller, then the fee, then the pool, and the fee rule equals both 12 bit halves being at most 1000 (src/ProtocolFees.sol:35-41, src/libraries/ProtocolFeeLibrary.sol:25-32). collectProtocolFees reverts for an amount above the accrued fees because the subtraction is checked, treats 0 as everything, and leaves the balance unchanged when the recipient is the contract itself. _updateProtocolFees wraps, as the fuzz test expects. Currency: a token that reverts without data gives WrappedError(token, transfer selector, empty, ERC20TransferFailed), a native transfer above the balance gives WrappedError(recipient, zero selector, empty, NativeTransferFailed), and a token that reverts with a panic has the panic bytes passed through (src/types/Currency.sol:40-88). fromId truncates to 160 bits and toId widens.",
+   "source": "test/Extsload.t.sol:13-59; test/ProtocolFeesImplementation.t.sol:39-171; test/types/Currency.t.sol:30-184; src/Extsload.sol:10-63; src/ProtocolFees.sol:29-71; src/types/Currency.sol:40-118",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "NatSpec in src/interfaces compared sentence by sentence with the implementation: IPoolManager.sol, IProtocolFees.sol, IHooks.sol, IExtsload.sol, IExttload.sol, callback/IUnlockCallback.sol and external/IERC6909Claims.sol.",
+   "result": "Apart from the six items in this unit's finding and the two interface items already in F-006, each sentence matches. Checked in particular: the error descriptions at IPoolManager.sol:16-49 against the places that raise them, tick spacing limited to the int16 maximum, sync as the checkpoint for token payments and sync with the native currency as the way to settle native funds after a token sync (165-171, src/PoolManager.sol:279-288), clear requiring the exact positive delta (190-194, PoolManager.sol:310-319), the truncation of ids to 160 bits in mint and burn (196-210), feesAccrued returned for information and callerDelta as principal plus fees less the hook delta (128-132), donate going to the positions in range at slot0.tick (149-155), and the hook return types in IHooks.sol, where a hook delta is read only when the matching return delta flag is set (src/libraries/Hooks.sol:159-168, 266, 301).",
+   "source": "src/interfaces/IPoolManager.sol:11-216; src/interfaces/IProtocolFees.sol:9-51; src/interfaces/IHooks.sol:9-151; src/interfaces/IExtsload.sol:5-20; src/interfaces/IExttload.sol:5-14",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Do the tests and test doubles refer to anything the source no longer declares. A changed or removed error, function or library member would stop the test suite from compiling.",
+   "result": "No. A script collected the 85 distinct selector references of the form Owner.name.selector in test/ and src/test, and each name is declared as an error, function or event in the repository. Every member called on the manager in the tests exists in src/PoolManager.sol, src/ProtocolFees.sol, src/ERC6909.sol, the two state libraries or Owned, and the three names that do not (burnFrom, setPrice, updateProtocolFees) belong to test doubles. The check is textual and does not replace a compiler.",
+   "source": "all Solidity files under test/ and src/test/; src/interfaces/IPoolManager.sol:11-49; src/libraries/StateLibrary.sol; src/libraries/TransientStateLibrary.sol",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-core"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "TickMath: replay of every vector and boundary in test/libraries/TickMath.t.sol by a Python transcription with EVM word semantics, and recomputation of every constant from its definition.",
+   "result": "The source reproduces all of it. getSqrtPriceAtTick returns 4295128739 at -887272, 4295343490 at -887271, 1461373636630004318706518188784493106690254656249 at 887271 and 1461446703485210103287273052203988822378723970342 at 887272, and reverts with InvalidTick for 887273, -887273 and the int24 minimum. getTickAtSqrtPrice reverts with InvalidSqrtPrice at MIN_SQRT_PRICE - 1 and at MAX_SQRT_PRICE and returns -887272, -887271 and 887271 for the four listed prices. The 20 per bit multipliers equal 2^128 divided by sqrt(1.0001)^(2^i), rounded to the nearest integer, when computed with 200 digit decimals. The factor 255738958999603826347141 equals 2^64 times the base sqrt(1.0001) logarithm of 2, rounded. The four relations of the fuzz test at TickMath.t.sol:205-223 hold for every one of the 1,774,544 ticks from -887272 to 887271, checked exhaustively, and prices rise strictly from tick to tick. On 20,047 sampled ticks the largest relative error against the exact value is 2.2e-10. The two tests that call a JavaScript reference pass against exact decimal values. The constants and the 14 log steps were also extracted from the file text by pattern and compared with the transcription, so the replay ran the text as written.",
+   "source": "src/libraries/TickMath.sol:20-36, src/libraries/TickMath.sol:57-114, src/libraries/TickMath.sol:121-237, test/libraries/TickMath.t.sol:30-223",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-libraries"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "SqrtPriceMath and SwapMath: replay of every concrete expectation and revert selector in test/libraries/SqrtPriceMath.t.sol and test/libraries/SwapMath.t.sol, the test constants, and the invariants stated in src/test/SqrtPriceMathEchidnaTest.sol.",
+   "result": "All vectors reproduce. Examples: getNextSqrtPriceFromInput gives 87150978765690771352898345369 and 72025602285694852357767227579 for 0.1 ether in at liquidity 1 ether, 624999999995069620 for 2^100 in, and 1 for the maximum inputs; getNextSqrtPriceFromOutput gives 88031291682515930659493278152 and 71305346262837903834189555302 and reverts with PriceOverflow for 4 and 5 out and with NotEnoughLiquidity for 262144 and 262145 out at price 20282409603651670423947251286016; getAmount0Delta gives 90909090909090910 rounded up and one less rounded down; getAmount1Delta gives 100000000000000000. The four literal selectors in assembly (0xf5c787f1, 0x4323a555, 0x4f2461b8, 0x00bfc921) match the keccak of the error signatures. The twelve SQRT_PRICE constants in test/utils/Constants.sol equal floor(sqrt(A/B) * 2^96). computeSwapStep reproduces all nine fixed cases, for example amountIn 9975124224178055, amountOut 9925619580021728 and fee 5988667735148 for the capped one for zero step, and (26215, 0, 79) and (1, 26214, 1) for the two low liquidity cases. The properties of test_fuzz_computeSwapStep held on 243,936 random inputs with no violation, and getSqrtPriceTarget matched its test on 300,000. The echidna invariants held on 200,000 random inputs: an input never buys more than the rounded up amount it pays for, an output never exceeds the rounded down amount, getAmount1Delta equals the exact quotient rounded in the stated direction, and getAmount0Delta equals the full precision formula whenever that formula does not overflow. The only assertions that fail are the sign assertions recorded under F-006.",
+   "source": "src/libraries/SqrtPriceMath.sol:31-288, src/libraries/SwapMath.sol:20-107, test/libraries/SqrtPriceMath.t.sol:10-348, test/libraries/SwapMath.t.sol:11-240, src/test/SqrtPriceMathEchidnaTest.sol:9-142",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-libraries"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "FullMath, UnsafeMath and BitMath: replay of test/libraries/FullMath.t.sol, UnsafeMath.t.sol and BitMath.t.sol, with exact big integer arithmetic as the reference.",
+   "result": "mulDiv and mulDivRoundingUp equal floor and ceiling of a*b/d on 600,000 random triples that include the edge denominators 1, 2, 3, 2^128 - 1, 2^128, 2^128 + 1, 2^255, 2^256 - 2 and 2^256 - 1, and they revert exactly when the denominator is zero or the result does not fit in 256 bits. The two listed inputs whose rounded up result overflows revert. mostSignificantBit and leastSignificantBit are correct for all 256 powers of two, for all 32,640 pairs of set bits and for 400,000 random values, and both revert for zero. divRoundingUp and simpleMulDiv match their tests, including a zero divisor returning zero.",
+   "source": "src/libraries/FullMath.sol:14-116, src/libraries/UnsafeMath.sol:12-28, src/libraries/BitMath.sol:12-48, test/libraries/FullMath.t.sol:13-169, test/libraries/BitMath.t.sol:8-92",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-libraries"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "TickBitmap: replay of test/libraries/TickBitmap.t.sol, and the range of the unchecked int24 products in nextInitializedTickWithinOneWord for every tick spacing that PoolManager.initialize accepts.",
+   "result": "All 19 fixed expectations of the search reproduce with the nine ticks that setUp flips (the loop at TickBitmap.t.sol:22 stops before 535), for example (84, true) from 78 upward, (511, false) from 255 upward, (-200, true) from -257 upward and (-512, false) from -257 downward. compress, position, flipTick with its TickMisaligned arguments, and both fuzz tests of the search held on 300,000, 100,000, 200,000 and 300,000 random inputs. For every spacing from 1 to 32767 and every reachable tick the product stays inside int24: the extremes are -8,388,352 and 8,355,585 against a range of -8,388,608 to 8,388,607. The first wrap appears at spacing 32769. I ran one sequence with a spacing above the cap to see what the cap prevents: the search result wraps to a positive tick, the clamp at Pool.sol:354-356 turns it into MAX_TICK, computeSwapStep takes its direction from the two prices (SwapMath.sol:60) and moves the price from the bottom of the range to the top at zero liquidity, and the same swap then crosses the same position again and is paid its currency1 a second time. The cap at PoolManager.sol:119 with MAX_TICK_SPACING equal to the int16 maximum (TickMath.sol:28) is the only thing that excludes this, it is enforced on the one path that creates a pool, and the spacing is part of the pool id, so it cannot change later. test/PoolManagerInitialize.t.sol:290-292 expects the revert at 32768.",
+   "source": "src/libraries/TickBitmap.sol:16-121, src/libraries/Pool.sol:347-356, src/libraries/SwapMath.sol:60, src/PoolManager.sol:119-120, src/libraries/TickMath.sol:26-28, test/libraries/TickBitmap.t.sol:19-344",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-libraries"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Tick bookkeeping in Pool: replay of test/Tick.t.sol and of the modifyLiquidity and tickSpacingToMaxLiquidityPerTick tests in test/libraries/Pool.t.sol.",
+   "result": "tickSpacingToMaxLiquidityPerTick returns the seven listed values, among them 191757530477355301479181766273477 for spacing 1, 1917559095893846719543856547154045 for 10, 11505354575363080317263139282924270 for 60, 38345995821606768476828330790147420 for 200 and 6076470837873901133274546561281575204 for 32767. For all 32,767 spacings the cap times the number of usable ticks is at most 2^128 - 1 and the cap is never above the value of the reference formula in Pool.t.sol:173-181. getFeeGrowthInside reproduces the seven cases including the wrap case (16, 13). updateTick reproduces the flip, net and parsing cases, and on 300,000 random states it agrees with the reference contract whenever the reference does not revert. The 737 cases where the source succeeds and the reference reverts all have a delta equal to the int128 minimum, which the test itself excludes. That delta cannot reach a pool: it needs a tick whose gross liquidity is 2^127 or more, and the largest per tick cap is 6.08e36. The revert order of Pool.modifyLiquidity matched Pool.t.sol:51-70 on 400,000 random parameter sets apart from the cast window recorded under F-006.",
+   "source": "src/libraries/Pool.sol:94-98, src/libraries/Pool.sol:146-237, src/libraries/Pool.sol:488-582, src/libraries/Pool.sol:592-612, test/Tick.t.sol:115-557, test/libraries/Pool.t.sol:43-88",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-libraries"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Position, SafeCast, LiquidityMath, LPFeeLibrary and ProtocolFeeLibrary: replay of their test files.",
+   "result": "Position.update reverts with CannotUpdateEmptyPosition and SafeCastOverflow exactly where test/libraries/Position.t.sol:39-59 expects, stores the new fee growth values, and pays (growth difference * old liquidity) / 2^128 on 200,000 random inputs. The assembly of calculatePositionKey hashes the same 58 bytes as abi.encodePacked(owner, tickLower, tickUpper, salt) on 2,000 random inputs, checked with an independent keccak. The six SafeCast functions revert at the bounds the tests list. addDelta equals x + y exactly when the sum fits in uint128 and reverts with SafeCastOverflow otherwise, including (0, -1), (2^127 - 1, int128 minimum) and (2^128 - 1, 1), and returns 0 for (2^127, int128 minimum). isDynamicFee is true only for 0x800000; getInitialLPFee returns 0 for that value, the fee itself up to 1000000 and reverts with LPFeeTooLarge above it, including 0x800001. getZeroForOneFee, getOneForZeroFee and isValidProtocolFee match their tests for all 16,777,216 values of the packed fee. calculateSwapFee equals protocolFee + lpFee * (1000000 - protocolFee) / 1000000 rounded up for every protocol fee from 0 to 1000 against about 3,300 LP fees each, and gives 3997 for (1000, 3000) and 1000000 for (1000, 1000000).",
+   "source": "src/libraries/Position.sol:48-102, src/libraries/SafeCast.sol:16-59, src/libraries/LiquidityMath.sol:10-19, src/libraries/LPFeeLibrary.sol:15-78, src/libraries/ProtocolFeeLibrary.sol:8-46, test/libraries/Position.t.sol:13-81, test/libraries/ProtocolFeeLibrary.t.sol:9-86",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-libraries"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Hooks, CustomRevert, the transient slot libraries, PoolId and the types in src/types: replay of test/libraries/Hooks.t.sol, Lock.t.sol, NonzeroDeltaCount.t.sol, PoolId.t.sol, test/CurrencyReserves.t.sol and test/types.",
+   "result": "The 14 flags are distinct single bits that sum to 0x3fff, and the example in the comment at Hooks.sol:17-18 (0x2400) decodes to beforeInitialize and afterAddLiquidity. isValidHookAddress returns what the tests list for all 18 literal addresses and for a return delta flag without its action flag. validateHookPermissions pairs each permission with the flag of the same name. bubbleUpAndRevertWith produces byte for byte the ABI encoding of WrappedError(address,bytes4,bytes,bytes) for revert data of 0, 4, 31, 32, 33 and 100 bytes, which is what Hooks.t.sol:1007-1045 and Currency.t.sol:126-180 expect. The four transient slot constants equal keccak256 of Unlocked, ReservesOf, Currency and NonzeroDeltaCount minus one. The literal selectors 0xd4d8f3e6, 0x93dafdf1 and 0xa9059cbb match TickMisaligned(int24,int24), SafeCastOverflow() and transfer(address,uint256). BalanceDelta packing, addition and subtraction match the tests on 300,000 random quadruples and revert exactly when a half leaves int128. Slot0 setters and getters round trip in both orders on 200,000 random values and never write above bit 231. The expectations in test/types/Currency.t.sol follow from Currency.sol:40-118 as read: a token call that reverts with no data gives WrappedError with an empty reason and ERC20TransferFailed, and a failed native send gives selector zero and NativeTransferFailed.",
+   "source": "src/libraries/Hooks.sol:27-47, src/libraries/Hooks.sol:83-127, src/libraries/CustomRevert.sol:83-119, src/libraries/Lock.sol:8, src/libraries/CurrencyReserves.sol:11-13, src/libraries/NonzeroDeltaCount.sol:9-10, src/types/BalanceDelta.sol:14-71, src/types/Slot0.sol:33-93, src/types/Currency.sol:40-118",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-libraries"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Whole swaps: replay of the concrete swap results in test/libraries/StateLibrary.t.sol and of the swap events and constants in test/DynamicFees.t.sol, test/PoolManager.t.sol and test/CustomAccounting.t.sol through a transcription of Pool.swap, Pool.modifyLiquidity, Pool.donate and Position.update.",
+   "result": "Every number reproduces. With 10,000 ether of liquidity on -60 to 60 and on -600 to 600 at fee 3000 and spacing 60, an exact input of 100 ether of currency0 ends at price 78680104762184586858280382455 and tick -139 after three steps, and feeGrowthOutside0 of tick -60 is 3076214778951936192155253373200636 (StateLibrary.t.sol:39-57 and 333-358). A 10 ether swap gives fee growth of 10 ether * 0.003 * 2^128 / liquidity in the input currency only. With 1e18 of liquidity on -120 to 120 the events are (-100, 98, 79228162514264329749955861424, tick -1) for fees 3000, 123 and 1123, (-100, 49, 79228162514264333632135824623) and (-202, 100, 79228162514264329670727698909) at 50 percent, (-100, 0, unchanged price, tick -1) at 100 percent, (-10, 8, 79228162514264336880490487708) at fee 100, and InvalidFeeForExactOut for an exact output at 100 percent. The tick of -1 at an unchanged price follows from the first step, which starts on the boundary of tick 0 and moves the tick without moving the price. The largest possible input and output of that pool at fee 100 are 6018336102428409 and 5981737760509662 in both directions, as CustomAccounting.t.sol:157-158 states. A donation of 100 and 200 gives fee growth 34028236692093846346337 and 68056473384187692692674. The protocol fee property of DynamicFees.t.sol:284-316 held on 54,428 random swaps, and the property of StateLibrary.t.sol:294-331 on 3,000 random positions.",
+   "source": "src/libraries/Pool.sol:279-480, src/libraries/Position.sol:76-102, test/libraries/StateLibrary.t.sol:39-57, test/libraries/StateLibrary.t.sol:166-205, test/libraries/StateLibrary.t.sol:333-358, test/DynamicFees.t.sol:148-316, test/PoolManager.t.sol:590-609, test/CustomAccounting.t.sol:157-158",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-libraries"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Solvency of the transcribed pool math under random sequences of adds, removals, swaps with and without protocol fees, and donations, for spacings 1, 2, 10, 60, 200, 3466, 9973 and 32767 and LP fees from 0 to 100 percent.",
+   "result": "In 9,200 random sequences of up to 40 operations the pool never owed more of either currency than it had received, at no step and after every position was removed, with accrued protocol fees set aside. After the unwind the in range liquidity was zero, no tick record remained and every bitmap word was zero. A swap never paid out on its input side. Two unwinds reverted on a full removal with SafeCastOverflow. In both the position held 1e24 of liquidity and the price had moved so far that one amount owed to the owner was above 2^127, for example 187458844526417154903613165193767364960 base units of currency1. The same position came out in two halves of 93729422263208577451806582596883682480 each, so this is the int128 cast limit that an earlier cleared item describes and needs token amounts above 1.7e38 base units. This repeats an earlier cleared item with an independent transcription and adds the 100 percent fee and the largest spacing.",
+   "source": "src/libraries/Pool.sol:146-480, src/libraries/SwapMath.sol:51-107, src/libraries/SqrtPriceMath.sol:31-288",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-libraries"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Gas snapshots in snapshots/ as a second witness for the library code paths. forge and solc are not installed, so no value was recomputed. The check is whether each recorded value fits the class and number of storage operations and the count of full precision divisions on the path the source takes.",
+   "result": "Nothing in the library snapshots contradicts the source, and several values confirm a path. StateLibraryTest: 2375, 4774 and 6949 are one, two and three cold SLOADs plus about 75 gas per extra loop round of Extsload.sol:31-36, and each name has the count that StateLibrary uses: one slot for getSlot0, getLiquidity, getTickBitmap, getTickLiquidity and getPositionLiquidity, two for getFeeGrowthGlobals and getTickFeeGrowthOutside, three for getTickInfo and getPositionInfo. getFeeGrowthInside records 2375, which fits the slot0 read being its last call (StateLibrary.sol:303-309). TickBitmapTest: 22209 is one SSTORE from zero on a cold slot, 5178 and 5109 are one SSTORE on a cold nonzero slot, and the six search values from 2242 to 2287 are one cold SLOAD each. SwapMathTest and SqrtPriceMathTest: the order of the values follows the number and kind of mulDiv calls per branch, for example the exact input step that stops early costs 165 more for zero for one than for one for zero, in line with 539 against 316 for the two branches of getNextSqrtPriceFromInput. TickMathTestTest: 195022 for 100 calls fits 14 log rounds plus a second price computation, which the transcription shows is needed for 90 of the 100 benchmark inputs. The limits of this witness: TestBitMath records 648 for four different calls and 14 or 25 for the first call of a test, and TickTest records 25 three times, so those regions hold almost no library code after optimisation and say nothing about the arithmetic. The values for PoolManager bytecode size and initcode hash could not be recomputed and are raised as a lead.",
+   "source": "snapshots/StateLibraryTest.json, snapshots/TickBitmapTest.json, snapshots/SwapMathTest.json, snapshots/SqrtPriceMathTest.json, snapshots/TickMathTestTest.json, snapshots/TestBitMath.json, snapshots/TickTest.json, src/libraries/StateLibrary.sol:40-322, src/Extsload.sol:18-39",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-libraries"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "The test double src/test/ProxyPoolManager.sol puts noDelegateCall on unlock, take, settle, settleFor, mint and burn, and the production PoolManager does not. Is that a gap in the source.",
+   "result": "No. The proxy exists to delegatecall into the real manager, and test/NoDelegateCall.t.sol:63-82 expects DelegateCallNotAllowed only from modifyLiquidity, swap and donate, which carry the modifier at PoolManager.sol:148, 190 and 259, as does initialize at line 117. No test expects the modifier on the other functions. A delegatecall into take, settle, mint, burn, clear or unlock runs the manager's code on the storage, transient storage and balance of the calling contract, so it can move only what that contract holds and cannot reach a pool. The proxy also differs from the manager in the position of the Initialize event (ProxyPoolManager.sol:90-94 against PoolManager.sol:136-141), so it is not kept as an exact mirror.",
+   "source": "src/test/ProxyPoolManager.sol:58-183, src/PoolManager.sol:104-336, src/NoDelegateCall.sol:24-32, test/NoDelegateCall.t.sol:63-82",
+   "cycle": 3,
+   "unit": "core-code-tests-replay-libraries"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "check": "Pooled assets on Celo: do transfer and balanceOf of the tokens the PoolManager holds behave in a way a holder can use (fee on transfer, rebase on transfer, callbacks, special recipients, zero amounts). Tokens probed: wBRL, wARS, USDC, USDT, CELO, UBE, USDm, COPm, KESm, EURm, BRLm, cGHS, PERKOS, stCELO, mCELO, USDGLO, bridged WETH and EURA.",
+   "result": "No. For each token I simulated a transfer of one thousandth of the PoolManager's balance from the PoolManager address to a second address, a transfer of the same amount back, a transfer to itself and a transfer of zero. In every case the sender fell and the recipient rose by exactly the amount, and the transfer to itself and the zero transfer left the balance unchanged. Transfers to address(0) revert on all of them. USDC, USDT and UBE also refuse their own address as recipient. A take therefore removes exactly what the caller is debited (src/PoolManager.sol:294-295) and a settle credits exactly what arrived (src/PoolManager.sol:358-360). G$ is the exception and is reported as a finding.",
+   "source": "eth_call on https://forno.celo.org with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22",
+   "cycle": 3,
+   "unit": "op-stack-custom-gas"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L3",
+   "check": "Pooled assets on X Layer: the same probe for USDT0, USDe, USDG, both USDC contracts, FAB, BEM, xETH, xSOL, XDOG, NIUMA, BSTN, lllp, Wrapped OKB, wUSDG, wSPCXx, BMNRx and ANTx.",
+   "result": "No. All 18 tokens moved exactly the requested amount in both directions, and the transfer to itself and the zero transfer changed nothing. BEM has a fee of 50 basis points that applies to cross chain sends and leaves plain transfers whole. XDOG and NIUMA are launch tokens with a built in bonding curve that report complete() true and isLiquidityPool(PoolManager) false, and they transfer like plain tokens. BMNRx and ANTx have a multiplier of 1.0, so shares and balances are equal and no rounding arises.",
+   "source": "eth_call on https://rpc.xlayer.tech with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22",
+   "cycle": 3,
+   "unit": "op-stack-custom-gas"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "check": "Faces on Celo, repeated with measured state: the CELO token and the native balance as two currency ids over one balance, walked through sync, settle, take, mint and burn.",
+   "result": "No gain in any order. A simulated CELO token transfer of 10^15 from the PoolManager address lowered its native balance by 10^15 and raised both the token balance and the native balance of the recipient by 10^15, so the two ids read one balance one to one. A value call to the token address reverts. A native credit needs the synced currency slot to be zero and a token credit needs it to hold the token (src/PoolManager.sol:353-361). settle with value reverts while a token is synced (src/PoolManager.sol:356), sync(token) reads the balance again each time (src/PoolManager.sol:285-286), and a balance that fell between sync and settle makes the subtraction at line 360 revert. The repository test test_settle_failsWithNativeERC20IfNotSyncedInOrder (test/Sync.t.sol:255-276) expects NonzeroNativeValue for sync of a native faced token followed by a native settle, and the source produces it. mint and burn only move claims under the id the caller names (src/PoolManager.sol:322-336).",
+   "source": "eth_call on https://forno.celo.org with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22; src/PoolManager.sol:279-297, 322-364; test/Sync.t.sol:255-276",
+   "cycle": 3,
+   "unit": "op-stack-custom-gas"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L4",
+   "check": "G$ as a Superfluid Super Token: can an ordinary account lower balanceOf(PoolManager), open an outflow from the PoolManager, or raise the balance for the length of one sync and settle window and lower it again.",
+   "result": "No path found in the token source. A flow or distribution out of an account needs a call through the host by that account or by an operator the account approved, and the PoolManager makes no such call (its only calls to a currency are transfer and balanceOf, src/types/Currency.sol:60-96). defaultOperators() is empty. For a blocked account the token rejects agreement writes that raise a deposit, raise a buffer or lower the account balance. Inflows from streams accrue with block time and are constant inside one transaction. A distribution claimed for the PoolManager is paid by its publisher and stays with the PoolManager. This rests on the verified token source and on-chain views. I did not read the Superfluid agreement contracts on Celo and did not run an agreement call in simulation, so the statement that only the account or its approved operator can open an outflow is unconfirmed here.",
+   "source": "https://celo.blockscout.com/api/v2/smart-contracts/0xb4419a3df33b9aa6fbe452df8816389e599c29ef (SuperGoodDollar.sol, SuperGoodDollarFlows.sol, SuperToken.sol); https://forno.celo.org eth_call defaultOperators(), realtimeBalanceOfNow(PoolManager)",
+   "cycle": 3,
+   "unit": "op-stack-custom-gas"
+  },
+  {
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L4",
+   "check": "Lead L-166 on both chains: an address whose balanceOf(PoolManager) rises on a plain value transfer or a zero amount call from the PoolManager and whose transfer releases native value or a pooled token at a rate other than one to one.",
+   "result": "None. With the PoolManager as caller, a value call of 10^15 wei raised the ledger by exactly 10^15 on the wrapped native predeploy of both chains, on Wrapped OKB and on the EntryPoints v0.6, v0.7 and v0.8. A zero value call raised nothing anywhere. transfer on the wrappers moved 10^15 of the wrapped token to the recipient and released no native value. transfer on the EntryPoints reverts. The fee vaults and the Celo message passer keep the value and have no balanceOf. L1BlockNumber answers transfer with the L1 block number, which the success check rejects (src/types/Currency.sol:68). LiquidityController and NativeAssetLiquidity on X Layer reject all three calls. stCELO and mCELO reject value calls and transfer one to one. A caller who syncs a wrapper, takes native value to it and settles holds a wrapper credit equal to the native debit (src/PoolManager.sol:291-297, 349-364).",
+   "source": "eth_call on https://forno.celo.org with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22; the same on https://rpc.xlayer.tech",
+   "cycle": 3,
+   "unit": "op-stack-custom-gas"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L2",
+   "check": "Leads L-153 and L-202 for Celo: does the fee currency debit or credit, or any other client feature, run code inside a call in progress under a transient storage map separate from the caller's while keeping its transfers and storage writes.",
+   "result": "No. The debit and the credit are steps of the transaction handler and run before the first frame of the main call and after its last frame has returned. A contract cannot start them. The debit starts from the empty map of a new transaction and the handler clears its transient writes before the main call (handler.rs lines 695 to 698). The credit runs on the same journal as the main call and clears transient storage when it ends (core_contracts.rs lines 241 to 248). The fee currency must be registered in FeeCurrencyDirectory, which Governance owns, so the code that runs is not chosen by the caller. The other system calls of the client read exchange rates through call_read_only, which reverts everything it did. unlock is one call frame (src/PoolManager.sol:104-114), so neither step can separate a take from its debit.",
+   "source": "https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/handler.rs; https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/contracts/core_contracts.rs; https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/contracts/erc20.rs",
+   "cycle": 3,
+   "unit": "op-stack-custom-gas"
+  },
+  {
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L3",
+   "check": "Lead L-203 on both chains: can a call frame carry value that the caller's balance did not lose in the same journal (fee currency transactions and deposits with mint on Celo, gasless transactions and deposits on X Layer, the transfer precompile).",
+   "result": "No. On Celo a fee currency transaction is rejected when its value exceeds the sender's native balance, a deposit's mint is added to the sender before execution, and the value then moves in the call frame (handler.rs lines 773 and 805 to 815). The transfer precompile uses the journal transfer and halts on an error, and it accepts only the CELO token as caller (transfer.rs lines 52 to 57 and 91 to 125). On X Layer a gasless transaction is rejected when the sender balance is below the value and the balance is otherwise left as it is, and a deposit adds its mint first (handler.rs lines 113 to 143 and 178 to 188). The one branch that raises a balance to the value runs only with the balance check disabled, which block production does not use. A native credit in core is msg.value (src/PoolManager.sol:352-354), and on both chains that value has left the caller's balance.",
+   "source": "https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/handler.rs; https://raw.githubusercontent.com/celo-org/celo-kona/HEAD/crates/celo-revm/src/precompiles/transfer.rs; https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/op-revm/src/handler.rs",
+   "cycle": 3,
+   "unit": "op-stack-custom-gas"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L4",
+   "check": "Permissioned wrapper tokens on X Layer (v4MSTR, v4CRCL and the like), whose whole supply sits in the PoolManager: can an ordinary account mint them to the PoolManager without paying, or take them or their underlying token out.",
+   "result": "No. wrapToPoolManager(1) from an arbitrary address reverts with selector 0x87d4de58, and depositForVerification(1) reverts in the token pull. A transfer from the PoolManager to an address that is not allow-listed reverts, so a take to such an address reverts (src/types/Currency.sol:82-86). A take that names the wrapper itself as recipient burns the caller's own wrapper credit and leaves the underlying in the wrapper, which costs the caller the amount it is debited (src/PoolManager.sol:294). The underlying token sits in the wrapper contract and the PoolManager holds none of it, so the two ids do not share a balance. Whether a user of an allowed wrapper can later mint against underlying left behind this way is listed as a lead.",
+   "source": "https://rpc.xlayer.tech eth_call wrapToPoolManager(uint256), depositForVerification(uint256), PERMISSIONED_TOKEN(), balanceOf; eth_call on https://rpc.xlayer.tech with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22",
+   "cycle": 3,
+   "unit": "op-stack-custom-gas"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L3",
+   "check": "Faces on X Layer, repeated with measured state: tokens that answer under two addresses or share a balance with the native asset (two USDC contracts, Wrapped OKB and the wrapped native predeploy, permissioned wrappers and their underlying tokens).",
+   "result": "None found. The two USDC contracts have separate supplies (128,381,476 and 765,788) and separate PoolManager balances. Wrapped OKB and the predeploy each keep their own ledger and their own native balance, and a value call from the PoolManager to one does not change balanceOf on the other. The permissioned wrappers hold their underlying token themselves. No contract at the swept addresses reports the PoolManager's native OKB balance as a token balance.",
+   "source": "https://rpc.xlayer.tech eth_call totalSupply(), balanceOf(PoolManager); eth_call on https://rpc.xlayer.tech with a state override that places the runtime code of Multicall3 (0xcA11bde05977b3631167028862bE2a173976CA11) at the PoolManager address and at a second address, 2026-11-22",
+   "cycle": 3,
+   "unit": "op-stack-custom-gas"
+  },
+  {
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L1",
+   "check": "Lead L-145 on both chains: hooks or vaults that keep a position at a boundary tick and add liquidity inside a swap hook or a withdrawal path.",
+   "result": "None in the pools that could be listed. The 20 Celo pools in the GeckoTerminal listing have no hook. The 110 X Layer pools in the listing use seven hook addresses, and none of the seven contains the selector of modifyLiquidity or of unlock in its code, so none adds liquidity itself. For the proxy hook 0x630e9cac0fff557bd3a01daa111ed253c771bcc0 the implementation was scanned. The listing is a sample. Pools that GeckoTerminal does not list and vaults that hold positions through the PositionManager were not searched.",
+   "source": "https://api.geckoterminal.com/api/v2/networks/x-layer/dexes/uniswap-v4-x-layer/pools and the same path for celo; eth_call poolKeys(bytes25) on the PositionManager of each chain; eth_getCode of each hook",
+   "cycle": 3,
+   "unit": "op-stack-custom-gas"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "On-chain differential for value semantics. A probe contract placed by state override made a CALL with 5 wei, a CALLCODE with 3 wei and a DELEGATECALL to a second probe that returns CALLVALUE, SELFBALANCE and BALANCE(CALLER). Runs: funded sender with value 7, funded sender with value 0, and an unfunded probe.",
+   "result": "All 21 endpoints returned the Ethereum result. The CALL moved exactly 5 wei from caller to callee and the callee read CALLVALUE 5. The CALLCODE frame read CALLVALUE 3 with the caller's balance unchanged. The DELEGATECALL frame read the parent's CALLVALUE with no balance change. From an account with balance 0 the CALL and the CALLCODE with value failed. On Tempo the run with transaction value was rejected with 'value transfer not allowed' and the run with an overridden balance behaved as on Ethereum. CALLCODE and DELEGATECALL frames show value without a debit on every client by design. They run in the caller's own storage, so they cannot set msg.value inside the PoolManager, which makes no DELEGATECALL or CALLCODE (src/types/Currency.sol:48 and 73 and src/libraries/Hooks.sol:134 are its only raw calls). A value CALL from an account lowers that account's balance by the value on every endpoint, which answers the second half of lead L-203 for ordinary recipients.",
+   "source": "eth_call with state overrides on the 21 RPC endpoints of state/networks.json, block latest, 2026-11-22",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Whether the PoolManager can be made to call itself with value, which would give a frame with CALLVALUE and no net debit on any client, and whether the deployed contracts accept plain value.",
+   "result": "No. The only value-bearing call in src is the native payout call(gas(), to, amount, 0, 0, 0, 0) with empty calldata (src/types/Currency.sol:48). Token transfers and hook calls pass value 0 (src/types/Currency.sol:73, src/libraries/Hooks.sol:134) and the unlock callback is a plain high-level call (src/PoolManager.sol:110). The contract has no receive or fallback function, so empty calldata reverts and a take of native currency to the PoolManager's own address fails. On all 21 endpoints a call with value 1 and empty calldata to the PoolManager reverted with empty data, both from a funded account and with the PoolManager as sender, and settle() and settleFor(address) with value reverted with ManagerLocked (0x54e3ca0d).",
+   "source": "src/types/Currency.sol:44-52, src/PoolManager.sol:104-114 and 300-307; eth_call on the 21 RPC endpoints, 2026-11-22",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "SELFDESTRUCT to a third party, to self and to the PoolManager: does any client credit the beneficiary without emptying the source, and does a forced credit give anyone a native delta.",
+   "result": "On all 21 endpoints a probe with 9 wei that self-destructs to a third address ended with balance 0 and the target with 9, and the same toward the PoolManager raised the PoolManager balance by exactly 9 with no code run. A forced credit is credited to nobody because native credit is msg.value (src/PoolManager.sol:352-354) and sync(address(0)) stores no balance (src/PoolManager.sol:281-283). Self-destruct to self kept the 9 wei on 19 endpoints, reverted on Arc (the client rejects source equal to target) and left 0 on Monad. I did not establish whether the Monad result is a burn rule or an effect of the state override. The PoolManager bytecode has no SELFDESTRUCT, so neither case reaches it.",
+   "source": "eth_call with state overrides on the 21 RPC endpoints, 2026-11-22; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/opcode.rs lines 64 to 143",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "check": "Ethereum: system caller rule in go-ethereum and whether anything a public account sends runs with caller 0xfffffffffffffffffffffffffffffffffffffffe.",
+   "result": "go-ethereum master skips the balance check and the transfer for that caller. Its only uses as caller are the EIP-4788, EIP-2935 and request queue calls, each with value zero and a fixed target. revm, which the queried endpoint runs (reth v2.11.0), moves value for every caller: the frame calls transfer_loaded, which fails with OutOfFunds when the balance is short, and its system call builder sets no value. The address holds 42 wei on mainnet and a funded probe call from it moved value normally on this endpoint.",
+   "source": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/core/vm/evm.go lines 268 to 309; https://raw.githubusercontent.com/ethereum/go-ethereum/master/core/state_processor.go lines 387 to 487; https://raw.githubusercontent.com/bluealloy/revm/main/crates/handler/src/frame.rs lines 184 to 193; https://raw.githubusercontent.com/bluealloy/revm/main/crates/context/src/journal/inner.rs lines 459 to 499; eth_call and eth_getBalance via https://ethereum-rpc.publicnode.com",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "check": "OP Stack chains with ETH gas: can a deposit transaction with a mint field, or any predeploy, give a frame value that its sender did not pay.",
+   "result": "No. op-revm adds the mint to the sender's balance, subtracts gas spending and leaves the value to the frame transfer, which fails when the balance is short. The branch that lifts the balance to the transaction value runs only when the balance check is disabled in configuration, which the code marks as not consensus critical and used in testing. The Base handler at v1.5.6 and the op-revm commit that World Chain pins have the same text. op-geth adds the mint and then checks CanTransfer for the value. The mint equals the ETH locked on Ethereum: depositTransaction with 0.001 ETH succeeded in eth_call on the OP Mainnet and Base portals. A deposit sender equal to the system address would need an Ethereum contract at 0xeeeeffffffffffffffffffffffffffffffffeeed or a signature for the system address. ETHLiquidity, SuperchainETHBridge, NativeAssetLiquidity and LiquidityController hold 0 native balance on all seven chains, so no predeploy can release native value. All seven endpoints rejected an unfunded call with value from the system address with OutOfFunds.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/rust/op-revm/src/handler.rs lines 130 to 161; https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/handler.rs lines 140 to 146; https://raw.githubusercontent.com/ethereum-optimism/optimism/722072949ce583f361424a160082186ee14cac71/rust/op-revm/src/handler.rs lines 148 to 151; https://raw.githubusercontent.com/ethereum-optimism/op-geth/optimism/core/state_transition.go lines 474 to 479 and 574 to 580; eth_call on https://ethereum-rpc.publicnode.com to portals 0xbeb5fc579115071764c7423a4f12edde41f106ed and 0x49048044d57e1c92a77f79988d21fa8faf74e97e; eth_getBalance of 0x42...24, 25, 29 and 2a on the seven endpoints",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L2",
+   "check": "Base: value in the planned transaction type 0x79 (separate payer, batched calls).",
+   "result": "Not active. In the v1.5.6 source each call is built with CallValue::Transfer(value) from the sender, so revm moves the value from the sender or reverts the frame when the sender cannot cover it. The payer covers gas only. This should be read again when Everest gets a date.",
+   "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/eip8130.rs lines 1469 to 1532",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L2",
+   "check": "Celo and X Layer: can an Ethereum deposit mint the custom gas token for ETH, and do fee currency transactions (Celo) or gasless transactions (X Layer) let value run without a native balance.",
+   "result": "No. On Ethereum, depositTransaction with 0.001 ETH reverted on the Celo portal 0xc5c5d157928bdbd2acf6d0777626b6c75a9eaedc (error 0x30144554) and on the X Layer portal 0x64057ad1ddac804d0d26a7275b193d9daca19993 (error 0xbd58e0a2), and the same call without ETH succeeded. Both SystemConfig contracts return isCustomGasToken true. In the Celo client the value check is separate from the fee check: a transaction that pays gas in a fee currency still fails with ErrInsufficientFundsForTransfer when the native balance is below the value. The Celo transfer precompile accepts only the CELO token as caller and moves balance without creating a frame with value. In the X Layer handler a gasless transaction is rejected when the sender balance is below the value, and the frame transfer then moves it. The four liquidity predeploys hold 0 on both chains. The Celo endpoint moved value normally in a funded probe call from the system address, so the rule present in the head of the Celo fork is not in the running build.",
+   "source": "eth_call on https://ethereum-rpc.publicnode.com to the two portals and to SystemConfig 0x89e31965d844a309231b1f17759ccaf1b7c09861 and 0x5065809af286321a05fbf85713b5d5de7c8f0433; https://raw.githubusercontent.com/celo-org/op-geth/HEAD/core/state_transition.go lines 554 to 559 and 668 to 674; https://raw.githubusercontent.com/celo-org/op-geth/HEAD/core/vm/celo_contracts.go; https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/op-revm/src/handler.rs lines 178 to 186",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L2",
+   "check": "Arbitrum family: retryable tickets, ETH deposits, unsigned parent chain messages and the native token mint precompile as sources of value without a debit.",
+   "result": "No path for an ordinary account. An ETH deposit mints to the sender and moves the amount with core.Transfer without running the EVM, so no contract sees CALLVALUE. A retry transaction first moves the call value from the ticket escrow to the sender, and the EVM then debits the sender as for any message. On failure the value goes back to escrow. The escrow was funded by the submission, whose deposit comes from the parent chain. Unsigned and contract messages pay from the aliased sender's own balance. The Nitro fork of go-ethereum checks CanTransfer and calls Transfer for every caller (no system caller rule), and all three endpoints rejected an unfunded value call from the system address. ArbOwnerPublic returns getNativeTokenManagementFrom 0 and an empty native token owner list on Arbitrum One, Robinhood Chain and Elysium, all at ArbOS version word 0x74, so nobody can mint the native asset today. For Elysium this describes the RPC node, a locally built binary. The sequencer was not probed.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/tx_processor.go lines 237 to 268, 538 to 565 and 838 to 846; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/vm/evm.go lines 264 and 294; eth_call to 0x000000000000000000000000000000000000006b and 0x64 on https://arb1.arbitrum.io/rpc, https://rpc.mainnet.chain.robinhood.com and https://rpc.elysium.kinetiq.xyz",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L4",
+   "check": "Polygon: system caller rule in Bor, value in state sync messages, and the 0x1010 token as a source of native value.",
+   "result": "Bor checks the balance and transfers for every caller. State sync and span messages are built with From BorSystemAddress and Value 0. The 0x1010 source pays deposits and transfers out of its own native balance with a 2300 gas value call, and transfer returns false unless msg.value equals the amount, so each payout is matched by value received or by a deposit recorded on Ethereum. A deposit addressed to the PoolManager would call it with value and empty calldata and revert, since the PoolManager has no receive function. The system address holds 0.01 POL and a probe call from it moved value normally. I read the MRC20 source in the contracts repository and did not compare it with the bytecode deployed at 0x1010.",
+   "source": "https://raw.githubusercontent.com/0xPolygon/bor/master/core/vm/evm.go lines 326 and 357; https://raw.githubusercontent.com/0xPolygon/bor/master/consensus/bor/statefull/processor.go lines 70 to 80; https://raw.githubusercontent.com/0xPolygon/bor/master/core/evm.go lines 247 to 275; https://raw.githubusercontent.com/maticnetwork/contracts/master/contracts/child/MRC20.sol; eth_call and eth_getBalance via https://polygon.drpc.org",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L4",
+   "check": "BNB Smart Chain: Parlia system transactions, the fee balance kept at the system address, and the stateful precompiles of the Jenner fork as sources or sinks of value.",
+   "result": "Parlia system transactions are sent from the block's coinbase and pay value from its balance after the client has moved the collected fees there. Native value sent to 0xfffffffffffffffffffffffffffffffffffffffe is swept into the validator reward when the block is finalized, so a payout that names it is lost to the caller who chose it, as with any burn address. The stateful precompile entry for CAS20 tokens rejects CALLCODE and DELEGATECALL and reverts with NonPayable when the frame carries value, so the Jenner tokens add no value path. The system caller rule itself is recorded as a finding of this unit.",
+   "source": "https://raw.githubusercontent.com/bnb-chain/bsc/master/consensus/parlia/parlia.go lines 2022 to 2052 and 2137; https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20.go lines 89 to 95; https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/contracts_stateful.go lines 37 to 42 and 161 to 186; eth_getBalance of the system address via https://bsc-dataseed1.bnbchain.org returned 0",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L4",
+   "check": "Avalanche: value handling in the EVM library, the nativeAssetCall precompile (which calls a target with the precompile's caller as msg.sender) and atomic transactions.",
+   "result": "libevm checks CanTransfer and calls Transfer for every caller. nativeAssetCall passes value zero to its inner call and needs at least 84 bytes of input, while the PoolManager's token call sends 68 bytes (src/types/Currency.sol:60-73). Its address ends in 0x0002, which sets the add-liquidity return flag without the after-add-liquidity flag and fails isValidHookAddress (src/libraries/Hooks.sol:109-124), so it cannot be a hook. On mainnet the precompile reverted for a well-formed call from the PoolManager address and from a second address, and nativeAssetBalance reverted too. Imports add balance without running code and exports need a signature of the debited address, as earlier cycles recorded.",
+   "source": "https://raw.githubusercontent.com/ava-labs/libevm/main/core/vm/evm.go lines 196 and 219; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/graft/coreth/nativeasset/contract.go lines 101 to 172; eth_call to 0x0100000000000000000000000000000000000001 and 0x0100000000000000000000000000000000000002 via https://api.avax.network/ext/bc/C/rpc",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Monad: value transfer in the client, the reserve balance design at depth zero, and system transactions.",
+   "result": "pre_call requires the sender balance for every call kind except DELEGATECALL and then subtracts from the sender and adds to the recipient. Because Monad admits transactions against a reserve balance, a top-level call can lack the value at execution time. The client then fails the call with InsufficientBalance, so no frame runs with unpaid value. System transactions run the staking syscall on their own state and call no other contract. The endpoint rejected an unfunded value call from the system address.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/execute_message.cpp lines 48 to 71, 115 to 131 and 201 to 215; https://raw.githubusercontent.com/category-labs/monad/main/category/execution/monad/execute_system_transaction.cpp lines 179 to 234; eth_call via https://rpc.monad.xyz",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "MegaETH: does the KeylessDeploy sandbox give the inner signer or the created contract value that nobody paid.",
+   "result": "No. The outer call must carry no value. The inner creation transaction keeps the value signed in the keyless transaction, runs as a deposit-like transaction with gas price 0 and mint None, and is rejected before execution when the signer's balance is below the value. The create frame moves the value from the signer, and the merge copies every changed balance, the signer's lower balance included, into the parent journal. I read the main branch. The endpoint reports mega-reth v2.2.3 and I did not match that build to a commit.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/sandbox/execution.rs lines 215 to 217, 512 to 540 and 599 to 613; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/sandbox/state_merge.rs lines 117 to 134",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "check": "Tempo: can any transaction form (plain, batched 0x76, sponsored, fee token) carry value, and what does the native branch of settle and take do.",
+   "result": "The handler rejects a batch when any call has nonzero value, in the gas calculation and again in validation, and the endpoint rejects a plain call with value ('value transfer not allowed'), including one from the system address. The fee payer pays in a TIP-20 token and adds no native value. With a balance placed by state override the interpreter moved value as on Ethereum, so the native branch is inert because accounts hold no native balance, which I confirmed for the probe accounts and did not confirm for every account in genesis. eth_getBalance returns the placeholder 4242...42 for every address including the system address. A native credit could in any case only be spent against address(0) pool liquidity, which nobody can fund with value.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler.rs lines 366 to 374 and 1438 to 1441; eth_call and eth_getBalance via https://rpc.mainnet.tempo.xyz",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L4",
+   "check": "Arc: value in CallFrom subcalls (sender substitution), the Native Coin Authority precompile, blocklist checks on value frames and the 18 versus 6 decimal split as ways to carry or move value without an equal debit.",
+   "result": "None found. The subcall path rejects a call to CallFrom that carries value, and the child call is built with CallValue::Transfer(0), so a substituted sender never sends value. The substituted sender must be the calling contract or the transaction signer. Before a CALL or CREATE frame with value starts, the client rejects the zero address, a blocklisted sender or recipient and a recipient destroyed in the same transaction, and then revm moves the value. A rejected frame moves nothing and a native payout to such a recipient reverts (src/types/Currency.sol:48-53). CALLCODE and DELEGATECALL are outside that check and move nothing. Native Coin Authority changes balances directly, only for caller 0x3600000000000000000000000000000000000000, and rejects DELEGATECALL. A value CALL moves the stated amount in 18 decimal units. Only the ERC-20 view truncates, which an earlier cycle bounded. The system address holds 0.0001 USDC and a probe call from it moved value normally. I read the main branch and the endpoint reports arc/v1.",
+   "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs lines 250 to 261, 499 to 611 and 884 to 956; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/call_from.rs lines 122 to 139; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_authority.rs lines 44, 120, 212 and 300; eth_call via https://rpc.mainnet.arc.io",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "check": "HyperEVM: do system transactions from 0x2222222222222222222222222222222222222222 carry value that no EVM account pays, and can one credit the PoolManager.",
+   "result": "In both public clients a system transaction runs through the ordinary transact path with base fee 0. The replay client sets only disable_eip3607 for it and the archive client only zeroes the base fee, so the value is debited from the sender's EVM balance. The bridge address holds 944,868,333 HYPE on the EVM side. A HyperCore transfer of HYPE to a contract therefore calls it with value paid by the bridge address and debited from the user on HyperCore. Sent to the PoolManager it reverts, because the call has empty calldata and the PoolManager has no receive function. Sent to another contract it is real value. The validator node is closed source, so the HyperCore debit and the node's own execution path are inferred from these clients.",
+   "source": "https://raw.githubusercontent.com/hyperliquid-dex/hyper-evm-sync/main/src/run.rs lines 123 to 146 and 216 to 232; https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/evm/mod.rs lines 101 to 117; eth_getBalance and eth_call via https://rpc.hyperliquid.xyz/evm",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "EIP-7702 delegated senders and sponsored, batched or fee-token transactions: can value appear in a frame at the PoolManager without the sender paying it.",
+   "result": "No. A delegated account that calls itself sees CALLVALUE with no net debit, as any self-transfer does, and any onward call with value to the PoolManager debits that account (probe result above). Every sponsor or fee-token design read here pays gas only: Celo fee currencies, X Layer gasless transactions, Tempo fee payers (value forbidden), MegaETH keyless deploys and the planned Base type 0x79. ERC-4337 accounts pay value from their own balance through an ordinary CALL.",
+   "source": "sources of the per-network items of this unit; eth_call with state overrides on the 21 RPC endpoints of state/networks.json, block latest, 2026-11-22",
+   "cycle": 3,
+   "unit": "theme-callvalue-without-debit"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L4",
+   "check": "Lead L-166, method for all 21 networks. For each candidate address X the stub at the PoolManager address reads X.balanceOf(PoolManager), makes one call to X and reads the balance again, in one eth_call. Four shapes per X: a value call of 10^12 wei with empty calldata, a zero value call with empty calldata, transfer(recipient, 0) and transfer(recipient, 1). Candidates: the ERC-4337 EntryPoints v0.6, v0.7 and v0.8 on every chain, the wrapped native token, every address with code from 0x4200000000000000000000000000000000000000 to 00ff on the ten OP Stack chains, the system contracts of BNB Smart Chain and Polygon, the Avalanche and HyperEVM precompile ranges, liquid staking tokens, and the 248 largest pooled tokens.",
+   "result": "The addresses whose balanceOf(PoolManager) rose on the value call are the wrapped native token of each chain (exactly 10^12 for 10^12 wei on all 20 chains that have native value), the three EntryPoints (exactly 10^12; on Tempo they have code and the value call fails, because the chain has no native value), stETH on Ethereum (999,999,999,999), wstETH on Ethereum (800,071,968,325), sAVAX on Avalanche (771,425,961,435) and qiAVAX on Avalanche (4,276 units of 8 decimals). No address raised the ledger on a zero value call or on a zero amount transfer. The EntryPoints reject transfer(address,uint256), so a credit under their id can only become a claim. For the others the full cycle with A = 10^12 wei is: sync(X) stores B (src/PoolManager.sol:279-288); take(address(0), X, A) sets the caller's delta under address(0) to minus A and sends A to X (src/PoolManager.sol:294-295, src/types/Currency.sol:48); X books r times A to the PoolManager; settle credits the caller r times A under id X (src/PoolManager.sol:358-364); take(X, caller, r times A) pays that out; the caller then pays A with msg.value to clear the native debt, because unlock needs every delta at zero (src/PoolManager.sol:112). The PoolManager's native balance and its X balance end where they started. The caller paid A and holds what a direct deposit of A into X mints, less 1 wei of rounding for stETH. No part of the cycle uses value that belonged to pools.",
+   "source": "rpc eth_call with state override on the 21 endpoints of networks.json, 2026-11-22, blocks 26,474,032 (Ethereum), 159,896,174 (OP Mainnet), 61,003,752 (Base), 64,642,766 (Unichain), 54,348,643 (Zora), 38,027,743 (World Chain), 61,892,714 (Ink), 31,128,186 (Soneium), 83,490,366 (Celo), 76,622,089 (X Layer), 526,647,112 (Arbitrum One), 120,983,007 (Robinhood Chain), 9,697,845 (Elysium), 97,790,438 (Polygon), 135,169,352 (BNB Smart Chain), 101,112,531 (Avalanche), 124,568,074 (Monad), 32,594,114 (MegaETH), 50,343,895 (Tempo), 32,644,012 (Arc), 51,986,345 (HyperEVM); src/PoolManager.sol:279-297, 349-364",
+   "cycle": 3,
+   "unit": "theme-mirrored-ledgers"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    4326,
+    42220,
+    196
+   ],
+   "lens": "L4",
+   "check": "L-166 on the OP Stack chains: all addresses with code among the 256 predeploy slots and the legacy ETH address, with the stub as an inner caller, to see which ones answer balanceOf(PoolManager) and which ones accept transfer.",
+   "result": "Only the wrapped native predeploy at 0x4200000000000000000000000000000000000006 has both halves, at one to one. L1BlockNumber at 0x4200000000000000000000000000000000000013 answers balanceOf with the L1 block number (26,474,026 on OP Mainnet) and returns that number to transfer, which fails the success test at src/types/Currency.sol:68, so take reverts. The number is fixed within one L2 block, so a sync and settle pair inside one transaction measures zero. L2ToL1MessagePasser (0x16, not on X Layer) and the fee vaults at 0x11, 0x19, 0x1a and 0x1b accept value and have no ledger that balanceOf reads. The governance token at 0x42 is an ordinary token where it has code. LegacyERC20ETH has code on OP Mainnet and Zora only, reports the native balance (247.28 ETH and 0.1526 ETH) and rejects transfer and value. On the other chains that address has no code, so transfer returns empty data and a take that names it debits the caller and moves nothing (src/types/Currency.sol:68). On Celo the CELO token at 0x471EcE3750Da237f93B8E339c536989b8978a438 rejects a value call, and transfer(recipient, 1) from the PoolManager lowers both balanceOf and the native balance by 1, so the two ids move the same balance at one to one in the same unit. The earlier clearance of double credit for that face stands (src/PoolManager.sol:353-356).",
+   "source": "rpc eth_call with state override via the endpoints of networks.json for chain ids 10, 8453, 130, 7777777, 480, 57073, 1868, 4326, 42220 and 196 at the blocks listed in the first cleared item; src/types/Currency.sol:60-75",
+   "cycle": 3,
+   "unit": "theme-mirrored-ledgers"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "L-166 on Arc, where the face of the native asset uses another unit: the full cycle across address(0) (18 decimals) and 0x3600000000000000000000000000000000000000 (6 decimals), and the link earlier cycles left open, namely whether native value can be forced into the PoolManager.",
+   "result": "The face rejects a value call from the PoolManager, so the PoolManager cannot be made to deposit into it. transfer(recipient, 1) from the PoolManager lowers the face balance by 1 and the native balance by exactly 10^12, and transfer(recipient, 0), a transfer to itself and a transfer of one thousandth of the balance are exact. A take under the face id is therefore debited one unit per 10^12 wei paid out, and a native take is debited in wei. A read only creation probe showed that a contract created with value that self destructs to the PoolManager raises its native balance by that value, for 1 wei and for 999,999,999,999 wei, and that the face balance rises by one unit when the sum crosses a multiple of 10^12. The rounding gain per sync and settle pair is the remainder already in the balance, at most 10^12 minus 1 wei, which is under 0.000001 USDC. The remainder was 486,011,262,919 wei at block 32,645,513. The gas price was 25 gwei, so 100,000 gas for one round costs 2.5 * 10^15 wei, more than 2,500 times the largest gain. The implementation address 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6 still reports the same balance and rejects transfer, as recorded.",
+   "source": "rpc https://rpc.mainnet.arc.io eth_call with state override, eth_getBalance and eth_gasPrice at blocks 32,644,012 and 32,645,513 on 2026-11-22; src/PoolManager.sol:349-364",
+   "cycle": 3,
+   "unit": "theme-mirrored-ledgers"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114,
+    143,
+    999,
+    4217
+   ],
+   "lens": "L4",
+   "check": "L-166 on Polygon, BNB Smart Chain, Avalanche, Monad, HyperEVM and Tempo: system contracts, precompile ranges and liquid staking tokens with the stub as an inner caller.",
+   "result": "Polygon: WPOL is one to one. The native token contract at 0x1010 reports the native balance (3,109,571 POL), returns true for transfer of zero and false for any other amount, and rejects value. 0x1000 and 0x1001 reject every shape. BNB Smart Chain: WBNB is one to one. The system contracts 0x1000, 0x1002, 0x1004, 0x1005, 0x2001 and 0x2006 accept value and have no balanceOf ledger and no transfer, so a native take to them is lost to the caller. Avalanche: WAVAX is one to one, sAVAX mints 0.7714 sAVAX per AVAX and qiAVAX mints at its exchange rate, both to the PoolManager and both transferable, which is the cycle described in the first cleared item. The addresses 0x0200000000000000000000000000000000000000 to 04 and 0x0300000000000000000000000000000000000000 to 03 have no code and answer as empty accounts. The warp address 0x0200000000000000000000000000000000000005 fails every shape. Monad: WMON is one to one. shMON, gMON, aprMON and sMON accept plain value without minting to the sender, so that value is lost to the caller. The staking precompile at 0x1000 fails every shape and uses all gas given to it. HyperEVM: WHYPE is one to one. 0x2222222222222222222222222222222222222222 accepts value with no EVM ledger. 0x0809 answers balanceOf and transfer with the HyperCore block number, which fails the success test for transfer. 0x0800 to 0x0808 and 0x080a to 0x0814 fail the balanceOf shape and use all gas given to them, so sync reverts. 0x0815 to 0x0820 and the token system addresses answer as empty accounts. Tempo: no address accepts value, the EntryPoints raise nothing, and TIP-20 transfers of 0 and 1 from the PoolManager are exact.",
+   "source": "rpc eth_call with state override via https://polygon.drpc.org, https://bsc-dataseed1.bnbchain.org, https://api.avax.network/ext/bc/C/rpc, https://rpc.monad.xyz, https://rpc.hyperliquid.xyz/evm and https://rpc.mainnet.tempo.xyz at the blocks listed in the first cleared item and block 51,987,046 for the HyperEVM precompile range; src/types/Currency.sol:44-75",
+   "cycle": 3,
+   "unit": "theme-mirrored-ledgers"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "check": "Zero amount and dust transfers with the PoolManager as sender, for the largest pooled tokens of each network. Token lists: explorer balances of the PoolManager ranked by value on OP Mainnet, Unichain, World Chain, Ink, Soneium, Celo and MegaETH (Blockscout), on Ethereum and Avalanche (Routescan), the largest currencies of Uniswap v4 pools by tracked reserve on Base, Arbitrum One, BNB Smart Chain, Polygon, Monad, X Layer, Zora, Tempo, Arc, Robinhood Chain and Elysium (GeckoTerminal), and a hand list on HyperEVM. 248 tokens, 9 to 16 per chain. For each token: transfer(recipient, 0), transfer(recipient, 1), transfer(PoolManager, 0), a transfer of one thousandth of the balance to a plain recipient, to the PoolManager itself, to the token address and to the zero address, with the sender balance read before and after and the gas of the inner call measured. On 13 endpoints the logs of the zero amount transfer were read with eth_simulateV1.",
+   "result": "In every successful call the sender balance changed by exactly the amount sent: zero for a zero amount, zero for a transfer to itself, minus the amount otherwise. No token paid a reward, released vested tokens, rebased, changed a delegation or charged the sender a fee on these calls, and no call moved a second token to or from the PoolManager in the logs. Exceptions and side effects, all without a gain for the caller: G$ on Celo and ELO and v4CRCL on Elysium and X Layer revert (see findings). sAVAX rejects a zero amount transfer with TRANSFER_ZERO_VALUE, so take(sAVAX, to, 0) reverts. stETH moves nothing for 1 wei while the caller is debited 1. qiAVAX runs Benqi reward accounting (see finding). The stock tokens on Robinhood Chain emit TransferWithScaledUI, SPCXB on BNB Smart Chain emits TransferWithUIAmount and ANTX on Ink emits TransferShares next to Transfer, with no balance effect beyond the amount. Vote tokens (OP, UNI, ARB, AAVE) used under 13,000 gas, which leaves no room for a checkpoint write, as expected for a holder without a delegate. USDT on Ethereum returns no data, which the success test accepts (src/types/Currency.sol:68). The largest zero amount gas figures were 140,444 (qiAVAX), about 106,000 on Monad for the wrapped stock tokens, whose contract on Ink uses 36,094 and logs only Transfer, and 40,713 (SPCXB). On the 8 endpoints without eth_simulateV1 (World Chain, Celo, X Layer, Avalanche, Monad, MegaETH, Arc, HyperEVM) the statement about second tokens rests on the gas figures and on the balance of the token itself. The lists are samples of 9 to 16 tokens per chain and do not cover every pooled token.",
+   "source": "rpc eth_call and eth_simulateV1 with state override on the 21 endpoints of networks.json on 2026-11-22 at blocks 26,474,005 (1), 159,896,016 (10), 61,002,173 (8453), 64,642,450 (130), 54,348,485 (7777777), 38,027,585 (480), 61,892,397 (57073), 31,128,028 (1868), 83,490,050 (42220), 76,621,774 (196), 526,646,159 (42161), 120,980,233 (4663), 9,697,391 (99901), 97,790,228 (137), 135,168,649 (56), 101,112,181 (43114), 124,567,027 (143), 32,593,799 (4326), 50,343,306 (4217), 32,643,387 (5042), 51,986,024 (999); token lists from https://explorer.optimism.io/api/v2/addresses/0x9a13f98cb987694c9f086b1f5eb990eea8264ec3/tokens?type=ERC-20 and the same path on unichain.blockscout.com, worldchain-mainnet.explorer.alchemy.com, explorer.inkonchain.com, soneium.blockscout.com, celo.blockscout.com and megaeth.blockscout.com, https://api.routescan.io/v2/network/mainnet/evm/1/etherscan/api?module=account&action=addresstokenbalance&address=0x000000000004444c5dc75cB358380D2e3dE08A90&page=1&offset=100, and https://api.geckoterminal.com/api/v2/networks/base/dexes/uniswap-v4-base/pools?page=1&include=base_token,quote_token with the network and dex ids of the other chains",
+   "cycle": 3,
+   "unit": "theme-mirrored-ledgers"
+  },
+  {
+   "chainIds": [
+    1868,
+    143
+   ],
+   "lens": "L3",
+   "check": "USDSC on Soneium (1.90 million held) and mUSD on Monad (1.88 million held) are yield bearing dollar tokens with a public claim function. Does a claim raise the PoolManager balance, which a caller could book between sync and settle?",
+   "result": "No. Both contracts answer yieldRecipient() with one fixed address (0xda798684ffd5eb509c2ab7b8352ec55b31f18201 and 0x4177a5287fae4767311dad02547b57d1b8cf5fbf) and yield() with the amount waiting for it. They do not answer accruedYieldOf, isEarning or claimRecipientFor for the PoolManager. The yield goes to the one recipient, and the PoolManager balance moves only by transfers. USDM, CUSD, apxUSD, AUSD, USDG on three chains, stcUSD, eUSD and WBRL answer none of the eleven yield or reward selectors I tried.",
+   "source": "rpc eth_call via https://rpc.soneium.org and https://rpc.monad.xyz and the endpoints of chain ids 4326, 1, 57073, 4663, 196, 4217, 137 and 480 on 2026-11-22; src/PoolManager.sol:349-364",
+   "cycle": 3,
+   "unit": "theme-mirrored-ledgers"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L5",
+   "check": "Can take make the PoolManager call itself with effect, so that its own ERC-6909 ledger serves as a mirrored ledger?",
+   "result": "No. take calls transfer(address,uint256) on the currency address and sync calls balanceOf(address) (src/types/Currency.sol:60-75, 94). The ERC-6909 functions of the PoolManager are transfer(address,uint256,uint256) and the getter balanceOf(address,uint256) (src/ERC6909.sol:17, 25), which have other selectors, and the contract has no fallback or receive function (the only payable functions are settle and settleFor, src/PoolManager.sol:300-307). A take or sync that names the PoolManager as currency reverts, and a native take to the PoolManager reverts.",
+   "source": "src/ERC6909.sol:15-48; src/PoolManager.sol:300-307; src/types/Currency.sol:40-96",
+   "cycle": 3,
+   "unit": "theme-mirrored-ledgers"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "What the two dangerous shapes would do to this code, so that each network can be judged against them. Shape A: an inner run that starts with an empty transient map and whose storage writes and token transfers are kept. Shape B: an inner run, or a rollback, that drops transient writes while keeping storage writes and token transfers. Walked through unlock, sync, settle, settleFor, take, mint and burn.",
+   "result": "The code has no defence of its own against either shape, so the answer rests on the chain. Shape A: sync needs no lock and stores the currency and the balance in two transient slots (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32). An inner run that sees no unlock flag (src/libraries/Lock.sol:23-27) can call unlock itself (src/PoolManager.sol:105-107), sync, pay, settle and mint a claim (src/PoolManager.sol:322-329), and end with its own counter at zero (src/PoolManager.sol:112). The outer run still holds the older reserves value, so its settle measures the same balance rise again (src/PoolManager.sol:358-360) and credits it a second time. Shape B: take writes the debit to a transient slot and then transfers (src/PoolManager.sol:294-295, src/libraries/CurrencyDelta.sol:32-40). If the debit and the counter increment (src/libraries/NonzeroDeltaCount.sol:18-24) are dropped while the transfer is kept, unlock passes its check at src/PoolManager.sol:112 with the tokens gone. The reverse of shape B, where transient writes survive a rollback that undoes a token transfer, lets a settle credit (src/PoolManager.sol:364) outlive the payment. burn and settleFor follow the same pattern (src/PoolManager.sol:305-307, 332-336). Calls that follow one another at the top level of one transaction (a Tempo type 0x76 batch, the phases of a Base type 0x79 transaction, user operations of one bundle) do not produce either shape: unlock opens and closes inside one call frame (src/PoolManager.sol:104-114), so between two top-level calls the flag is false and every delta is zero, and only the synced currency and reserves can carry over, which earlier cycles cleared. The remaining items of this file answer, network by network, whether shape A or B exists. No network has one that an ordinary contract can start from inside a call.",
+   "source": "src/PoolManager.sol:104-114, 279-297, 300-307, 322-336, 349-364; src/libraries/Lock.sol:10-27; src/libraries/CurrencyDelta.sol:28-41; src/libraries/CurrencyReserves.sol:15-38; src/libraries/NonzeroDeltaCount.sol:12-34",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "On-chain test on all 21 RPC endpoints: does a call from an inner frame to any precompile, predeploy or system address change the caller's transient storage. One 3,640 byte creation payload, sent with eth_call and no to address, stores 0xaa55 in transient slot 1, then calls each of 173 addresses three ways with 20,000 gas (3,000 on HyperEVM): CALL with empty calldata, CALL with transfer(address,uint256), STATICCALL with balanceOf(address). It returns the slot and the loop counter.",
+   "result": "All 21 endpoints returned 0xaa55 and a count of 173. The address list holds the standard precompiles 0x01 to 0x11 and 0x100, the OP Stack predeploys 0x4200..00 to 0x4200..2f, the ArbOS precompiles 0x64 to 0x74 with 0xc8, 0xff and 0xa4b05, the Celo transfer precompile 0xfd and the CELO token, sixteen Tempo precompile and TIP-20 addresses, the Arc range 0x1800..00 to 0x1800..09 and 0x3600..00, the HyperEVM range 0x0800 to 0x0813 with 0x2222..22, 0x3333..33 and 0x5555..55, the BNB Smart Chain and Polygon system contracts 0x1000 to 0x1008, 0x2000 to 0x2006, 0x3000 and 0x1010, the MegaETH system contracts 0x6342..00 to 0x6342..05, the Avalanche ranges 0x0100..00 to 02 and 0x0200..00 to 05, and the two Base precompiles 0x8130..aa01 and aa02. The test uses zeroed arguments, so it shows that no special address resets or replaces the transient map on a plain call. It does not exercise the function of each precompile. The items below cover the features that take specific input.",
+   "source": "eth_call on the rpc URL of each entry in research/network-risk/state/networks.json at the latest block on 2026-11-22 (for example Ethereum near block 26473884, Tempo near 50340613, HyperEVM near 51984554); payload sha256 prefix 519864eafc678a1d",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "On-chain test on all 21 RPC endpoints: is transient storage restored on every way a frame can fail, and is it restored to the earlier nonzero value. The earlier critic probe covered REVERT. This probe creates a child contract and calls it so that the child writes transient slot 1 and then ends with REVERT, with INVALID, by running out of gas in a loop, and with REVERT after a nested call that itself succeeded and wrote slot 2. It then lets a write succeed, repeats the reverting call, and runs the same writes through DELEGATECALL against the parent's own slot.",
+   "result": "All 21 endpoints returned the same 15 words: slot 1 and slot 2 read zero after each of the four failures, slot 1 reads 0x55 after the successful write and still 0x55 after a later reverted write of 0x11, and the parent's slot reads 0xaa after a reverted and after an INVALID delegatecall and 0x55 after a successful one. A settle credit or a take debit written in a frame that fails is therefore undone together with the token transfer of that frame on every network, including the clients that do not use revm or go-ethereum (Tempo with evm2, Monad, HyperEVM). The result describes the RPC node of each network.",
+   "source": "eth_call with no to address on the rpc URL of each entry in research/network-risk/state/networks.json, latest block on 2026-11-22, data 0x61009761014e610400396100976104005ff06101e05260015f535f5f60015f5f6101e0515af15060065f53604061020060015f5f6101e0515af15060025f535f5f60015f5f6101e051620186a0f15060065f53604061024060015f5f6101e0515af15060035f535f5f60015f5f6101e0516200ea60f15060065f53604061028060015f5f6101e0515af15060045f535f5f60015f5f6101e0515af15060065f5360406102c060015f5f6101e0515af15060055f535f5f60015f5f6101e0515af15060065f53604061030060015f5f6101e0515af15060015f535f5f60015f5f6101e0515af15060065f53604061034060015f5f6101e0515af15060aa60015d60015f535f5f60015f6101e0515af45060015c6103805260025f535f5f60015f6101e051620186a0f45060015c6103a05260055f535f5f60015f6101e0515af45060015c6103c0526102006101e0f3608e8060095f395ff35f3560f81c8060011461003e5780600214610047578060031461004e578060041461005957806005146100705780600614610077578060091461008757005b601160015d5f5ffd5b602260015dfe5b603360015d5b610054565b604460015d60095f535f5f60015f5f305af1505f5ffd5b605560015d005b60015c5f5260025c60205260405ff35b609960025d00",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Tempo. Type 0x76 batches, precompiles that might call out to contracts, the storage credit settlement that removes transient slots, T14 configurable accounts and the zone contracts. For each: can a contract start it from inside a call, which transient map does it use, and are transient writes journaled like storage writes.",
+   "result": "No feature gives a second transient map. The mainnet node reports tempo/v1.19.0-697ea97, and the manifest at that commit pins evm2 at revision 66687c18 (the main branch pins e25a95fb today, which is the revision an earlier cleared item quoted). A type 0x76 batch runs every call as a top-level frame with the signer as caller under one checkpoint (handler.rs lines 1277 to 1372, checkpoint at 1289, rollback at 1339), and the calls share one transient map that is not cleared between them. An ordinary contract cannot start a batch. evm2 keeps one transient map per transaction (state/mod.rs line 59), journals each TSTORE (lines 806 to 836), restores it in rollback (lines 891 to 898) and clears it in clear_transaction_state (lines 523 to 539). Every call frame and every precompile call takes a checkpoint from that journal and rolls back on failure (evm/mod.rs lines 1691 to 1795). Tempo precompiles run native code through a storage provider that offers sload, sstore, tload, tstore, events and checkpoints and has no function that calls a contract (precompiles/src/storage/mod.rs lines 92 to 280, dispatch at precompiles/src/lib.rs lines 309 to 342), so no precompile runs caller-chosen code. take_transient_storage removes slots part way through settlement, and its only caller passes the storage credits address 0x1060..00 (state/mod.rs lines 842 to 859, handler/config.rs lines 444 to 455), so PoolManager slots are untouched. T14 is not active on mainnet: eth_getCode at 0xAACC000000000000000000000000000000000000 returned 0x near block 50341036 while the T7 and T8 precompiles return 0xef. The specification of TIP-1107 registers a configurable account before any call runs and outside the rollback checkpoint, and the code does the same (handler.rs line 1693), so it is a top-level step that touches no PoolManager state. Zone contracts are ordinary EVM bytecode on the main chain (ZonePortal implementation 23,994 bytes at 0x5AD1..00, ZoneMessenger 1,858 bytes at 0x5A4D..00, and nextZoneId() on the factory returned 4), so a callback from them is an ordinary call on the same journal, and the zone itself is a separate chain where this PoolManager does not exist. Not confirmed: whether validators run the evm2 JIT backend, and whether its TSTORE path matches the interpreter. Both probes above passed on the public RPC node.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler.rs; https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler/config.rs; https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/lib.rs; https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/storage/mod.rs; https://raw.githubusercontent.com/alloy-rs/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/evm2/src/evm/state/mod.rs; https://raw.githubusercontent.com/alloy-rs/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/evm2/src/evm/mod.rs; https://tips.sh/1107; eth_getCode and eth_call on https://rpc.mainnet.tempo.xyz",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L2",
+   "check": "Base. Type 0x79 Base Transactions, the B20, policy, nonce and transaction context precompiles, and validity transactions. Can any of them run caller-chosen code under another transient map, or drop transient writes while keeping storage writes.",
+   "result": "No. The node reports base/v1.5.6 on reth v2.5.2 and that release builds on revm 42. Type 0x79 belongs to the Everest upgrade, which the Base upgrade page lists with no date for Sepolia or mainnet, and the latest mainnet block held only types 0x7e, 0x2 and 0x0. In the v1.5.6 source each phase takes one journal checkpoint, a failed phase is reverted through it and a completed phase is committed (eip8130.rs lines 1260 to 1344). revm restores transient storage in checkpoint_revert, so a reverted phase loses its transient writes together with its storage writes and transfers. The specification states that every call is dispatched from the sender, so phases are top-level calls and no contract can start one. Phases of one transaction share the transient map, which gives the sender nothing beyond what a contract with several calls has. The Base precompiles reach state through a provider with sload, sstore, tload, tstore, events and checkpoints and no function that calls a contract (precompile-storage/src/provider.rs lines 34 to 140). Validity transactions add inclusion conditions and no execution context.",
+   "source": "https://docs.base.org/specifications/base-transactions; https://docs.base.org/upgrades/overview; https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/eip8130.rs; https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompile-storage/src/provider.rs; web3_clientVersion and eth_getBlockByNumber on https://mainnet.base.org/",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L2",
+   "check": "Arbitrum One, Robinhood Chain and Elysium. Stylus host calls, retryable redeems started with ArbRetryableTx.redeem from inside a call, and the group rollback of the sequencer. Does any of them execute code under a transient map other than the one of the running transaction, or undo transient writes apart from storage writes.",
+   "result": "No. A Stylus program reaches other contracts through closures that call evm.Call, evm.DelegateCall and evm.StaticCall on the EVM that is already running (arbos/programs/api.go lines 186 to 190), and its transient host calls read and write the same StateDB under the acting address (lines 119 to 127). A contract called by a Stylus program therefore sees the PoolManager's lock flag and deltas as any other callee does. redeem only emits RedeemScheduled. The node builds the retry transaction from that log after the scheduling transaction has finished and appends it to the queue as its own transaction (tx_processor.go lines 924 to 950, block_processor.go line 719), and an earlier cleared item showed that every transaction starts with StateDB.Prepare. The group rollback saves a checkpoint for a user transaction and the redeems it scheduled and restores whole transactions (block_processor.go lines 125 to 134 and 583 to 594), so storage, balances and transient state go back together. Not confirmed: Arbitrum One and Robinhood Chain report nitro v3.13.0-rc.9 at commit b72783f, and neither that tag nor that commit is served by raw.githubusercontent.com. I read master and v3.12.0, whose api.go has the same call sites. Elysium reports a locally built binary. Both probes above passed on all three RPC nodes.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/programs/api.go; https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.0/arbos/programs/api.go; https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/tx_processor.go; https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/block_processor.go; web3_clientVersion on https://arb1.arbitrum.io/rpc, https://rpc.mainnet.chain.robinhood.com and https://rpc.elysium.kinetiq.xyz",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "MegaETH. The KeylessDeploy sandbox is the one feature on the 21 networks with shape A: it runs caller-chosen init code in a second EVM with a new journal over live state and merges the resulting state into the parent. Can an ordinary contract start it from inside a call, and is transient state merged back.",
+   "result": "It cannot be started from inside a call, and transient state is not merged. The interceptor returns without acting when the call is inside a sandbox or its depth is not zero (system/intercept.rs lines 295 to 303). The sandbox builds a new context over a database wrapper and runs one transaction in it (sandbox/execution.rs lines 583 to 650), and the sandbox sources never copy transient storage in either direction, so the inner run starts empty and its transient values are dropped. On the public RPC node near block 32592160, eth_call straight to 0x6342000000000000000000000000000000000003 with keylessDeploy(bytes,uint256) and a one byte payload reverted with 0xae1270d3, which is MalformedEncoding() and shows interception at depth zero. The same calldata sent from a creation frame, one level down, failed with return data 0x1894f076, which is NotIntercepted(), the revert of the Solidity stub. A sandbox is therefore the first frame of a transaction whose target is the KeylessDeploy address. The parent has run no contract code before it and runs none after it, so the PoolManager has no transient state in the parent that the sandbox could bypass, and inside the sandbox unlock, sync, settle and take share one map. The latest block held transaction types 0x7e, 0x0 and 0x2, each of which has one top-level call. I did not enumerate the transaction types the node accepts, and the lead below asks for that. Not confirmed: which mega-evm revision mega-reth v2.2.3 pins. I read the main branch, version 1.7.3, and the on-chain result agrees with it.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/system/intercept.rs; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/sandbox/mod.rs; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/sandbox/execution.rs; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/system-contracts/contracts/KeylessDeploy.sol; eth_call on https://mainnet.megaeth.com/rpc with and without a to address",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L2",
+   "check": "Arc. On-chain test of the CallFrom precompile at 0x1800000000000000000000000000000000000003: does the child call it starts see the transient storage of the surrounding transaction, and are the child's transient writes kept. Earlier cycles answered from the main branch source only.",
+   "result": "The child runs on the same map. With state overrides I placed a probe at the Multicall3From address 0x522fAf9A91c41c443c66765030741e4AaCe147D0, which is one of the two callers the precompile accepts, and a counter contract at a second address. The counter returns its transient slot 2 and adds 0x22 to it. The probe called the counter directly, then through callFrom, then directly again. The three readings were 0, 0x22 and 0x44 near block 32640276, both with the helper and with tx.origin as the substituted sender. An empty map for the child would give 0 as the second reading, and dropped child writes would give 0x22 as the third. The same probe at an address outside the allowlist failed at the precompile call. The source agrees: init_subcall rejects callers outside the allowlist, static context, value and a sender that is neither the caller nor the transaction signer, and pushes the child onto the same frame stack with a checkpoint from the same journal (evm.rs lines 884 to 952 and 1031 to 1040), and a failed child is rolled back through that checkpoint (lines 1228 to 1231).",
+   "source": "eth_call with state overrides on https://rpc.mainnet.arc.io; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/call_from.rs; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/execution-config/src/call_from.rs",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L2",
+   "check": "Celo. The fee currency calls debitGasFees and creditGasFees that the node makes around a CIP-64 transaction. Can a contract start them, which transient map do they use, and is anything discarded between them and the main call.",
+   "result": "They are node calls at the top level and use the map of the transaction. The sequencer RPC reports the op-geth fork at commit c7ed55b8. In that source innerExecute calls StateDB.Prepare, which replaces the transient map, at state_transition.go line 602, and the debit runs after it inside preCheck at line 605. The credit runs after the main call has returned (line 824). Both go through evm.CallWithABI on the same EVM and StateDB (contracts/fee_currencies.go lines 88 and 154). Nothing clears transient storage between the debit, the main call and the credit, and no opcode or precompile lets a contract trigger either call. By the time the credit runs, unlock has returned or the main call has reverted, so the flag is false and all deltas are zero (src/PoolManager.sol:112-113). The fee currency is chosen from the governance list, so no caller-chosen code runs in these calls. Whether a listed token calls out to untrusted code during credit stays with the open lead of the Celo unit.",
+   "source": "https://raw.githubusercontent.com/celo-org/op-geth/c7ed55b8/core/state_transition.go; https://raw.githubusercontent.com/celo-org/op-geth/c7ed55b8/contracts/fee_currencies.go; web3_clientVersion on https://forno.celo.org",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "check": "HyperEVM. The sendToEvmWithData action that makes the node call coreReceiveWithData on a linked contract, and CoreWriter. Can an ordinary contract start either from inside a call so that code runs under another transient map.",
+   "result": "No, on the documentation and the public clients. sendToEvmWithData is an action signed on HyperCore and posted to the exchange endpoint. The documentation describes Core to EVM transfers as credited by a system transaction that calls the linked contract as the system address. A system transaction is a transaction of its own, and earlier cycles read in the archive client that each one runs through a single transact call with transient storage cleared at its end. The inner run therefore starts with an empty map because it is a different transaction, and no PoolManager unlock can be open around it. A contract on HyperEVM cannot start one within its own call: transfers back to HyperCore are picked up from Transfer logs after execution, as the documentation states, and CoreWriter at 0x3333333333333333333333333333333333333333 emits a log that HyperCore processes as an action after execution, with a delay of a few seconds for some actions. Both probes above passed on the RPC node, including the calls to 0x3333333333333333333333333333333333333333 and 0x2222222222222222222222222222222222222222. Not confirmed: the validator binary is closed, so the statement that no in-call path exists rests on documentation, on the archive client and on these probes.",
+   "source": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers; https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint; https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/interacting-with-hypercore; eth_call on https://rpc.hyperliquid.xyz/evm",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "check": "Monad. Whether optimistic parallel execution, the call frame model of the client or the staking precompile gives a call a transient map of its own, and whether a failed frame restores transient storage together with storage.",
+   "result": "No. Transient storage is a field of the per-account state object next to storage (account_state.hpp line 70, accessors at lines 126 to 154). The state keeps a version stack per account: entering a frame pushes a version, a write copies the account state into the new version, pop_accept folds it into the parent and pop_reject drops it (state.cpp lines 129 to 183, version_stack.hpp). Storage and transient storage of an account are therefore kept or dropped by the same operation. An earlier cleared item showed that each execution attempt of a transaction builds a new State. The staking contract source contains no call into the EVM host, and precompiles.cpp dispatches only the standard precompiles, so no precompile runs caller-chosen code. Both probes above passed on the RPC node. I did not read the JIT compiler's TSTORE path.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/state.cpp; https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/account_state.hpp; https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/version_stack.hpp; https://raw.githubusercontent.com/category-labs/monad/main/category/execution/monad/staking/staking_contract.cpp; https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/precompiles.cpp",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Avalanche. The nativeAssetCall precompile at 0x0100000000000000000000000000000000000002 transfers an Avalanche native asset and then calls an address chosen by the caller, keeping the original caller as msg.sender. Is it active, and which state does its inner call use.",
+   "result": "It is switched off, and it used the same state when it was active. From the Banff rules on, all three native asset addresses map to DeprecatedContract, whose Run returns ErrExecutionReverted (params/hooks_libevm.go lines 113 to 122, nativeasset/contract.go line 178). eth_call to the address with 84 zero bytes on the public endpoint returned execution reverted. The earlier implementation took a StateDB snapshot and called env.Call on the running EVM (nativeasset/contract.go lines 146 to 171), so its callee shared the transient map of the transaction. The endpoint reports avalanchego 1.15.3, the release I read. No other C-Chain precompile takes a call target.",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/graft/coreth/params/hooks_libevm.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/graft/coreth/nativeasset/contract.go; eth_call on https://api.avax.network/ext/bc/C/rpc",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    137,
+    56
+   ],
+   "lens": "L2",
+   "check": "Polygon and BNB Smart Chain. Can a precompile or a system contract path run caller-chosen code with a separate transient map, and does the parallel executor of Bor give a task a map that outlives the task.",
+   "result": "No. In Bor v2.11.0 and in BSC v1.8.2 (the version the BSC endpoint reports) a precompile implements RequiredGas, Run(input) and Name, and Run receives only the input bytes (core/vm/contracts.go lines 51 to 55 and 56 to 60), so a precompile has no handle on the EVM and cannot start a call. Both clients replace the transient map in StateDB.Prepare (Bor statedb.go line 3051, BSC statedb.go line 1532). Bor's parallel tasks run ApplyMessage, which calls Prepare, on a state object of their own (parallel_state_processor.go lines 101 to 150 and 451). State sync records and Parlia system transactions run at the top level between user transactions, as earlier cycles recorded. A public Polygon endpoint reports bor v2.11.1-private, one patch above the source I read. Both probes above passed on both networks.",
+   "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/vm/contracts.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/state/statedb.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/parallel_state_processor.go; https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/contracts.go; https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/state/statedb.go",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    480,
+    196
+   ],
+   "lens": "L2",
+   "check": "World Chain and X Layer. PBH bundles, and the node additions of both chains that I could locate (the World Chain EVM crate and the X Layer bridge intercept crate). Does any of them run user code in a context of its own inside a transaction.",
+   "result": "No. A PBH transaction is a standard OP transaction that targets the PBHEntryPoint contract, and a PBH bundle is a standard ERC-4337 bundle, so every user operation runs as a nested call of one transaction on one journal. The builder checks proofs and orders transactions. The World Chain manifest at tag v2.8.2, the version the endpoint reports, pins revm 43.0.2, and the EVM crate on the main branch holds configuration, an EVM factory, execution wiring and caches, and its lib.rs and factory.rs name no precompile. The X Layer intercept crate inspects the logs of a finished transaction in the payload builder and drops the whole transaction when a bridge event matches, which is a decision about inclusion. The gasless rule of X Layer was covered by an earlier cleared item and I did not read it again. Both nodes keep the revm journal, where transient storage is cleared in commit_tx, discard_tx and finalize and restored in checkpoint_revert (journal/inner.rs lines 141 to 250 and 622 to 638). Both probes above passed on both networks. I did not read every crate of either node.",
+   "source": "https://worldcoin.github.io/world-chain/pbh/txs.html; https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/Cargo.toml; https://raw.githubusercontent.com/worldcoin/world-chain/main/crates/evm/src/factory.rs; https://raw.githubusercontent.com/worldcoin/world-chain/main/crates/evm/src/lib.rs; https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/intercept/src/lib.rs; https://raw.githubusercontent.com/bluealloy/revm/main/crates/context/src/journal/inner.rs",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    130,
+    7777777,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "check": "Ethereum and the OP Stack chains without node additions (OP Mainnet, Unichain, Zora, Ink, Soneium). EIP-7702 delegated accounts, ERC-4337 bundles, deposit transactions, and any frame style transaction type. Is there an execution context with its own transient map inside a transaction.",
+   "result": "No. EIP-1153 defines transient storage as discarded after every transaction and shared by all frames of the transaction. Delegated code under EIP-7702 runs in an ordinary frame at the account's address, and an ERC-4337 bundle is one transaction that calls the EntryPoint contract, so both use the one map. No frame transaction type is live: the latest Ethereum block (26473884) held types 0x0, 0x2, 0x3 and 0x4 and its header has no field beyond the Osaka set, and the latest blocks of the five OP Stack chains held types 0x7e, 0x2 and 0x0. The endpoints report reth or op-reth builds, which keep the revm journal (transient storage at journal/inner.rs line 68, cleared at lines 141 to 250, restored at lines 622 to 638, written at lines 1080 to 1105). Both probes above passed on all six networks. The Unichain PoolManager is a predeploy with other bytecode, and this item speaks about the chain, as the other Unichain items do.",
+   "source": "https://eips.ethereum.org/EIPS/eip-1153; https://raw.githubusercontent.com/bluealloy/revm/main/crates/context/src/journal/inner.rs; eth_getBlockByNumber and web3_clientVersion on the rpc URL of each of the six networks",
+   "cycle": 3,
+   "unit": "theme-nested-transient"
   }
  ]
 }

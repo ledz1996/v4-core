@@ -1,6 +1,6 @@
 # PoolManager network risk report
 
-State on 2026-11-22: cycles 1 and 2 are merged. The ledger holds 52 findings, 332 checks that came out safe, and 200 open leads across the 21 networks. Forty-six agents have worked on it so far, half of them as independent verifiers.
+State on 2026-11-23: cycles 1 to 3 are merged. The ledger holds 60 findings, 420 checks that came out safe, and 236 open leads across the 21 networks. Sixty-one agents have worked on it so far, about half of them as independent verifiers.
 
 ## The question
 
@@ -8,11 +8,11 @@ Can an ordinary account take funds that other users hold in this repository's Po
 
 ## Answer so far
 
-No critical or high finding exists for an ordinary attacker. The planted weakness has not been identified. Every verifier in cycle 2 was asked whether its unit contained it, and each answered no.
+No critical or high finding exists for an ordinary attacker. The planted weakness has not been identified. Cycle 3 closed the three questions that cycle 2 ranked highest, and each came out safe on all 21 networks.
 
-Seventeen findings can be triggered by an ordinary account. They fall into five groups.
+Twenty findings can be triggered by an ordinary account: 3 medium, 13 low and 4 that only record a mismatch between comments or tests and the source. They fall into five groups.
 
-Rebase capture, the only one where an attacker gains (F-041, medium, confirmed on Ethereum). Any account can call `sync`, cause the PoolManager's balance of a token to rise, and call `settle` to be credited the rise. Taking the pooled balance first and repaying the nominal amount works as well. For Ampleforth the public rebase is guarded by `msg.sender == tx.origin`, and an EIP-7702 delegated account passes that check while running code; the verifier simulated this on mainnet. The gain is the positive rebase on whatever the PoolManager holds of that token. Today that is 16 base units of AMPL, and the method reaches only pools in elastic or reward-pushing tokens.
+Rebase capture, the only one where an attacker gains (F-041, medium, confirmed on Ethereum). Any account can call `sync`, cause the PoolManager's balance of a token to rise, and call `settle` to be credited the rise. Taking the pooled balance first and repaying the nominal amount works as well. For Ampleforth the public rebase is guarded by `msg.sender == tx.origin`, and an EIP-7702 delegated account passes that check while running code; the verifier simulated this on mainnet. The gain is the positive rebase on whatever the PoolManager holds of that token. Today that is 16 base units of AMPL, and the method reaches only pools in elastic or reward-pushing tokens. Cycle 3 found a second case on Avalanche (F-060, low): any account can ask Benqi to pay the QI rewards that accrued on the PoolManager's qiAVAX and book the payment as its own. The accrued amount is 14.84 QI and Benqi's reward contract pays nothing today.
 
 Yield that nobody can withdraw (F-012 stETH on Ethereum, F-037 Aave aTokens on Arbitrum One). The balance grows outside pool accounting and core has no function that pays the growth out. Principal is untouched.
 
@@ -22,13 +22,13 @@ Currency ids that take credit and cannot pay out: Polygon's system token at `0x1
 
 Delay without loss. One cheap transaction on MegaETH uses a block's whole budget for new state and the node skips the rest of that block (F-042). A HyperEVM small block holds 3,000,000 gas, which fits about 200 tick crossings in one swap (F-039). A HyperCore transfer runs a linked contract ahead of every signed transaction in the block (F-044). Any account can fill one tick to the liquidity cap for dust and block later deposits on that tick, on every network (F-038). Withdrawals keep working in all four.
 
-The remaining two (F-006, F-014) record places where the source disagrees with its own comments, with no funds involved.
+The remaining four (F-006, F-014, F-054, F-055) record places where the source disagrees with its own comments, tests or test doubles, with no funds involved.
 
-The other 35 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end.
+The other 40 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end. One of them is in force today. The owner of the GoodDollar token put the Celo PoolManager on the token's block list on 11 September 2026, so about 550 million G$ (roughly 60,000 USD) held for pools cannot leave (F-056). An ordinary account can neither set nor lift that block.
 
 ## What has been tested
 
-One balance under two currency ids. Arc (native USDC with 18 decimals and an ERC-20 face with 6), Celo (CELO token), Polygon (`0x1010`), the legacy ETH token on Optimism and Zora, and stHYPE with wstHYPE on HyperEVM, which share one share balance. In each case `sync`, `settle` and `take` were walked across both faces in every order, twice by network researchers and once in a Python model of the settlement code. No order credits one deposit twice. A native credit needs `settle` with value while no token is synced, `settle` rejects value while a token is synced (`src/PoolManager.sol:353-356`), and only one currency can be synced at a time. On Arc the 12 digit truncation gives at most 0.000001 USDC per round against a 20 gwei minimum base fee.
+One balance under two currency ids. Arc (native USDC with 18 decimals and an ERC-20 face with 6), Celo (CELO token), Polygon (`0x1010`), the legacy ETH token on Optimism and Zora, and stHYPE with wstHYPE on HyperEVM, which share one share balance. In each case `sync`, `settle` and `take` were walked across both faces in every order, twice by network researchers and once in a Python model of the settlement code. No order credits one deposit twice. Cycle 3 widened this to every address whose reported balance for the PoolManager could move with another ledger: a sweep of 248 pooled tokens across the 21 networks with zero and dust transfers from the PoolManager address. Wrapped native tokens exchange one for one, and wstETH, sAVAX and qiAVAX mint at their own rate with the caller debited in full. A native credit needs `settle` with value while no token is synced, `settle` rejects value while a token is synced (`src/PoolManager.sol:353-356`), and only one currency can be synced at a time. On Arc the 12 digit truncation gives at most 0.000001 USDC per round against a 20 gwei minimum base fee.
 
 The PoolManager as caller of special addresses. `take` lets anyone make the PoolManager call any address with `transfer(address,uint256)` or with empty calldata, and `initialize` lets anyone name any address as a hook. Cycle 2 ran these call shapes from the PoolManager address against every precompile, predeploy and system contract the researchers could list: all 2,048 predeploy slots on each of the seven OP Stack chains, 122 special addresses on Polygon, BNB Smart Chain and Avalanche, and the full precompile sets of Tempo, Arc, Monad, MegaETH, HyperEVM and the Arbitrum family. Where a call succeeds, the caller owes the full amount, which is the payout-stranding group above.
 
@@ -36,19 +36,26 @@ Opcodes. A verifier deployed nothing and used `eth_call` with init code to run 6
 
 Transient storage across transactions. Read in client source for the OP Stack (op-revm, Base), Bor, BSC, AvalancheGo, Nitro, X Layer and Arc, and tested with `eth_simulateV1` on six OP Stack chains, Polygon and BNB Smart Chain. A second transaction always starts with an empty map. Batch transactions on Tempo and helper contracts on Arc share transient storage only among one sender's own calls.
 
+A run inside a transaction with its own transient storage. `sync` needs no lock, so a network that let a contract start code under a fresh transient map while keeping its transfers could credit one payment twice. Cycle 3 read the client source of Tempo, Base, Nitro, MegaETH, Arc, Celo, Monad, Avalanche, Bor and BSC and ran two probes on all 21 endpoints: 519 calls to 173 special addresses left a transient slot intact, and every kind of revert restored transient storage together with ordinary state. No network offers such a run to an ordinary contract. The MegaETH keyless deploy sandbox has the right shape and starts only as the first frame of a transaction.
+
+Call value without a balance debit. `settle` credits `msg.value`. On BNB Smart Chain a call from the system address `0xff…fe` carries its stated value and moves no balance (F-058), and nothing an ordinary account sends can run with that caller. Every other value-carrying path that was read debits the sender: OP Stack deposits, Nitro retryables, X Layer gasless transactions, Celo fee currency calls, HyperEVM system transactions, Tempo and Arc.
+
 A chain without a native asset. On Tempo `CALLVALUE` is always 0 and value transfers are rejected, so the native branch of `settle` credits 0.
 
-The source itself. Six readings so far: two line by line, a swap trace, a liquidity trace, an attempt to break the custody invariants with a search over call sequences, and a check of every mask, shift, cast and `unchecked` block. Three independent Python transcriptions of the pool math stayed solvent across about 27,000 random operation sequences. The slot constants, error selectors, TickMath and BitMath tables were recomputed from the text.
+The source itself. Eight readings so far: two line by line, a swap trace, a liquidity trace, an attempt to break the custody invariants with a search over call sequences, a check of every mask, shift, cast and `unchecked` block, and two replays of the repository's tests against `src/`. The replays reproduced every concrete vector and revert in the test files on a Python transcription, including 8,920 cases of the v3 comparison run from the bytecode fixture in `test/bin`, and a verifier matched the transcription against 370 quotes and 107 mined swaps on the live networks. Three independent Python transcriptions of the pool math stayed solvent across about 27,000 random operation sequences. The slot constants, error selectors, TickMath and BitMath tables were recomputed from the text.
 
 ## What is open
 
-Three high-priority leads from the cycle 2 critic head the queue.
+The cycle 3 critic put four questions at the head of the queue.
 
-- A nested execution context with its own transient storage. `sync` needs no lock. If any network can run caller-chosen code inside a transaction under a fresh transient map while keeping its token transfers, one payment could be credited twice. Candidates named for checking: Tempo zones and the T14 account type due on 8 December 2026, Base transactions of type 0x79, Stylus host calls and retryable redeems, HyperEVM system calls with data, World Chain bundles, and Celo's fee currency calls. MegaETH's keyless deploy sandbox was checked and is safe.
-- A call that carries value without a matching balance debit. `settle` credits `msg.value` as paid. go-ethereum and BNB Smart Chain skip the balance check for the system caller address; whether anything an ordinary account sends can run with that caller is unchecked.
-- The repository's own tests, comments and test doubles that no reader has yet replayed against `src/`.
+- Tokens whose balance at the PoolManager moves without a transfer. Every such token found so far (AMPL, stETH, aTokens, qiAVAX, G$) turned up by chance in a sample. Comparing the change of `balanceOf(PoolManager)` between two blocks with the Transfer logs in between would list all of them on each network, and it has not been run.
+- Tokens that cap what one address may send in a period. If a pooled token has such a cap, an account that takes the PoolManager's balance and pays it back in the same unlock could use up the cap and block other users' withdrawals for the rest of the period.
+- Hooks that many pools share on Robinhood Chain, Elysium and X Layer. Whether an ordinary account can create its own pool on one of them and reach state that other pools depend on is unchecked.
+- A line by line list of which test or comment guards each statement in the custody path.
 
-Two limits apply to everything above. No compiler is installed here, so nothing was built, and one question depends on that: the Solidity team's bug list marks solc 0.8.26, which `foundry.toml` pins, as affected by a Yul optimizer bug published on 22 October 2026, and the readers found none of its source patterns but could not inspect the optimized output. Second, the chain facts were read from the live official deployments, which may differ from the CTF build once it is deployed.
+One more question is new: several users' calls inside one transaction, as in an ERC-4337 bundle. Transient storage is shared there, so a `sync` left by one user is still set when the next user's call runs.
+
+Three limits apply to everything above. No compiler is installed here, so nothing was built, and two questions depend on that: whether the build matches the size and creation code hash recorded in `snapshots/PoolManagerTest.json`, and whether a Yul optimizer bug published on 22 October 2026, which the Solidity bug list marks as affecting the pinned solc 0.8.26, touches the optimized output. Second, some node software could not be read: the HyperEVM validator is closed, the Nitro release that Arbitrum One and Robinhood Chain run is not public, and the Elysium build is unidentified. Third, the chain facts were read from the live official deployments, which may differ from the CTF build once it is deployed.
 
 ## Findings an ordinary account can trigger
 
@@ -438,6 +445,32 @@ Sources:
 - https://raw.githubusercontent.com/circlefin/arc-node/main/crates/precompiles/src/native_coin_authority.rs (transfer, mint and burn revert unless the caller is the native fiat token address)
 - https://rpc.mainnet.arc.io (eth_call at block 32,584,426 with from set to the PoolManager: balanceOf(PoolManager) on 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6 returns the proxy's figure, transfer(address,uint256) on it reverts, and eth_call of sync(0xc6ad...) and of sync(0x3600...) on the PoolManager succeeds while the manager is locked)
 
+### F-060. A zero amount transfer of qiAVAX from the Avalanche PoolManager runs Benqi reward accounting for it, and anyone can ask Benqi to pay the accrued QI to the PoolManager
+
+Low severity, confirmed. Effect: siphon. Who can trigger it: any account. Networks: Avalanche.
+
+What differs on the network: This is the reward bearing token case of the Ethereum finding, found on Avalanche with numbers. The PoolManager holds 2,305.6 qiAVAX, the Benqi market token for AVAX. Benqi pays suppliers in QI and in AVAX through its Comptroller, and claimReward(uint8,address) is public and pays the named holder.
+
+How it meets the code: 1. Every qiAVAX transfer calls Comptroller.transferAllowed, which updates and distributes supplier rewards for the sender and the recipient (Comptroller.sol lines 595 to 608). take(qiAVAX, to, 0) records no delta (src/PoolManager.sol:294, 368-369) and still makes the PoolManager call transfer (src/types/Currency.sol:73), so any account can run this accounting for the PoolManager at no cost. The call used 140,444 gas against about 5,000 for a plain token and changed no balance. 2. rewardAccrued(0, PoolManager) is 14.844 QI and rewardAccrued(1, PoolManager) is 0.1286 AVAX. 3. claimReward(0, PoolManager) can be called by anyone and transfers the accrued QI to the PoolManager when the Comptroller holds enough QI (lines 1234 and 1287 to 1291). 4. A caller who runs sync(QI), then the claim, then settle inside one unlock is credited the QI that arrived and can take it (src/PoolManager.sol:279-297, 349-364). 5. Today the Comptroller holds 0.1096 QI, less than the accrued amount, so the claim pays nothing: in simulation it succeeded and the QI balance of the PoolManager did not change. The AVAX reward cannot be paid at all, because the PoolManager has no receive function, and claimReward(1, PoolManager) reverts.
+
+What is at risk: 14.84 QI today, once the Comptroller is funded again, plus whatever accrues later on the qiAVAX that pools hold. The qiAVAX balance is worth about 54 AVAX at the measured mint rate, so the sums are small. Without a caller the QI would sit in the PoolManager as a surplus that no pool can withdraw, so liquidity providers do not receive it in either case.
+
+What it takes: Pools or claims in qiAVAX or another market token of a lending protocol whose reward claim can be made for a third party. The Benqi Comptroller must hold at least the accrued amount of QI. I did not check other lending forks on other chains.
+
+What can be done: None in core. Liquidity providers in reward bearing market tokens should expect to lose the rewards. A hook could claim and donate them to the pool.
+
+This entry adds to F-041.
+
+Second reviewer's corrections: The zero amount transfer is not needed. claimReward updates the supply index and distributes to the holder by itself before it pays. The impact line about what accrues later needs a number: supplyRewardSpeeds(0, qiAVAX) and supplyRewardSpeeds(1, qiAVAX) both return 1 wei per second, and rewardAccrued rose by 103 wei across my claim simulation, so nothing of size accrues now. The 14.84 QI is a remainder from an earlier reward period. Today the claim pays nothing because the Comptroller holds 0.1096 QI, as the finding says. A caller who tops up the Comptroller himself to make the claim pay gains at most that 0.1096 QI. I compared the public repository file with on-chain behaviour only and did not match it to the deployed implementation bytecode. The actor value unprivileged is right, since the claim and every PoolManager call are open to any account. Severity low stands: the amount is small, the condition for a payout does not hold today, and pool principal is not touched.
+
+Code: `src/PoolManager.sol:279-297`, `src/PoolManager.sol:349-369`, `src/types/Currency.sol:55-75`.
+
+Sources:
+
+- https://api.avax.network/ext/bc/C/rpc (rpc eth_call at block 101,112,181 and later on 2026-11-22 with a measuring stub placed at the PoolManager address by state override: qiAVAX.transfer(recipient, 0) returns true, uses 140,444 gas and leaves the qiAVAX and QI balances unchanged; rewardAccrued(0, PoolManager) = 0xce0130c391ab383d; rewardAccrued(1, PoolManager) = 0x01c90be69987eff4; claimReward(0, PoolManager) succeeds with no change in QI.balanceOf(PoolManager); claimReward(1, PoolManager) reverts; QI.balanceOf(Comptroller) = 0.1096 QI; balanceOf(PoolManager) on qiAVAX = 230,561,327,030 with 8 decimals; a value call of 10^12 wei to qiAVAX mints 4,276 units)
+- https://raw.githubusercontent.com/Benqi-fi/BENQI-Smart-Contracts/master/lending/Comptroller.sol (transferAllowed distributes supplier rewards for src and dst; claimReward(uint8,address payable) is public; grantRewardInternal pays QI only when the amount does not exceed the Comptroller balance)
+- https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api?module=account&action=addresstokenbalance&address=0x06380c0e0912312b5150364b9dc4542ba0dbbc85&page=1&offset=100 (token balances of the Avalanche PoolManager, including 2,305.61 qiAVAX, 131.06 sAVAX and 10,974 QI)
+
 ### F-006. Source disagrees with two interface comments and two test conditions, and none of the four changes who can move funds
 
 Info severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: all 21 networks.
@@ -490,6 +523,67 @@ Sources:
 - https://sourcify.dev/server/v2/contract/1/0xf38521f130fccf29db1961597bc5d2b60f995f85?fields=sources,compilation (TokenJar has an empty receive function and a release function restricted to the releaser, so native fee collection does not hand control to an arbitrary party)
 - https://raw.githubusercontent.com/ethereum/ERCs/master/ERCS/erc-4337.md (a bundle is one transaction and transient storage persists across the UserOperations in it)
 
+### F-054. Four interface comments and two test helper remarks disagree with the source, and none of them changes who can move funds
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: all 21 networks.
+
+What differs on the network: None. These are differences between the source text and the repository's own comments, tests and test doubles. They are the same on every network.
+
+How it meets the code: This unit compared every NatSpec sentence in src/interfaces with the function it describes and read every helper in src/test and test/utils. Six statements do not match the source, in addition to the four recorded in F-006. First, src/interfaces/IHooks.sol:102 says the fee returned by beforeSwap is used only if it is at most 1,000,000. The source reverts with LPFeeTooLarge when the override flag is set and the fee is above the maximum (src/libraries/Pool.sol:303-305, src/libraries/LPFeeLibrary.sol:75-78). The test agrees with the source and expects the revert (test/DynamicReturnFees.t.sol:151-162), although its own comment says the large fee is not used. Second, IHooks.sol:50 and IHooks.sol:81 describe the delta handed to afterAddLiquidity and afterRemoveLiquidity as the sum of principal, fees and hook delta. The source passes principal plus fees, and subtracts the hook delta only after the hook returns (src/PoolManager.sol:171-178, src/libraries/Hooks.sol:219-243). The test doubles rely on the source behaviour (src/test/FeeTakingHook.sol:54-91, test/CustomAccounting.t.sol:270-322). Third, src/interfaces/IPoolManager.sol:85-86 calls the Swap event amounts the deltas of the pool's balances. The emitted values are the swapper's deltas, negative for the amount paid in (src/PoolManager.sol:241-250), and the tests expect -100 and 98 for an exact input of 100 (test/PoolManager.t.sol:500-503). Fourth, IPoolManager.sol:174 says take reverts if the requested amount is not available. That holds for native currency and for tokens with code, and test/PoolManager.t.sol:917-922 states it for an empty manager. For a currency address without code the transfer call succeeds with empty return data and nothing moves (src/types/Currency.sol:60-74), which earlier cycles recorded under assumption A4. Fifth, test/utils/CurrencySettler.sol:20-25 settles native currency without a prior sync and says a sync is not required, while the comment at src/PoolManager.sol:348 tells integrators to call sync before a native settle. A native settle that follows a token sync by other code in the same transaction reverts with NonzeroNativeValue (src/PoolManager.sol:353-356, test/PoolManager.t.sol:976-989). Sixth, src/test/ProtocolFeesImplementation.sol:27-33 offers setIsUnlocked and an _isUnlocked override, no test calls setIsUnlocked, and collectProtocolFees never reads the lock (src/ProtocolFees.sol:44-57). This is the test double side of the first item of F-006. I traced each item for a fund effect. A hook that returns an oversized fee can only stop swaps in its own pool. The delta seen by a liquidity hook is the amount the hook can charge against, and the caller delta plus the hook delta still equals the pool delta in every replayed case. The event wording affects readers of logs only. The native settle revert needs code that runs earlier in the same transaction, and it returns the caller's value with the revert.
+
+What is at risk: No loss or freeze found. A hook author who trusts IHooks.sol:102 may ship a hook that makes swaps in its own pool revert when it computes a fee above 100 percent. An integrator that copies the native branch of the test helper without sync(address(0)) can have a native settle reverted by a token sync left earlier in the same transaction.
+
+What it takes: None for the comments. The native settle revert needs a call to sync with a token address earlier in the same transaction, for example from a hook of a pool the caller used or from a contract that bundles several actions.
+
+What can be done: Correct the six texts. Hook authors should cap the fee before setting the override flag. Integrators should call sync(address(0)) before every native settle, as the comment at src/PoolManager.sol:348 says.
+
+Second reviewer's corrections: No correction to the six items. Two precisions. The fourth item says the comment holds for tokens with code. It holds only for tokens whose transfer reverts or returns false on a shortfall, because Currency.sol:68 also accepts empty return data from a contract with code. The actor value is nominal here. The record describes no loss or freeze. The two operational effects need a hook author for the fee revert and a party that runs earlier in the same transaction for the native settle revert, which F-014 already records.
+
+Code: `src/libraries/Pool.sol:303-305`, `src/libraries/Hooks.sol:209-245`, `src/PoolManager.sol:171-178`, `src/PoolManager.sol:241-250`, `src/PoolManager.sol:348-365`, `src/ProtocolFees.sol:44-60`, `src/types/Currency.sol:60-74`.
+
+Sources:
+
+- src/interfaces/IHooks.sol:102 (Comment says an override fee above the maximum is not used.)
+- src/libraries/Pool.sol:303-305 (The source validates the override fee and reverts with LPFeeTooLarge when it is above 1,000,000.)
+- test/DynamicReturnFees.t.sol:151-162 (The test expects LPFeeTooLarge for an override fee of 1,000,001.)
+- src/interfaces/IHooks.sol:50 (Comment says the delta passed to afterAddLiquidity includes the hook delta. Line 81 says the same for removal.)
+- src/libraries/Hooks.sol:219-243 (The hook receives the delta before the hook delta is subtracted.)
+- src/interfaces/IPoolManager.sol:85-86 (Comment describes the Swap event amounts as pool balance deltas.)
+- test/PoolManager.t.sol:500-503 (The test expects amount0 -100 and amount1 98 for an exact input of 100 of currency0.)
+- test/utils/CurrencySettler.sol:20-25 (The helper settles native currency without calling sync first.)
+- src/PoolManager.sol:348 (Comment says integrators should call sync before a native settle.)
+- src/test/ProtocolFeesImplementation.sol:27-33 (The test double has a lock toggle that no test uses.)
+
+### F-055. Two more places where the repository's tests and test doubles disagree with the library source, and neither changes who can move funds
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: all 21 networks.
+
+What differs on the network: None. The disagreements are between files of this repository and hold on every network.
+
+How it meets the code: This extends F-006 with what a replay of test/libraries, test/Tick.t.sol, test/types and the test doubles in src/test found. First, test/libraries/Pool.t.sol:73-83 expects SafeCastOverflow from Pool.modifyLiquidity only when a token amount is above 2^128 - 1. The variable is named maxInt128InTypeU256 and holds Constants.MAX_UINT128. The source casts both amounts to int128: Pool.sol:212-235 takes the signed results of SqrtPriceMath.sol:261-288 and SafeCast.toInt128 (SafeCast.sol:40-43) reverts once the amount of an add is above 2^127. For amounts from 2^127 + 1 to 2^128 - 1 the source reverts and the test expects success. One case from the replay: spacing 32767, price 735853766953812733719635225319847024411115828962 (tick 873548), range -131068 to 98301, liquidity 2300850342447660200206975412810193765, which is below the per tick cap 6076470837873901133274546561281575204. The amount of currency1 is 313585663563401618519606321096647269736 and the source reverts with SafeCastOverflow. Out of 400,000 random parameter sets 346 fell in this window. Every other outcome, including the order of the eight revert conditions at Pool.t.sol:51-70, matched the source. Second, src/test/SqrtPriceMathEchidnaTest.sol:144-197 asserts that the signed helpers return a positive amount for positive liquidity and a non-positive amount for negative liquidity. The source returns minus the rounded up amount for positive liquidity and the rounded down amount for negative liquidity (SqrtPriceMath.sol:266-270 and 283-287). On 200,000 random inputs the assertion for positive liquidity fails 135,655 times and the one for negative liquidity 48,354 times as written, and every other invariant of that file holds. The forge tests use the sign of the source: a negative delta is owed by the caller (PoolManager.sol:183 and 368-378), and test/libraries/StateLibrary.t.sol:300-301 negates the delta of an add to get the amount paid. The echidna harness is not part of forge test, so nothing in the repository runs it. Third, a correction to the fourth item of F-006: test/libraries/Pool.t.sol:135-158 calls swap for a nonzero amount only when it expects a revert. It makes no call for a valid limit and no call when a zeroForOne limit equals MIN_SQRT_PRICE, so that file says nothing about the boundary that Pool.sol:328-330 rejects and contains no successful nonzero swap. The third item of F-006 was replayed: 8,795 of 120,000 random cases had a zero amount with a 100 percent swap fee, where Pool.t.sol:129-131 expects InvalidFeeForExactOut and Pool.sol:311-320 returns a zero delta without touching state.
+
+What is at risk: None on funds. In the first case the source refuses an add that the test would let through, so it is stricter than the test. A removal whose amount is 2^127 or more reverts at the same cast and has to be split, which an earlier cleared item on the int128 casts already covers. In the second case the source sign is the one the accounting in PoolManager needs: with the sign of the echidna file an add would credit the caller.
+
+What it takes: None. No account gains anything from these disagreements.
+
+What can be done: Change the bound at test/libraries/Pool.t.sol:73 to the int128 maximum and bring the sign assertions in src/test/SqrtPriceMathEchidnaTest.sol in line with SqrtPriceMath, so that the tests and the harness can serve as a reference for the source.
+
+This entry adds to F-006.
+
+Second reviewer's corrections: No party gains or loses through these disagreements, so the actor value carries no weight here; unprivileged is the value the existing F-006 entry already has. The counts 346 of 400,000, 135,655 and 48,354 could not be reproduced because the finding does not state its sampling distribution; the direction of each result reproduces. The third part repeats a correction that the cycle 1 verification of F-006 already recorded. The statement that nothing in the repository runs the echidna harness needs one addition: .github/workflows/mythx.yml:60 lists SqrtPriceMathEchidnaTest under contracts/test/, a directory that does not exist in this repository, and echidna.config.yml is present. No forge test runs the harness. On the limit for an add: an amount of exactly 2^127 passes, because the amount is negated before the cast and -2^127 fits int128. A removal passes up to 2^127 - 1.
+
+Code: `src/libraries/Pool.sol:206-237`, `src/libraries/SqrtPriceMath.sol:261-288`, `src/libraries/SafeCast.sol:40-43`, `src/libraries/Pool.sol:311-330`.
+
+Sources:
+
+- test/libraries/Pool.t.sol:73-83 (The test expects SafeCastOverflow only above Constants.MAX_UINT128.)
+- src/libraries/Pool.sol:212-235 (Both amounts of a liquidity change are cast with toInt128.)
+- src/libraries/SafeCast.sol:40-43 (toInt128(int256) reverts when the value does not fit in int128.)
+- src/test/SqrtPriceMathEchidnaTest.sol:144-197 (The echidna harness asserts a positive amount for positive liquidity.)
+- src/libraries/SqrtPriceMath.sol:261-288 (The signed helpers return a negative amount for positive liquidity, rounded up, and a positive amount for negative liquidity, rounded down.)
+- test/libraries/Pool.t.sol:129-158 (The swap fuzz test calls swap for nonzero amounts only when it expects a revert.)
+- test/libraries/StateLibrary.t.sol:300-301 (The forge tests treat the delta of an add as negative.)
+
 ## Findings that need a privileged party
 
 These are outside the threat model and are listed for reference. Full text is in `FINDINGS.md`.
@@ -500,9 +594,11 @@ These are outside the threat model and are listed for reference. Full text is in
 | F-004 | author of a hook or token the victims use | medium | confirmed | all 21 networks | A pool's hook can block or reprice every liquidity removal in that pool, and core has no path that skips the hook |
 | F-005 | author of a hook or token the victims use | medium | confirmed | all 21 networks | Uncollected fees above the int128 maximum make every later update of a liquidity position revert |
 | F-013 | author of a hook or token the victims use | medium | confirmed | Ethereum | EIP-7702 lets the code behind a hook address be replaced or removed after a pool is created |
+| F-053 | author of a hook or token the victims use | medium | confirmed | Arbitrum One, Robinhood Chain | Activated Stylus programs exist on Robinhood Chain as well, and a copy of an activated program runs without a new activation |
 | F-018 | author of a hook or token the victims use | low | confirmed | MegaETH | On MegaETH a caller can make every block field and oracle read revert inside hook and token sub-calls, and one such read caps the rest of the transaction at 20 million compute gas |
 | F-040 | author of a hook or token the victims use | low | confirmed | Avalanche | Avalanche C-Chain folds two storage slot indexes into one, which lets a hook author hide a write path that Ethereum does not have |
 | F-051 | author of a hook or token the victims use | low | confirmed | Tempo | A delegated session credential with a TIP-20 spending limit on Tempo can move the account's ERC-6909 claims and pool positions without limit |
+| F-059 | author of a hook or token the victims use | low | confirmed | Elysium, X Layer | Two pooled tokens make their transfer rules depend on the PoolManager address: ELO on Elysium needs a budget set by its hook, and v4CRCL on X Layer pays out only to permitted recipients |
 | F-002 | token issuer or admin | high | confirmed | Robinhood Chain | Robinhood Stock Tokens and USDG let the issuer block, pause, burn or upgrade the tokens held by the PoolManager |
 | F-011 | token issuer or admin | high | confirmed | Ethereum | One issuer blocklist entry on the PoolManager address freezes or wipes a stablecoin for every pool |
 | F-015 | token issuer or admin | high | confirmed | Monad | Role holders on GHO, syrupUSDC, apxUSD, shMON and mUSD can pause, burn, move or replace balances that the Monad PoolManager holds |
@@ -512,6 +608,8 @@ These are outside the threat model and are listed for reference. Full text is in
 | F-031 | token issuer or admin | high | confirmed | Tempo | TIP-20 issuer roles can burn, freeze or pause the PoolManager balance of a Tempo stablecoin |
 | F-032 | token issuer or admin | high | confirmed | Arc | A pause of the USDC token on Arc stops the ERC-20 face and leaves native transfers open over the same PoolManager balance |
 | F-036 | token issuer or admin | high | confirmed | Arbitrum One | Issuer block lists on USDC, USDT0, PYUSD and cbBTC cover the single PoolManager address on Arbitrum One |
+| F-056 | token issuer or admin | high | confirmed | Celo | The GoodDollar owner has blocked the PoolManager address on Celo, so 550 million G$ held for pools cannot leave |
+| F-057 | token issuer or admin | high | confirmed | Celo, X Layer | Issuers of the tokens that make up most pool value on Celo and X Layer can pause, block, burn or upgrade the PoolManager's balance |
 | F-007 | token issuer or admin | medium | confirmed | BNB Smart Chain | Scheduled Jenner fork adds protocol-native tokens whose issuer can seize, pause or block the PoolManager balance |
 | F-043 | token issuer or admin | medium | confirmed | HyperEVM | stHYPE and wstHYPE are two currency ids over one share balance, so a loss in the rebasing face is paid from the shares of pools in the other face |
 | F-035 | token issuer or admin | low | confirmed | Elysium | Elysium USDC is a bridge representation whose backing on HyperEVM sits at one address that the issuer can block |
@@ -531,6 +629,7 @@ These are outside the threat model and are listed for reference. Full text is in
 | F-029 | owner, fee controller or chain governance | medium | confirmed | Optimism, Base, Unichain, Zora, Worldchain, Ink, Soneium | PoolManager ownership rests on an upgradeable messenger predeploy on five chains and on the portal alias on two, and a takeover reaches protocol fees only |
 | F-045 | owner, fee controller or chain governance | low | confirmed | HyperEVM | The MRB hard fork raised the price of seven precompiles by 5 to 40 times, which can push a hook past the 3,000,000 gas fast block |
 | F-052 | owner, fee controller or chain governance | low | confirmed | Arc | Arc keeps a denylist contract whose owner can keep transactions that name a listed sender or target out of the mempool |
+| F-058 | owner, fee controller or chain governance | info | confirmed | BNB Smart Chain | BNB Smart Chain runs a call from the system address with its stated value and moves no balance, and no ordinary sender can be that address |
 
 ## The 21 networks as read from chain
 
@@ -563,6 +662,6 @@ Code group compares the deployed bytecode after blanking the contract's own addr
 ## Where the evidence is
 
 - `FINDINGS.md`: every finding in full, including the out-of-scope ones.
-- `CLEARED.md`: the 332 checks that came out safe, with the reason for each.
+- `CLEARED.md`: the 420 checks that came out safe, with the reason for each.
 - `STATUS.md`: coverage per network and lens, open leads, cycle history.
 - `cycles/NNN/`: the raw research and verdict files of each cycle.

@@ -1387,6 +1387,79 @@
    ]
   },
   {
+   "title": "A zero amount transfer of qiAVAX from the Avalanche PoolManager runs Benqi reward accounting for it, and anyone can ask Benqi to pay the accrued QI to the PoolManager",
+   "chainIds": [
+    43114
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A5"
+   ],
+   "effect": "siphon",
+   "difference": "This is the reward bearing token case of the Ethereum finding, found on Avalanche with numbers. The PoolManager holds 2,305.6 qiAVAX, the Benqi market token for AVAX. Benqi pays suppliers in QI and in AVAX through its Comptroller, and claimReward(uint8,address) is public and pays the named holder.",
+   "mechanism": "1. Every qiAVAX transfer calls Comptroller.transferAllowed, which updates and distributes supplier rewards for the sender and the recipient (Comptroller.sol lines 595 to 608). take(qiAVAX, to, 0) records no delta (src/PoolManager.sol:294, 368-369) and still makes the PoolManager call transfer (src/types/Currency.sol:73), so any account can run this accounting for the PoolManager at no cost. The call used 140,444 gas against about 5,000 for a plain token and changed no balance. 2. rewardAccrued(0, PoolManager) is 14.844 QI and rewardAccrued(1, PoolManager) is 0.1286 AVAX. 3. claimReward(0, PoolManager) can be called by anyone and transfers the accrued QI to the PoolManager when the Comptroller holds enough QI (lines 1234 and 1287 to 1291). 4. A caller who runs sync(QI), then the claim, then settle inside one unlock is credited the QI that arrived and can take it (src/PoolManager.sol:279-297, 349-364). 5. Today the Comptroller holds 0.1096 QI, less than the accrued amount, so the claim pays nothing: in simulation it succeeded and the QI balance of the PoolManager did not change. The AVAX reward cannot be paid at all, because the PoolManager has no receive function, and claimReward(1, PoolManager) reverts.",
+   "impact": "14.84 QI today, once the Comptroller is funded again, plus whatever accrues later on the qiAVAX that pools hold. The qiAVAX balance is worth about 54 AVAX at the measured mint rate, so the sums are small. Without a caller the QI would sit in the PoolManager as a surplus that no pool can withdraw, so liquidity providers do not receive it in either case.",
+   "preconditions": "Pools or claims in qiAVAX or another market token of a lending protocol whose reward claim can be made for a third party. The Benqi Comptroller must hold at least the accrued amount of QI. I did not check other lending forks on other chains.",
+   "mitigations": "None in core. Liquidity providers in reward bearing market tokens should expect to lose the rewards. A hook could claim and donate them to the pool.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-297",
+    "src/PoolManager.sol:349-369",
+    "src/types/Currency.sol:55-75"
+   ],
+   "sources": [
+    {
+     "url": "https://api.avax.network/ext/bc/C/rpc",
+     "supports": "rpc eth_call at block 101,112,181 and later on 2026-11-22 with a measuring stub placed at the PoolManager address by state override: qiAVAX.transfer(recipient, 0) returns true, uses 140,444 gas and leaves the qiAVAX and QI balances unchanged; rewardAccrued(0, PoolManager) = 0xce0130c391ab383d; rewardAccrued(1, PoolManager) = 0x01c90be69987eff4; claimReward(0, PoolManager) succeeds with no change in QI.balanceOf(PoolManager); claimReward(1, PoolManager) reverts; QI.balanceOf(Comptroller) = 0.1096 QI; balanceOf(PoolManager) on qiAVAX = 230,561,327,030 with 8 decimals; a value call of 10^12 wei to qiAVAX mints 4,276 units"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/Benqi-fi/BENQI-Smart-Contracts/master/lending/Comptroller.sol",
+     "supports": "transferAllowed distributes supplier rewards for src and dst; claimReward(uint8,address payable) is public; grantRewardInternal pays QI only when the amount does not exceed the Comptroller balance"
+    },
+    {
+     "url": "https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api?module=account&action=addresstokenbalance&address=0x06380c0e0912312b5150364b9dc4542ba0dbbc85&page=1&offset=100",
+     "supports": "token balances of the Avalanche PoolManager, including 2,305.61 qiAVAX, 131.06 sAVAX and 10,974 QI"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 3,
+    "factCheck": "On https://api.avax.network/ext/bc/C/rpc at block 101,117,710 on 2026-11-23: qiAVAX at 0x5C0401e81Bc07Ca70fAD469b451682c0d747Ef1c names 0x486af39519b4dc9a7fccd318217352830e8ad9b4 as comptroller, and that contract names QI at 0x8729438eb15e2c8b576fcc6aecda6a148776c0f5. qiAVAX.balanceOf(PoolManager) is 230,561,327,030 (2,305.61 with 8 decimals). rewardAccrued(0, PoolManager) is 14.844 QI and rewardAccrued(1, PoolManager) is 0.1286 AVAX. QI.balanceOf(Comptroller) is 0.1096 QI and QI.balanceOf(PoolManager) is 10,974.54 QI. transfer(recipient, 0) with from set to the PoolManager returns true, and eth_estimateGas for it gives 167,537 for the whole transaction, which agrees with about 140,000 for the token call. claimReward(0, PoolManager) from an unrelated address returns without error. claimReward(1, PoolManager) reverts with the string Transfer failed. Through the Multicall3 contract that exists on chain I read QI.balanceOf(PoolManager), called claimReward(0, PoolManager) and read the balance again in one eth_call: the balance stayed at 10,974,542,456,766,585,212,156 and rewardAccrued stayed at 14.844 QI. The Comptroller source in the Benqi repository matches this behaviour: transferAllowed runs the supplier reward update for source and destination (lines 595 to 611), claimReward(uint8,address payable) is public (line 1234), and grantRewardInternal pays QI only when the amount is at most the balance of the Comptroller and otherwise leaves the accrual in place (lines 1287 to 1306). The AVAX branch sends value with 4,029 gas and requires success, which fails for a recipient without a receive function. The Routescan balance list shows 2,305.61 qiAVAX, 131.06 sAVAX and 10,974.54 QI for the PoolManager.",
+    "codeCheck": "take with amount 0 passes toInt128, and _accountDelta returns at once for a zero delta (src/PoolManager.sol:294, 368-369). The library still makes the CALL to the token with the PoolManager as msg.sender (src/types/Currency.sol:60-74), so any account inside an unlock can run the token's sender side logic at no cost. sync has no lock check and stores balanceOf(PoolManager) (src/PoolManager.sol:279-288). _settle credits the caller with the whole rise since the sync (src/PoolManager.sol:358-364), and take pays it out (src/PoolManager.sol:291-297). The caller ends with all deltas at zero, so the count check in unlock passes (src/PoolManager.sol:112). No function in src/ pays out a balance surplus to pools: collectProtocolFees is limited to protocolFeesAccrued (src/ProtocolFees.sol:54-56). A QI payment that reaches the PoolManager between sync(QI) and settle is therefore credited to whoever opened the window. The guard at src/PoolManager.sol:356 does not apply because no value is sent. The path is the one already recorded for Ethereum under this reference.",
+    "corrections": "The zero amount transfer is not needed. claimReward updates the supply index and distributes to the holder by itself before it pays. The impact line about what accrues later needs a number: supplyRewardSpeeds(0, qiAVAX) and supplyRewardSpeeds(1, qiAVAX) both return 1 wei per second, and rewardAccrued rose by 103 wei across my claim simulation, so nothing of size accrues now. The 14.84 QI is a remainder from an earlier reward period. Today the claim pays nothing because the Comptroller holds 0.1096 QI, as the finding says. A caller who tops up the Comptroller himself to make the claim pay gains at most that 0.1096 QI. I compared the public repository file with on-chain behaviour only and did not match it to the deployed implementation bytecode. The actor value unprivileged is right, since the claim and every PoolManager call are open to any account. Severity low stands: the amount is small, the condition for a payout does not hold today, and pool principal is not touched.",
+    "sources": [
+     {
+      "url": "https://api.avax.network/ext/bc/C/rpc",
+      "supports": "rpc eth_call and eth_estimateGas at blocks 101,117,710 and later on 2026-11-23: comptroller and QI addresses, qiAVAX and QI balances of the PoolManager, rewardAccrued for both reward types, QI balance of the Comptroller, zero amount transfer from the PoolManager returns true, claimReward(0, PoolManager) from an unrelated address succeeds and moves no QI, claimReward(1, PoolManager) reverts, supplyRewardSpeeds for qiAVAX are 1"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/Benqi-fi/BENQI-Smart-Contracts/master/lending/Comptroller.sol",
+      "supports": "transferAllowed distributes supplier rewards for source and destination, claimReward is public and takes the holder as an argument, grantRewardInternal pays QI only when the Comptroller balance covers the amount and sends AVAX with a required success"
+     },
+     {
+      "url": "https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api?module=account&action=addresstokenbalance&address=0x06380c0e0912312b5150364b9dc4542ba0dbbc85&page=1&offset=100",
+      "supports": "token balances of the Avalanche PoolManager: 2,305.61 qiAVAX, 131.06 sAVAX, 10,974.54 QI"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 3,
+   "extends": "F-041",
+   "id": "F-060",
+   "firstCycle": 3,
+   "history": [
+    {
+     "cycle": 3,
+     "unit": "theme-mirrored-ledgers",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
    "title": "Source disagrees with two interface comments and two test conditions, and none of the four changes who can move funds",
    "chainIds": [
     1,
@@ -1579,6 +1652,318 @@
     {
      "cycle": 1,
      "unit": "ethereum-reference",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
+   "title": "Four interface comments and two test helper remarks disagree with the source, and none of them changes who can move funds",
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "assumptions": [],
+   "effect": "degrade",
+   "difference": "None. These are differences between the source text and the repository's own comments, tests and test doubles. They are the same on every network.",
+   "mechanism": "This unit compared every NatSpec sentence in src/interfaces with the function it describes and read every helper in src/test and test/utils. Six statements do not match the source, in addition to the four recorded in F-006. First, src/interfaces/IHooks.sol:102 says the fee returned by beforeSwap is used only if it is at most 1,000,000. The source reverts with LPFeeTooLarge when the override flag is set and the fee is above the maximum (src/libraries/Pool.sol:303-305, src/libraries/LPFeeLibrary.sol:75-78). The test agrees with the source and expects the revert (test/DynamicReturnFees.t.sol:151-162), although its own comment says the large fee is not used. Second, IHooks.sol:50 and IHooks.sol:81 describe the delta handed to afterAddLiquidity and afterRemoveLiquidity as the sum of principal, fees and hook delta. The source passes principal plus fees, and subtracts the hook delta only after the hook returns (src/PoolManager.sol:171-178, src/libraries/Hooks.sol:219-243). The test doubles rely on the source behaviour (src/test/FeeTakingHook.sol:54-91, test/CustomAccounting.t.sol:270-322). Third, src/interfaces/IPoolManager.sol:85-86 calls the Swap event amounts the deltas of the pool's balances. The emitted values are the swapper's deltas, negative for the amount paid in (src/PoolManager.sol:241-250), and the tests expect -100 and 98 for an exact input of 100 (test/PoolManager.t.sol:500-503). Fourth, IPoolManager.sol:174 says take reverts if the requested amount is not available. That holds for native currency and for tokens with code, and test/PoolManager.t.sol:917-922 states it for an empty manager. For a currency address without code the transfer call succeeds with empty return data and nothing moves (src/types/Currency.sol:60-74), which earlier cycles recorded under assumption A4. Fifth, test/utils/CurrencySettler.sol:20-25 settles native currency without a prior sync and says a sync is not required, while the comment at src/PoolManager.sol:348 tells integrators to call sync before a native settle. A native settle that follows a token sync by other code in the same transaction reverts with NonzeroNativeValue (src/PoolManager.sol:353-356, test/PoolManager.t.sol:976-989). Sixth, src/test/ProtocolFeesImplementation.sol:27-33 offers setIsUnlocked and an _isUnlocked override, no test calls setIsUnlocked, and collectProtocolFees never reads the lock (src/ProtocolFees.sol:44-57). This is the test double side of the first item of F-006. I traced each item for a fund effect. A hook that returns an oversized fee can only stop swaps in its own pool. The delta seen by a liquidity hook is the amount the hook can charge against, and the caller delta plus the hook delta still equals the pool delta in every replayed case. The event wording affects readers of logs only. The native settle revert needs code that runs earlier in the same transaction, and it returns the caller's value with the revert.",
+   "impact": "No loss or freeze found. A hook author who trusts IHooks.sol:102 may ship a hook that makes swaps in its own pool revert when it computes a fee above 100 percent. An integrator that copies the native branch of the test helper without sync(address(0)) can have a native settle reverted by a token sync left earlier in the same transaction.",
+   "preconditions": "None for the comments. The native settle revert needs a call to sync with a token address earlier in the same transaction, for example from a hook of a pool the caller used or from a contract that bundles several actions.",
+   "mitigations": "Correct the six texts. Hook authors should cap the fee before setting the override flag. Integrators should call sync(address(0)) before every native settle, as the comment at src/PoolManager.sol:348 says.",
+   "coreRefs": [
+    "src/libraries/Pool.sol:303-305",
+    "src/libraries/Hooks.sol:209-245",
+    "src/PoolManager.sol:171-178",
+    "src/PoolManager.sol:241-250",
+    "src/PoolManager.sol:348-365",
+    "src/ProtocolFees.sol:44-60",
+    "src/types/Currency.sol:60-74"
+   ],
+   "sources": [
+    {
+     "url": "src/interfaces/IHooks.sol:102",
+     "supports": "Comment says an override fee above the maximum is not used."
+    },
+    {
+     "url": "src/libraries/Pool.sol:303-305",
+     "supports": "The source validates the override fee and reverts with LPFeeTooLarge when it is above 1,000,000."
+    },
+    {
+     "url": "test/DynamicReturnFees.t.sol:151-162",
+     "supports": "The test expects LPFeeTooLarge for an override fee of 1,000,001."
+    },
+    {
+     "url": "src/interfaces/IHooks.sol:50",
+     "supports": "Comment says the delta passed to afterAddLiquidity includes the hook delta. Line 81 says the same for removal."
+    },
+    {
+     "url": "src/libraries/Hooks.sol:219-243",
+     "supports": "The hook receives the delta before the hook delta is subtracted."
+    },
+    {
+     "url": "src/interfaces/IPoolManager.sol:85-86",
+     "supports": "Comment describes the Swap event amounts as pool balance deltas."
+    },
+    {
+     "url": "test/PoolManager.t.sol:500-503",
+     "supports": "The test expects amount0 -100 and amount1 98 for an exact input of 100 of currency0."
+    },
+    {
+     "url": "test/utils/CurrencySettler.sol:20-25",
+     "supports": "The helper settles native currency without calling sync first."
+    },
+    {
+     "url": "src/PoolManager.sol:348",
+     "supports": "Comment says integrators should call sync before a native settle."
+    },
+    {
+     "url": "src/test/ProtocolFeesImplementation.sol:27-33",
+     "supports": "The test double has a lock toggle that no test uses."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 3,
+    "factCheck": "The finding states no chain fact. Its field difference says that the six items are the same on every network, so the fact check is whether the deployed contracts behave as the source reading says. I ran read-only calls on all 21 RPC endpoints of state/networks.json on 2026-11-23 (Ethereum block 26,474,254, Celo 83,493,046, Polygon 97,792,226, Arc 32,649,308, the others at latest). From an unrelated address, sync(address(0)) returned success on all 21, sync of an address without code (0x00000000000000000000000000000000dead0001) reverted with empty data on all 21, settle() and take reverted with ManagerLocked (0x54e3ca0d) on all 21, and a call with empty calldata reverted on all 21. That matches the source: sync has no lock check, balanceOf on an address without code fails in the return decoding, and the contract has no receive or fallback function. For the fifth item I tested the guard on the deployed code. A caller placed by state override opened unlock, called sync(X) and then settle with 1 wei. Every path of that caller ends in a revert, so nothing is credited. With X set to the identity precompile 0x04, which answers balanceOf with its 36 input bytes, all 21 deployed PoolManagers returned NonzeroNativeValue (0xb0ec849e). The same caller with value 0 after sync(X), and with 1 wei after sync(address(0)), got past settle on all 21. With X set to the native face on Celo (0x471EcE3750Da237f93B8E339c536989b8978a438), Polygon (0x0000000000000000000000000000000000001010) and Arc (0x3600000000000000000000000000000000000000), and to USDC on Ethereum, the result was the same. The four interface comments and the two helper remarks are facts of this repository and I read each cited line. Not confirmed: forge is not installed, so I did not run the tests, and I did not exercise take with a currency without code inside an unlock on chain.",
+    "codeCheck": "All six items hold as stated. One. src/interfaces/IHooks.sol:102 says the returned fee is used only if it is at most 1,000,000. src/libraries/Pool.sol:303-305 calls removeOverrideFlagAndValidate when the override flag is set, and src/libraries/LPFeeLibrary.sol:75-78 with 43-45 reverts with LPFeeTooLarge above the maximum. test/DynamicReturnFees.t.sol:151-162 expects that revert, and its comment at line 158 says the large fee is not used. The comment at src/libraries/Hooks.sol:261-262 agrees with the source. Two. IHooks.sol:50 and 81 describe the delta passed to the hook as including the hook delta. src/libraries/Hooks.sol:219-243 encodes the delta it received, which src/PoolManager.sol:171 builds as principal plus fees, and subtracts the hook delta only at lines 230 and 242. src/test/FeeTakingHook.sol:53-91 computes its fee from that value. Three. src/interfaces/IPoolManager.sol:85-86 calls the event amounts the deltas of the pool balance. src/PoolManager.sol:241-250 emits the delta that src/libraries/Pool.sol:451-462 builds, which is negative for the amount paid in, and test/PoolManager.t.sol:500-503 expects -100 and 98. Four. IPoolManager.sol:174 says take reverts if the amount is not available. src/types/Currency.sol:60-74 accepts a call that does not revert and returns no data, with no code size check, so take of a currency without code debits the caller and moves nothing. Five. test/utils/CurrencySettler.sol:20-25 settles native currency without sync and says sync is not required. The comment at src/PoolManager.sol:348 asks for sync first. Lines 353-356 revert with NonzeroNativeValue when a token is synced and value is sent, and test/PoolManager.t.sol:976-989 covers it. Six. src/test/ProtocolFeesImplementation.sol:27-33 has setIsUnlocked and an _isUnlocked override. A search of test/ and src/ finds no call to either, and src/ProtocolFees.sol:44-57 never reads the lock. I traced each item for a path to funds and looked for missed guards. An oversized override fee reverts the swap before any state change in Pool.swap, so it can only stop swaps in the pool of that hook. The delta shown to a liquidity hook does not change the sum: Hooks.sol:230 and 242 subtract the hook delta from the caller delta, and PoolManager.sol:181-183 books both, so caller delta plus hook delta equals principal plus fees. The subtraction goes through the int128 casts of src/types/BalanceDelta.sol:34-46. The event wording touches no accounting. A take of a currency without code leaves the caller with a negative delta in that id (PoolManager.sol:294). sync of the same address reverts, mint adds to the debt (line 326), clear accepts only a positive delta (lines 311-314), and a pool can return that currency only after someone paid it in, so the unlock ends in CurrencyNotSettled (line 112). The native settle revert returns the value to the caller. Fee collection is limited to the controller (ProtocolFees.sol:48) and to protocolFeesAccrued with a checked subtraction (line 55).",
+    "corrections": "No correction to the six items. Two precisions. The fourth item says the comment holds for tokens with code. It holds only for tokens whose transfer reverts or returns false on a shortfall, because Currency.sol:68 also accepts empty return data from a contract with code. The actor value is nominal here. The record describes no loss or freeze. The two operational effects need a hook author for the fee revert and a party that runs earlier in the same transaction for the native settle revert, which F-014 already records.",
+    "sources": [
+     {
+      "url": "src/interfaces/IHooks.sol:50",
+      "supports": "Comment says the delta passed to afterAddLiquidity includes the hook delta. Line 81 says the same for removal and line 102 says an override fee above the maximum is not used."
+     },
+     {
+      "url": "src/libraries/Pool.sol:303-305",
+      "supports": "An override fee is validated and the swap reverts with LPFeeTooLarge above 1,000,000 (with src/libraries/LPFeeLibrary.sol:43-45 and 75-78)."
+     },
+     {
+      "url": "src/libraries/Hooks.sol:219-243",
+      "supports": "The liquidity hook receives the delta before the hook delta is subtracted."
+     },
+     {
+      "url": "src/PoolManager.sol:241-250",
+      "supports": "The Swap event carries the delta returned by Pool.swap, negative for the amount paid in."
+     },
+     {
+      "url": "src/types/Currency.sol:60-74",
+      "supports": "A token transfer counts as successful when the call does not revert and returns nothing, with no code size check."
+     },
+     {
+      "url": "src/PoolManager.sol:348-365",
+      "supports": "Comment asks for sync before a native settle. A settle with value while a token is synced reverts with NonzeroNativeValue."
+     },
+     {
+      "url": "src/ProtocolFees.sol:44-60",
+      "supports": "collectProtocolFees checks the caller and the synced token and never reads the lock. _isUnlocked has no caller."
+     },
+     {
+      "url": "test/DynamicReturnFees.t.sol:151-162",
+      "supports": "The test expects LPFeeTooLarge for an override fee of 1,000,001 and its comment says the fee is not used."
+     },
+     {
+      "url": "test/PoolManager.t.sol:500-503",
+      "supports": "The test expects Swap event amounts -100 and 98 for an exact input of 100."
+     },
+     {
+      "url": "test/utils/CurrencySettler.sol:20-25",
+      "supports": "The helper settles native currency without sync and says sync is not required."
+     },
+     {
+      "url": "src/test/ProtocolFeesImplementation.sol:27-33",
+      "supports": "The test double has a lock toggle and an override that nothing calls."
+     },
+     {
+      "url": "rpc: eth_call on the 21 RPC URLs of research/network-risk/state/networks.json, 2026-11-23, plain calls from 0x00000000000000000000000000000000000a11ce",
+      "supports": "sync(address(0)) succeeds while locked, sync of an address without code reverts, settle and take revert with ManagerLocked 0x54e3ca0d, empty calldata reverts, on all 21 deployed PoolManagers."
+     },
+     {
+      "url": "rpc: eth_call with a state override caller at 0x00000000000000000000000000000000000c0de1 on the 21 RPC URLs, 2026-11-23",
+      "supports": "Inside unlock, settle with 1 wei after sync of a token, of a native face (Celo, Polygon, Arc) or of the identity precompile reverts with NonzeroNativeValue 0xb0ec849e on every deployed PoolManager. Settle with value 0 after that sync and settle with 1 wei after sync(address(0)) are accepted."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-1153.md",
+      "supports": "Transient storage under DELEGATECALL belongs to the calling contract, and under CALL or STATICCALL to the callee. Used for the spot check of the delegatecall clearance."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7.md",
+      "supports": "The call created by DELEGATECALL has the same sender and value as the original call."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md",
+      "supports": "A call to a delegated account loads the code at the delegated address and executes it in the context of the authority."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 3,
+   "id": "F-054",
+   "firstCycle": 3,
+   "history": [
+    {
+     "cycle": 3,
+     "unit": "core-code-tests-replay-core",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
+   "title": "Two more places where the repository's tests and test doubles disagree with the library source, and neither changes who can move funds",
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "assumptions": [],
+   "effect": "degrade",
+   "difference": "None. The disagreements are between files of this repository and hold on every network.",
+   "mechanism": "This extends F-006 with what a replay of test/libraries, test/Tick.t.sol, test/types and the test doubles in src/test found. First, test/libraries/Pool.t.sol:73-83 expects SafeCastOverflow from Pool.modifyLiquidity only when a token amount is above 2^128 - 1. The variable is named maxInt128InTypeU256 and holds Constants.MAX_UINT128. The source casts both amounts to int128: Pool.sol:212-235 takes the signed results of SqrtPriceMath.sol:261-288 and SafeCast.toInt128 (SafeCast.sol:40-43) reverts once the amount of an add is above 2^127. For amounts from 2^127 + 1 to 2^128 - 1 the source reverts and the test expects success. One case from the replay: spacing 32767, price 735853766953812733719635225319847024411115828962 (tick 873548), range -131068 to 98301, liquidity 2300850342447660200206975412810193765, which is below the per tick cap 6076470837873901133274546561281575204. The amount of currency1 is 313585663563401618519606321096647269736 and the source reverts with SafeCastOverflow. Out of 400,000 random parameter sets 346 fell in this window. Every other outcome, including the order of the eight revert conditions at Pool.t.sol:51-70, matched the source. Second, src/test/SqrtPriceMathEchidnaTest.sol:144-197 asserts that the signed helpers return a positive amount for positive liquidity and a non-positive amount for negative liquidity. The source returns minus the rounded up amount for positive liquidity and the rounded down amount for negative liquidity (SqrtPriceMath.sol:266-270 and 283-287). On 200,000 random inputs the assertion for positive liquidity fails 135,655 times and the one for negative liquidity 48,354 times as written, and every other invariant of that file holds. The forge tests use the sign of the source: a negative delta is owed by the caller (PoolManager.sol:183 and 368-378), and test/libraries/StateLibrary.t.sol:300-301 negates the delta of an add to get the amount paid. The echidna harness is not part of forge test, so nothing in the repository runs it. Third, a correction to the fourth item of F-006: test/libraries/Pool.t.sol:135-158 calls swap for a nonzero amount only when it expects a revert. It makes no call for a valid limit and no call when a zeroForOne limit equals MIN_SQRT_PRICE, so that file says nothing about the boundary that Pool.sol:328-330 rejects and contains no successful nonzero swap. The third item of F-006 was replayed: 8,795 of 120,000 random cases had a zero amount with a 100 percent swap fee, where Pool.t.sol:129-131 expects InvalidFeeForExactOut and Pool.sol:311-320 returns a zero delta without touching state.",
+   "impact": "None on funds. In the first case the source refuses an add that the test would let through, so it is stricter than the test. A removal whose amount is 2^127 or more reverts at the same cast and has to be split, which an earlier cleared item on the int128 casts already covers. In the second case the source sign is the one the accounting in PoolManager needs: with the sign of the echidna file an add would credit the caller.",
+   "preconditions": "None. No account gains anything from these disagreements.",
+   "mitigations": "Change the bound at test/libraries/Pool.t.sol:73 to the int128 maximum and bring the sign assertions in src/test/SqrtPriceMathEchidnaTest.sol in line with SqrtPriceMath, so that the tests and the harness can serve as a reference for the source.",
+   "coreRefs": [
+    "src/libraries/Pool.sol:206-237",
+    "src/libraries/SqrtPriceMath.sol:261-288",
+    "src/libraries/SafeCast.sol:40-43",
+    "src/libraries/Pool.sol:311-330"
+   ],
+   "sources": [
+    {
+     "url": "test/libraries/Pool.t.sol:73-83",
+     "supports": "The test expects SafeCastOverflow only above Constants.MAX_UINT128."
+    },
+    {
+     "url": "src/libraries/Pool.sol:212-235",
+     "supports": "Both amounts of a liquidity change are cast with toInt128."
+    },
+    {
+     "url": "src/libraries/SafeCast.sol:40-43",
+     "supports": "toInt128(int256) reverts when the value does not fit in int128."
+    },
+    {
+     "url": "src/test/SqrtPriceMathEchidnaTest.sol:144-197",
+     "supports": "The echidna harness asserts a positive amount for positive liquidity."
+    },
+    {
+     "url": "src/libraries/SqrtPriceMath.sol:261-288",
+     "supports": "The signed helpers return a negative amount for positive liquidity, rounded up, and a positive amount for negative liquidity, rounded down."
+    },
+    {
+     "url": "test/libraries/Pool.t.sol:129-158",
+     "supports": "The swap fuzz test calls swap for nonzero amounts only when it expects a revert."
+    },
+    {
+     "url": "test/libraries/StateLibrary.t.sol:300-301",
+     "supports": "The forge tests treat the delta of an add as negative."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 3,
+    "factCheck": "The finding claims no chain fact. Its claims concern files of this repository. I checked each one against the text and with a Python transcription of the libraries that I wrote myself with EVM word semantics. Case one reproduces exactly. With spacing 32767 the per tick cap is 6076470837873901133274546561281575204. The price 735853766953812733719635225319847024411115828962 lies in tick 873548. The ticks -131068 and 98301 are multiples of 32767. getAmount1Delta rounded up for liquidity 2300850342447660200206975412810193765 gives 313585663563401618519606321096647269736, which is above 2^127 and below 2^128, and the source path reverts with SafeCastOverflow. The reference that the test uses (test/utils/LiquidityAmounts.sol:99-107, rounded down) stays below Constants.MAX_UINT128 (test/utils/Constants.sol:21), so the test sets no expectRevert and that input would fail. Case two reproduces in direction. On 100,000 random inputs the assertion for positive liquidity failed 49,865 times for each of the two signed helpers, and the assertion for negative liquidity failed 46,525 and 48,375 times. No file under test/ imports SqrtPriceMathEchidnaTest. Case three matches the text of test/libraries/Pool.t.sol:129-170. The cast in modifyLiquidity cannot be reached by a plain eth_call because the function needs an unlock callback from a contract, so I did not test it on chain. The on-chain queries I ran for this unit are listed under the spot checks.",
+    "codeCheck": "Pool.modifyLiquidity passes the signed results of SqrtPriceMath.getAmount0Delta and getAmount1Delta through SafeCast.toInt128 in all three branches (src/libraries/Pool.sol:209-236). The signed helpers return minus the rounded up amount for a liquidity delta of zero or more and the rounded down amount for a negative delta (src/libraries/SqrtPriceMath.sol:261-288). toInt128(int256) reverts when the value does not fit (src/libraries/SafeCast.sol:40-43). An add therefore reverts when its rounded up amount is 2^127 + 1 or more, and a removal reverts when its rounded down amount is 2^127 or more. test/libraries/Pool.t.sol:73-83 compares the amounts with Constants.MAX_UINT128, so the source is the stricter side for amounts from 2^127 + 1 to 2^128 - 1. The eight earlier branches at Pool.t.sol:51-70 follow the order in which the source reaches them: checkTicks (Pool.sol:94-98), the underflow in LiquidityMath.addDelta for a negative delta on an empty tick (Pool.sol:529, src/libraries/LiquidityMath.sol:10-19), the empty position check (src/libraries/Position.sol:84-87), the cap on the lower tick before the upper tick (Pool.sol:165-173), and flipTick for the lower tick before the upper tick (Pool.sol:175-180). The sign in the source is the one the accounting needs. A negative delta is added to the caller's slot (src/PoolManager.sol:183 and 368-384), settle adds what was paid (PoolManager.sol:364) and unlock reverts while any slot is nonzero (PoolManager.sol:112). src/test/SqrtPriceMathEchidnaTest.sol:144-197 asserts the opposite sign. Pool.swap reverts at a 100 percent fee only for a positive amount and returns a zero delta for a zero amount before any state is written (Pool.sol:311-320), while Pool.t.sol:129 expects a revert for zero. Pool.t.sol:135-158 calls swap for a nonzero amount only inside the branches that expect a revert. I looked for a guard or a path that would turn one of these disagreements into a fund effect and found none. A removal that hits the cast can be split, because both amounts scale with the liquidity delta. PoolManager.swap rejects a zero amount (PoolManager.sol:193), so Pool.swap sees zero only when a beforeSwap hook cancels the amount in its own pool (src/libraries/Hooks.sol:273-279), and then nothing is written.",
+    "corrections": "No party gains or loses through these disagreements, so the actor value carries no weight here; unprivileged is the value the existing F-006 entry already has. The counts 346 of 400,000, 135,655 and 48,354 could not be reproduced because the finding does not state its sampling distribution; the direction of each result reproduces. The third part repeats a correction that the cycle 1 verification of F-006 already recorded. The statement that nothing in the repository runs the echidna harness needs one addition: .github/workflows/mythx.yml:60 lists SqrtPriceMathEchidnaTest under contracts/test/, a directory that does not exist in this repository, and echidna.config.yml is present. No forge test runs the harness. On the limit for an add: an amount of exactly 2^127 passes, because the amount is negated before the cast and -2^127 fits int128. A removal passes up to 2^127 - 1.",
+    "sources": [
+     {
+      "url": "test/libraries/Pool.t.sol:43-88",
+      "supports": "The modifyLiquidity fuzz test expects SafeCastOverflow only for amounts above Constants.MAX_UINT128."
+     },
+     {
+      "url": "test/utils/Constants.sol:21",
+      "supports": "MAX_UINT128 is type(uint128).max."
+     },
+     {
+      "url": "test/utils/LiquidityAmounts.sol:99-133",
+      "supports": "The reference amounts of the test are rounded down."
+     },
+     {
+      "url": "src/libraries/Pool.sol:206-237",
+      "supports": "Both amounts of a liquidity change are cast with toInt128."
+     },
+     {
+      "url": "src/libraries/SqrtPriceMath.sol:261-288",
+      "supports": "Sign and rounding of the signed amount helpers."
+     },
+     {
+      "url": "src/libraries/SafeCast.sol:40-43",
+      "supports": "toInt128(int256) reverts when the value does not fit."
+     },
+     {
+      "url": "src/test/SqrtPriceMathEchidnaTest.sol:144-197",
+      "supports": "The harness asserts a positive amount for positive liquidity."
+     },
+     {
+      "url": "src/PoolManager.sol:104-114",
+      "supports": "unlock reverts while a delta is open, so a negative delta is a debt of the caller."
+     },
+     {
+      "url": "src/libraries/Pool.sol:311-330",
+      "supports": "The zero amount return and the two price limit checks of swap."
+     },
+     {
+      "url": "test/libraries/Pool.t.sol:129-170",
+      "supports": "The swap fuzz test calls swap for a nonzero amount only when it expects a revert."
+     },
+     {
+      "url": ".github/workflows/mythx.yml:58-67",
+      "supports": "The only workflow that names the echidna harness points at contracts/test/, which this repository does not have."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 3,
+   "extends": "F-006",
+   "id": "F-055",
+   "firstCycle": 3,
+   "history": [
+    {
+     "cycle": 3,
+     "unit": "core-code-tests-replay-libraries",
      "status": "confirmed",
      "severity": "info"
     }
@@ -2758,6 +3143,207 @@
    ]
   },
   {
+   "title": "The GoodDollar owner has blocked the PoolManager address on Celo, so 550 million G$ held for pools cannot leave",
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A6",
+    "A4",
+    "A2"
+   ],
+   "effect": "freeze",
+   "difference": "G$ on Celo is a Superfluid Super Token with an owner controlled list of accounts that can neither send nor receive it, and with an owner function that burns from any account. After the Superfluid incident of September 2026 the owner put the Uniswap v4 PoolManager on that list and has not removed it. Ethereum's PoolManager holds no token in this state.",
+   "mechanism": "1. On 11 September 2026 at 13:48:08 UTC (Celo block 77,233,730, transaction 0x22cd34a5f179dfa342fd3659d029e4d40469ca8fa02abd032145f162b0b8dd4d, sent by 0x6823a04a6fd4148167567d5ef6dcca1f34db0494 to the contract 0xa2521e8f5a990903fdd8afa6570c52526e7e0d5e) the token emitted BlockedUpdated with value true for eleven addresses, one of which is the PoolManager 0x288dc841A52FCA2707c6947B3A777c5E56cd87BC. setBlocked is restricted to the owner role. isBlocked(PoolManager) returned true at block 83,475,285 on 22 November 2026. 2. Every ERC-20, ERC-677 and ERC-777 movement of G$ runs _processFees, which reverts with SUPER_GOODDOLLAR_BLOCKED (0xe7d0c09e) when the sender or the recipient is blocked. An eth_call of transfer from the PoolManager reverts with that selector for amounts 1 and 0. A transfer of 1 unit from the owner account to the PoolManager reverts the same way, and the same transfer to another address returns true. 3. take debits the caller and then calls transfer on the currency (src/PoolManager.sol:291-297). A failed transfer makes take revert (src/types/Currency.sol:64-86). Every take of G$ therefore reverts, including a take of zero. The PoolManager's 550,022,104.456 G$ stay where they are. 4. A position owner who removes liquidity from a G$ pool receives a positive G$ delta. The owner can take the other currency. For the G$ side the remaining choices are mint, which turns the delta into an ERC-6909 claim (src/PoolManager.sol:322-329), and clear, which gives it up (src/PoolManager.sol:310-319). A swap that buys G$ ends the same way. 5. A payment of G$ into the PoolManager by transfer reverts as well, so a seller needs a G$ claim to burn (src/PoolManager.sol:332-336). The token source says a blocked account can still be credited through Superfluid agreements. Such a credit would raise balanceOf(PoolManager), and sync followed by settle would credit it to the settler (src/PoolManager.sol:279-288, 349-364). I did not simulate that path. 6. The owner can also call adminBurn(account, amount), which skips allowance, hooks, pause and the block list. A burn of the PoolManager's balance would leave pool liquidity and G$ claims without tokens behind them. Superfluid's report says 544 million G$ was burned elsewhere during the recovery.",
+   "impact": "550,022,104 G$, which is 13.7 percent of the G$ supply and about 60,000 USD at the price Blockscout shows (0.00010924 USD). GoodDollar names one position holder with two wallets as the depositor. Because all pools share one address, the block also covers every other G$ pool in this PoolManager, every G$ claim and any protocol fee accrued in G$. The paired currencies of those pools can still be withdrawn.",
+   "preconditions": "None remain. The block is in force. It ends when an account with the G$ owner role calls setBlocked with false for the PoolManager. owner() returns 0x495d133b938596c9984d462f007b676bdc57ecec. GoodDollar states it will do so once the position holder contacts Good Labs or moves the position to the Good Labs Safe.",
+   "mitigations": "The deployer cannot lift the block. Interfaces should stop routing through G$ pools on Celo and should show G$ positions as withdrawable only as claims. Liquidity providers can remove liquidity, take the paired currency and mint the G$ side as a claim. Integrations should not value G$ claims or G$ pool liquidity at the market price while the block and the admin burn function exist. New deployments should treat any token with a per address block list as able to freeze every pool of that token at once.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:64-86",
+    "src/PoolManager.sol:310-336",
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364"
+   ],
+   "sources": [
+    {
+     "url": "https://forno.celo.org eth_call isBlocked(address) on 0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A with the PoolManager address, block 83475285",
+     "supports": "isBlocked(PoolManager) returns true"
+    },
+    {
+     "url": "https://forno.celo.org eth_call transfer(address,uint256) on 0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A from the PoolManager and from the owner account, block 83475323",
+     "supports": "transfers from and to the PoolManager revert with 0xe7d0c09e, and a transfer between two other accounts returns true"
+    },
+    {
+     "url": "https://celo.blockscout.com/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A&topic0=0x148a86796e0fc2ba3270f94c00ce0af947ccc7a4db4269c66c9dd1eb883e90a5",
+     "supports": "one BlockedUpdated event for the PoolManager, at block 77,233,730 with value true, and no later event that unblocks it"
+    },
+    {
+     "url": "https://celo.blockscout.com/api/v2/smart-contracts/0xb4419a3df33b9aa6fbe452df8816389e599c29ef",
+     "supports": "verified source of SuperGoodDollar with isBlocked, setBlocked, adminBurn, _processFees and the agreement guards"
+    },
+    {
+     "url": "https://discourse.gooddollar.org/t/gooddollar-incident-post-mortem-september-4-attack/9164",
+     "supports": "the Celo Uniswap v4 pool holds 550 million G$ and remains blocked, and the condition GoodDollar sets for unblocking"
+    },
+    {
+     "url": "https://forum.superfluid.org/t/security-council-preliminary-disclosure-of-a-security-incident-that-impacted-g-liquidity-on-celo-network/1743",
+     "supports": "cause of the incident, the unbacked amount and the burn of 544 million G$"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "issuer",
+   "severity": "high",
+   "proposedSeverity": "high",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 3,
+    "factCheck": "I repeated the chain reads on https://forno.celo.org at block 83,491,539 on 2026-11-23. isBlocked(PoolManager) on G$ 0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A returns true. balanceOf(PoolManager) is 550,022,104.456 G$ of a supply of 4,020,965,252 G$, which is 13.68 percent. An eth_call of transfer(address,uint256) with from set to the PoolManager reverts with 0xe7d0c09e for amounts 1 and 0. I computed that selector myself: it is the first four bytes of keccak256 of SUPER_GOODDOLLAR_BLOCKED(). A transfer of 1 unit from the owner account 0x495d133b938596c9984d462f007b676bdc57ecec to the PoolManager reverts with the same selector, and the same transfer to an unrelated address returns true. eth_getLogs for block 77,233,730 and topic 0x148a8679 (keccak256 of BlockedUpdated(address,bool), also computed here) returns 11 logs with value true in transaction 0x22cd34a5f179dfa342fd3659d029e4d40469ca8fa02abd032145f162b0b8dd4d. One of the 11 accounts is the PoolManager. The block timestamp is 2026-09-11 13:48:08 UTC, the sender is 0x6823a04a6fd4148167567d5ef6dcca1f34db0494 and the target is 0xa2521e8f5a990903fdd8afa6570c52526e7e0d5e. The endpoint limits log queries to 5,000 blocks, so I did not scan for a later unblock event. The current value of isBlocked answers that question. The ERC-1967 slot and getCodeAddress() of the G$ proxy both hold 0xb4419A3Df33b9aa6fbE452Df8816389E599C29eF. Blockscout returns verified source for that address under the name SuperGoodDollar. I read it: isBlocked is a public mapping (line 48), setBlocked(address[],bool) and adminBurn(address,uint256) call _onlyOwner (lines 365 to 391), transfer, transferFrom, send and transferAndCall all pass through _processFees, and _processFees calls _onlyNotBlocked for the sender and for the recipient (lines 434 to 470). The comment on setBlocked says a blocked account can still be credited by agreements. The library SuperGoodDollarFlows rejects, for a blocked account, a higher CFA deposit, a higher GDA buffer, a lower GDA balance and every IDA write. The GoodDollar post of 20 October 2026 says all liquidity pools were unblocked on 28 September except the Celo Uniswap V4 pool, which holds 550M G$, and that it stays blocked until the position holder contacts Good Labs or moves the position to the Safe 0x4e31993d9F13F940828bf9eC2f643A7E55B21e8C. The Superfluid technical report of 2 October 2026 gives 2,801,252,167 unbacked G$, the 900 KB callback return data, the 30 million block gas limit, the host upgrade of 4 September and 544 million G$ burned. Blockscout shows a G$ price of 0.00011464 USD today, which values the balance at about 63,000 USD. Not confirmed: that a Superfluid agreement can still credit the blocked PoolManager in practice. I read the guard code and it lets a balance increase pass, and I did not simulate a distribution or a stream.",
+    "codeCheck": "take is at src/PoolManager.sol:291-297. It debits the caller at line 294 and calls currency.transfer at line 295. For an ERC-20 the call is at src/types/Currency.sol:73, and a reverting token gives success zero, so lines 82 to 85 revert through CustomRevert.bubbleUpAndRevertWith (src/libraries/CustomRevert.sol:83-119). The whole take reverts, including the debit, for every amount including zero, because the token checks the block list before it looks at the amount. There is no other function in src/ that moves an ERC-20 out of the PoolManager except collectProtocolFees (src/ProtocolFees.sol:44-57), which uses the same transfer. A positive G$ delta can be closed by mint (src/PoolManager.sol:322-329), which only writes an ERC-6909 balance, or by clear (src/PoolManager.sol:310-319), which gives the amount up. unlock reverts while any delta is open (src/PoolManager.sol:112). An inbound payment needs the token balance to rise between sync and settle (src/PoolManager.sol:279-288, 349-364), and an ERC-20 transfer to the blocked PoolManager reverts, so a seller needs a claim to burn (src/PoolManager.sol:332-336) or a credit through an agreement. I found no guard that the finding missed. The freeze follows from one address holding all pools (assumption A6) and from core having no reaction to a failing transfer.",
+    "corrections": "The actor value issuer is right. The block was set by the G$ owner role, an ordinary account can neither set nor lift it, and no step lets an ordinary account take funds. The mitigation that tells liquidity providers to mint the G$ side as a claim does not hold for positions held through the PositionManager. In core the position owner is the msg.sender of modifyLiquidity (src/PoolManager.sol:161), so only the contract that opened a position can remove it. The runtime code of the Celo PositionManager 0xf7965f3981e4d5bc383bfbcb61501763e9068ca9 (23,877 bytes) contains the selectors of take, clear, settle, sync, modifyLiquidity and unlock and does not contain the selector of mint(address,uint256,uint256) (0x156e29f6) or of burn(address,uint256,uint256) (0xf5298aca). A holder of such a position who removes liquidity must close the G$ delta with take, which reverts, or with clear, which forfeits the G$. I did not establish whether the PositionManager can move the G$ delta into another position inside the same unlock. setBlocked takes an array of accounts. At today's Blockscout price the balance is worth about 63,000 USD. The statement that no later unblock event exists was not checked by a full log scan here.",
+    "sources": [
+     {
+      "url": "https://forno.celo.org eth_call isBlocked(address), balanceOf(address), totalSupply(), owner(), getCodeAddress() and transfer(address,uint256) on 0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A, block 83491539",
+      "supports": "the PoolManager is blocked, holds 550,022,104 G$, and transfers from it and to it revert with 0xe7d0c09e"
+     },
+     {
+      "url": "https://forno.celo.org eth_getLogs address 0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A topic 0x148a86796e0fc2ba3270f94c00ce0af947ccc7a4db4269c66c9dd1eb883e90a5 block 77233730, and eth_getTransactionByHash",
+      "supports": "11 BlockedUpdated logs with value true on 2026-09-11 13:48:08 UTC, one of them for the PoolManager, with the stated sender and target"
+     },
+     {
+      "url": "https://celo.blockscout.com/api/v2/smart-contracts/0xb4419a3df33b9aa6fbe452df8816389e599c29ef",
+      "supports": "verified source of SuperGoodDollar and SuperGoodDollarFlows with the block list, the owner functions and the agreement guards"
+     },
+     {
+      "url": "https://discourse.gooddollar.org/t/gooddollar-incident-post-mortem-september-4-attack/9164",
+      "supports": "the Celo Uniswap V4 pool holds 550M G$, remains blocked, and the condition for unblocking"
+     },
+     {
+      "url": "https://forum.superfluid.org/t/security-council-preliminary-disclosure-of-a-security-incident-that-impacted-g-liquidity-on-celo-network/1743",
+      "supports": "cause of the incident, 2,801,252,167 unbacked G$, the host fix of 4 September 2026 and 544 million G$ burned"
+     },
+     {
+      "url": "https://forno.celo.org eth_getCode 0xf7965f3981e4d5bc383bfbcb61501763e9068ca9",
+      "supports": "the PositionManager code has no selector of PoolManager.mint or burn"
+     },
+     {
+      "url": "https://celo.blockscout.com/api/v2/tokens/0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A",
+      "supports": "G$ price 0.00011464 USD"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 3,
+   "id": "F-056",
+   "firstCycle": 3,
+   "history": [
+    {
+     "cycle": 3,
+     "unit": "op-stack-custom-gas",
+     "status": "confirmed",
+     "severity": "high"
+    }
+   ]
+  },
+  {
+   "title": "Issuers of the tokens that make up most pool value on Celo and X Layer can pause, block, burn or upgrade the PoolManager's balance",
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A6",
+    "A2",
+    "A4"
+   ],
+   "effect": "both",
+   "difference": "The pooled value on these two networks sits in issuer controlled tokens that are small or new: wBRL and wARS on Celo, and USDT0, USDG, two USDC contracts and tokenized stocks on X Layer. On Celo the PoolManager holds 83.7 percent of all wBRL and 59.0 percent of all wARS. Each of these tokens has roles that act on a single holder address.",
+   "mechanism": "1. All pools keep a currency in one balance at the PoolManager address, and that balance leaves only through transfer inside take (src/PoolManager.sol:291-297, src/types/Currency.sol:64-86). A role that stops transfers for that one address stops every pool of the token. 2. wBRL and wARS are proxies of LatamStable. Its compliance role can switch the blocklist on and block the PoolManager, after which _update reverts for it as sender and as recipient. Its pauser role stops all transfers. Its upgrader role can replace the implementation through UUPS and with it the balance logic. The blocklist is switched off today and neither token is paused. 3. On X Layer USDT0 has addToBlockedList and destroyBlockedFunds, USDG has freeze and wipeFrozenAddress, both USDC contracts have a blacklister and a pause, and xETH has a deny list and a pause. A wipe or a destroy sets the PoolManager balance to zero while pool accounting and ERC-6909 claims still count the tokens. 4. BMNRx and ANTx report balanceOf as shares times a multiplier that a multiplier updater role sets, and a fee per period can lower the multiplier over time. A lower multiplier lowers balanceOf(PoolManager) without a take, which leaves pools with less than their accounting says (assumption A2). A higher multiplier adds tokens that no settle credits. The multiplier is 1.0 and the fee is 0 today. 5. On Celo the owner of USDm, which is Celo Governance, can name operators and burners that move or burn the balance of any account. 6. core has no function that reacts to any of these actions. Liquidity providers who exit first after a partial loss take the remaining tokens, and later exits revert when the balance runs out.",
+   "impact": "On Celo about 522,000 USD of wBRL and 129,000 USD of wARS at the prices Blockscout shows, plus the USDC paired with them. On X Layer about 5.97 million USDT0, 459,000 USDG and 97,700 USDC, plus the 4.67 million USDe that trade against USDT0 in the largest pool. USDe itself has no block or pause function in its code. A freeze stops withdrawals of the affected token for every pool. A wipe, burn or lower multiplier is a loss shared by all liquidity providers and claim holders of that token.",
+   "preconditions": "An action by a role holder of the token: compliance, pauser or upgrader for wBRL and wARS, the owner of USDT0 (0x4dff9b5b0143e642a3f63a5bcf2d1c328e600bf8), the asset protection role of USDG, the blacklister or pauser of each USDC contract, the multiplier updater or owner of the stock tokens, and the owner of USDm, which is Celo Governance (0xD533Ca259b330c7A88f74E000a3FaEa2d63B7972). No such flag is set for the PoolManager on either chain at blocks 83,476,610 (Celo) and 76,608,329 (X Layer).",
+   "mitigations": "Liquidity providers should size positions in these tokens with the issuer roles in mind, and pool interfaces should show them. Monitoring should watch the PoolManager address in each token's block, freeze and pause state and the stock token multiplier. Pools in rebasing stock tokens should use the wrapped ERC-4626 versions, which keep a fixed balance. The deployer cannot remove any of these roles.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:64-96",
+    "src/PoolManager.sol:349-364"
+   ],
+   "sources": [
+    {
+     "url": "https://celo.blockscout.com/api/v2/smart-contracts/0xfbab5dcb1647787ec8402a6509add256fa6c7f9d",
+     "supports": "verified source of LatamStable with the pauser, minter, compliance and upgrader roles and the blocklist check in _update"
+    },
+    {
+     "url": "https://forno.celo.org eth_call totalSupply(), balanceOf(PoolManager), enforceBlocklist(), isBlocked(address), paused() on wBRL and wARS, block 83475210",
+     "supports": "PoolManager share of supply and the current flag values"
+    },
+    {
+     "url": "https://rpc.xlayer.tech eth_getCode selector scan of USDT0, USDG, USDC, xETH, BMNRx and USDe implementations and eth_call isBlocked, isFrozen, isBlacklisted, paused, denyList, multiplier, feePerPeriod, block 76608329",
+     "supports": "which control functions each token has and that none is set for the PoolManager"
+    },
+    {
+     "url": "https://api.openchain.xyz/signature-database/v1/lookup",
+     "supports": "function names for the selectors found in the token bytecode"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/mento-protocol/mento-core/develop/contracts/tokens/StableTokenV3.sol",
+     "supports": "sendToPool for operators and burn(address,uint256) for burners in the USDm implementation"
+    },
+    {
+     "url": "https://celo.blockscout.com/api/v2/addresses/0x288dc841A52FCA2707c6947B3A777c5E56cd87BC/tokens?type=ERC-20",
+     "supports": "token list and prices used for the Celo amounts"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "issuer",
+   "severity": "high",
+   "proposedSeverity": "high",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 3,
+    "factCheck": "Celo, block 83,491,539. wBRL 0xD76f5Faf6888e24D9F04Bf92a0c8B921FE4390e0: balanceOf(PoolManager) 3,193,624.74 of a supply of 3,816,971.75, which is 83.67 percent. wARS 0x0DC4F92879B7670e5f4e4e6e3c801D229129D90D: 226,948,782.63 of 385,354,849.29, which is 58.89 percent. enforceBlocklist(), isBlocked(PoolManager) and paused() return false on both. The ERC-1967 slot of wBRL holds 0xfbab5dcb1647787ec8402a6509add256fa6c7f9d and the slot of wARS holds 0xba0030bba7112171a8a5bcc417ee1994051321b9. Blockscout returns the same verified source, LatamStable, for both addresses. I read it: PAUSER_ROLE, MINTER_ROLE, UPGRADER_ROLE and COMPLIANCE_ROLE, setEnforceBlocklist and blockUser for the compliance role, _authorizeUpgrade for the upgrader role, and an _update that reverts with AddressBlocked for a blocked sender or recipient when enforcement is on. Blockscout prices of 0.1635 USD and 0.000565 USD give about 522,000 USD of wBRL and 128,000 USD of wARS. USDm 0x765DE816845861e75A25fCA122bb6898B8B1282a: owner() is 0xD533Ca259b330c7A88f74E000a3FaEa2d63B7972 and _getImplementation() is 0x815795c30d0758a297b08cd4e0643620c974c318. StableTokenV3.sol on the mento-core develop branch has setOperator, setBurner and setMinter for the owner, burn(address,uint256) for burners and sendToPool(address,address,uint256) for operators. X Layer, block 76,623,463. The largest pool id resolves on the PositionManager to USDe 0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34 and USDT0 0x779ded0c9e1022225f8e0630b35a9b54be713736, fee 9, tick spacing 1, hook zero. The PoolManager holds 6,248,352 USDT0, 4,627,765 USDe, 220,723 USDG, 85,843 and 11,348 of the two USDC contracts. owner() of USDT0 is 0x4dff9b5b0143e642a3f63a5bcf2d1c328e600bf8. Its implementation 0x1ec7df9e74be05cb5a456aca2dc1ac2cec9ab6a3 contains the selectors of addToBlockedList(address), removeFromBlockedList(address) and destroyBlockedFunds(address), and isBlocked(PoolManager) is false. USDG 0x4ae46a509f6b1d9056937ba4500cb143933d2dc8 answers getFacet(bytes4) with 0x6a7935003ff120840394b13389635fdcb2f14ac0 for freeze(address), wipeFrozenAddress(address) and pause(), and isFrozen(PoolManager) and paused() are false. Both USDC contracts answer isBlacklisted(PoolManager) and paused() with false. USDe reverts on every block and pause view I tried and has owner 0xa179d46706d78a8bb24bd36bfb6472d4a0e15569. BMNRx reports multiplier() 10^18, feePerPeriod() 0 and sharesOf(PoolManager) equal to balanceOf(PoolManager). Not rechecked here: the deny list of xETH, ANTx, the wrapped stock vaults, and the implementation code of the two USDC contracts, which do not use the ERC-1967 slot.",
+    "codeCheck": "The only ERC-20 exits are currency.transfer inside take (src/PoolManager.sol:291-297) and inside collectProtocolFees (src/ProtocolFees.sol:56). A transfer that reverts makes the call revert (src/types/Currency.sol:64-86). The only reads of a token balance are balanceOfSelf in sync and in _settle (src/PoolManager.sol:285, 359, src/types/Currency.sol:90-96). Pool liquidity, protocol fees and ERC-6909 claims are kept in storage and never compared with the token balance, so a burn, a wipe or a lower multiplier leaves the books above the balance and the last takers revert when the balance runs out. A raised balance is credited to nobody, because a credit is the rise between sync and settle in one transaction (src/PoolManager.sol:358-360). I found no guard in src/ that reacts to any of these token side actions, which is what the finding says.",
+    "corrections": "The actor value issuer is right. Every step needs a role holder of the token, and for USDm it needs Celo Governance. wARS does not point at the implementation 0xfbab5dcb1647787ec8402a6509add256fa6c7f9d that the finding cites. It points at 0xba0030bba7112171a8a5bcc417ee1994051321b9, a second deployment with the same verified source. The USDG balance has fallen from 459,142 to 220,723 since the finding was written. The severity follows the scale entry for a freeze or loss that needs a token issuer. This is the same hazard class as the issuer findings of earlier cycles on other chains and should be merged with them as a per chain token table.",
+    "sources": [
+     {
+      "url": "https://forno.celo.org eth_call balanceOf, totalSupply, enforceBlocklist, isBlocked, paused and eth_getStorageAt of the ERC-1967 slot on wBRL and wARS, block 83491539",
+      "supports": "PoolManager share of supply, flag values and the two implementation addresses"
+     },
+     {
+      "url": "https://celo.blockscout.com/api/v2/smart-contracts/0xfbab5dcb1647787ec8402a6509add256fa6c7f9d",
+      "supports": "verified LatamStable source with the four roles and the blocklist check in _update"
+     },
+     {
+      "url": "https://celo.blockscout.com/api/v2/smart-contracts/0xba0030bba7112171a8a5bcc417ee1994051321b9",
+      "supports": "the wARS implementation is a second deployment of the same verified source"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/mento-protocol/mento-core/develop/contracts/tokens/StableTokenV3.sol",
+      "supports": "operator and burner functions of the USDm implementation"
+     },
+     {
+      "url": "https://rpc.xlayer.tech eth_call poolKeys(bytes25), balanceOf, owner, isBlocked, isFrozen, isBlacklisted, paused, getFacet(bytes4), multiplier, feePerPeriod, sharesOf and eth_getCode of the USDT0 implementation, block 76623463",
+      "supports": "the pooled tokens, their control functions and that no flag is set for the PoolManager"
+     },
+     {
+      "url": "https://celo.blockscout.com/api/v2/tokens/0xD76f5Faf6888e24D9F04Bf92a0c8B921FE4390e0",
+      "supports": "wBRL price used for the amount"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 3,
+   "id": "F-057",
+   "firstCycle": 3,
+   "history": [
+    {
+     "cycle": 3,
+     "unit": "op-stack-custom-gas",
+     "status": "confirmed",
+     "severity": "high"
+    }
+   ]
+  },
+  {
    "title": "A Stylus program used as a hook or token stops answering calls on expiry or a Stylus version change, and activation is blocked",
    "chainIds": [
     42161
@@ -3703,6 +4289,109 @@
    ]
   },
   {
+   "title": "Activated Stylus programs exist on Robinhood Chain as well, and a copy of an activated program runs without a new activation",
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A7",
+    "A4"
+   ],
+   "effect": "freeze",
+   "difference": "Nitro chains run WASM contracts next to EVM contracts. A WASM contract answers calls only while its code hash is recorded as activated at the current Stylus version and the record is younger than the expiry period. Ethereum has no contract whose callability ends with time or with a protocol version. Cycle 1 recorded this for Arbitrum One and cleared Robinhood Chain on the ground that activation is closed there, without checking for earlier activations. Robinhood Chain has 26 activated code hashes, and the activation record is per code hash on both chains.",
+   "mechanism": "The client looks a program up under the code hash of the called contract and fails the call when the record is missing, expired or at another Stylus version. Activation costs activationGas, which is 2^64-1 on both chains, so no new code hash can be activated and an expired one cannot be reactivated. A record can be extended with codehashKeepalive once it is 31 days old, by any account. An ordinary account can still deploy a new contract with the bytecode of one of the activated programs, at an address whose low 14 bits form a valid hook flag set, and name it as the hook or a currency of a pool. When the record of that code hash expires after 365 days without a keepalive, or when a later ArbOS release raises the Stylus version, every call to the contract fails. A failed hook call makes callHook revert, so each pool action that reaches the hook reverts, including liquidity removal when the address carries a remove flag. A failed transfer call makes take revert for that currency.",
+   "impact": "Funds in pools that use a Stylus program as hook or token. Liquidity providers cannot remove liquidity through a hook that no longer answers, and nobody can take a token that no longer answers. Pools without such a hook or token are not affected. On Robinhood Chain the 26 programs were activated between 2026-07-25 and 2026-10-02, so the first records expire in July 2027 unless someone extends them. I did not check whether any of the 26 programs or a copy of them is used by a pool.",
+   "preconditions": "The pool creator must choose a Stylus program, or a copy of an activated one, as hook or currency, and the victims must use that pool. The freeze then needs the record to lapse or the Stylus version to change, which needs time or a chain upgrade.",
+   "mitigations": "Liquidity providers should avoid pools whose hook or token is a Stylus program while activation is closed. Interfaces can read ArbWasm.programVersion and programTimeLeft for a hook or token address and warn when the answer is a live program. Anyone can call codehashKeepalive to extend a record that pools depend on.",
+   "coreRefs": [
+    "src/libraries/Hooks.sol:131-155",
+    "src/libraries/Hooks.sol:194-245",
+    "src/types/Currency.sol:55-87",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com eth_getLogs on 0x0000000000000000000000000000000000000071 and eth_call expiryDays(), keepaliveDays(), stylusVersion(), activationGas(), programTimeLeft(address), queried 2026-11-22",
+     "supports": "26 ProgramActivated events with 26 distinct code hashes at Stylus version 3 on Robinhood Chain, expiry of 365 days, keepalive age of 31 days, activation gas of 2^64-1"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/arbos/programs/programs.go",
+     "supports": "CallProgram takes the code hash of the called contract and fails unless getActiveProgram finds a live record for it (lines 206 to 219 and 559 to 580)"
+    },
+    {
+     "url": "https://docs.arbitrum.io/notices/stylus-activation-pause-notice",
+     "supports": "new and expired programs cannot be activated while the pause lasts, active programs keep running until they expire and can be renewed with keepalive"
+    },
+    {
+     "url": "https://forum.arbitrum.foundation/t/security-council-emergency-action-2-10-2026/31530",
+     "supports": "the pause was made by setting the activation gas to 2^64-1 on 2026-10-02"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "pool-creator",
+   "severity": "medium",
+   "proposedSeverity": "medium",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 3,
+    "factCheck": "I repeated the on-chain queries on 2026-11-22. On Robinhood Chain I fetched every log of ArbWasm (0x71) from block 0 to the head near block 120,983,000 in ranges of 5,000,000 blocks. There are 26 logs, all ProgramActivated, with 26 distinct code hashes, all at version 3. The first is in block 18,864,425 (timestamp 1784967900, 2026-07-25) and the last in block 78,438,208 (timestamp 1790964946, 2026-10-02). stylusVersion() is 3, expiryDays() is 365, keepaliveDays() is 31 and activationGas() is 2^64-1 on Arbitrum One, Robinhood Chain and Elysium. programTimeLeft returns 21,111,176 seconds for the oldest program 0xabce50d4038d9cfa6bc85ff8768d7b1e8149b2e5 and 27,108,774 seconds for the newest 0x3e65dfc1f7863f11ba0e12870bfb5fdf5913a34e, so the oldest record lapses near 2027-07-24. I tested the copy claim directly on Robinhood Chain. With the code of three activated programs placed at an unused address by state override, every call returned the same result as the call to the original, and ArbWasm.programVersion and programTimeLeft answered for the copy. With one byte of the code changed, the same call failed with ProgramNotActivated(). A simulated activateProgram with 30,000,000 gas reverted. A simulated codehashKeepalive for the oldest code hash from an unrelated account succeeded. On Arbitrum One the program 0x2e5d89a229cbd17efb0a731d26232f88c3746aa9, still at version 2, fails with ProgramNeedsUpgrade(2, 3). With a forwarding stub at the PoolManager address, transfer(address,uint256), balanceOf(PoolManager) and a hook selector sent to it as inner calls all returned failure, while the version 3 program 0xaff2f129d2bcba4649a54fb516be0cc78288898d answered transfer and balanceOf. Source at Nitro v3.12.4: CallProgram takes contract.CodeHash and calls getActiveProgram (arbos/programs/programs.go lines 206 to 218), which fails for version 0, for a version other than the current one and for an age above ExpiryDays (lines 559 to 579). ProgramKeepalive needs an active program of at least KeepaliveDays and has no caller check (lines 603 to 624). ArbWasm.ActivateProgram burns the stored activation gas before anything else (precompiles/ArbWasm.go lines 41 to 48). The GitHub tree page of v3.12.4 shows the go-ethereum submodule at 0e44603, and at that commit initNewContract accepts deployed code with the Stylus prefix (core/vm/evm.go lines 727 to 732), so a new contract with the bytes of an activated program can be created while activation is closed. The pause notice says that new and expired programs cannot be activated, that active ones run until they expire and that keepalive renews them. The Security Council report dates the change to 2026-10-02 and names the call ArbOwner.setWasmActivationGas(2^64 - 1). Both documents name Arbitrum One and Nova only.",
+    "codeCheck": "callHook makes a call with all gas and reverts with HookCallFailed when the call fails (src/libraries/Hooks.sol:131-137). A call that succeeds with fewer than 32 bytes or with another selector reverts with InvalidHookResponse (Hooks.sol:152-154). beforeModifyLiquidity calls the hook for a zero or negative liquidityDelta when the address has the before remove flag (Hooks.sol:203-204), and afterModifyLiquidity does so for the after remove flag (Hooks.sol:233-243). Both run inside modifyLiquidity (src/PoolManager.sol:156 and 178). The only bypass is the hook itself as caller (Hooks.sol:171-175 and 217), and a program that cannot run cannot be the caller. Permissions are bits of the address (Hooks.sol:337-339), and initialize accepts any address whose bits pass isValidHookAddress (Hooks.sol:109-127, PoolManager.sol:126). The swap and donate hooks fail the same way (Hooks.sol:255-256, 298-302, 322-323 and 332-333). For a token, take debits the caller and then calls transfer, and a failed call reverts with ERC20TransferFailed (PoolManager.sol:291-297, src/types/Currency.sol:64-86). sync and the ERC-20 branch of _settle call balanceOf and revert with it (PoolManager.sol:285 and 359, Currency.sol:94). I found no guard that changes this path. One limit on the token case: modifyLiquidity makes no token call, and mint writes a delta and a claim balance only (PoolManager.sol:322-329). A liquidity provider in a pool whose token stopped answering can still remove liquidity, mint claims for the dead token and take the other currency. What stays locked is the balance of the dead token.",
+    "corrections": "The actor and the severity stand. The actor is pool-creator because the victims must use a pool whose hook or currency the creator chose. The creator cannot bring about the lapse at will: it needs 365 days without a keepalive, which any account can pay while the record is live, or a Stylus version change by chain governance. Four additions. First, the two Arbitrum documents cover Arbitrum One and Nova. For Robinhood Chain the closed activation rests on the on-chain value of activationGas() and on the date of the last activation, and I found no statement by the chain operator. Second, a copy shares the record of its code hash. One keepalive extends the original and every copy, and a copy deployed late has only the time the original has left. Third, I checked the 26 program addresses on Robinhood Chain. None answers balanceOf(PoolManager) as a token would: 25 revert, and 0xd6cf26df204184fc9c3f2c47c36b04eb631ecf1f returns 64 bytes of hash output for any input and appears in no Initialize event as a currency between block 77,000,000 and the head. The low bits of 16 of the 26 addresses pass isValidHookAddress. The hook is not an indexed field of Initialize, so I did not establish whether a pool uses one of them, a copy, or an EVM contract that forwards to one. Fourth, the finding lists Hooks.sol:194-245 for liquidity changes. The same failure blocks swaps and donations for hooks with those flags, which the mechanism text implies and the references omit.",
+    "sources": [
+     {
+      "url": "https://rpc.mainnet.chain.robinhood.com eth_getLogs on 0x0000000000000000000000000000000000000071 from block 0 to the head, eth_call stylusVersion(), expiryDays(), keepaliveDays(), activationGas(), programVersion(address), programTimeLeft(address), codehashKeepalive(bytes32), activateProgram(address), and eth_call with code override at an unused address, queried 2026-11-22",
+      "supports": "26 ProgramActivated logs with 26 distinct code hashes at version 3 between 2026-07-25 and 2026-10-02, activation gas of 2^64-1, a copy of an activated program runs and a changed copy fails with ProgramNotActivated, keepalive by an unrelated account succeeds and activation reverts"
+     },
+     {
+      "url": "https://arb1.arbitrum.io/rpc eth_call to 0x2e5d89a229cbd17efb0a731d26232f88c3746aa9 and 0xaff2f129d2bcba4649a54fb516be0cc78288898d, direct and through a forwarding stub placed at 0x360e68faccca8ca495c1b759fd9eee466db9fb32 by state override, and eth_call to ArbWasm 0x71, queried 2026-11-22",
+      "supports": "a program at an old Stylus version fails every call with ProgramNeedsUpgrade(2, 3), including the transfer, balanceOf and hook call shapes as inner calls from the PoolManager address, and activation gas is 2^64-1"
+     },
+     {
+      "url": "https://rpc.elysium.kinetiq.xyz eth_getLogs on 0x0000000000000000000000000000000000000071 from block 0 and eth_call activationGas(), queried 2026-11-22",
+      "supports": "no ArbWasm log exists on Elysium and activation gas is 2^64-1, so the finding is rightly limited to Arbitrum One and Robinhood Chain"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/arbos/programs/programs.go",
+      "supports": "CallProgram looks the program up under the code hash of the called contract, getActiveProgram fails for a missing, outdated or expired record, and ProgramKeepalive has no caller check"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/precompiles/ArbWasm.go",
+      "supports": "ActivateProgram burns the stored activation gas first, and CodehashKeepalive charges only the data fee"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/evm.go",
+      "supports": "initNewContract accepts deployed code with the Stylus prefix on Arbitrum chains (lines 727 to 732)"
+     },
+     {
+      "url": "https://github.com/OffchainLabs/nitro/tree/v3.12.4",
+      "supports": "the go-ethereum submodule of v3.12.4 is at commit 0e44603"
+     },
+     {
+      "url": "https://docs.arbitrum.io/notices/stylus-activation-pause-notice",
+      "supports": "new and expired Stylus contracts cannot be activated on Arbitrum One and Nova during the pause, active ones run until they expire and can be renewed with codehashKeepalive"
+     },
+     {
+      "url": "https://forum.arbitrum.foundation/t/security-council-emergency-action-2-10-2026/31530",
+      "supports": "on 2026-10-02 the Security Council called ArbOwner.setWasmActivationGas(2^64 - 1) on Arbitrum One and Nova"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 3,
+   "extends": "F-003",
+   "id": "F-053",
+   "firstCycle": 3,
+   "history": [
+    {
+     "cycle": 3,
+     "unit": "arbitrum-family",
+     "status": "confirmed",
+     "severity": "medium"
+    }
+   ]
+  },
+  {
    "title": "Thirteen Wormhole guardians can act as PoolManager owner on BNB Smart Chain and Avalanche",
    "chainIds": [
     56,
@@ -4273,10 +4962,10 @@
    ],
    "effect": "freeze",
    "difference": "Ethereum has no protocol component that screens transactions by content. The X Layer execution client contains a risk control filter in the block builder. It evaluates every pool transaction after simulation against rules supplied by an external service, using the transaction's logs, call frames and native transfers. A second component drops transactions that emit bridge events for a configured token.",
-   "mechanism": "All funds of all pools sit at one address and leave only through take (src/PoolManager.sol:291-297), which runs inside unlock (src/PoolManager.sol:104-114). A rule that matches PoolManager events, calls into the PoolManager, or transfers of a pooled token gives a deny verdict. The builder then marks the transaction invalid and removes it from the pool, so it is never included. An audit verdict holds the transaction until the external service approves it. Liquidity removal and swaps that match such a rule stop for users who submit through the sequencer. Deposits are outside the filter: the builder code states that a deposit is consensus mandated and only records a metric for it. A user can therefore call the same contracts through OptimismPortal.depositTransaction on Ethereum from the same EOA. Contract accounts arrive with an aliased sender, so a position held by an L2 contract needs an EOA that the contract accepts as caller.",
-   "impact": "While a matching rule is active, LPs and swappers cannot move funds through sequencer submitted transactions in the affected pools, or in all pools if the rule targets the PoolManager address. No funds are lost. Exit through an L1 deposit costs Ethereum gas and depends on the sequencer honouring derivation.",
-   "preconditions": "The sequencer operator must run with the filter enabled and the risk control service must deliver a rule that matches PoolManager activity. Whether the mainnet sequencer has the filter or the bridge interceptor enabled, and which rules are loaded, could not be confirmed from public sources. The filter entered the code in release v0.0.7, and operators had to upgrade to v0.0.7.3 by 10 November 2026.",
-   "mitigations": "LPs who hold positions through contracts should keep an EOA controlled path so that an L1 deposit can reach the position. Integrators can prepare the L1 deposit route to PositionManager in advance. The deployer can ask OKX to state which contracts and tokens the risk rules may match.",
+   "mechanism": "1. All funds of all pools sit at one address and leave only through take (src/PoolManager.sol:291-297), which runs inside unlock (src/PoolManager.sol:104-114). An exit is a transaction that the sequencer must include. 2. A rule that matches PoolManager events, calls into the PoolManager or transfers of a pooled token gives a deny verdict. The builder then marks the transaction invalid and removes it from the pool, so it is never included. An audit verdict holds the transaction until the external service approves it. 3. New in this cycle, read on the main branch: the builder also denies a transaction when its capture exceeds an observation limit (10,000 native transfers, 10,000 event bindings or 10,000 call frame observations), when the observed frame stack is unbalanced, and when no rule snapshot was pinned for the block although screening is enabled. With the filter enabled, every pool transaction screened in a block without a pinned rule snapshot is denied and removed from the pool. 4. Deposits are outside the filter. The builder source states that a deposit is consensus mandated and that the rule result for it is reported and never acted on. A user can call the same contracts through OptimismPortal.depositTransaction on Ethereum from the same EOA. Contract accounts arrive with an aliased sender, so a position held by an L2 contract needs an EOA that the contract accepts as caller. Finding F-046 records a separate rule that can void a deposit whose source hash is on the deposit blacklist. 5. FilterConfig::default() sets enabled to false, the filter needs a service URL to start, and the setting is read once at node start. The crate header names a requirement 'OKONE Mainnet RSC'. Whether the mainnet sequencer starts with the filter enabled cannot be read from chain. The public endpoint reports the build reth/v2.3.0-f60420a with xlayer/v0.0.7 and refuses rpc_modules, and I found no operator statement about the mainnet setting.",
+   "impact": "While a matching rule is active, liquidity providers and swappers cannot move funds through sequencer submitted transactions in the affected pools, or in all pools if the rule targets the PoolManager address. No funds are lost. Exit through an L1 deposit costs Ethereum gas and depends on the sequencer following derivation.",
+   "preconditions": "The sequencer operator must run with the filter enabled and the risk control service must deliver a rule that matches PoolManager activity, or leave a block without a pinned rule snapshot. Whether the mainnet sequencer has the filter or the bridge interceptor enabled, and which rules are loaded, is still unconfirmed after this cycle. The filter entered the code in release v0.0.7, and operators had to upgrade to v0.0.7.3 by 10 November 2026.",
+   "mitigations": "Liquidity providers who hold positions through contracts should keep an EOA controlled path so that an L1 deposit can reach the position. Integrators can prepare the L1 deposit route to the PositionManager in advance. The deployer can ask OKX to state whether the filter runs on mainnet and which contracts and tokens its rules may match.",
    "coreRefs": [
     "src/PoolManager.sol:291-297",
     "src/PoolManager.sol:104-114"
@@ -4284,92 +4973,106 @@
    "sources": [
     {
      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/rcs-filter/src/lib.rs",
-     "supports": "The crate describes rule driven, per transaction risk control interception in the block builder: deny transactions are excluded from the block, audit transactions are packaged only after the external service approves them."
+     "supports": "the crate screens every transaction in the block builder, deny transactions are excluded, audit transactions are packaged after approval, and the header names the requirement OKONE Mainnet RSC"
     },
     {
      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/builder/src/flashblocks/context.rs",
-     "supports": "After simulation the builder calls the bridge interceptor and the filter. On Screen::Deny it marks the transaction invalid and removes it from the transaction pool. The sequencer transaction loop comment says a deposit is consensus mandated and the identification result is emitted as a metric and a log only."
+     "supports": "on Screen::Deny the builder marks the transaction invalid and removes it from the pool, capture failures and a missing rule snapshot fail closed to deny, and a deposit is consensus mandated and only reported"
     },
     {
      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/intercept/src/lib.rs",
-     "supports": "The bridge interceptor blocks transactions whose logs contain a BridgeEvent from the configured bridge contract, in wildcard mode or for one target token."
+     "supports": "the bridge interceptor blocks transactions with a BridgeEvent from the configured contract, for all tokens or for one"
     },
     {
-     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/bin/node/src/args.rs",
-     "supports": "The interceptor is configured with the flags xlayer.intercept.enabled, xlayer.intercept.bridge-contract and xlayer.intercept.target-token."
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3/crates/rcs-filter/src/config.rs",
+     "supports": "at the mainnet release tag the filter is off by default, needs a service URL, reads its settings once at start and has per transaction observation limits"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/rcs-filter/src/config.rs",
+     "supports": "the main branch adds a call frame observation limit and describes a callstack section of the rule format"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3/bin/node/src/args.rs",
+     "supports": "the flags xlayer.intercept.enabled, xlayer.intercept.bridge-contract and xlayer.intercept.target-token"
     },
     {
      "url": "https://github.com/okx/xlayer-reth/releases",
-     "supports": "Release v0.0.7 lists 'add the Risk Control Service transaction filter and RPC audit layer' and 'add configurable bridge interception to Flashblocks'. Release v0.0.7.3 requires a coordinated mainnet upgrade by 10 November 2026."
+     "supports": "v0.0.7 introduced the filter and the interceptor and was marked testnet only, v0.0.7.3 requires a mainnet upgrade by 10 November 2026, and the notes of v0.0.7.3 and v0.0.7.3-rc.1 do not mention the filter"
     },
     {
-     "url": "https://ethereum-rpc.publicnode.com eth_call depositTransaction(address,uint256,uint64,bool,bytes) with zero value on 0x64057ad1DdAc804d0D26A7275b193D9DACa19993 from an EOA",
-     "supports": "The X Layer OptimismPortal accepts a zero value deposit in simulation and paused() returns false."
+     "url": "https://ethereum-rpc.publicnode.com eth_call paused() and depositTransaction(address,uint256,uint64,bool,bytes) with zero value on 0x64057ad1DdAc804d0D26A7275b193D9DACa19993 from an EOA, 2026-11-22",
+     "supports": "the X Layer OptimismPortal is not paused and accepts a zero value deposit to the PoolManager address in simulation"
     },
     {
      "url": "https://specs.optimism.io/protocol/deposits.html",
-     "supports": "A deposit sent by an L1 contract carries the sender address plus 0x1111000000000000000000000000000000001111, and a deposit from an EOA keeps its address."
+     "supports": "a deposit from a contract carries the sender address plus 0x1111000000000000000000000000000000001111 and a deposit from an EOA keeps its address"
     },
     {
-     "url": "https://web3.okx.com/onchainos/dev-docs/xlayer/developer/build-on-xlayer/about-xlayer",
-     "supports": "The sequencer is trusted and is implemented by op-node in sequencer mode with op-reth."
+     "url": "https://rpc.xlayer.tech web3_clientVersion and rpc_modules, 2026-11-22",
+     "supports": "the endpoint reports reth/v2.3.0-f60420a with xlayer/v0.0.7 and refuses rpc_modules"
     }
    ],
    "evidence": "primary",
    "actor": "operator",
    "severity": "low",
-   "proposedSeverity": "medium",
+   "proposedSeverity": "low",
    "status": "plausible",
    "verification": {
-    "cycle": 1,
-    "factCheck": "I fetched the four cited source files from okx/xlayer-reth. The rcs-filter crate root describes rule driven screening of every transaction in the block builder: deny transactions are excluded, audit transactions are sent to an external service and packaged once approved. In crates/builder/src/flashblocks/context.rs the candidate loop calls the bridge interceptor on the simulated logs and then the filter. On Screen::Deny and Screen::Drop it marks the transaction invalid and removes it from the transaction pool. On Screen::AuditPending it marks it invalid for this block and keeps it. Capture failures such as an exceeded observation budget also map to deny. The sequencer transaction loop states that a deposit is consensus mandated and that the identification result goes to a metric and a log only. The intercept crate blocks transactions whose logs carry a BridgeEvent from the configured bridge contract, for all tokens or for one. The node arguments define the three xlayer.intercept flags. The releases page shows v0.0.7 of 27 August with both features in its change list and a note that the release is for testnet only. v0.0.7.3 of 30 October requires a coordinated mainnet upgrade by 10 November 2026. Its change list leaves the filter out. The directories crates/rcs-filter and crates/intercept exist at the tags v0.0.7, v0.0.7.3 and v0.0.7.3-rc.1 and are absent at v0.0.6.1. FilterConfig defaults to enabled false at v0.0.7.3. The exit path holds on chain. OptimismPortal 0x64057ad1DdAc804d0D26A7275b193D9DACa19993 points to a SystemConfig whose l2ChainId() is 196, paused() is false, and an eth_call of depositTransaction with zero value from an account without code returns. The OP deposit specification says the content of a deposited transaction comes from the portal event, that an EOA sender keeps its address and that a contract sender is aliased. The X Layer documentation calls the sequencer trusted. The unconfirmed link is activation. I found no public statement, flag listing or evidence of withheld transactions that shows the mainnet sequencer runs with the filter or the interceptor enabled, or that any rule matches the PoolManager or a pooled token.",
-    "codeCheck": "Pool reserves leave through take (src/PoolManager.sol:291-297), which requires the unlocked state set inside unlock (src/PoolManager.sol:104-114). Accrued protocol fees also leave through collectProtocolFees, which only the controller can call (src/ProtocolFees.sol:44-56). The contract has no path that bypasses transaction inclusion, so a builder that drops matching transactions stops these calls for as long as the rule applies. The code has no dependence on time or block number, so a delayed exit loses nothing through the code itself. Positions are stored under msg.sender (src/PoolManager.sol:161), so an exit through an L1 deposit must arrive from the same L2 address that owns the position. An EOA keeps its address in a deposit. A position held through a contract needs a caller that the contract accepts and that can be reproduced from L1. No test in test/ concerns transaction inclusion.",
-    "corrections": "1. Severity lowered from medium to low. The filter is off by default, activation on mainnet is not shown, and EOAs keep an exit through an L1 deposit. A trusted sequencer can also leave transactions out without this component, so the filter changes how selective exclusion is run and adds little to who can do it. The same treatment was given to the Soneium restriction list in this cycle. If activation with a rule that matches the PoolManager is shown, medium applies. 2. The statement that funds leave only through take omits collectProtocolFees. 3. With the filter enabled, a transaction can be denied without any rule: an exceeded observation budget and any capture inconsistency fail closed. The native transfer budget defaults to 10,000 per transaction.",
+    "cycle": 3,
+    "factCheck": "I fetched the cited files from raw.githubusercontent.com on 2026-11-23. crates/rcs-filter/src/lib.rs on main opens with the statement that the component screens every transaction produced during block building, that deny transactions are excluded from the block and audit transactions are packaged only after approval, and it names the requirement XLOP-1142 / OKONE Mainnet RSC. crates/builder/src/flashblocks/context.rs on main maps every capture outcome other than complete to Screen::Deny (lines 354 to 458), returns Screen::Deny when no rule snapshot was pinned for the block (lines 1495 to 1505), and on Screen::Deny calls best_txs.mark_invalid and tx_pool.remove_transaction (lines 1519 to 1524). The same file says a deposit is consensus-mandated and that the identification result is emitted as a metric and a log and nothing else (lines 188 to 194 and 850 to 856). crates/rcs-filter/src/config.rs at tag v0.0.7.3 has enabled false by default, requires a base URL when enabled, and sets both per transaction limits to 10,000. The main branch adds max_callstack_observations_per_tx with the same default. crates/intercept/src/lib.rs blocks a transaction that logs a BridgeEvent from the configured contract, for one token or for all, and bin/node/src/args.rs at the tag has the three xlayer.intercept flags. The releases page lists v0.0.7 of 27 August with the Risk Control Service filter and the bridge interception and marks it as testnet only. v0.0.7.3 of 30 October requires the coordinated upgrade by November 10, 2026, and its notes do not mention the filter. https://rpc.xlayer.tech reports reth/v2.3.0-f60420a with xlayer/v0.0.7 and answers rpc_modules with the error that the method is not whitelisted. paused() on the L1 portal 0x64057ad1DdAc804d0D26A7275b193D9DACa19993 returns false. The link that stays unconfirmed is the same as in cycle 1: whether the mainnet sequencer runs with the filter or the interceptor enabled and which rules it loads. Nothing on chain or in the public sources shows it. The fail closed branches were read on main, and I did not check that they are part of the v0.0.7.3 tag.",
+    "codeCheck": "Every exit is a call to take inside unlock (src/PoolManager.sol:104-114, 291-297), so an exit is a transaction that must be included. core has no time dependence and no path that works without inclusion. A transaction that is never included changes nothing in the PoolManager, so the effect is a delay and no loss. The code references in the finding are correct.",
+    "corrections": "The actor value operator is right. The title says L1 deposits remain as the exit. Finding F-046 from cycle 2 shows that X Layer can void a blacklisted deposit at the execution layer, so the deposit route also depends on the operator, and the two findings should be read as one. A sequencer can leave out transactions with or without this filter. What the filter adds is rule driven, automatic screening by log, call frame and native transfer content. I keep the severity at low because the filter is not shown to run on mainnet and because the stronger statement about deposits is carried by F-046.",
     "sources": [
      {
       "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/rcs-filter/src/lib.rs",
-      "supports": "Rule driven screening in the block builder with deny, audit and allow outcomes."
+      "supports": "purpose of the filter, deny and audit handling, the requirement name"
      },
      {
       "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/builder/src/flashblocks/context.rs",
-      "supports": "Deny and drop remove the transaction from the pool, audit pending holds it, capture failures deny, deposits are only reported."
-     },
-     {
-      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/intercept/src/lib.rs",
-      "supports": "Bridge interceptor blocks on BridgeEvent logs from the configured contract."
-     },
-     {
-      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/bin/node/src/args.rs",
-      "supports": "The xlayer.intercept flags."
+      "supports": "deny removes the transaction from the pool, capture failures and a missing rule snapshot give deny, deposits are only reported"
      },
      {
       "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3/crates/rcs-filter/src/config.rs",
-      "supports": "The filter crate is present at the mainnet release tag and FilterConfig defaults to enabled false."
+      "supports": "filter disabled by default at the release tag, with two limits of 10,000"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/rcs-filter/src/config.rs",
+      "supports": "the call frame observation limit on main"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/intercept/src/lib.rs",
+      "supports": "the bridge interceptor"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3/bin/node/src/args.rs",
+      "supports": "the xlayer.intercept flags"
      },
      {
       "url": "https://github.com/okx/xlayer-reth/releases",
-      "supports": "v0.0.7 lists both features and is marked testnet only. v0.0.7.3 requires a mainnet upgrade by 10 November 2026."
+      "supports": "release history and the upgrade date"
      },
      {
-      "url": "https://specs.optimism.io/protocol/deposits.html",
-      "supports": "Deposit content comes from the portal event, EOA senders keep their address, contract senders are aliased."
+      "url": "https://rpc.xlayer.tech web3_clientVersion and rpc_modules, 2026-11-23",
+      "supports": "client version string and the refused method"
      },
      {
-      "url": "https://web3.okx.com/onchainos/dev-docs/xlayer/developer/build-on-xlayer/about-xlayer",
-      "supports": "The sequencer is trusted."
-     },
-     {
-      "url": "https://ethereum-rpc.publicnode.com eth_call paused(), systemConfig(), depositTransaction(address,uint256,uint64,bool,bytes) on 0x64057ad1DdAc804d0D26A7275b193D9DACa19993; l2ChainId(), isCustomGasToken() on 0x5065809af286321a05fbf85713b5d5de7c8f0433",
-      "supports": "The portal belongs to chain 196, is not paused and accepts a zero value deposit in simulation."
+      "url": "https://ethereum-rpc.publicnode.com eth_call paused() on 0x64057ad1DdAc804d0D26A7275b193D9DACa19993",
+      "supports": "the X Layer portal is not paused"
      }
     ]
    },
-   "lastVerifiedCycle": 1,
+   "lastVerifiedCycle": 3,
    "id": "F-024",
    "firstCycle": 1,
    "history": [
     {
      "cycle": 1,
+     "unit": "op-stack-custom-gas",
+     "status": "plausible",
+     "severity": "low"
+    },
+    {
+     "cycle": 3,
      "unit": "op-stack-custom-gas",
      "status": "plausible",
      "severity": "low"
@@ -4969,6 +5672,256 @@
      "unit": "stablecoin-l1",
      "status": "confirmed",
      "severity": "low"
+    }
+   ]
+  },
+  {
+   "title": "Two pooled tokens make their transfer rules depend on the PoolManager address: ELO on Elysium needs a budget set by its hook, and v4CRCL on X Layer pays out only to permitted recipients",
+   "chainIds": [
+    99901,
+    196
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A4",
+    "A7"
+   ],
+   "effect": "freeze",
+   "difference": "No chain rule is involved. These are token designs that exist on these two networks among the tokens the PoolManager holds. ELO at 0xe107e5d99910f544f88ef961e3ca6d88f06f29dd on Elysium stores the PoolManager address and has functions poolManagerGateEnabled, poolManagerTransferBudget, authorizePoolManagerTransfer, setPoolManagerGate, setHook and setBlockedVenue. v4CRCL at 0xd4f64a67b2c1295bd6c25b3a306b2a049e392397 on X Layer has POOL_MANAGER, PERMISSIONED_TOKEN, allowListChecker, allowedHooks, allowedWrappers, wrapToPoolManager and swappingEnabled, which is the shape of a wrapper for a permissioned token.",
+   "mechanism": "1. take(X, to, amount) debits the caller and makes the PoolManager call X.transfer(to, amount) (src/PoolManager.sol:291-297, src/types/Currency.sol:55-75). 2. ELO: a transfer of zero from the PoolManager succeeds. A transfer of 1 base unit or of 10^18 reverts with UnauthorizedPoolManagerTransfer(bool,uint256,uint256). authorizePoolManagerTransfer succeeds when called from the address returned by hook() and reverts for any other caller, including the PoolManager. Both budgets read zero outside a transaction and the bytecode contains TLOAD and TSTORE, so the budget appears to live in transient storage. ELO can therefore leave the PoolManager only in a transaction in which its hook has authorized the amount. A pool that names ELO with another hook or with no hook can receive ELO and can never pay it out, and an ERC-6909 claim on ELO can be burned for a take only when the hook takes part (src/PoolManager.sol:322-336). The owner of ELO can switch the gate and replace the hook. 3. v4CRCL: every transfer from the PoolManager to the four recipients I tried reverts with TRANSFER_FAILED, for a zero amount as well, and transfers by other senders revert with a custom error. Payouts depend on a permission list kept outside core. 4. In both cases the failed transfer makes take revert with ERC20TransferFailed (src/types/Currency.sol:82-86), and the same holds for collectProtocolFees (src/ProtocolFees.sol:56). I found no way for an ordinary account to use these rules against another currency: the checks act on the token's own balance, a zero amount poke changes nothing, and each take is debited in full.",
+   "impact": "The PoolManager holds 60,839 ELO on Elysium (about 46,000 USD of pool reserves on the tracker) and 65.98 v4CRCL on X Layer (about 1,800 USD). Holders of these tokens through pools or claims depend on the token owner and on the hook or permission list for every payout. Other currencies and other pools are not affected.",
+   "preconditions": "A user must hold liquidity or claims in one of these tokens. The token owner, the hook or the permission list must refuse or stop authorizing. I could not obtain verified source for either token, so the function names come from the public signature database and the behaviour from read only calls.",
+   "mitigations": "Front ends can flag currencies whose transfer from the PoolManager fails in simulation for a plain recipient. Liquidity providers should treat such a token like a hook that can block removal, which the state already records for all chains.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:55-86",
+    "src/PoolManager.sol:322-336"
+   ],
+   "sources": [
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz",
+     "supports": "rpc eth_call at block 9,697,391 and later on 2026-11-22: ELO transfer(recipient, 0) from the PoolManager returns true; transfer of 1 and of 10^18 revert with 0x206e5f37; poolManagerGateEnabled() is 1; poolManager() is the PoolManager; hook() is 0x34a6e76a10881d215abb5872f584bef6e3103dcd; authorizePoolManagerTransfer(true, 10^18) succeeds from the hook address and reverts with 0x67373552 from two other senders; balanceOf(PoolManager) is 60,838.98 ELO; a linear scan of the 7,456 byte code finds 5 TLOAD and 3 TSTORE"
+    },
+    {
+     "url": "https://rpc.xlayer.tech",
+     "supports": "rpc eth_call at block 76,621,774 and later on 2026-11-22: v4CRCL transfer from the PoolManager to the Universal Router, the PositionManager and two plain addresses reverts with TRANSFER_FAILED for amounts 0 and 1000; balanceOf(PoolManager) is 65,979,861 with 6 decimals"
+    },
+    {
+     "url": "https://api.4byte.sourcify.dev/signature-database/v1/lookup?function=0xe7d0c09e,0x206e5f37",
+     "supports": "selector 0x206e5f37 is UnauthorizedPoolManagerTransfer(bool,uint256,uint256); the same database resolves the ELO and v4CRCL function selectors named in this finding"
+    },
+    {
+     "url": "https://api.geckoterminal.com/api/v2/networks/elysium/dexes/uniswap-v4-elysium/pools?page=1&include=base_token,quote_token",
+     "supports": "ELO is among the twelve largest currencies of Uniswap v4 pools on Elysium by tracked reserve"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "pool-creator",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 3,
+    "factCheck": "ELO on Elysium, https://rpc.elysium.kinetiq.xyz at block 9,705,318 on 2026-11-23 (client nitro): the address holds 7,456 bytes of code with 5 TLOAD and 3 TSTORE opcodes in a linear scan. name() is Eloscape, poolManagerGateEnabled() is 1, poolManager() is the PoolManager, hook() is 0x34a6e76a10881d215abb5872f584bef6e3103dcd (15,541 bytes of code), owner() is 0xc40f3a4bcc1c9077ad08cce365947e70fe18b65e, an account without code. balanceOf(PoolManager) is 61,374.86 ELO of a total supply of 95,985.28. With from set to the PoolManager, transfer(recipient, 0) returns true and transfers of 1 and of 10^18 revert with 0x206e5f37 followed by (false, amount, 0). I computed that selector locally from UnauthorizedPoolManagerTransfer(bool,uint256,uint256). authorizePoolManagerTransfer(bool,uint256) returns without error when the caller is the hook address and reverts with 0x67373552, which the signature database names NotCanonicalHook(), for the PoolManager and for an unrelated caller. poolManagerTransferBudget(bool) returns 0 for both flag values outside a transaction. The selectors of setPoolManagerGate(bool), setHook(address) and setBlockedVenue(address,bool) are present in the bytecode. GeckoTerminal lists an ELO / HYPE 1% pool with about 90,000 USD of reserves. v4CRCL on X Layer, https://rpc.xlayer.tech at block 76,626,622: name() is Uniswap v4 Circle - Securitize, POOL_MANAGER() is the PoolManager, PERMISSIONED_TOKEN() is 0x76163273f8bae6570ba3bb202044129a98e98f16 (symbol CRCL, 6 decimals), allowListChecker() is 0x09e4ef4da58d13edcc8c10d02c89dd8ed119f9ec and swappingEnabled() is 1. totalSupply() and balanceOf(PoolManager) are both 68,536,255 base units, and the wrapper holds the same amount of CRCL. Transfers from the PoolManager to the Universal Router, the PositionManager and two plain addresses revert with the string TRANSFER_FAILED for amounts 0 and 1000. A transfer between two unrelated addresses reverts with 0x709ac017, InvalidTransfer(address,address). wrapToPoolManager from an unrelated caller reverts with UnauthorizedWrapper(address).",
+    "codeCheck": "take books the debit and calls transfer on the currency with the PoolManager as msg.sender (src/PoolManager.sol:291-297, src/types/Currency.sol:60-74). A revert in the token makes the take revert with the wrapped ERC20TransferFailed error (src/types/Currency.sol:82-86), and the same holds for collectProtocolFees (src/ProtocolFees.sol:56). burn credits the caller and makes no token call, so a claim can be burned at any time and only the take that follows depends on the token (src/PoolManager.sol:332-336). Each take is debited in full before the call and a zero amount take books nothing (src/PoolManager.sol:294, 368-369), so the token rules give an ordinary account no credit and no payout in another currency. I agree with the finding that no path leads from these two tokens to other pools.",
+    "corrections": "The sentence that a pool with another hook or with no hook can receive ELO and can never pay it out is wrong for the receiving half. A transfer of 1 base unit to the PoolManager from each of four ELO holders reverts with UnauthorizedPoolManagerTransfer(true, 1, 0), so ELO can neither enter nor leave the PoolManager without a budget from the hook. The statement that the owner can replace the hook did not hold in simulation: setHook from the owner address reverts with 0xbef9156a, which the signature database names HookAlreadySet(). setPoolManagerGate(false) from the owner succeeds in simulation and reverts for another caller, so the owner can open the gate. The v4CRCL balance is now 68.54 and the finding quotes 65.98. Not confirmed: verified source for either token, the logic of the ELO hook and who controls it, and a payout of v4CRCL to a permitted recipient, because I did not find an address on the permission list. The actor value pool-creator fits ELO. For v4CRCL the party that decides payouts is the keeper of the permission list of the underlying security token, which is closer to issuer. Neither is an ordinary account. Severity low stands: the payout dependence on the hook is the hazard the state already records for hooks, and the sums are about 46,000 USD and under 2,000 USD.",
+    "sources": [
+     {
+      "url": "https://rpc.elysium.kinetiq.xyz",
+      "supports": "rpc eth_call and eth_getCode at block 9,705,318 on 2026-11-23: ELO gate, hook and owner getters, outbound transfers of 1 and 10^18 from the PoolManager revert with 0x206e5f37, inbound transfers of 1 from four holders revert with the same error and flag true, authorizePoolManagerTransfer succeeds only from the hook address, setHook from the owner reverts with 0xbef9156a, setPoolManagerGate(false) from the owner succeeds"
+     },
+     {
+      "url": "https://rpc.xlayer.tech",
+      "supports": "rpc eth_call at block 76,626,622 on 2026-11-23: v4CRCL getters, transfers from the PoolManager to four recipients revert with TRANSFER_FAILED, totalSupply equals balanceOf(PoolManager) equals the CRCL balance of the wrapper, wrapToPoolManager from an unrelated caller reverts with 0x87d4de58"
+     },
+     {
+      "url": "https://api.4byte.sourcify.dev/signature-database/v1/lookup?function=0xe7d0c09e,0x206e5f37,0x67373552,0x709ac017,0x87d4de58,0xbef9156a,0x118cdaa7",
+      "supports": "names of the seven error selectors seen in these calls, including UnauthorizedPoolManagerTransfer(bool,uint256,uint256), NotCanonicalHook(), HookAlreadySet(), InvalidTransfer(address,address) and UnauthorizedWrapper(address)"
+     },
+     {
+      "url": "https://api.geckoterminal.com/api/v2/networks/elysium/dexes/uniswap-v4-elysium/pools?page=1&include=base_token,quote_token",
+      "supports": "an ELO / HYPE 1% pool with about 90,000 USD of tracked reserves is on the first page of Uniswap v4 pools on Elysium"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 3,
+   "id": "F-059",
+   "firstCycle": 3,
+   "history": [
+    {
+     "cycle": 3,
+     "unit": "theme-mirrored-ledgers",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
+   "title": "BNB Smart Chain runs a call from the system address with its stated value and moves no balance, and no ordinary sender can be that address",
+   "chainIds": [
+    56
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A3",
+    "A8"
+   ],
+   "effect": "siphon",
+   "difference": "On Ethereum as the PoolManager code models it, a frame that reports CALLVALUE v exists only after v was moved from the caller to the callee. The BNB Smart Chain client treats the caller 0xfffffffffffffffffffffffffffffffffffffffe as a system call: EVM.Call skips the balance check and skips the transfer for that caller, and still builds the callee frame with the stated value (core/vm/evm.go lines 311 to 316 and 342 to 347 on master). The same text is in go-ethereum master (lines 288 to 309), in op-geth on the optimism branch (lines 268 to 303) and in the head of the Celo fork of op-geth (lines 285 to 321). Bor, the Nitro fork of go-ethereum, libevm (Avalanche), revm and the Monad client perform the check and the transfer for every caller. A read-only probe on the 21 public endpoints showed the rule active on BNB Smart Chain only: a call from that address with value 7 and an overridden balance of 1000 left the sender at 1000 and the target at its old balance, while the target frame read CALLVALUE 7. The other 20 endpoints moved the 7 wei or rejected the transaction.",
+   "mechanism": "1. settle and settleFor credit msg.value as paid when no ERC-20 is synced and read no balance (src/PoolManager.sol:300-307 and 352-354). 2. A frame entered from the system address on BNB Smart Chain reports a value that nobody paid. If such a frame reached settleFor(recipient) while the manager is unlocked, the recipient would hold a native credit backed by nothing and could take the PoolManager's BNB (src/PoolManager.sol:291-297). 3. The client itself calls with that caller in three places, the beacon root call, the parent hash call and the request queue call, each with value zero and a fixed target (core/state_processor.go lines 353 to 429). Parlia system transactions use the block's coinbase as sender (consensus/parlia/parlia.go lines 1389, 2069, 2096, 2110, 2131 and 2137), so they pay value from a real balance. 4. A signed transaction or an EIP-7702 authorization from that address needs a signature for an address with no known signing secret. 5. A system call starts a new transaction context, so the manager is locked. A probe call of settle() and settleFor(address) with value 1 from the system address returned ManagerLocked (0x54e3ca0d) on all 21 networks. 6. A contract that the system address calls sees the value but receives no balance, so it cannot pass the value on to the PoolManager. No step lets an ordinary account produce the frame.",
+   "impact": "None today. The PoolManager on BNB Smart Chain holds about 3,794 BNB plus the tokens of every pool that has BNB on one side. Those funds would be exposed only if a later client release or hard fork added a system call that carries value into contract code chosen by users, or let a public transaction type run with the system address as caller.",
+   "preconditions": "A consensus rule change on BNB Smart Chain (or on a network whose client carries the same rule) that makes the system address the caller of user-chosen code with nonzero value while the PoolManager is unlocked. Client developers and the validator set must act. No ordinary account can meet this.",
+   "mitigations": "The deployer can keep this rule on the checklist for every BNB Smart Chain hard fork, starting with Jenner on 2026-12-08, and rerun the probe from this finding after each one. A core change that removes the dependency would have sync(address(0)) record address(this).balance and have the native branch of _settle credit the smaller of msg.value and the balance rise. LPs and pool creators cannot act on this.",
+   "coreRefs": [
+    "src/PoolManager.sol:300-307",
+    "src/PoolManager.sol:349-364",
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:44-52"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/evm.go",
+     "supports": "isSystemCall at lines 291 to 293. Call skips CanTransfer at 314 and skips Transfer at 345 to 347 when the caller is the system address, and passes value to the callee frame."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/state_processor.go",
+     "supports": "The three calls made with From params.SystemAddress pass common.U2560 as value (lines 353 to 363, 380 to 390, 420 to 429)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/consensus/parlia/parlia.go",
+     "supports": "getSystemMessage at line 2137 is always called with header.Coinbase as sender. distributeIncoming at lines 2022 to 2052 moves the system address balance to the coinbase before the reward deposit."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/core/vm/evm.go",
+     "supports": "Same rule in go-ethereum master, lines 268 to 309."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/core/state_processor.go",
+     "supports": "The go-ethereum system calls at lines 387 to 487 pass value zero."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/op-geth/optimism/core/vm/evm.go",
+     "supports": "Same rule in op-geth, lines 268 to 303."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/op-geth/HEAD/core/vm/evm.go",
+     "supports": "Same rule in the head of the Celo fork, lines 285 to 321. The Celo mainnet endpoint (build c7ed55b8 of 2026-08-17) did not show it in the probe."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/master/core/vm/evm.go",
+     "supports": "Bor checks CanTransfer at line 326 and calls Transfer at line 357 for every caller."
+    },
+    {
+     "url": "rpc https://bsc-dataseed1.bnbchain.org eth_call from 0xfffffffffffffffffffffffffffffffffffffffe, value 7, balance override 1000, to a probe placed by state override",
+     "supports": "Returned sender balance 1000, target balance 10 before its own transfer of 5, and CALLVALUE 7 in the target frame. The same call on the other 20 endpoints returned sender balance 993 and target balance 17, or was rejected (Tempo)."
+    },
+    {
+     "url": "rpc eth_call of settle() and settleFor(address) with value 1 from 0xfffffffffffffffffffffffffffffffffffffffe to the PoolManager on all 21 endpoints",
+     "supports": "Every call reverted with 0x54e3ca0d (ManagerLocked)."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "governance",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 3,
+    "factCheck": "I fetched core/vm/evm.go from the master branch of bnb-chain/bsc. isSystemCall at lines 291 to 293 compares the caller with params.SystemAddress, which params/protocol_params.go line 238 sets to 0xfffffffffffffffffffffffffffffffffffffffe. EVM.Call skips CanTransfer at line 314 and skips Transfer at lines 345 to 347 for that caller and still passes the value to the callee contract. CallCode (line 409) and create (line 552) keep the balance check for every caller. I repeated the probe on all 21 endpoints of networks.json on 2026-11-23: eth_call from the system address with value 7, a sender balance of 1000 set by state override, to a 16 byte probe that returns CALLVALUE, SELFBALANCE and BALANCE(CALLER), probe balance 10. BNB Smart Chain (Geth/v1.8.2-4e1c8247-20261104, near block 135,178,626) returned 7, 10 and 1000 in 12 of 12 runs. The same call from an ordinary address returned 7, 17 and 993 there. Nineteen other endpoints returned 7, 17 and 993 for the system address, and Tempo rejected the call with 'value transfer not allowed'. The system address has no code, nonce 0 and balance 0 on BNB Smart Chain. I looked for every use of the address as a caller in the client. core/state_processor.go builds three messages with From params.SystemAddress (lines 353, 380 and 420) and each evm.Call passes common.U2560 as value to a fixed target. consensus/parlia/parlia.go calls getSystemMessage five times (lines 1389, 2069, 2096, 2110 and 2131) and feynmanfork.go twice (lines 54 and 125), always with header.Coinbase as sender. core/state_transition.go lines 702 and 708 only add fees to the address, and distributeIncoming (parlia.go lines 2022 to 2052) moves that balance to the coinbase. The Jenner stateful precompile entry (core/vm/contracts_stateful.go lines 161 to 186) and the CAS20 prologue (core/vm/cas20.go lines 89 to 95) make no outbound call and reject value. A frame whose address is the system address would need code at that address, an EIP-7702 authorization signed for it, or a transaction signed for it. None of these is open to an ordinary account. go-ethereum master (lines 268 to 309), op-geth on the optimism branch (lines 247 to 304) and the head of celo-org/op-geth (lines 264 to 321) hold the same rule. Bor master (lines 326 and 357), the Nitro fork of go-ethereum (lines 264 and 294) and libevm (lines 196 and 219) check and transfer for every caller. go-ethereum's own three system calls pass value zero (core/state_processor.go lines 387 to 487). eth_call of settle() (0x11da60b4) and settleFor(address) (0x3dd45adb) with value 1 from the system address returned 0x54e3ca0d on BNB Smart Chain and on the other endpoints I ran with both selectors (Ethereum, Unichain, Celo, HyperEVM). settle() returned 0x54e3ca0d on 20 endpoints and Tempo rejected the value. eth_getBalance of the BNB Smart Chain PoolManager returned 3,793.5 BNB. The Jenner date is confirmed: params/config.go line 256 sets JennerTime to 1796697000 and the v1.8.2 release notes give 2026-12-08 02:30 UTC. Not confirmed by me: the revm and Monad source lines the finding names for the other clients. Their endpoints behaved as on Ethereum in the probe.",
+    "codeCheck": "settle and settleFor are the only payable functions in src (src/PoolManager.sol:300-307). Both carry onlyWhenUnlocked, which reverts with ManagerLocked unless Lock.isUnlocked() is true (src/PoolManager.sol:96-99). _settle credits paid = msg.value to the recipient when the synced currency is address(0) and reads no balance on that branch (src/PoolManager.sol:349-354 and 364). sync(address(0)) stores no reserves (src/PoolManager.sol:281-283). A native credit can be spent by take, which sends value with call(gas(), to, amount, 0, 0, 0, 0) (src/PoolManager.sol:291-297, src/types/Currency.sol:44-52). So a frame at the PoolManager that reports a value nobody paid would give a real credit, as the finding says. The guards hold for the case at hand. The unlock flag is set only inside unlock, which then calls unlockCallback on msg.sender (src/PoolManager.sol:104-114). A call that starts from the system address begins with the manager locked, and an account without code cannot run a callback. The PoolManager makes three raw calls. The token transfer and the hook call pass value 0 (src/types/Currency.sol:73, src/libraries/Hooks.sol:134) and the native payout uses the PoolManager as caller (src/types/Currency.sol:48), so the PoolManager never calls as the system address. A contract called by the system address with a stated value receives no balance on BNB Smart Chain, so any onward value call to settle would be paid from that contract's own balance. No path from an ordinary account to a native credit follows from this rule.",
+    "corrections": "The mechanism text says the settle and settleFor probe returned ManagerLocked on all 21 networks. On Tempo the endpoint rejects any call that carries value with 'value transfer not allowed', also when the sender balance is set by override, so the count is 20 and one rejection. With value 0 the Tempo PoolManager returns ManagerLocked. The op-geth line range begins at 247 and the Celo range at 264, where isSystemCall is defined. forno.celo.org answered from two client families during my runs (reth/v2.2.0-74cc8bb and Geth/v0.1.0-untagged-c7ed55b8-20260817) and both moved value for the system address in 12 of 12 runs. The actor value governance and the severity info are right: no party can trigger the hazard today and it needs a consensus rule change.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/evm.go",
+      "supports": "isSystemCall at lines 291 to 293. Call skips CanTransfer at line 314 and Transfer at lines 345 to 347 for the system address. CallCode at line 409 and create at line 552 keep the check."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/params/protocol_params.go",
+      "supports": "SystemAddress is 0xfffffffffffffffffffffffffffffffffffffffe (line 238)."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/state_processor.go",
+      "supports": "The three messages with From params.SystemAddress (lines 353, 380, 420) call fixed targets with value common.U2560."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/consensus/parlia/parlia.go",
+      "supports": "Every getSystemMessage call uses header.Coinbase as sender (lines 1389, 2069, 2096, 2110, 2131). distributeIncoming moves the system address balance to the coinbase (lines 2022 to 2052)."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/consensus/parlia/feynmanfork.go",
+      "supports": "The two further getSystemMessage calls (lines 54 and 125) also use header.Coinbase."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/state_transition.go",
+      "supports": "Transaction fees are added to the system address (lines 702 and 708). The file has no other use of the address."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/contracts_stateful.go",
+      "supports": "runStatefulPrecompiledContract (lines 161 to 186) passes the frame value to the precompile and makes no outbound call."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/core/vm/cas20.go",
+      "supports": "cas20EnterCall rejects CALLCODE and DELEGATECALL entry and reverts with NonPayable when the frame has value (lines 89 to 95)."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/master/params/config.go",
+      "supports": "JennerTime on mainnet is 1796697000, 2026-12-08 02:30 UTC (line 256)."
+     },
+     {
+      "url": "https://github.com/bnb-chain/bsc/releases/tag/v1.8.2",
+      "supports": "Release notes schedule the mainnet Jenner hard fork for 2026-12-08 02:30:00 UTC."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/core/vm/evm.go",
+      "supports": "Same system caller rule, lines 268 to 309."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/core/state_processor.go",
+      "supports": "The system calls at lines 387 to 487 pass value common.U2560."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum-optimism/op-geth/optimism/core/vm/evm.go",
+      "supports": "Same rule, lines 247 to 304."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/celo-org/op-geth/HEAD/core/vm/evm.go",
+      "supports": "Same rule, lines 264 to 321."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/0xPolygon/bor/master/core/vm/evm.go",
+      "supports": "CanTransfer at line 326 and Transfer at line 357 run for every caller."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/vm/evm.go",
+      "supports": "CanTransfer at line 264 and Transfer at line 294 run for every caller."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ava-labs/libevm/main/core/vm/evm.go",
+      "supports": "CanTransfer at line 196 and Transfer at line 219 run for every caller."
+     },
+     {
+      "url": "rpc https://bsc-dataseed1.bnbchain.org eth_call from 0xfffffffffffffffffffffffffffffffffffffffe, value 7, balance override 1000, to a probe placed by state override; eth_getCode, eth_getBalance and eth_getTransactionCount of the system address; eth_getBalance of the PoolManager",
+      "supports": "Probe returned CALLVALUE 7, callee balance 10, sender balance 1000 in 12 of 12 runs near block 135,178,626. System address: no code, balance 0, nonce 0. PoolManager balance 3,793.5 BNB."
+     },
+     {
+      "url": "rpc eth_call of the same probe on the other 20 endpoints of state/networks.json, 2026-11-23",
+      "supports": "Nineteen returned 7, 17 and 993. Tempo rejected the call with 'value transfer not allowed'."
+     },
+     {
+      "url": "rpc eth_call of settle() 0x11da60b4 and settleFor(address) 0x3dd45adb with value 1 from the system address to each PoolManager",
+      "supports": "0x54e3ca0d (ManagerLocked) for settle on 20 endpoints and for settleFor on the five endpoints tested with the right selector. Tempo rejected the value and returned 0x54e3ca0d with value 0."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 3,
+   "id": "F-058",
+   "firstCycle": 3,
+   "history": [
+    {
+     "cycle": 3,
+     "unit": "theme-callvalue-without-debit",
+     "status": "confirmed",
+     "severity": "info"
     }
    ]
   }

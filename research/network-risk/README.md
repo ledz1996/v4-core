@@ -49,6 +49,8 @@ Cells start at depth 0 and a baseline pass only brings them to depth 2. Reaching
 
 Every research agent, verifier and critic writes leads: concrete open questions with a priority. A lead stays open until an agent answers it with a finding or a clearance. After three inconclusive attempts it is parked.
 
+A finding that names an earlier one in "ref" replaces it only when the plan assigned that recheck to the unit. Otherwise it is kept as its own entry with an "extends" link. `cycles/NNN/skip.json` drops a finding that the critic showed to be a second report of one event.
+
 Findings marked plausible or unverified pull their network family back into the plan until someone confirms or refutes them. Confirmed findings are re-checked after six cycles, because networks upgrade.
 
 Revisits rotate through eight work items: a sweep of the chain's special addresses with the PoolManager as caller, an opcode comparison against the node's source, the faces of the native asset, known weaknesses of the network, added transaction types, upcoming forks, the assets pools hold, and ways to block other users' exits. The same network gets different questions each time.

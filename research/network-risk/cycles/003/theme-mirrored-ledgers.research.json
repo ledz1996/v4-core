@@ -1,0 +1,370 @@
+{
+ "unit": "theme-mirrored-ledgers",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "The GoodDollar token owner has blocked the Celo PoolManager address, which freezes 550 million G$ and every pool that uses G$",
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A4",
+    "A6"
+   ],
+   "effect": "freeze",
+   "actor": "issuer",
+   "severity": "high",
+   "difference": "On Celo the G$ token at 0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A is a Superfluid based token with an owner controlled block list. The owner can block any address from sending or receiving, can burn any balance with adminBurn, and can install a fee formula under which the sender pays a fee on top of the amount. After an attack on 2026-09-04 that used a flaw in the Superfluid deployment on Celo, the owner blocked liquidity pool addresses. The PoolManager address was blocked in block 77,233,730 on 2026-09-11 and is still blocked. The GoodDollar report of 2026-10-20 says all pools were unblocked on 2026-09-28 except the Uniswap v4 pool, which holds 550 million G$.",
+   "mechanism": "1. All pools, claims and protocol fees in one currency sit in one balance at the PoolManager address (assumption A6). 2. The token checks isBlocked for the sender and the recipient of every transfer and reverts with SUPER_GOODDOLLAR_BLOCKED (verified source, SuperGoodDollar.sol lines 434 to 440 and 468 to 470). isBlocked(PoolManager) returns true. 3. take(G$, to, amount) debits the caller and then calls transfer on the token (src/PoolManager.sol:291-297, src/types/Currency.sol:55-75). The call reverts, the success test at src/types/Currency.sol:64-74 fails and the take reverts with ERC20TransferFailed (src/types/Currency.sol:82-86). In a read only call from the PoolManager address a transfer of zero, of 1 G$ and of one thousandth of the balance all revert with selector 0xe7d0c09e. collectProtocolFees for G$ reverts the same way (src/ProtocolFees.sol:56). 4. A transfer of G$ from another account to the PoolManager reverts with the same error, so nobody can pay G$ in and a sync and settle window can never show an increase (src/PoolManager.sol:279-288, 349-364). 5. An account that holds a positive G$ delta, for example a liquidity provider who removes a position, can still mint an ERC-6909 claim for it or clear it (src/PoolManager.sol:310-329), and can take the other currency of the pool. The G$ itself cannot leave until the owner lifts the block. 6. The block is one storage flag for the whole PoolManager address. It applies to every G$ pool and claim on that address, whoever created them.",
+   "impact": "550,022,104 G$ held by the Celo PoolManager, valued at about 63,000 USD by the explorer, cannot be taken out. Liquidity providers and claim holders in every G$ pool are affected. The other currency of those pools stays reachable for a provider whose router can mint a claim or clear the G$ side. The owner can also burn the balance with adminBurn, which would leave pool accounting above the real balance. The fee formula returns zero today. If the owner set a fee paid by the sender, each take would lower the PoolManager balance by more than the caller is debited.",
+   "preconditions": "The token owner has acted already. The freeze holds today. Lifting it needs a call of setBlocked by an account with the admin role of the token. The report says the owner waits for the holder of the liquidity position to make contact. I did not identify which pools hold the balance and did not read the Superfluid host contracts.",
+   "mitigations": "The deployer cannot prevent an issuer block on the singleton address. Front ends on Celo can warn on tokens with a block list or a sender paid fee and can offer an exit that mints an ERC-6909 claim for the blocked side so that the other currency is not held back. Liquidity providers can avoid tokens whose owner can block an address or burn balances.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:55-86",
+    "src/PoolManager.sol:310-329",
+    "src/ProtocolFees.sol:44-57"
+   ],
+   "sources": [
+    {
+     "url": "https://forno.celo.org",
+     "supports": "rpc eth_call at block 83,490,050 on 2026-11-22: isBlocked(PoolManager) returns 1; transfer from the PoolManager address reverts with 0xe7d0c09e for amounts 0, 10^18 and one thousandth of the balance; transfer of 0 from another address to the PoolManager reverts with the same selector; transfers between two other addresses succeed; balanceOf(PoolManager) is 550,022,104,456,118,939,767,246,081; paused() is false; getFees returns a zero fee"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/42220/0xb4419A3Df33b9aa6fbE452Df8816389E599C29eF?fields=sources,compilation",
+     "supports": "verified source of the SuperGoodDollar implementation: isBlocked mapping, setBlocked and adminBurn restricted to the admin role, _processFees checks both parties and can charge the sender a fee on top of the amount"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/42220/0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A?fields=compilation,proxyResolution",
+     "supports": "the token address is a proxy whose implementation is 0xb4419A3Df33b9aa6fbE452Df8816389E599C29eF, named SuperGoodDollar"
+    },
+    {
+     "url": "https://celo.blockscout.com/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A&topic0=0x148a86796e0fc2ba3270f94c00ce0af947ccc7a4db4269c66c9dd1eb883e90a5&topic1=0x000000000000000000000000288dc841a52fca2707c6947b3a777c5e56cd87bc&topic0_1_opr=and",
+     "supports": "one BlockedUpdated(PoolManager, true) event in block 77,233,730, timestamp 1789134488 (2026-09-11 13:48:08 UTC), transaction 0x22cd34a5f179dfa342fd3659d029e4d40469ca8fa02abd032145f162b0b8dd4d"
+    },
+    {
+     "url": "https://discourse.gooddollar.org/t/gooddollar-incident-post-mortem-september-4-attack/9164",
+     "supports": "issuer report of 2026-10-20: transfers from G$ liquidity pools were blocked after the attack of 2026-09-04, all pools were unblocked on 2026-09-28 except the Celo Uniswap V4 pool, which holds 550M G$ and remains blocked"
+    },
+    {
+     "url": "https://api.4byte.sourcify.dev/signature-database/v1/lookup?function=0xe7d0c09e,0x206e5f37",
+     "supports": "selector 0xe7d0c09e is SUPER_GOODDOLLAR_BLOCKED()"
+    },
+    {
+     "url": "https://celo.blockscout.com/api/v2/addresses/0x288dc841A52FCA2707c6947B3A777c5E56cd87BC/tokens?type=ERC-20",
+     "supports": "G$ is the third largest ERC-20 holding of the Celo PoolManager by explorer value, about 63,000 USD"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Two pooled tokens make their transfer rules depend on the PoolManager address: ELO on Elysium needs a budget set by its hook, and v4CRCL on X Layer pays out only to permitted recipients",
+   "chainIds": [
+    99901,
+    196
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A4",
+    "A7"
+   ],
+   "effect": "freeze",
+   "actor": "pool-creator",
+   "severity": "low",
+   "difference": "No chain rule is involved. These are token designs that exist on these two networks among the tokens the PoolManager holds. ELO at 0xe107e5d99910f544f88ef961e3ca6d88f06f29dd on Elysium stores the PoolManager address and has functions poolManagerGateEnabled, poolManagerTransferBudget, authorizePoolManagerTransfer, setPoolManagerGate, setHook and setBlockedVenue. v4CRCL at 0xd4f64a67b2c1295bd6c25b3a306b2a049e392397 on X Layer has POOL_MANAGER, PERMISSIONED_TOKEN, allowListChecker, allowedHooks, allowedWrappers, wrapToPoolManager and swappingEnabled, which is the shape of a wrapper for a permissioned token.",
+   "mechanism": "1. take(X, to, amount) debits the caller and makes the PoolManager call X.transfer(to, amount) (src/PoolManager.sol:291-297, src/types/Currency.sol:55-75). 2. ELO: a transfer of zero from the PoolManager succeeds. A transfer of 1 base unit or of 10^18 reverts with UnauthorizedPoolManagerTransfer(bool,uint256,uint256). authorizePoolManagerTransfer succeeds when called from the address returned by hook() and reverts for any other caller, including the PoolManager. Both budgets read zero outside a transaction and the bytecode contains TLOAD and TSTORE, so the budget appears to live in transient storage. ELO can therefore leave the PoolManager only in a transaction in which its hook has authorized the amount. A pool that names ELO with another hook or with no hook can receive ELO and can never pay it out, and an ERC-6909 claim on ELO can be burned for a take only when the hook takes part (src/PoolManager.sol:322-336). The owner of ELO can switch the gate and replace the hook. 3. v4CRCL: every transfer from the PoolManager to the four recipients I tried reverts with TRANSFER_FAILED, for a zero amount as well, and transfers by other senders revert with a custom error. Payouts depend on a permission list kept outside core. 4. In both cases the failed transfer makes take revert with ERC20TransferFailed (src/types/Currency.sol:82-86), and the same holds for collectProtocolFees (src/ProtocolFees.sol:56). I found no way for an ordinary account to use these rules against another currency: the checks act on the token's own balance, a zero amount poke changes nothing, and each take is debited in full.",
+   "impact": "The PoolManager holds 60,839 ELO on Elysium (about 46,000 USD of pool reserves on the tracker) and 65.98 v4CRCL on X Layer (about 1,800 USD). Holders of these tokens through pools or claims depend on the token owner and on the hook or permission list for every payout. Other currencies and other pools are not affected.",
+   "preconditions": "A user must hold liquidity or claims in one of these tokens. The token owner, the hook or the permission list must refuse or stop authorizing. I could not obtain verified source for either token, so the function names come from the public signature database and the behaviour from read only calls.",
+   "mitigations": "Front ends can flag currencies whose transfer from the PoolManager fails in simulation for a plain recipient. Liquidity providers should treat such a token like a hook that can block removal, which the state already records for all chains.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:55-86",
+    "src/PoolManager.sol:322-336"
+   ],
+   "sources": [
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz",
+     "supports": "rpc eth_call at block 9,697,391 and later on 2026-11-22: ELO transfer(recipient, 0) from the PoolManager returns true; transfer of 1 and of 10^18 revert with 0x206e5f37; poolManagerGateEnabled() is 1; poolManager() is the PoolManager; hook() is 0x34a6e76a10881d215abb5872f584bef6e3103dcd; authorizePoolManagerTransfer(true, 10^18) succeeds from the hook address and reverts with 0x67373552 from two other senders; balanceOf(PoolManager) is 60,838.98 ELO; a linear scan of the 7,456 byte code finds 5 TLOAD and 3 TSTORE"
+    },
+    {
+     "url": "https://rpc.xlayer.tech",
+     "supports": "rpc eth_call at block 76,621,774 and later on 2026-11-22: v4CRCL transfer from the PoolManager to the Universal Router, the PositionManager and two plain addresses reverts with TRANSFER_FAILED for amounts 0 and 1000; balanceOf(PoolManager) is 65,979,861 with 6 decimals"
+    },
+    {
+     "url": "https://api.4byte.sourcify.dev/signature-database/v1/lookup?function=0xe7d0c09e,0x206e5f37",
+     "supports": "selector 0x206e5f37 is UnauthorizedPoolManagerTransfer(bool,uint256,uint256); the same database resolves the ELO and v4CRCL function selectors named in this finding"
+    },
+    {
+     "url": "https://api.geckoterminal.com/api/v2/networks/elysium/dexes/uniswap-v4-elysium/pools?page=1&include=base_token,quote_token",
+     "supports": "ELO is among the twelve largest currencies of Uniswap v4 pools on Elysium by tracked reserve"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "F-041",
+   "title": "A zero amount transfer of qiAVAX from the Avalanche PoolManager runs Benqi reward accounting for it, and anyone can ask Benqi to pay the accrued QI to the PoolManager",
+   "chainIds": [
+    43114
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A5"
+   ],
+   "effect": "siphon",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "This is the reward bearing token case of the Ethereum finding, found on Avalanche with numbers. The PoolManager holds 2,305.6 qiAVAX, the Benqi market token for AVAX. Benqi pays suppliers in QI and in AVAX through its Comptroller, and claimReward(uint8,address) is public and pays the named holder.",
+   "mechanism": "1. Every qiAVAX transfer calls Comptroller.transferAllowed, which updates and distributes supplier rewards for the sender and the recipient (Comptroller.sol lines 595 to 608). take(qiAVAX, to, 0) records no delta (src/PoolManager.sol:294, 368-369) and still makes the PoolManager call transfer (src/types/Currency.sol:73), so any account can run this accounting for the PoolManager at no cost. The call used 140,444 gas against about 5,000 for a plain token and changed no balance. 2. rewardAccrued(0, PoolManager) is 14.844 QI and rewardAccrued(1, PoolManager) is 0.1286 AVAX. 3. claimReward(0, PoolManager) can be called by anyone and transfers the accrued QI to the PoolManager when the Comptroller holds enough QI (lines 1234 and 1287 to 1291). 4. A caller who runs sync(QI), then the claim, then settle inside one unlock is credited the QI that arrived and can take it (src/PoolManager.sol:279-297, 349-364). 5. Today the Comptroller holds 0.1096 QI, less than the accrued amount, so the claim pays nothing: in simulation it succeeded and the QI balance of the PoolManager did not change. The AVAX reward cannot be paid at all, because the PoolManager has no receive function, and claimReward(1, PoolManager) reverts.",
+   "impact": "14.84 QI today, once the Comptroller is funded again, plus whatever accrues later on the qiAVAX that pools hold. The qiAVAX balance is worth about 54 AVAX at the measured mint rate, so the sums are small. Without a caller the QI would sit in the PoolManager as a surplus that no pool can withdraw, so liquidity providers do not receive it in either case.",
+   "preconditions": "Pools or claims in qiAVAX or another market token of a lending protocol whose reward claim can be made for a third party. The Benqi Comptroller must hold at least the accrued amount of QI. I did not check other lending forks on other chains.",
+   "mitigations": "None in core. Liquidity providers in reward bearing market tokens should expect to lose the rewards. A hook could claim and donate them to the pool.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-297",
+    "src/PoolManager.sol:349-369",
+    "src/types/Currency.sol:55-75"
+   ],
+   "sources": [
+    {
+     "url": "https://api.avax.network/ext/bc/C/rpc",
+     "supports": "rpc eth_call at block 101,112,181 and later on 2026-11-22 with a measuring stub placed at the PoolManager address by state override: qiAVAX.transfer(recipient, 0) returns true, uses 140,444 gas and leaves the qiAVAX and QI balances unchanged; rewardAccrued(0, PoolManager) = 0xce0130c391ab383d; rewardAccrued(1, PoolManager) = 0x01c90be69987eff4; claimReward(0, PoolManager) succeeds with no change in QI.balanceOf(PoolManager); claimReward(1, PoolManager) reverts; QI.balanceOf(Comptroller) = 0.1096 QI; balanceOf(PoolManager) on qiAVAX = 230,561,327,030 with 8 decimals; a value call of 10^12 wei to qiAVAX mints 4,276 units"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/Benqi-fi/BENQI-Smart-Contracts/master/lending/Comptroller.sol",
+     "supports": "transferAllowed distributes supplier rewards for src and dst; claimReward(uint8,address payable) is public; grantRewardInternal pays QI only when the amount does not exceed the Comptroller balance"
+    },
+    {
+     "url": "https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api?module=account&action=addresstokenbalance&address=0x06380c0e0912312b5150364b9dc4542ba0dbbc85&page=1&offset=100",
+     "supports": "token balances of the Avalanche PoolManager, including 2,305.61 qiAVAX, 131.06 sAVAX and 10,974 QI"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L4",
+   "check": "Lead L-166, method for all 21 networks. For each candidate address X the stub at the PoolManager address reads X.balanceOf(PoolManager), makes one call to X and reads the balance again, in one eth_call. Four shapes per X: a value call of 10^12 wei with empty calldata, a zero value call with empty calldata, transfer(recipient, 0) and transfer(recipient, 1). Candidates: the ERC-4337 EntryPoints v0.6, v0.7 and v0.8 on every chain, the wrapped native token, every address with code from 0x4200000000000000000000000000000000000000 to 00ff on the ten OP Stack chains, the system contracts of BNB Smart Chain and Polygon, the Avalanche and HyperEVM precompile ranges, liquid staking tokens, and the 248 largest pooled tokens.",
+   "result": "The addresses whose balanceOf(PoolManager) rose on the value call are the wrapped native token of each chain (exactly 10^12 for 10^12 wei on all 20 chains that have native value), the three EntryPoints (exactly 10^12; on Tempo they have code and the value call fails, because the chain has no native value), stETH on Ethereum (999,999,999,999), wstETH on Ethereum (800,071,968,325), sAVAX on Avalanche (771,425,961,435) and qiAVAX on Avalanche (4,276 units of 8 decimals). No address raised the ledger on a zero value call or on a zero amount transfer. The EntryPoints reject transfer(address,uint256), so a credit under their id can only become a claim. For the others the full cycle with A = 10^12 wei is: sync(X) stores B (src/PoolManager.sol:279-288); take(address(0), X, A) sets the caller's delta under address(0) to minus A and sends A to X (src/PoolManager.sol:294-295, src/types/Currency.sol:48); X books r times A to the PoolManager; settle credits the caller r times A under id X (src/PoolManager.sol:358-364); take(X, caller, r times A) pays that out; the caller then pays A with msg.value to clear the native debt, because unlock needs every delta at zero (src/PoolManager.sol:112). The PoolManager's native balance and its X balance end where they started. The caller paid A and holds what a direct deposit of A into X mints, less 1 wei of rounding for stETH. No part of the cycle uses value that belonged to pools.",
+   "source": "rpc eth_call with state override on the 21 endpoints of networks.json, 2026-11-22, blocks 26,474,032 (Ethereum), 159,896,174 (OP Mainnet), 61,003,752 (Base), 64,642,766 (Unichain), 54,348,643 (Zora), 38,027,743 (World Chain), 61,892,714 (Ink), 31,128,186 (Soneium), 83,490,366 (Celo), 76,622,089 (X Layer), 526,647,112 (Arbitrum One), 120,983,007 (Robinhood Chain), 9,697,845 (Elysium), 97,790,438 (Polygon), 135,169,352 (BNB Smart Chain), 101,112,531 (Avalanche), 124,568,074 (Monad), 32,594,114 (MegaETH), 50,343,895 (Tempo), 32,644,012 (Arc), 51,986,345 (HyperEVM); src/PoolManager.sol:279-297, 349-364"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    4326,
+    42220,
+    196
+   ],
+   "lens": "L4",
+   "check": "L-166 on the OP Stack chains: all addresses with code among the 256 predeploy slots and the legacy ETH address, with the stub as an inner caller, to see which ones answer balanceOf(PoolManager) and which ones accept transfer.",
+   "result": "Only the wrapped native predeploy at 0x4200000000000000000000000000000000000006 has both halves, at one to one. L1BlockNumber at 0x4200000000000000000000000000000000000013 answers balanceOf with the L1 block number (26,474,026 on OP Mainnet) and returns that number to transfer, which fails the success test at src/types/Currency.sol:68, so take reverts. The number is fixed within one L2 block, so a sync and settle pair inside one transaction measures zero. L2ToL1MessagePasser (0x16, not on X Layer) and the fee vaults at 0x11, 0x19, 0x1a and 0x1b accept value and have no ledger that balanceOf reads. The governance token at 0x42 is an ordinary token where it has code. LegacyERC20ETH has code on OP Mainnet and Zora only, reports the native balance (247.28 ETH and 0.1526 ETH) and rejects transfer and value. On the other chains that address has no code, so transfer returns empty data and a take that names it debits the caller and moves nothing (src/types/Currency.sol:68). On Celo the CELO token at 0x471EcE3750Da237f93B8E339c536989b8978a438 rejects a value call, and transfer(recipient, 1) from the PoolManager lowers both balanceOf and the native balance by 1, so the two ids move the same balance at one to one in the same unit. The earlier clearance of double credit for that face stands (src/PoolManager.sol:353-356).",
+   "source": "rpc eth_call with state override via the endpoints of networks.json for chain ids 10, 8453, 130, 7777777, 480, 57073, 1868, 4326, 42220 and 196 at the blocks listed in the first cleared item; src/types/Currency.sol:60-75"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "L-166 on Arc, where the face of the native asset uses another unit: the full cycle across address(0) (18 decimals) and 0x3600000000000000000000000000000000000000 (6 decimals), and the link earlier cycles left open, namely whether native value can be forced into the PoolManager.",
+   "result": "The face rejects a value call from the PoolManager, so the PoolManager cannot be made to deposit into it. transfer(recipient, 1) from the PoolManager lowers the face balance by 1 and the native balance by exactly 10^12, and transfer(recipient, 0), a transfer to itself and a transfer of one thousandth of the balance are exact. A take under the face id is therefore debited one unit per 10^12 wei paid out, and a native take is debited in wei. A read only creation probe showed that a contract created with value that self destructs to the PoolManager raises its native balance by that value, for 1 wei and for 999,999,999,999 wei, and that the face balance rises by one unit when the sum crosses a multiple of 10^12. The rounding gain per sync and settle pair is the remainder already in the balance, at most 10^12 minus 1 wei, which is under 0.000001 USDC. The remainder was 486,011,262,919 wei at block 32,645,513. The gas price was 25 gwei, so 100,000 gas for one round costs 2.5 * 10^15 wei, more than 2,500 times the largest gain. The implementation address 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6 still reports the same balance and rejects transfer, as recorded.",
+   "source": "rpc https://rpc.mainnet.arc.io eth_call with state override, eth_getBalance and eth_gasPrice at blocks 32,644,012 and 32,645,513 on 2026-11-22; src/PoolManager.sol:349-364"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114,
+    143,
+    999,
+    4217
+   ],
+   "lens": "L4",
+   "check": "L-166 on Polygon, BNB Smart Chain, Avalanche, Monad, HyperEVM and Tempo: system contracts, precompile ranges and liquid staking tokens with the stub as an inner caller.",
+   "result": "Polygon: WPOL is one to one. The native token contract at 0x1010 reports the native balance (3,109,571 POL), returns true for transfer of zero and false for any other amount, and rejects value. 0x1000 and 0x1001 reject every shape. BNB Smart Chain: WBNB is one to one. The system contracts 0x1000, 0x1002, 0x1004, 0x1005, 0x2001 and 0x2006 accept value and have no balanceOf ledger and no transfer, so a native take to them is lost to the caller. Avalanche: WAVAX is one to one, sAVAX mints 0.7714 sAVAX per AVAX and qiAVAX mints at its exchange rate, both to the PoolManager and both transferable, which is the cycle described in the first cleared item. The addresses 0x0200000000000000000000000000000000000000 to 04 and 0x0300000000000000000000000000000000000000 to 03 have no code and answer as empty accounts. The warp address 0x0200000000000000000000000000000000000005 fails every shape. Monad: WMON is one to one. shMON, gMON, aprMON and sMON accept plain value without minting to the sender, so that value is lost to the caller. The staking precompile at 0x1000 fails every shape and uses all gas given to it. HyperEVM: WHYPE is one to one. 0x2222222222222222222222222222222222222222 accepts value with no EVM ledger. 0x0809 answers balanceOf and transfer with the HyperCore block number, which fails the success test for transfer. 0x0800 to 0x0808 and 0x080a to 0x0814 fail the balanceOf shape and use all gas given to them, so sync reverts. 0x0815 to 0x0820 and the token system addresses answer as empty accounts. Tempo: no address accepts value, the EntryPoints raise nothing, and TIP-20 transfers of 0 and 1 from the PoolManager are exact.",
+   "source": "rpc eth_call with state override via https://polygon.drpc.org, https://bsc-dataseed1.bnbchain.org, https://api.avax.network/ext/bc/C/rpc, https://rpc.monad.xyz, https://rpc.hyperliquid.xyz/evm and https://rpc.mainnet.tempo.xyz at the blocks listed in the first cleared item and block 51,987,046 for the HyperEVM precompile range; src/types/Currency.sol:44-75"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "check": "Zero amount and dust transfers with the PoolManager as sender, for the largest pooled tokens of each network. Token lists: explorer balances of the PoolManager ranked by value on OP Mainnet, Unichain, World Chain, Ink, Soneium, Celo and MegaETH (Blockscout), on Ethereum and Avalanche (Routescan), the largest currencies of Uniswap v4 pools by tracked reserve on Base, Arbitrum One, BNB Smart Chain, Polygon, Monad, X Layer, Zora, Tempo, Arc, Robinhood Chain and Elysium (GeckoTerminal), and a hand list on HyperEVM. 248 tokens, 9 to 16 per chain. For each token: transfer(recipient, 0), transfer(recipient, 1), transfer(PoolManager, 0), a transfer of one thousandth of the balance to a plain recipient, to the PoolManager itself, to the token address and to the zero address, with the sender balance read before and after and the gas of the inner call measured. On 13 endpoints the logs of the zero amount transfer were read with eth_simulateV1.",
+   "result": "In every successful call the sender balance changed by exactly the amount sent: zero for a zero amount, zero for a transfer to itself, minus the amount otherwise. No token paid a reward, released vested tokens, rebased, changed a delegation or charged the sender a fee on these calls, and no call moved a second token to or from the PoolManager in the logs. Exceptions and side effects, all without a gain for the caller: G$ on Celo and ELO and v4CRCL on Elysium and X Layer revert (see findings). sAVAX rejects a zero amount transfer with TRANSFER_ZERO_VALUE, so take(sAVAX, to, 0) reverts. stETH moves nothing for 1 wei while the caller is debited 1. qiAVAX runs Benqi reward accounting (see finding). The stock tokens on Robinhood Chain emit TransferWithScaledUI, SPCXB on BNB Smart Chain emits TransferWithUIAmount and ANTX on Ink emits TransferShares next to Transfer, with no balance effect beyond the amount. Vote tokens (OP, UNI, ARB, AAVE) used under 13,000 gas, which leaves no room for a checkpoint write, as expected for a holder without a delegate. USDT on Ethereum returns no data, which the success test accepts (src/types/Currency.sol:68). The largest zero amount gas figures were 140,444 (qiAVAX), about 106,000 on Monad for the wrapped stock tokens, whose contract on Ink uses 36,094 and logs only Transfer, and 40,713 (SPCXB). On the 8 endpoints without eth_simulateV1 (World Chain, Celo, X Layer, Avalanche, Monad, MegaETH, Arc, HyperEVM) the statement about second tokens rests on the gas figures and on the balance of the token itself. The lists are samples of 9 to 16 tokens per chain and do not cover every pooled token.",
+   "source": "rpc eth_call and eth_simulateV1 with state override on the 21 endpoints of networks.json on 2026-11-22 at blocks 26,474,005 (1), 159,896,016 (10), 61,002,173 (8453), 64,642,450 (130), 54,348,485 (7777777), 38,027,585 (480), 61,892,397 (57073), 31,128,028 (1868), 83,490,050 (42220), 76,621,774 (196), 526,646,159 (42161), 120,980,233 (4663), 9,697,391 (99901), 97,790,228 (137), 135,168,649 (56), 101,112,181 (43114), 124,567,027 (143), 32,593,799 (4326), 50,343,306 (4217), 32,643,387 (5042), 51,986,024 (999); token lists from https://explorer.optimism.io/api/v2/addresses/0x9a13f98cb987694c9f086b1f5eb990eea8264ec3/tokens?type=ERC-20 and the same path on unichain.blockscout.com, worldchain-mainnet.explorer.alchemy.com, explorer.inkonchain.com, soneium.blockscout.com, celo.blockscout.com and megaeth.blockscout.com, https://api.routescan.io/v2/network/mainnet/evm/1/etherscan/api?module=account&action=addresstokenbalance&address=0x000000000004444c5dc75cB358380D2e3dE08A90&page=1&offset=100, and https://api.geckoterminal.com/api/v2/networks/base/dexes/uniswap-v4-base/pools?page=1&include=base_token,quote_token with the network and dex ids of the other chains"
+  },
+  {
+   "chainIds": [
+    1868,
+    143
+   ],
+   "lens": "L3",
+   "check": "USDSC on Soneium (1.90 million held) and mUSD on Monad (1.88 million held) are yield bearing dollar tokens with a public claim function. Does a claim raise the PoolManager balance, which a caller could book between sync and settle?",
+   "result": "No. Both contracts answer yieldRecipient() with one fixed address (0xda798684ffd5eb509c2ab7b8352ec55b31f18201 and 0x4177a5287fae4767311dad02547b57d1b8cf5fbf) and yield() with the amount waiting for it. They do not answer accruedYieldOf, isEarning or claimRecipientFor for the PoolManager. The yield goes to the one recipient, and the PoolManager balance moves only by transfers. USDM, CUSD, apxUSD, AUSD, USDG on three chains, stcUSD, eUSD and WBRL answer none of the eleven yield or reward selectors I tried.",
+   "source": "rpc eth_call via https://rpc.soneium.org and https://rpc.monad.xyz and the endpoints of chain ids 4326, 1, 57073, 4663, 196, 4217, 137 and 480 on 2026-11-22; src/PoolManager.sol:349-364"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L5",
+   "check": "Can take make the PoolManager call itself with effect, so that its own ERC-6909 ledger serves as a mirrored ledger?",
+   "result": "No. take calls transfer(address,uint256) on the currency address and sync calls balanceOf(address) (src/types/Currency.sol:60-75, 94). The ERC-6909 functions of the PoolManager are transfer(address,uint256,uint256) and the getter balanceOf(address,uint256) (src/ERC6909.sol:17, 25), which have other selectors, and the contract has no fallback or receive function (the only payable functions are settle and settleFor, src/PoolManager.sol:300-307). A take or sync that names the PoolManager as currency reverts, and a native take to the PoolManager reverts.",
+   "source": "src/ERC6909.sol:15-48; src/PoolManager.sol:300-307; src/types/Currency.sol:40-96"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "question": "Which pools and positions hold the 550 million G$ in the Celo PoolManager, and does the deployed PositionManager offer an exit that takes the other currency while the G$ side is minted as a claim or cleared?",
+   "why": "The G$ side is frozen by the issuer's block. Core allows mint and clear in place of take (src/PoolManager.sol:310-329). If the periphery only offers a take of both currencies, the other currency of those positions is frozen in practice as well.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "question": "Which pooled tokens on each chain store the PoolManager address or answer poolManager(), POOL_MANAGER() or poolManagerGateEnabled(), and what does each do when the PoolManager is the sender?",
+   "why": "ELO on Elysium and v4CRCL on X Layer change their transfer rules for the PoolManager. They were found by a failed dust transfer in a sample of 12 tokens per chain. An indexer pass over all pool currencies with these three selectors would list every token of this kind.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    56,
+    8453,
+    10,
+    130,
+    42161,
+    43114
+   ],
+   "lens": "L3",
+   "question": "Does the PoolManager on these chains hold market tokens of lending protocols whose reward claim names the holder (Venus claimVenus(address), Moonwell and other Compound forks), and how much is accrued for it?",
+   "why": "On Avalanche 14.84 QI is accrued for the PoolManager and the public claim pays it to the PoolManager when the Comptroller is funded, which a caller can book between sync and settle (src/PoolManager.sol:279-288, 349-364). The same shape may hold larger sums elsewhere. XVS is among the larger holdings on Unichain.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    480,
+    42220,
+    196,
+    43114,
+    143,
+    4326,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "question": "With a tracing endpoint, does a zero amount transfer from the PoolManager write any storage outside the token itself for the largest pooled tokens on these eight chains?",
+   "why": "Their public endpoints refuse eth_simulateV1 and debug_traceCall, so effects on a second token were judged from gas use and from the token's own balance only.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-166",
+   "outcome": "cleared",
+   "answer": "No address of the asked kind pays out at a gain on any of the 21 networks. Measured with a stub at the PoolManager address as an inner caller: on every chain with native value the wrapped native token raises balanceOf(PoolManager) by exactly the value sent and transfers one to one. The EntryPoints v0.6, v0.7 and v0.8 raise their deposit ledger by exactly the value sent and reject transfer(address,uint256). Three more contracts have both halves at a rate other than one to one: wstETH on Ethereum (0.800072 per ETH), sAVAX on Avalanche (0.771426 per AVAX) and qiAVAX on Avalanche (4,276 units per 10^12 wei), and stETH on Ethereum mints 1 wei less than sent. In each case the caller is debited the full native amount under address(0), is credited under the token id exactly what the contract minted to the PoolManager, and must pay the native debt with msg.value, so the result equals a direct deposit and the PoolManager balances end unchanged. No address raised its ledger on a zero value call or a zero amount transfer. All code holding predeploys on the ten OP Stack chains, the system contracts of BNB Smart Chain and Polygon and the precompile ranges of Avalanche, Monad and HyperEVM were covered. The native faces with a ledger of their own unit are recorded separately: CELO on Celo moves one to one in the same unit, and USDC on Arc moves 10^12 wei per unit with a rounding gain under 0.000001 USDC per round that costs more than 2,500 times that in gas. Tempo has no native value. The Arbitrum family unit and the custom gas unit reached the same result for their chains in this cycle."
+  },
+  {
+   "leadId": "L-163",
+   "outcome": "finding",
+   "answer": "Covered for the 12 to 15 largest pooled tokens on BNB Smart Chain, Polygon and Avalanche, and for 248 tokens over all 21 chains. A zero amount transfer from the PoolManager changes sender state in one token: qiAVAX on Avalanche, where it runs Benqi reward accounting for the PoolManager, and the public claimReward(0, PoolManager) would pay 14.84 accrued QI to the PoolManager if the Comptroller held it (it holds 0.11 QI, so the claim pays nothing today). sAVAX rejects zero amount transfers. No token in the samples has a per sender cooldown, an automatic claim to the sender, a fee paid by the sender or a swap back. On BNB Smart Chain SPCXB emits a second event with a display amount and nothing else changes. On Polygon all twelve tokens log only Transfer. The samples do not cover every pooled token."
+  }
+ ]
+}

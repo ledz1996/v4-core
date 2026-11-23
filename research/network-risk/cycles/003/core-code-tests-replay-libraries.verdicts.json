@@ -1,0 +1,111 @@
+{
+ "unit": "core-code-tests-replay-libraries",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "The finding claims no chain fact. Its claims concern files of this repository. I checked each one against the text and with a Python transcription of the libraries that I wrote myself with EVM word semantics. Case one reproduces exactly. With spacing 32767 the per tick cap is 6076470837873901133274546561281575204. The price 735853766953812733719635225319847024411115828962 lies in tick 873548. The ticks -131068 and 98301 are multiples of 32767. getAmount1Delta rounded up for liquidity 2300850342447660200206975412810193765 gives 313585663563401618519606321096647269736, which is above 2^127 and below 2^128, and the source path reverts with SafeCastOverflow. The reference that the test uses (test/utils/LiquidityAmounts.sol:99-107, rounded down) stays below Constants.MAX_UINT128 (test/utils/Constants.sol:21), so the test sets no expectRevert and that input would fail. Case two reproduces in direction. On 100,000 random inputs the assertion for positive liquidity failed 49,865 times for each of the two signed helpers, and the assertion for negative liquidity failed 46,525 and 48,375 times. No file under test/ imports SqrtPriceMathEchidnaTest. Case three matches the text of test/libraries/Pool.t.sol:129-170. The cast in modifyLiquidity cannot be reached by a plain eth_call because the function needs an unlock callback from a contract, so I did not test it on chain. The on-chain queries I ran for this unit are listed under the spot checks.",
+   "codeCheck": "Pool.modifyLiquidity passes the signed results of SqrtPriceMath.getAmount0Delta and getAmount1Delta through SafeCast.toInt128 in all three branches (src/libraries/Pool.sol:209-236). The signed helpers return minus the rounded up amount for a liquidity delta of zero or more and the rounded down amount for a negative delta (src/libraries/SqrtPriceMath.sol:261-288). toInt128(int256) reverts when the value does not fit (src/libraries/SafeCast.sol:40-43). An add therefore reverts when its rounded up amount is 2^127 + 1 or more, and a removal reverts when its rounded down amount is 2^127 or more. test/libraries/Pool.t.sol:73-83 compares the amounts with Constants.MAX_UINT128, so the source is the stricter side for amounts from 2^127 + 1 to 2^128 - 1. The eight earlier branches at Pool.t.sol:51-70 follow the order in which the source reaches them: checkTicks (Pool.sol:94-98), the underflow in LiquidityMath.addDelta for a negative delta on an empty tick (Pool.sol:529, src/libraries/LiquidityMath.sol:10-19), the empty position check (src/libraries/Position.sol:84-87), the cap on the lower tick before the upper tick (Pool.sol:165-173), and flipTick for the lower tick before the upper tick (Pool.sol:175-180). The sign in the source is the one the accounting needs. A negative delta is added to the caller's slot (src/PoolManager.sol:183 and 368-384), settle adds what was paid (PoolManager.sol:364) and unlock reverts while any slot is nonzero (PoolManager.sol:112). src/test/SqrtPriceMathEchidnaTest.sol:144-197 asserts the opposite sign. Pool.swap reverts at a 100 percent fee only for a positive amount and returns a zero delta for a zero amount before any state is written (Pool.sol:311-320), while Pool.t.sol:129 expects a revert for zero. Pool.t.sol:135-158 calls swap for a nonzero amount only inside the branches that expect a revert. I looked for a guard or a path that would turn one of these disagreements into a fund effect and found none. A removal that hits the cast can be split, because both amounts scale with the liquidity delta. PoolManager.swap rejects a zero amount (PoolManager.sol:193), so Pool.swap sees zero only when a beforeSwap hook cancels the amount in its own pool (src/libraries/Hooks.sol:273-279), and then nothing is written.",
+   "corrections": "No party gains or loses through these disagreements, so the actor value carries no weight here; unprivileged is the value the existing F-006 entry already has. The counts 346 of 400,000, 135,655 and 48,354 could not be reproduced because the finding does not state its sampling distribution; the direction of each result reproduces. The third part repeats a correction that the cycle 1 verification of F-006 already recorded. The statement that nothing in the repository runs the echidna harness needs one addition: .github/workflows/mythx.yml:60 lists SqrtPriceMathEchidnaTest under contracts/test/, a directory that does not exist in this repository, and echidna.config.yml is present. No forge test runs the harness. On the limit for an add: an amount of exactly 2^127 passes, because the amount is negated before the cast and -2^127 fits int128. A removal passes up to 2^127 - 1.",
+   "sources": [
+    {
+     "url": "test/libraries/Pool.t.sol:43-88",
+     "supports": "The modifyLiquidity fuzz test expects SafeCastOverflow only for amounts above Constants.MAX_UINT128."
+    },
+    {
+     "url": "test/utils/Constants.sol:21",
+     "supports": "MAX_UINT128 is type(uint128).max."
+    },
+    {
+     "url": "test/utils/LiquidityAmounts.sol:99-133",
+     "supports": "The reference amounts of the test are rounded down."
+    },
+    {
+     "url": "src/libraries/Pool.sol:206-237",
+     "supports": "Both amounts of a liquidity change are cast with toInt128."
+    },
+    {
+     "url": "src/libraries/SqrtPriceMath.sol:261-288",
+     "supports": "Sign and rounding of the signed amount helpers."
+    },
+    {
+     "url": "src/libraries/SafeCast.sol:40-43",
+     "supports": "toInt128(int256) reverts when the value does not fit."
+    },
+    {
+     "url": "src/test/SqrtPriceMathEchidnaTest.sol:144-197",
+     "supports": "The harness asserts a positive amount for positive liquidity."
+    },
+    {
+     "url": "src/PoolManager.sol:104-114",
+     "supports": "unlock reverts while a delta is open, so a negative delta is a debt of the caller."
+    },
+    {
+     "url": "src/libraries/Pool.sol:311-330",
+     "supports": "The zero amount return and the two price limit checks of swap."
+    },
+    {
+     "url": "test/libraries/Pool.t.sol:129-170",
+     "supports": "The swap fuzz test calls swap for a nonzero amount only when it expects a revert."
+    },
+    {
+     "url": ".github/workflows/mythx.yml:58-67",
+     "supports": "The only workflow that names the echidna harness points at contracts/test/, which this repository does not have."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "TickMath: replay of every vector and boundary in test/libraries/TickMath.t.sol by a Python transcription with EVM word semantics, and recomputation of every constant from its definition.",
+   "agrees": true,
+   "note": "My own transcription of src/libraries/TickMath.sol:57-237 and src/libraries/BitMath.sol:12-48 returns the four boundary prices and the reverts that the item lists. The 20 multipliers and the factor 255738958999603826347141 equal their definitions when computed with 220 digit decimals. Over all 1,774,545 ticks the price rises strictly from tick to tick. For every tick t below MAX_TICK, getTickAtSqrtPrice(price(t)) equals t, and for every t above MIN_TICK, getTickAtSqrtPrice(price(t) - 1) equals t - 1. The largest relative error on 3,005 sampled ticks was 2.0e-10. On chain, read only, 2026-11-23: initialize needs no unlock and returns getTickAtSqrtPrice of the price, so I called it through eth_call on all 21 PoolManagers with an unused pair of currency addresses and no hook. Every network answered all 116 cases as the transcription predicts. 111 calls returned the predicted tick (the listed boundaries, price(t) and price(t) - 1 for 40 random ticks, 20 random prices). MIN_SQRT_PRICE - 1 and MAX_SQRT_PRICE gave InvalidSqrtPrice, tick spacing 32768 gave TickSpacingTooLarge, and spacings 0 and -1 gave TickSpacingTooSmall. This includes the Unichain predeploy with its different bytecode. These calls show the eth_call path of each RPC node."
+  },
+  {
+   "check": "SqrtPriceMath and SwapMath: replay of every concrete expectation and revert selector in test/libraries/SqrtPriceMath.t.sol and test/libraries/SwapMath.t.sol, the test constants, and the invariants stated in src/test/SqrtPriceMathEchidnaTest.sol.",
+   "agrees": true,
+   "note": "44 fixed expectations from test/libraries/SqrtPriceMath.t.sol and test/libraries/SwapMath.t.sol reproduce on my transcription, including the PriceOverflow and NotEnoughLiquidity cases at price 20282409603651670423947251286016 and the nine computeSwapStep cases. The four literal selectors match keccak256 of the error signatures, computed with a keccak that I wrote from the specification. On 138,435 random steps the properties of test_fuzz_computeSwapStep held. I also compared every step with exact rational arithmetic: the pool received at least the exact input for the price move and paid at most the exact output, in both directions and for exact input and exact output. No violation. I did not recompute the twelve SQRT_PRICE constants of test/utils/Constants.sol."
+  },
+  {
+   "check": "Whole swaps: replay of the concrete swap results in test/libraries/StateLibrary.t.sol and of the swap events and constants in test/DynamicFees.t.sol, test/PoolManager.t.sol and test/CustomAccounting.t.sol through a transcription of Pool.swap, Pool.modifyLiquidity, Pool.donate and Position.update.",
+   "agrees": true,
+   "note": "A separate transcription of Pool.swap, Pool.modifyLiquidity, Pool.donate and Position.update reproduces price 78680104762184586858280382455, tick -139 and feeGrowthOutside0 3076214778951936192155253373200636 after three steps, the fee growth of the two 10 ether swaps, seven Swap events of test/DynamicFees.t.sol:156-333, InvalidFeeForExactOut for an exact output at 100 percent, the pair 6018336102428409 and 5981737760509662 in both directions, and the two donation values. On chain, read only, 2026-11-23, I ran two replays against deployed contracts. First, I asked the deployed Quoter of each network (address from networks.json) for exact input and exact output quotes on pools without a hook, and fed the transcription with slot0, liquidity, bitmap words and tick records read through extsload at the same block. 370 quotes on all 21 networks were equal to the last unit, with up to 106 loop steps, and none differed. 116 further quotes were left out because the replay needed more state reads than the limit I set per quote or because the pool could not fill the amount. Second, mined Swap events: for 107 swaps on 20 networks the transcription, started from the pool state at the block before, reproduced the logged amount0, amount1, price, liquidity, tick and fee exactly. 22 of these swaps were in pools with a hook. HyperEVM returned no PoolManager log in the range I scanned, so it has the Quoter replay only. Monad, BNB Smart Chain, Tempo and Arc are among the 20, which answers the cycle 2 critic note on swap results through deployed contracts for the swaps sampled. The sample is six swaps per network or fewer."
+  },
+  {
+   "check": "Solvency of the transcribed pool math under random sequences of adds, removals, swaps with and without protocol fees, and donations, for spacings 1, 2, 10, 60, 200, 3466, 9973 and 32767 and LP fees from 0 to 100 percent.",
+   "agrees": true,
+   "note": "With my own transcription I ran 2,450 random sequences. 1,250 used a wide mix of spacings from 1 to 32767 and LP fees from 0 to 100 percent with and without protocol fees (seeds 11 to 14 and 21). 1,200 were dense, with spacings 1 to 60, narrow overlapping ranges and price limits near the current tick, about 29,400 swaps (seeds 31 to 33). After every step the net amount paid into the pool was zero or more in both currencies with accrued protocol fees set aside. On a random quarter of the steps and at the end of each sequence a full unwind of all positions left no negative balance, and after the final unwind the liquidity in range was zero and no tick record or bitmap word remained. Removals that hit the int128 cast went through in halves. One caution for anyone who repeats this: a first version of my harness kept the writes of an operation that reverted and reported false shortfalls. They disappeared once a revert restored the state, as the EVM does."
+  },
+  {
+   "check": "TickBitmap: replay of test/libraries/TickBitmap.t.sol, and the range of the unchecked int24 products in nextInitializedTickWithinOneWord for every tick spacing that PoolManager.initialize accepts.",
+   "agrees": true,
+   "note": "The 18 distinct fixed inputs of the search (19 tests, two of them use the same input) reproduce with the nine ticks that setUp flips. For every spacing from 1 to 32767 the raw products at the extreme reachable ticks lie between -8,388,352 and 8,355,585. compress and position match their definitions on 200,000 random inputs. src/PoolManager.sol:119-120 enforces the cap from src/libraries/TickMath.sol:28, and the 21 deployed contracts reject spacing 32768 and accept 32767 (see the TickMath check). I did not rerun the sequence above the cap that the item describes, because it concerns a state the cap excludes."
+  },
+  {
+   "check": "FullMath, UnsafeMath and BitMath: replay of test/libraries/FullMath.t.sol, UnsafeMath.t.sol and BitMath.t.sol, with exact big integer arithmetic as the reference.",
+   "agrees": true,
+   "note": "mulDiv and mulDivRoundingUp equal floor and ceiling of a*b/d on 300,000 random triples with edge values mixed in, and they revert exactly when the denominator is zero or the result exceeds 256 bits. mostSignificantBit and leastSignificantBit are correct for all 256 powers of two and for 200,000 random values. I did not replay UnsafeMath.t.sol separately. divRoundingUp and simpleMulDiv are one line of assembly each and read as the item states."
+  },
+  {
+   "check": "Hooks, CustomRevert, the transient slot libraries, PoolId and the types in src/types: replay of test/libraries/Hooks.t.sol, Lock.t.sol, NonzeroDeltaCount.t.sol, PoolId.t.sol, test/CurrencyReserves.t.sol and test/types.",
+   "agrees": true,
+   "note": "I recomputed part of this item. The four transient slot constants equal keccak256 of Unlocked, ReservesOf, Currency and NonzeroDeltaCount minus one. The selectors 0xd4d8f3e6, 0x93dafdf1 and 0xa9059cbb match TickMisaligned(int24,int24), SafeCastOverflow() and transfer(address,uint256). The layout written by src/libraries/CustomRevert.sol:83-119 has the offsets 0x80 and 0xa0 plus the padded size, which is the ABI encoding of WrappedError. I read Hooks.sol, Currency.sol, BalanceDelta.sol, Slot0.sol and the transient slot libraries in full and found nothing that contradicts the item. I did not replay the 18 literal hook addresses of test/libraries/Hooks.t.sol or the random round trips of BalanceDelta and Slot0."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    143,
+    56,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "question": "Do several thousand mined Swap, ModifyLiquidity and Donate events per network reproduce from the pool state at the block before, when replayed with a transcription of src/libraries/Pool.sol fed through extsload, including swaps that cross many initialized ticks?",
+   "why": "This verifier reproduced 107 mined swaps on 20 networks and 370 Quoter quotes on 21 networks with no difference, six mined swaps per network or fewer. HyperEVM returned no PoolManager log in the scanned range and has no mined sample. Monad compiles hot bytecode, BNB Smart Chain has an opcode fusion interpreter, Tempo pins a JIT crate and the Arc release in use is unknown, so a larger sample of mined results on these chains would close the cycle 2 critic gap on execution paths that an eth_call may not take. The method is read only and needs no contract.",
+   "priority": "low"
+  }
+ ]
+}
