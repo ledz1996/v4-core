@@ -1,0 +1,382 @@
+{
+ "unit": "theme-token-triggers",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Any account can burn the PoolManager's whole Imperium balance on Polygon today through scanAndClean, and two more pooled tokens carry the same kind of rule",
+   "chainIds": [
+    137,
+    1
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A6"
+   ],
+   "effect": "freeze",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "difference": "The cause is a token rule, and Polygon is where the token and its pools are. ImperiumToken (IMP) at 0xf236d2b542eadf2246b307bb1278eafb94fadda6 has a function scanAndClean(address[] targets) without any caller check. For each target that has received no IMP for 90 days it sets the balance to zero, lowers totalSupply by the amount and credits 5 percent to the token owner. The token records lastActivity only for the receiver of a transfer, so an address that only pays out is idle by this rule. This is the class of the DeadToken finding on Base (F-085). It differs in two points: the caller needs no token balance, and nobody but the token owner receives anything, so the caller gains nothing and the pools lose the amount. The same selector search found BankToken (symbol USD.M) at 0x718102f857b91eb573b78c41c654af2db05dd0b1 on Ethereum with reclaimInactive(address), and a second deployment of the DeadToken code at 0x720f29e57cda0a987b7ff37ace02b7021aacbc0c on Polygon. The PoolManager holds dust of those two (800 base units and 1 base unit).",
+   "mechanism": "1. Core keeps no total per currency. Pools record their reserves in pool state, and the token balance is read only in sync and settle (src/PoolManager.sol:279-288, 349-365). A take pays with a plain transfer call and reverts when the token refuses (src/PoolManager.sol:291-297, src/types/Currency.sol:60-87). When the balance falls without a take, pools record more than the PoolManager holds. 2. ImperiumToken._transfer writes lastActivity[to] = block.timestamp and nothing for the sender (verified source, lines 88 to 101). scanAndClean (lines 202 to 215) checks block.timestamp - lastActivity[target] >= burnInactiveAfter and balanceOf[target] > 0, then sets the balance to zero, subtracts the amount from totalSupply and adds amount * protocolFee / 10000 to the owner. burnInactiveAfter is the constant 90 days (line 18) and protocolFee reads 500. 3. State today: lastActivity(PoolManager) is 1753576517 (27 July 2025), which is 484 days before Polygon block 97,824,929 (timestamp 1795442866). balanceOf(PoolManager) is 3,029.036932838782921101 IMP. 4. Read-only trial at block 97,824,929: with a measuring stub at the PoolManager address (state override) an account without code and without IMP called scanAndClean([PoolManager]). The call succeeded and balanceOf(PoolManager) went from 3,029.036932838782921101 to 0. A plain eth_call of scanAndClean([PoolManager]) from an address with no code and no tokens, without any override, also returns without revert. The same result came back with the block time moved forward by 8 hours, 91 days and 400 days. 5. The PoolManager takes no part in the call. No unlock, sync, settle or take is involved, so nothing in core can see or stop it. 6. The balance does not come back. Later payments into the PoolManager restart the timer for 90 days and are recorded by pools as well. 7. BankToken.reclaimInactive(account) has no caller check either. When the owner set autoAction to 1 it burns the whole balance of an account that is past INACTIVITY_PERIOD, and with 2 it sends the balance to the treasury or the owner. In the trial with the block time moved forward by 91 days and by 400 days the PoolManager balance of 800 base units fell to 0, and it stayed at the current time and at 8 hours. 8. The second DeadToken deployment answers getTimeUntilClaimable(PoolManager) with 0 and whiteListedPool(PoolManager) with 0, so the PoolManager is a valid target there now. Its balance has been 1 base unit at every sample since Polygon block 79,980,384. I found no verified source for this address and identified it by its selectors (claimIdleTokens, getTimeUntilClaimable, lastTransferTime).",
+   "impact": "Liquidity providers and claim holders of the IMP pools lose the pooled IMP: 3,029.04 IMP, of which 2,877.59 vanish and 151.45 go to the token owner 0xe77e6c411f2ee01f1cfbcccb1c418c80f1a534fe. The Initialize logs read in cycle 4 show two pools with IMP as a currency. GeckoTerminal reports a total reserve of about 1.57 USD for the token and no price, and coins.llama.fi and DexScreener have no entry, so the amount at stake today is negligible. The loss stays inside currency IMP because deltas are kept per currency (src/PoolManager.sol:368-378). The finding matters as a pattern: a pool in any token with such a rule can be emptied by an account that holds nothing, and the PoolManager is idle by a receiver based timer whenever a pool sees no inflow for the period. The step 2 trials found no token with a market price above 1,000 USD at a PoolManager that has such a rule, on the lists available (see the leads for the networks where the list is incomplete).",
+   "preconditions": "A pool or claim balance in a token that lets any caller remove the balance of an idle holder. For IMP: no IMP received by the PoolManager for 90 days, which holds since 25 October 2025. No role, hook, token balance or attacker made token is needed. I did not send any transaction and did not read the fee and hook settings of the two pools.",
+   "mitigations": "None in core. The token owner cannot exempt an address from scanAndClean in this source (excludeFromFee covers the fee only). Liquidity providers should leave IMP pools. Interfaces and routers should refuse or flag currencies whose code holds scanAndClean, reclaimInactive, sweepInactive or claimIdleTokens selectors, and a deployment that lists tokens should test each token with a call from a stranger at a shifted block time before it is shown to users.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:349-365",
+    "src/types/Currency.sol:60-95"
+   ],
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0xf236d2b542eadf2246b307bb1278eafb94fadda6?fields=sources,compilation,proxyResolution",
+     "supports": "Verified source ImperiumToken.sol: burnInactiveAfter = 90 days (line 18), lastActivity written for the receiver only (line 99), scanAndClean without caller check (lines 202 to 215)."
+    },
+    {
+     "url": "https://polygon-bor-rpc.publicnode.com",
+     "supports": "eth_call at block 97,824,929: balanceOf(PoolManager) 3029036932838782921101, lastActivity(PoolManager) 1753576517, burnInactiveAfter 7776000, protocolFee 500, owner 0xe77e6c411f2ee01f1cfbcccb1c418c80f1a534fe; trial with a stub at the PoolManager address: balance 0 after scanAndClean([PoolManager]) called by an account without tokens. Raw result in research/network-risk/cycles/006/theme-token-triggers.work/raw/imperium_trial.json."
+    },
+    {
+     "url": "https://api.geckoterminal.com/api/v2/networks/polygon_pos/tokens/0xf236d2b542eadf2246b307bb1278eafb94fadda6",
+     "supports": "price_usd null and total_reserve_in_usd about 1.57 for IMP."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x718102f857b91eb573b78c41c654af2db05dd0b1?fields=sources,compilation,proxyResolution",
+     "supports": "Verified source BankToken: reclaimInactive(address) is external without a caller check and burns or moves the whole balance of an inactive account."
+    },
+    {
+     "url": "https://polygon.gateway.tenderly.co",
+     "supports": "Archive eth_call: balanceOf(PoolManager) of 0x720f29e57cda0a987b7ff37ace02b7021aacbc0c is 1 at every sampled block from 79,980,384 to 97,824,567; getTimeUntilClaimable(PoolManager) 0 and whiteListedPool(PoolManager) 0 at the latest block."
+    },
+    {
+     "url": "src/PoolManager.sol:349-365",
+     "supports": "_settle reads the token balance and credits the rise since sync. No other place compares pool records with the balance."
+    },
+    {
+     "url": "src/types/Currency.sol:60-87",
+     "supports": "A take is a plain transfer call that reverts when the token refuses, which is what happens once the balance is gone."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "check": "Step 1. Which pooled tokens with a market price are worth more than 1,000 USD at each PoolManager today. Method: currency lists of cycle 4, live balanceOf(PoolManager), prices from coins.llama.fi (cycle 5 price files for 18 networks; this cycle priced every currency with a balance on Robinhood Chain, Elysium and Arc, 738,773, 129,491 and 261,204 addresses).",
+   "result": "2151 tokens on 19 networks, 1080 of them above 10,000 USD: Ethereum 845 (427 above 10,000 USD); Optimism 29 (9 above 10,000 USD); Base 323 (200 above 10,000 USD); Unichain 18 (12 above 10,000 USD); Zora 0 (0 above 10,000 USD); Worldchain 12 (9 above 10,000 USD); Ink 19 (15 above 10,000 USD); Soneium 6 (2 above 10,000 USD); Celo 5 (3 above 10,000 USD); X Layer 14 (7 above 10,000 USD); Arbitrum One 85 (48 above 10,000 USD); Robinhood Chain 353 (183 above 10,000 USD); Elysium 18 (12 above 10,000 USD); Polygon 70 (36 above 10,000 USD); BNB Smart Chain 250 (67 above 10,000 USD); Avalanche 22 (8 above 10,000 USD); Monad 34 (22 above 10,000 USD); MegaETH 2 (1 above 10,000 USD); Tempo 5 (4 above 10,000 USD); Arc 41 (15 above 10,000 USD); HyperEVM 0 (0 above 10,000 USD). Zora and HyperEVM have no priced token above the threshold (2 and 11 priced currencies, all below 1,000 USD). The lists are complete where cycle 4 read every Initialize log (Ethereum, Robinhood Chain, Elysium, Arc and the other networks with an init census). They are incomplete on Base, BNB Smart Chain and X Layer, where the cycle 4 list holds only currencies that moved in its window, and on World Chain, where it comes from an explorer page. A census of Base Initialize logs started in this cycle counted 2,418,681 currencies in the first 10,000,000 blocks after deployment against 9,116 on the list, and was stopped for size. Two values are price artefacts and were kept as targets: PORT3 on Ethereum and vUSDT on BNB Smart Chain, whose balanceOf returns more than one word. Token lists with values are in the discover files.",
+   "source": "research/network-risk/cycles/006/theme-token-triggers.work/raw/stats.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042
+   ],
+   "lens": "L3",
+   "check": "Step 2. For each of the 2151 tokens: every selector of the token, of its implementation and of the contracts that balanceOf(PoolManager) touches (eth_createAccessList, 1442 related contracts) was called from an ordinary account with the PoolManager as address argument. Named functions got arguments by type; the 14775 selectors without a known name got eight fixed calldata shapes. Each trial ran in eth_call with a measuring stub at the PoolManager address and was repeated with the block time moved by 8 hours, 91 days and 400 days. Mode A: the stub hands one third of the balance to the account first. Mode B: the PoolManager sends nothing and the account holds a balance written by state override into the token's balance slot. Mode C: as B without a balance, for tokens whose slot was not found. Measured: balanceOf(PoolManager) before and after, the account's balance, and whether a transfer of the full balance leaves the PoolManager.",
+   "result": "Mode A 2318914 trials, 140312 calls accepted by the token. Mode B 2279949 trials on 2019 tokens, 133089 accepted. Mode C 38965 trials on 132 tokens. Batches that failed for lack of gas were rerun with eight trials per call and none is left open. One priced token ended a trial with a higher reported balance and a refused full transfer: QANX 0xaaa7a10a8ee237ea61e8ac46c50a8db8bcc1baaa on Ethereum through transferLocked, at every block time. That is finding F-078 and nothing new (21,210,277.64 units at the PoolManager, 205,708 USD at the coins.llama.fi figure that F-078 already calls unreliable). No trial lowered balanceOf(PoolManager) of a priced token, at any of the four times. Every other accepted call that raised the balance took the same amount from the caller and left the full balance transferable (transfer, transferAndCall, multiTransfer, batchTransfer, transferShares and equals), or differed by one or two base units of share rounding. The full list of functions through which a caller's tokens reached the PoolManager is transfer, transferFrom, transferAndCall, transferWithMemo, multiTransfer, batchTransfer, push, move, transferShares, bridgeTransfer, bridgeTransferFrom, transferMultiple, transferForMultiAddresses, transferWithReference, transferFromWithReference, multisend and bulkTransfer. None is a grant, a lock or a deposit for another account, so no priced token offers the grant and revoke sequence of F-079, and no selector without a name raised the balance. One mode B result is an artefact: claimRewardsAndStake on stkAAVE paid the account's own rewards, which exist only because of the overridden balance, to the PoolManager. Control: DeadToken on Base (F-085) is not detected in mode A, because the hand-out by the PoolManager resets its idle timer, and is detected in mode B at 91 and 400 days (claimIdleTokens lowers the balance to 0 and the account gains half). Limits: the trials measure the token's own balance only, so a public call that pays a second asset to the PoolManager is not seen; arguments such as Merkle proofs and signatures are not satisfied; on Monad no endpoint accepted a block override, so Monad was tested at the current time only.",
+   "source": "research/network-risk/cycles/006/theme-token-triggers.work/sweep.py, raw/sweep_<chain>.json.gz, raw/sweepB_<chain>.json.gz, raw/sweepC_<chain>.json.gz"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    4326,
+    4217,
+    5042
+   ],
+   "lens": "L3",
+   "check": "Does the passage of time alone change the PoolManager balance of a target token or stop it from sending the full balance (expiry, demurrage, cooldown, scheduled rebase)? One block was pinned per network and the trial without any call was run at 0, 8 hours, 91 days and 400 days, with and without a hand-out.",
+   "result": "Six tokens change, all Aave receipt tokens whose balance grows with interest: aEthLINK, aEthWETH, aEthUSDC and aEthUSDT on Ethereum, aArbUSDT on Arbitrum One and aBasWETH on Base (each between 1,500 and 5,800 USD). No token lost balance with time and no full balance transfer turned from accepted to refused at any of the shifted times. Monad could not be tested for lack of a block override.",
+   "source": "research/network-risk/cycles/006/theme-token-triggers.work/timeonly.py, raw/timeonly_<chain>.json.gz"
+  },
+  {
+   "chainIds": [
+    8453,
+    4217
+   ],
+   "lens": "L4",
+   "check": "Precompile tokens have no selector table in code: 35 B20 tokens on Base (OUSD with 5.3 million USD, the tokenized stocks with suffix c, cbZEC, cbHYPE) and the 5 TIP-20 tokens on Tempo. The function lists were taken from the published interfaces and run through the same trials.",
+   "result": "Base B20: 30 state changing functions of IB20, IB20Asset and IERC8056; 3,920 trials per mode; an ordinary account gets transfer, transferWithMemo and approve accepted and nothing else. mint, burnBlocked, seizeWithMemo, pause, updatePolicy and the multiplier setters need roles, and the interface states that balanceOf stays in raw units while the multiplier scales the UI view only. Tempo TIP-20: 29 functions, 620 trials per mode, the accepted calls are transfers, approve and calls that act on the caller. burnBlocked and burnAt need roles, and rewards are claimed by the holder for itself. Issuer powers over these tokens are in F-027 and the Tempo findings of earlier cycles.",
+   "source": "https://raw.githubusercontent.com/base/base-std/main/src/interfaces/IB20.sol ; https://rustdocs.tempo.xyz/tempo_precompiles/tip20/ITIP20/index.html ; research/network-risk/cycles/006/theme-token-triggers.work/b20.py, tempo.py"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Lead L-399, FOLD 0xe172e9b6cfbeeb5593bdce3f077356fdb33af904 (24,275,769 FOLD at the PoolManager, about 742,000 USD). A transfer from CLAIM_SOURCE locks the amount at the recipient until NO_MORE_LOCKS. Can any account still cause such a transfer to the PoolManager, and can the owner name a later claim source?",
+   "result": "No. setClaimSource reverts once a source is set (InterfoldToken.sol lines 416 to 422) and CLAIM_SOURCE() returns the auction 0x687cc38d8279df3352b64cf3ec1fe8e033933595. The auction pays tokens to the bid owner only (claimTokens and claimTokensBatch) and accepts bids only while it is active. All 310 bids were read at Ethereum block 26,478,229: none has the PoolManager as owner, 10 are not exited and 1 is exited with 8.33 FOLD unclaimed, all owned by other addresses. lockCount(PoolManager), queuedLockCount(PoolManager) and lockedBalanceOf(PoolManager) are 0 and transferableBalanceOf equals balanceOf. The remaining ways to place a lock (linkClaim, mintAllocations) need LOCK_MANAGER_ROLE or MINTER_ROLE, and minting is closed since tge. Locks end for everyone at NO_MORE_LOCKS = 1915884000 (17 September 2030).",
+   "source": "https://sourcify.dev/server/v2/contract/1/0xe172e9b6cfbeeb5593bdce3f077356fdb33af904?fields=sources,compilation,proxyResolution ; https://sourcify.dev/server/v2/contract/1/0x687cc38d8279df3352b64cf3ec1fe8e033933595?fields=sources,compilation,proxyResolution ; research/network-risk/cycles/006/theme-token-triggers.work/raw/fold_bids.json"
+  },
+  {
+   "chainIds": [
+    1,
+    42161
+   ],
+   "lens": "L3",
+   "check": "Step 3, tokens where balanceOf counts units that transfer cannot move (apart from QANX): who can create such units at another address? Sources read: ondo, skl, SPA, WLFI, SIERRA, fxSAVE and its base pool.",
+   "result": "Only role holders or the holder itself. ondo: transfers are limited to the freed balance when investorBalances is set; the trial call of the setter by an ordinary account reverted. skl: SkaleToken refuses a transfer that would leave less than the locked amount, and the three lockers add to it through TokenLaunchManager (role), through the holder's own delegation and through a slash of the holder's delegation. SPA: transferWithLock is onlyOwner. WLFI: the transfer hook blocks legacy users that are not activated, a registry state set by the owner; staking locks sit in a separate contract. SIERRA (LYTPool) and the fxUSD base pool lock shares of an open redeem request, and a request is made by msg.sender for its own shares. The PoolManager has made none of these calls and cannot make them (its calls to a currency are transfer and balanceOf, src/types/Currency.sol:60-95).",
+   "source": "https://sourcify.dev/server/v2/contract/1/0x00c83aecc790e8a4453e5dd3b0b4b3680501a7a7?fields=sources,compilation,proxyResolution ; https://sourcify.dev/server/v2/contract/42161/0x5575552988a3a80504bbaeb1311674fcfd40ad4b?fields=sources,compilation,proxyResolution ; https://sourcify.dev/server/v2/contract/1/0xfd10892c8a1cac5b279ee22877dcc735db7b7833?fields=sources,compilation,proxyResolution"
+  },
+  {
+   "chainIds": [
+    1,
+    43114,
+    8453
+   ],
+   "lens": "L3",
+   "check": "Step 3, staking and vault tokens with cooldown, vesting or escrow words: sUSDe, sENA, sPENDLE, apyUSD, aptUSD, syrupUSDC, syrupUSDT, syrupUSDG, yUSD, yETH, svZCHF, SiloVault shares (USDC on Arbitrum One, mevUSDC on Avalanche by selector match), Yearn vaults on Base.",
+   "result": "balanceOf is the plain share balance in the sources read. cooldownAssets and cooldownShares burn the caller's own shares into a silo. The vesting in sUSDe, sENA, yUSD, yETH, apyUSD and aptUSD is the release schedule of vault yield and touches no holder balance. redistributeLockedAmount needs the admin role and a restricted source address. Maple pool shares are a plain mapping and every transfer passes a permission check of the pool's manager contract. The remaining risk is the issuer side (deny lists, pause), which earlier findings hold.",
+   "source": "https://sourcify.dev/server/v2/contract/1/0x9d39a5de30e57443bff2a8307a4256c8797a3497?fields=sources,compilation,proxyResolution ; https://sourcify.dev/server/v2/contract/1/0x7fd57b46ae1a7b14f6940508381877ee03e1018b?fields=sources,compilation,proxyResolution ; https://sourcify.dev/server/v2/contract/1/0xfd616567ecc1607f61073951a1e822f7315bb112?fields=sources,compilation,proxyResolution"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Step 3, tokens with lock or escrow functions that act on the caller, and one that locks for a named recipient: AST, BNB, RNDR, TITANX, HEX, DPR.",
+   "result": "AST lockBalance, BNB freeze, RNDR holdInEscrow and the TITANX and HEX claim, stake and mint functions act on msg.sender. The TITANX burn functions for another user spend that user's allowance. DPR transferWithLock(to, reason, amount, time) moves the caller's tokens into the token contract and records a lock for the recipient. The locked amount is outside balanceOf(recipient). unlock(of) can be called by anyone after expiry and pays the amount to the recipient, so it is a public call that raises the PoolManager balance with the locker's own tokens, which is the class of F-041 without a gain.",
+   "source": "https://sourcify.dev/server/v2/contract/1/0xf3ae5d769e153ef72b4e3591ac004e89f48107a1?fields=sources,compilation,proxyResolution ; https://sourcify.dev/server/v2/contract/1/0xf19308f923582a6f7c465e5ce7a9dc1bec6665b1?fields=sources,compilation,proxyResolution"
+  },
+  {
+   "chainIds": [
+    8453,
+    4663,
+    1
+   ],
+   "lens": "L3",
+   "check": "Step 3, launch pad tokens with lockPool, vesting, allocation or cap data: the DERC20 family on Base (33 tokens above 10,000 USD of one selector set, 4.2 million USD together), CloneDERC20VotesV2, Zora CreatorCoin and ContentCoin, DopplerERC20V1 on Robinhood Chain (10 tokens), StonkCoin (STONKFI, 1.18 million USD), SEND LaunchToken, GANG.",
+   "result": "Vested amounts are held by the token contract and paid on release to the beneficiary, so they are outside balanceOf of holders. lockPool blocks transfers to one pool address and is onlyOwner; pool() was read for all 44 tokens above 10,000 USD with these functions and none names the PoolManager. DopplerERC20V1 adds a holding cap for receivers while isBalanceLimitActive, which reads 0 on the Robinhood Chain tokens read. StonkCoin.balanceOf adds claimableAllocation(account), which the first transfer turns into balance. The allocation comes from the account's own backing of the raise before launch (StonkFi.back uses msg.sender), claimableAllocation(PoolManager) is 0 and the raise is launched, so no account can create one for the PoolManager. SEND pays holder rewards in a second asset to msg.sender on claim. These tokens are made by the launch pads, and what their owners can do is pool-creator scope.",
+   "source": "https://sourcify.dev/server/v2/contract/8453/0xf895783b2931c919955e18b5e3343e7c7c456ba3?fields=sources,compilation,proxyResolution ; https://sourcify.dev/server/v2/contract/4663/0xbd4802d70448fb1d776683bebea592d66b623e29?fields=sources,compilation,proxyResolution ; https://sourcify.dev/server/v2/contract/4663/0x5db57a2e6dad60e9964531bc7244ff9e712c6999?fields=sources,compilation,proxyResolution ; https://sourcify.dev/server/v2/contract/4663/0x3be8b97fd0e713b5abe0649fa830223b6b4bc599?fields=sources,compilation,proxyResolution"
+  },
+  {
+   "chainIds": [
+    1,
+    8453,
+    42161,
+    56,
+    143,
+    1868,
+    137
+   ],
+   "lens": "L3",
+   "check": "Step 3, tokens whose matching functions are freeze, seize, reclaim or rescue functions: PYUSD, PAXG, USD1, EURI, FDUSD, U, UUSD, cbBTC, AUSD, frxUSD, WPRL, XGZ, geod, ESPORTS, USDSC, mUSD, rsETH, weETH, USUALX, LBTC, BTC.b, WBTC, wTAO, BBTC, eure, LCX, SWFTC.",
+   "result": "In the sources read these functions carry a role or owner check (modifier or an explicit sender test), and no trial call of them by an ordinary account was accepted. I read the functions with the step 3 words and the transfer hooks of one token per selector family and did not read every file of every token. PAXG has a rewards module since its last upgrade: an account joins a payout group through the registrar role, through its own EIP-712 or ERC-1271 signature, or by accepting a proposal itself. The PoolManager has no isValidSignature and cannot accept. Rewards are paid from the claim source to the group's destination and leave the account's balance unchanged. This group is issuer scope and is covered by the issuer findings (F-019, F-036 and the Ethereum issuer finding of cycle 5).",
+   "source": "https://sourcify.dev/server/v2/contract/1/0x7da4c5d9eca180a03765a6d27196f2a0380fa543?fields=sources,compilation,proxyResolution"
+  },
+  {
+   "chainIds": [
+    1,
+    99901,
+    4663,
+    56
+   ],
+   "lens": "L3",
+   "check": "Step 3, reward, claim and reflection tokens: ENS and 00 (Merkle claims), PNK, LDO, NMR, DBR, JEFE, MONTRA on Elysium, stkAAVE, G$, FWA and RIP, and the tokens without verified source (gAIX and KTI, MONTRA implementation, PAXG implementation on Base).",
+   "result": "The Merkle claims pay msg.sender or an address in the tree. DBR lowers balanceOf by accrued debt, which only a borrower has. JEFE is a reflection token whose balance at every holder rises with taxed transfers, a known class without gain for the sender. MONTRA pays rewards in KNTQ and reports isExcluded(PoolManager) = 1 and earned(PoolManager) = 0. FWA and RIP allow transfers to and from the PoolManager only inside a hook granted allowance, which is a design of the pool author. G$ is covered by F-056 and an earlier cleared item. For gAIX, KTI and the two unverified implementations the result rests on the trials and on the named selectors: KTI has nine functions and none takes a holder address beside the standard ones.",
+   "source": "research/network-risk/cycles/006/theme-token-triggers.work/raw/digest/, raw/triage.txt"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "check": "Leads L-397 and L-386: which pooled currencies hold the selector of claimIdleTokens(address) or of 19 related names (getTimeUntilClaimable, lastTransferTime, claimInactive, sweepInactive, burnInactive, reclaimIdle, claimDormant, liquidateInactive, claimAbandoned, decay, burnIdle, claimExpired, collectDemurrage, applyDemurrage, reapInactive, purge, isIdle, lastActive, lastActivity)? Search over the selector files of cycle 5 for 20 networks (own code and resolved implementation of every currency with a balance), then mode B trials at the four block times for every hit.",
+   "result": "claimIdleTokens: one token, the DeadToken copy on Polygon (see the finding). The Base DeadToken of F-085 is not in the Base currency list at all, which shows the gap of that list. Hits of the other names: 41 on Ethereum, 10 on Polygon, 1 each on Arbitrum One, BNB Smart Chain and Avalanche, 2 on Elysium, 3 on HyperEVM. The trials lowered the PoolManager balance for Imperium on Polygon and BankToken on Ethereum (see the finding) and for no other hit. sweepInactive on 0xc5f10a8997032ad9a4a07a9bb53721a2dda416df and the tokens with lastActive or lastTransferTime getters did not move the balance from an ordinary account. Robinhood Chain has no selector file for all 738,773 currencies and was not searched.",
+   "source": "research/network-risk/cycles/006/theme-token-triggers.work/idle_scan.py, raw/idle_scan.json, raw/controlB_*.json.gz"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    8453,
+    56,
+    196,
+    480
+   ],
+   "lens": "L3",
+   "question": "Build the full currency list of the PoolManager on Base, BNB Smart Chain, X Layer and World Chain from Initialize logs (an indexer or an archive log endpoint is needed: publicnode serves recent blocks only, Tenderly allows 1,000 blocks per request, X Layer endpoints 100), then rerun balance, price, the mode B trials at shifted block times and the idle selector search on every currency with a balance.",
+   "why": "The lists used here hold only currencies that moved in the cycle 4 window. An idle token is exactly what an inactivity rule hits, and the Base token of F-085 is missing from the list. Base alone has more than 2.4 million currencies in its first 10 million blocks.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "question": "Repeat the step 2 trials on Monad with the block time moved forward by 8 hours, 91 days and 400 days, on an endpoint or a local node that accepts block overrides or eth_simulateV1.",
+   "why": "rpc.monad.xyz, rpc2, rpc3 and the monadinfra endpoint answer Invalid params to a block override and have no eth_simulateV1, so 34 tokens worth 35 million USD were tested at the current time only, and 12 of them (AUSD, mUSD and ten wrapped stock tokens) without a caller balance.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "question": "For every target token, call the functions with claim, reward, distribute, push, harvest, payout and dividend names with the PoolManager as argument and record all Transfer logs and native transfers to the PoolManager (eth_simulateV1 with traceTransfers where the endpoint has it), in place of the token's own balance.",
+   "why": "The trials of this unit read only the balance of the token under test. A token that pays holder rewards in a second pooled asset to the PoolManager on a public call gives the caller a balance rise to book through sync and settle, as TITHE does in its own units (F-081). MONTRA on Elysium pays in KNTQ and excludes the PoolManager; others were not measured.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "question": "Fetch code for every distinct code hash among the 738,773 currencies with a balance on Robinhood Chain and search it for the idle claim selectors and for scanAndClean, reclaimInactive and sweepInactive.",
+   "why": "The selector search of this unit covers 20 networks. Robinhood Chain has the largest currency list after Base and only a size sample of its code was parsed in cycle 5.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "question": "Which contracts can move or burn a pooled token at any holder without being read by balanceOf: controllers, lockers, reward distributors and bridges that hold a burner or operator role? List role holders from RoleGranted and operator events of the tokens above 10,000 USD and test their public functions with the PoolManager as argument.",
+   "why": "The related contracts of this unit come from the access list of balanceOf(PoolManager). A contract with a role over the token that balanceOf never touches is outside that set, and a public function on it would be an unprivileged path.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4663,
+    56,
+    8453,
+    99901
+   ],
+   "lens": "L3",
+   "question": "Obtain verified source or decompile gAIX 0x0a4be7073bc336e451082502d768e8d644ca780c on Robinhood Chain (202,730 USD, 117 selectors without a name, words escrow and sweep), the MONTRA implementation 0x10b0292fb853966d3039d80bbef98b1a9507f55f on Elysium and the PAXG implementation 0xc623efe9cddf73e416a08d4cb81de738ba994037 on Base.",
+   "why": "Step 3 asks for a source reading and these have none at Sourcify or the reachable explorers, so their clearance rests on trials with fixed argument shapes.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-397",
+   "outcome": "finding",
+   "answer": "Done for 2151 priced tokens on 19 networks with all selectors, including 14775 without a known name, at four block times and in a second mode where the PoolManager sends nothing first. No priced token above 1,000 USD lets a stranger lower the PoolManager balance or lock it, apart from QANX (F-078). The selector search for claimIdleTokens and related names on 20 networks found the DeadToken copy on Polygon (1 base unit pooled), Imperium on Polygon (3,029 IMP, can be burned by anyone today, about 1.57 USD of reserves) and BankToken on Ethereum (dust). The TokensClaimed topic was not searched, because the code files of cycle 5 keep four byte constants only. Open: the incomplete currency lists of Base, BNB Smart Chain, X Layer and World Chain, Robinhood Chain for the selector search, and Monad for shifted block times."
+  },
+  {
+   "leadId": "L-399",
+   "outcome": "cleared",
+   "answer": "Sources were read for one token of each of 111 selector families behind the 160 tokens above 10,000 USD with lock, vest, cooldown, freeze, escrow, idle, inactive, sweep, reflect or claim words. FOLD: the claim source is set once and cannot be renamed, the auction is over, none of its 310 bids belongs to the PoolManager, and the ten bids that are not exited belong to other addresses. Apart from QANX no token of the list lets an ordinary account create a non transferable amount at another address. ondo, skl, SPA, WLFI, SIERRA, StonkCoin and the fxUSD base pool count such amounts and create them only through a role or through the holder's own call. Five tokens have no verified source and rest on trials."
+  },
+  {
+   "leadId": "L-386",
+   "outcome": "finding",
+   "answer": "Three pooled tokens beside the Base DeadToken have a public function that removes the balance of an idle holder with the PoolManager as a valid target: Imperium on Polygon (scanAndClean, valid today, no caller balance needed), the DeadToken copy on Polygon (claimIdleTokens, valid today, 1 base unit pooled) and BankToken on Ethereum (reclaimInactive, valid after the inactivity period in the trial at 91 days, 800 base units pooled). None has a market price. No such function was found among the priced tokens."
+  }
+ ]
+}

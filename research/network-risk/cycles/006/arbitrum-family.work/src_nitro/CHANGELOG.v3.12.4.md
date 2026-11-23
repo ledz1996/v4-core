@@ -1,0 +1,810 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on Keep a Changelog, and this project adheres to Semantic Versioning.
+
+## [v3.12.4](https://github.com/OffchainLabs/nitro/compare/v3.12.3...v3.12.4) - 2026-11-09
+
+### Configuration
+
+- Added `tx-pre-checker.max-pending-conditional-txs`, hot-reloadable; 0 (the default) disables the cap. [[commit]](https://github.com/OffchainLabs/nitro/commit/7df16069311c86fed59149bd89f065cd48c87210)
+
+### Added
+
+- A node can cap conditional transactions in flight, rejecting extras with RPC error -32012. [[commit]](https://github.com/OffchainLabs/nitro/commit/7df16069311c86fed59149bd89f065cd48c87210)
+- Added metric `arb/txprechecker/conditionaltx/pending/gauge`. [[commit]](https://github.com/OffchainLabs/nitro/commit/7df16069311c86fed59149bd89f065cd48c87210)
+- Added metric `arb/txprechecker/conditionaltx/rejected/pendingcap/counter`. [[commit]](https://github.com/OffchainLabs/nitro/commit/7df16069311c86fed59149bd89f065cd48c87210)
+
+### Changed
+
+- JSON-RPC methods now reject `null` for a required argument, such as the transaction in `eth_call`. [[commit]](https://github.com/OffchainLabs/nitro/commit/e6058e2f3c1504a3759072884a0a1c4e7a3646de)
+
+### Fixed
+
+- Speed up JSON-RPC request decoding, which stalled block production during large request bursts. [[commit]](https://github.com/OffchainLabs/nitro/commit/e6058e2f3c1504a3759072884a0a1c4e7a3646de)
+
+## [v3.12.3](https://github.com/OffchainLabs/nitro/compare/v3.12.2...v3.12.3) - 2026-10-26
+
+### Configuration
+
+- Add `--execution.sequencer.fifo.size-sampling-max-exponent`. [[commit]](https://github.com/OffchainLabs/nitro/commit/e019b4e6dd4121411191a44cf864652280cd9e0b)
+- Add `--execution.sequencer.fifo.size-sampling-grace-blocks`. [[commit]](https://github.com/OffchainLabs/nitro/commit/e019b4e6dd4121411191a44cf864652280cd9e0b)
+- Add `--execution.sequencer.fifo.size-sampling-min-tx-size`. [[commit]](https://github.com/OffchainLabs/nitro/commit/e019b4e6dd4121411191a44cf864652280cd9e0b)
+- Add `--execution.sequencer.reject-noop-replacements`. [[commit]](https://github.com/OffchainLabs/nitro/commit/8c467151a18461b9cadaec5d57eddee588b4a26e)
+- Add `--execution.sequencer.pga.min-priority-fee-percent-bump-to-replace`. [[commit]](https://github.com/OffchainLabs/nitro/commit/8c467151a18461b9cadaec5d57eddee588b4a26e)
+
+### Added
+
+- Add metric `arb/sequencer/fifo/sizesampling/skipped`. [[commit]](https://github.com/OffchainLabs/nitro/commit/e019b4e6dd4121411191a44cf864652280cd9e0b)
+- Add metric `arb/sequencer/fifo/sizesampling/exponent`. [[commit]](https://github.com/OffchainLabs/nitro/commit/e019b4e6dd4121411191a44cf864652280cd9e0b)
+- Add metric `arb/sequencer/pending/count/gauge`. [[commit]](https://github.com/OffchainLabs/nitro/commit/8c467151a18461b9cadaec5d57eddee588b4a26e)
+- Add metric `arb/sequencer/pending/count/histogram`. [[commit]](https://github.com/OffchainLabs/nitro/commit/8c467151a18461b9cadaec5d57eddee588b4a26e)
+- Add metric `arb/sequencer/pending/rejected/alreadyknown/counter`. [[commit]](https://github.com/OffchainLabs/nitro/commit/8c467151a18461b9cadaec5d57eddee588b4a26e)
+- Add metric `arb/sequencer/pending/rejected/noncepending/counter`. [[commit]](https://github.com/OffchainLabs/nitro/commit/8c467151a18461b9cadaec5d57eddee588b4a26e)
+- Add metric `arb/sequencer/pending/rejected/replaceunderpriced/counter`. [[commit]](https://github.com/OffchainLabs/nitro/commit/8c467151a18461b9cadaec5d57eddee588b4a26e)
+- Add metric `arb/sequencer/pending/replaced/counter`. [[commit]](https://github.com/OffchainLabs/nitro/commit/8c467151a18461b9cadaec5d57eddee588b4a26e)
+
+### Changed
+
+- Small transactions can overtake large ones after consecutive data-limited FIFO blocks. [[commit]](https://github.com/OffchainLabs/nitro/commit/e019b4e6dd4121411191a44cf864652280cd9e0b)
+- The sequencer rejects same-sender, same-nonce txs unless PGA is on and the tip is higher. [[commit]](https://github.com/OffchainLabs/nitro/commit/8c467151a18461b9cadaec5d57eddee588b4a26e)
+- A same-sender, same-nonce tx outside PGA is rejected with "replacement transaction underpriced". [[commit]](https://github.com/OffchainLabs/nitro/commit/285d657b250fbc1af246f163faf087eb6f87c7a2)
+- Feed REST backfill treats a 410 from the archive as an evicted chunk instead of retrying it. [[commit]](https://github.com/OffchainLabs/nitro/commit/f55dbeac7b06e9f09704a7a375ce17866b8f2e04)
+
+### Fixed
+
+- Fix a crash on node startup failure that hid the original startup error. [[commit]](https://github.com/OffchainLabs/nitro/commit/f792271078cfef569baf66b52d021ac06147447f)
+- Fix a panic on the first boot of a node from a downloaded snapshot. [[commit]](https://github.com/OffchainLabs/nitro/commit/f792271078cfef569baf66b52d021ac06147447f)
+- Fix crashes when a database is closed while a background task is still reading it. [[commit]](https://github.com/OffchainLabs/nitro/commit/f792271078cfef569baf66b52d021ac06147447f)
+
+## [v3.12.2](https://github.com/OffchainLabs/nitro/compare/v3.12.1...v3.12.2) - 2026-10-14
+
+### Added
+
+- Add transaction-feed client example implementation. [[commit]](https://github.com/OffchainLabs/nitro/commit/b8d83b7541e15c9d0fa8ae296470b518430200f9)
+
+### Fixed
+
+- Fix for head truncation below a diverged tail group. [[commit]](https://github.com/OffchainLabs/nitro/commit/c9f1ccf374a12eb3d91c84e6f0178da6a8795848)
+- The sequencer survives a panic while sequencing a delayed message, retrying it after a minute. [[commit]](https://github.com/OffchainLabs/nitro/commit/498ce18fcba28eba8f0a6594ea95522b60c61ad2)
+- Returning to 3.12.x after running 3.11.x no longer deletes recent blocks. [[commit]](https://github.com/OffchainLabs/nitro/commit/5f02f3f03076343061f167e81b8e82ec5518064b)
+
+## [v3.12.1](https://github.com/OffchainLabs/nitro/compare/v3.12.0...v3.12.1) - 2026-09-29
+
+### Configuration
+
+- Add `node.feed.input.rest.enable` (default false). [[commit]](https://github.com/OffchainLabs/nitro/commit/60b57c1d4135bf65b8f030e6d93f4737fe3d4313)
+- Add `node.feed.input.rest.url`, required when `node.feed.input.rest.enable` is set. [[commit]](https://github.com/OffchainLabs/nitro/commit/60b57c1d4135bf65b8f030e6d93f4737fe3d4313)
+- Add `node.feed.input.rest.timeout` (default 10s). [[commit]](https://github.com/OffchainLabs/nitro/commit/60b57c1d4135bf65b8f030e6d93f4737fe3d4313)
+- Add `execution.stylus-target.allow-offchain-activation`. [[commit]](https://github.com/OffchainLabs/nitro/commit/0cecce14a06058ba3439be15c34b8a5955d9d345)
+- `node.feed.input.rest.url` is now optional. [[commit]](https://github.com/OffchainLabs/nitro/commit/70fa99a6e711f09eedd96a907290c3df0f3bcf7d)
+
+### Added
+
+- Feed clients can fill gaps from the feed's REST backlog instead of the websocket backlog. [[commit]](https://github.com/OffchainLabs/nitro/commit/60b57c1d4135bf65b8f030e6d93f4737fe3d4313)
+- Add `arb/feed/backfill/runs`. [[commit]](https://github.com/OffchainLabs/nitro/commit/60b57c1d4135bf65b8f030e6d93f4737fe3d4313)
+- Add `arb/feed/backfill/chunks`. [[commit]](https://github.com/OffchainLabs/nitro/commit/60b57c1d4135bf65b8f030e6d93f4737fe3d4313)
+- Add `arb/feed/backfill/messages`. [[commit]](https://github.com/OffchainLabs/nitro/commit/60b57c1d4135bf65b8f030e6d93f4737fe3d4313)
+- Add `arb/feed/backfill/chunks_missing`. [[commit]](https://github.com/OffchainLabs/nitro/commit/60b57c1d4135bf65b8f030e6d93f4737fe3d4313)
+- Add `arb/feed/backfill/errors`. [[commit]](https://github.com/OffchainLabs/nitro/commit/60b57c1d4135bf65b8f030e6d93f4737fe3d4313)
+- Add `arb/feed/backfill/permanent_errors`. [[commit]](https://github.com/OffchainLabs/nitro/commit/60b57c1d4135bf65b8f030e6d93f4737fe3d4313)
+
+### Changed
+
+- **Breaking:** Stylus activation is refused for `eth_call` and `eth_estimateGas` by default. [[commit]](https://github.com/OffchainLabs/nitro/commit/0cecce14a06058ba3439be15c34b8a5955d9d345)
+- Feed REST backfill reads from the feed's host when no REST url is set. [[commit]](https://github.com/OffchainLabs/nitro/commit/70fa99a6e711f09eedd96a907290c3df0f3bcf7d)
+
+### Fixed
+
+- `debug_traceCall` and `eth_simulateV1` no longer crash on chains that collect tips. [[commit]](https://github.com/OffchainLabs/nitro/commit/3f5afac31f5283f6c386da2d9e02faacdb09fad3)
+
+
+## [v3.12.0](https://github.com/OffchainLabs/nitro/compare/v3.11.4...v3.12.0) - 2026-09-22
+
+### Configuration
+
+- Add `--execution.sequencer.poll-interval`. [[commit]](https://github.com/OffchainLabs/nitro/commit/15094865eb37be546b40e3b595305feec68446c5)
+- **Breaking:** Remove `--execution.sequencer.read-from-tx-queue-timeout`. [[commit]](https://github.com/OffchainLabs/nitro/commit/761d056ce436246750ee1a0842b316394db1464e)
+- Add `--execution.transaction-feed.enable`. [[commit]](https://github.com/OffchainLabs/nitro/commit/b60558f711b9fcd2cc9b4a54bd4e2e59b044e453)
+- Add `--execution.transaction-feed.addr`. [[commit]](https://github.com/OffchainLabs/nitro/commit/b60558f711b9fcd2cc9b4a54bd4e2e59b044e453)
+- Add `--execution.transaction-feed.port`. [[commit]](https://github.com/OffchainLabs/nitro/commit/b60558f711b9fcd2cc9b4a54bd4e2e59b044e453)
+- Add `--execution.transaction-feed.client-buf`. [[commit]](https://github.com/OffchainLabs/nitro/commit/b60558f711b9fcd2cc9b4a54bd4e2e59b044e453)
+- Add `--execution.transaction-feed.broadcast-buf`. [[commit]](https://github.com/OffchainLabs/nitro/commit/b60558f711b9fcd2cc9b4a54bd4e2e59b044e453)
+- Add `--execution.transaction-feed.write-timeout`. [[commit]](https://github.com/OffchainLabs/nitro/commit/b60558f711b9fcd2cc9b4a54bd4e2e59b044e453)
+- Add `--execution.transaction-feed.ping-interval`. [[commit]](https://github.com/OffchainLabs/nitro/commit/b60558f711b9fcd2cc9b4a54bd4e2e59b044e453)
+- Add `--execution.transaction-feed.handshake-timeout`. [[commit]](https://github.com/OffchainLabs/nitro/commit/b60558f711b9fcd2cc9b4a54bd4e2e59b044e453)
+- Change the default of `--node.batch-poster.data-poster.min-blob-tx-tip-cap-gwei`. [[commit]](https://github.com/OffchainLabs/nitro/commit/d3a8c30a1a8a2ed1d2dab5d5cdeb283b342daac8)
+- Change the default of `--node.batch-poster.data-poster.blob-tx-replacement-times`. [[commit]](https://github.com/OffchainLabs/nitro/commit/d3a8c30a1a8a2ed1d2dab5d5cdeb283b342daac8)
+- **Breaking:** Rename `--execution.sequencer.experimental-pga.*` to `--execution.sequencer.pga.*`. [[commit]](https://github.com/OffchainLabs/nitro/commit/99331461700eeabcbdf52c68fecfec29c44644df)
+- `--node.batch-poster.ignore-blob-price` now defaults to `true`. [[commit]](https://github.com/OffchainLabs/nitro/commit/c6d72dbea4444e36ceb5e9b332b0922ecc20341a)
+- Add `--execution.sequencer.max-block-tx-candidates`. [[commit]](https://github.com/OffchainLabs/nitro/commit/8a9efe8d24fb0cd707825a015c55f8576da4f851)
+- Add `--execution.caching.node-full-value-checkpoint`. [[commit]](https://github.com/OffchainLabs/nitro/commit/9cc09720023a480657dcb8a3361fd022b849c7a8)
+- Add `init.genesis-json`.
+- Add `init.genesis-mode`.
+- **Breaking:** Remove `--execution.transaction-filtering.address-filter.s3.*`. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+- **Breaking:** Remove `--execution.transaction-filtering.address-filter.poll-interval`. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+- Add `execution.transaction-filtering.address-filter.files`. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+- Add `--execution.transaction-filtering.address-filter.static-list`. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+- Add per-file `min-bytes-per-hash-entry` to the address filter. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+- Add the `plaintext` hashing scheme for address filter hash lists. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+- Add `--count-steps` to the arbitrator prover CLI. [[commit]](https://github.com/OffchainLabs/nitro/commit/8939f3b1a7e82434d7eb5716aabd7d6c785ab730)
+- Add `--node.block-recordings-pruner.enable`. [[commit]](https://github.com/OffchainLabs/nitro/commit/c3fe22b75ab572b3f60ac1f69b9f0b3274e95045)
+- `--node.batch-poster.data-poster.dangerous.clear-dbstorage` now also clears Redis storage. [[commit]](https://github.com/OffchainLabs/nitro/commit/99f2036cb3def2ee99aebece5945fc1c04777223)
+
+### Added
+
+- Add verifiable (SP1) compiler for Stylus programs (from wasm to rv64). [[commit]](https://github.com/OffchainLabs/nitro/commit/b3216d4c52cc2fe35b926a4adf16027566b88bd3)
+- Add `ValidationInput::from_request_allowing_missing_binaries` and `SP1_BOOTLOAD_SENTINEL`. [[commit]](https://github.com/OffchainLabs/nitro/commit/86eccf4617887ca6ee463e2b74679f0cf6cb498a)
+- Record chain-tip validation inputs for pathdb. [[commit]](https://github.com/OffchainLabs/nitro/commit/56a8f660613619443571ff59d62f86a01a59fae6)
+- Store chain-tip block recordings in a dedicated append-only freezer. [[commit]](https://github.com/OffchainLabs/nitro/commit/92484e0a2eec8255ac4daaea6fcccefb985ea48e)
+- Update go-ethereum to upstream v1.17.2. [[commit]](https://github.com/OffchainLabs/nitro/commit/9cc09720023a480657dcb8a3361fd022b849c7a8)
+- Report the current address-filter set ID to the filtering-report service. [[commit]](https://github.com/OffchainLabs/nitro/commit/15f397af27d64afb0e1b2cab9cb4841022194a50)
+- Add rust-analyzer to the rust toolchain components. [[commit]](https://github.com/OffchainLabs/nitro/commit/b8df9a22424c7c992071f1058eeccced0554778a)
+- Add priority gas auction (PGA) transaction ordering. [[commit]](https://github.com/OffchainLabs/nitro/commit/3f770df7483827e33efd70f67688ca759ab0fd81)
+- Update go-ethereum to upstream v1.17.3. [[commit]](https://github.com/OffchainLabs/nitro/commit/13f3f14d4ca86b93ecb427c7b9f573c241cdaac4)
+- Log the transaction ordering strategy (FIFO or PGA) when it is set or changes. [[commit]](https://github.com/OffchainLabs/nitro/commit/856ef433dc96649ffc6cd3f6ac80e9d26ebbd3a3)
+- Add a limit to the Stylus storage cache size. [[commit]](https://github.com/OffchainLabs/nitro/commit/8d24f6eab81698d0e555ab52ce6278904b1eb45e)
+- Add an RPC client for running native MEL in a separate process. [[commit]](https://github.com/OffchainLabs/nitro/commit/b0f9c8c3fbd95482a2bca649ac1605516a6355ca)
+- Add `arb/sequencer/timeboost/*` metrics. [[commit]](https://github.com/OffchainLabs/nitro/commit/305da0a31a1394c577c38cfed4eaed2dea9cf53d)
+- Add `arb/txprechecker/expresslane/*` metrics. [[commit]](https://github.com/OffchainLabs/nitro/commit/305da0a31a1394c577c38cfed4eaed2dea9cf53d)
+- Add `arb/transactionfeed/*` metrics. [[commit]](https://github.com/OffchainLabs/nitro/commit/b253038204e896e539ba916b30b17354b976de38)
+- Add `arb/dataposter/*` metrics. [[commit]](https://github.com/OffchainLabs/nitro/commit/01dbd2630c796e584852fe6bbe2968ce6b6b0b64)
+- Add `arb/sequencer/ordering/fifo` metric. [[commit]](https://github.com/OffchainLabs/nitro/commit/68dc30e593640bc95a0d9fa4ec87ee2b49a47304)
+- Add `arb/sequencer/ordering/pga` metric. [[commit]](https://github.com/OffchainLabs/nitro/commit/68dc30e593640bc95a0d9fa4ec87ee2b49a47304)
+- Add `arb/sequencer/pga/*` metrics. [[commit]](https://github.com/OffchainLabs/nitro/commit/68dc30e593640bc95a0d9fa4ec87ee2b49a47304)
+- Add `arb/sequencer/live` metric. [[commit]](https://github.com/OffchainLabs/nitro/commit/a59084c832dbfa2630a6f04c2f476e6ff4dddfe7)
+- Add `arb/sequencer/priority` metric. [[commit]](https://github.com/OffchainLabs/nitro/commit/a59084c832dbfa2630a6f04c2f476e6ff4dddfe7)
+- Add `arb/sequencer/transactions/dropped/*` metrics. [[commit]](https://github.com/OffchainLabs/nitro/commit/7729ecbc5edfade03be6e0953a7687da0d96fd7b)
+- Add `arb/sequencer/block/timelimited` metric. [[commit]](https://github.com/OffchainLabs/nitro/commit/a864bdad6196feb6e690b8b2bb5e1dde094dd638)
+- Add per-file `arb/addressfilter/file/<bucket>/<object_key>/size` metrics. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+
+### Changed
+
+- The BOLD staker gets the module root from the latest staked assertion. [[commit]](https://github.com/OffchainLabs/nitro/commit/7a4c0eac0c1b82cdcd97fdc9ae41cee3b427fbf8)
+- Replace the bincode Stylus module cache with a stable WAVM wire format. [[commit]](https://github.com/OffchainLabs/nitro/commit/89490e246945e955c2c51b259d965c6bc2b81b9d)
+- **Breaking:** Rename filtering errors `ErrArbTxFilter` and `ErrFilteredTx`. [[commit]](https://github.com/OffchainLabs/nitro/commit/08d1dcfcb42cfdc3461226d0d14b727518b74c01)
+- Block production is now driven by consensus instead of execution. [[commit]](https://github.com/OffchainLabs/nitro/commit/15094865eb37be546b40e3b595305feec68446c5)
+- `TxForwarder` logs whether a forwarding error will be retried against another target. [[commit]](https://github.com/OffchainLabs/nitro/commit/5124ad1f4fc8b81219c649002d7282ca761ddd42)
+- `eth_call` and gas estimation reject filtered `from`/`to` addresses before execution. [[commit]](https://github.com/OffchainLabs/nitro/commit/bcc67facf4913869506d4d8f8787a41ded442bdd)
+- Improve address hash caching. [[commit]](https://github.com/OffchainLabs/nitro/commit/2c8899d7e174ce7cc178002ac25c51dd30803d17)
+- Use Reth's execution cache when executing blocks. [[commit]](https://github.com/OffchainLabs/nitro/commit/dd64d65a1751d7ffe0988ec971930d28b70541f6)
+- Nitro binaries report explicit build provenance, including the commit timestamp. [[commit]](https://github.com/OffchainLabs/nitro/commit/b589681074a3c25e990d08a7b0e4f7eea55d9ab7)
+- After a block, the sequencer throttles to the next PGA round boundary. [[commit]](https://github.com/OffchainLabs/nitro/commit/1a57513a1020de3863af725128f13c4e400d8915)
+- Transaction feed messages report the PGA round in `pga_round`. [[commit]](https://github.com/OffchainLabs/nitro/commit/ade62d45b13ae91f0abb9d09f0cf0800bc506d29)
+- Pin go-ethereum to an Amsterdam L1 compatible version. [[commit]](https://github.com/OffchainLabs/nitro/commit/00f983ebbca6e32a68aeeb501d5380392188f7bf)
+- The sequencer ends a block once remaining gas is below the intrinsic tx cost. [[commit]](https://github.com/OffchainLabs/nitro/commit/a864bdad6196feb6e690b8b2bb5e1dde094dd638)
+- The `memory.fill` value overflow transaction filter applies only below ArbOS 59. [[commit]](https://github.com/OffchainLabs/nitro/commit/a81923cd91cf301531e7af8c38b3cd82c40153fa)
+- The sequencer rejects configurations yielding a PGA round length below 5ms. [[commit]](https://github.com/OffchainLabs/nitro/commit/8a9efe8d24fb0cd707825a015c55f8576da4f851)
+- Update go-ethereum to upstream v1.17.4. [[commit]](https://github.com/OffchainLabs/nitro/commit/eb6459d3538f26b24b0ce5e7d5bf37f270b6f48b)
+- Rename `arb/filter_report/api/filter_set_id_post_failure_total` to `filter_set_ids_post_failure_total`. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+- Rename `arb/filter_report/api/filter_set_id_post_success_total` to `filter_set_ids_post_success_total`. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+- Rename `arb/filter_report/client/filter_set_id_failure_total` to `filter_set_ids_failure_total`. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+- Rename `arb/filter_report/client/filter_set_id_success_total` to `filter_set_ids_success_total`. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+
+### Removed
+
+- Remove `arb/addressfilter/file/size` metric. [[commit]](https://github.com/OffchainLabs/nitro/commit/83be87866b87928b540f71445c6fc19982ffdf5c)
+
+### Fixed
+
+- Fix re-entrant mutable aliasing UB in `user-host`. [[commit]](https://github.com/OffchainLabs/nitro/commit/d82135ce7dcf47de1149b65e9ec0641b4c2e4a5a)
+- Fix initialization of the BOLD redis execution client. [[commit]](https://github.com/OffchainLabs/nitro/commit/b882cc88030774124de3122a73fc2a8d129f6a79)
+- `LocalFileStorageService` fsyncs data and directories before signing. [[commit]](https://github.com/OffchainLabs/nitro/commit/5b6f89c84ffbea502c2f69e68c65327586e485a2)
+- The delayed sequencer no longer stays halted on a filtered, already-finalized delayed message. [[commit]](https://github.com/OffchainLabs/nitro/commit/9a607e664389e97a53d1e40a3ca9cf5bfd10465b)
+- Fix a panic when syncing Arbitrum Sepolia at block 204060502. [[commit]](https://github.com/OffchainLabs/nitro/commit/b181164dfe88fa9ab12215b82313a29d4ffc89ff)
+- Correct the Arbitrum One `GenesisBlockNum` in the chain info config. [[commit]](https://github.com/OffchainLabs/nitro/commit/bdcafb1bec9cc0ff3150400bda6b176dd84d62a4)
+- The address filter checks the de-aliased L1 sender of retryable submissions and deposits. [[commit]](https://github.com/OffchainLabs/nitro/commit/6612d34d87d16fff8b0de3a56da7e88cf8d1dbb1)
+- Allow arbitrary size payloads in the rust validator service. [[commit]](https://github.com/OffchainLabs/nitro/commit/72ddd46ce4531336596e9007bfa7b45f0563a7e2)
+- `timeboost` rejects express lane submissions with a nil chain id instead of panicking. [[commit]](https://github.com/OffchainLabs/nitro/commit/c66497467a5816df392b0b1596c87fa3f5274436)
+- Txs drained but not attempted stay queued when a block fails to commit. [[commit]](https://github.com/OffchainLabs/nitro/commit/c36c4d736475801e64f91f97361e1d55e42d7f87)
+- Fix a "send on closed channel" panic in the BOLD event `Producer`. [[commit]](https://github.com/OffchainLabs/nitro/commit/87633da88791e9e402f0a11a0850b4408f69f3de)
+- Bump `WasmerSerializeVersion` to 17 to match wasmer. [[commit]](https://github.com/OffchainLabs/nitro/commit/8abc8be4a08222569515f70ed91f61464117b2ea)
+- Delete stale keys during a sequence number jump. [[commit]](https://github.com/OffchainLabs/nitro/commit/5c37ce50bf4524f565099cd63439e515e4c13c02)
+- Fix the brotli build script watching a nonexistent path. [[commit]](https://github.com/OffchainLabs/nitro/commit/a2cf824f90b6af3e9d5692021e091a58bee688a0)
+- Rate-limit the "error checking onchain filter" log while the delayed sequencer is halted. [[commit]](https://github.com/OffchainLabs/nitro/commit/159e18a98ff932206d100569c7fb5a1b4895917f)
+- An unusable revalidation start batch no longer aborts node startup. [[commit]](https://github.com/OffchainLabs/nitro/commit/6c1241b83a45cf213a4c704e8e764f4dedd8d401)
+- Stylus activation database failures are reported instead of crashing the node. [[commit]](https://github.com/OffchainLabs/nitro/commit/10a214a4e5915501929c645faebbe44995c659ad)
+- Fix a race where a concurrent head update could move the chain head during block building. [[commit]](https://github.com/OffchainLabs/nitro/commit/e37590e1f942c8f091b418236abd8ed82a363b10)
+- The sequencer reads the sender's nonce from post-execution state. [[commit]](https://github.com/OffchainLabs/nitro/commit/4abede6200a0a81f8e49fb50e51cd97b0a1cee31)
+- `ExecutionEngine.Reorg` prefetches the next message, not the current one. [[commit]](https://github.com/OffchainLabs/nitro/commit/a2b40c014a813d27733e41301c7474f0d5a25012)
+- Bump nitro-testnode so `--l2-anytrust` works again. [[commit]](https://github.com/OffchainLabs/nitro/commit/0451c10c4ac5ea2217376e19f68016638620a28d)
+- A force-included retryable with a very large gas limit no longer drops its auto-redeem. [[commit]](https://github.com/OffchainLabs/nitro/commit/430f31710c6b610bb7ebfde437a5db2bd6d53c58)
+- Select state scheme compatible snapshots when using `--init.latest` with PathDB. [[commit]](https://github.com/OffchainLabs/nitro/commit/b801fe34e062985d006815f7c81edd7508ac103d)
+- Return native Stylus initialization failures to Go instead of panicking in Rust. [[commit]](https://github.com/OffchainLabs/nitro/commit/ccc5c828d9ea22f161efc784bac4d4a6559b7e59)
+- Prevent shutdown deadlocks when waiting for the processed message count over execution RPC. [[commit]](https://github.com/OffchainLabs/nitro/commit/314acc93e8f20e20eb677467fc3fb6119fb2d8d1)
+- Fix opening a database with an unexpected freezer state. [[commit]](https://github.com/OffchainLabs/nitro/commit/daaf37eb042d2f000a348471646ebefb39d3223e)
+- Cancelled `eth_getLogs` requests no longer leak goroutines or stall log index rendering. [[commit]](https://github.com/OffchainLabs/nitro/commit/ebe9e83e5dbc83909822cc208f5defc8b1892b46)
+
+### Internal
+
+- Add the PGA round schedule state machine. [[commit]](https://github.com/OffchainLabs/nitro/commit/1f92cb824a4a868b26a2aadd8adb17f592da77e9)
+- Add the priority mempool for PGA ordering. [[commit]](https://github.com/OffchainLabs/nitro/commit/2dfeaf513009543b9be5ac04dab246723b987411)
+- Add the anti-starvation priority boost to the priority mempool. [[commit]](https://github.com/OffchainLabs/nitro/commit/3f59102bef7339a63239893557a8839463d5d978)
+- Add transaction address filtering support to `eth_call`, matching `eth_estimateGas`. [[commit]](https://github.com/OffchainLabs/nitro/commit/61d7a951926420656171b1572b6f28704ecc8026)
+- The execution engine sequences transactions through the `BlockSequencingHooks` interface. [[commit]](https://github.com/OffchainLabs/nitro/commit/ef28c845313c6fdda9fce93602fe53a210d60cff)
+- Pin SP1 version to 6.2.1. [[commit]](https://github.com/OffchainLabs/nitro/commit/c472164c644aa579118e33dea4d9ffe1920577cc)
+- Reject tx submissions with `ErrNoSequencer` once the sequencer is stopped. [[commit]](https://github.com/OffchainLabs/nitro/commit/761d056ce436246750ee1a0842b316394db1464e)
+- `make` installs safe-smart-account's dependencies with `npm ci`. [[commit]](https://github.com/OffchainLabs/nitro/commit/660984d3defea8dec365358eef16585dcf77bd47)
+- Restore the unfiltered baseline in `TestEthCallFilterPreservesResultWithScheduledTxes`. [[commit]](https://github.com/OffchainLabs/nitro/commit/daeb3b9d464eac5071bef9e15cbad23c9fa525c8)
+- **Breaking:** `gethexec.CreateExecutionNode` takes functional options. [[commit]](https://github.com/OffchainLabs/nitro/commit/ed151569bade1c64be18e5e415487abf7718c11e)
+- Use `ComputeBudget` and `BalanceLedger` from arbos in the block executor. [[commit]](https://github.com/OffchainLabs/nitro/commit/4ee7f5232f034d2e824a7c12973ee754b17e1d2d)
+- Decompose the nitro-reth block producer. [[commit]](https://github.com/OffchainLabs/nitro/commit/57dc95c93c2d5aeacd9dc1b1c9a5abce9d8d6cce)
+- Seed the `arb-replay` crate in nitro-reth. [[commit]](https://github.com/OffchainLabs/nitro/commit/3675efa26305f612c99b01a0de0f018dbdcbf764)
+- `arb-stylus` reuses `arbutil` gas types and constants instead of duplicating them. [[commit]](https://github.com/OffchainLabs/nitro/commit/350017e7feedaf761d01e2ab89a2d60c72d97f6f)
+- `arb-stylus` implements `arbutil`'s `EvmApi` trait. [[commit]](https://github.com/OffchainLabs/nitro/commit/816b2bcc75ff5f56bd0dc23e230ad7f1156c3c01)
+- `arb-stylus` compiles for wasm32. [[commit]](https://github.com/OffchainLabs/nitro/commit/ba65ed5a4dc4cd5bcb88df3a447775c8a68712e5)
+- nitro-reth links the prebuilt brotli static libs. [[commit]](https://github.com/OffchainLabs/nitro/commit/19e94c6e0f0850bd54c70302fad2ec674dd1f670)
+
+
+## [v3.11.4](https://github.com/OffchainLabs/nitro/compare/v3.11.3...v3.11.4) - 2026-09-09
+
+### Changed
+
+- The BoLD staker's "Waiting for more batches to post next assertion" log now includes a `reason` field. [[commit]](https://github.com/OffchainLabs/nitro/commit/7d5ac271b400f710f6267ad759c6afc3e12d7059)
+
+### Fixed
+
+- Parent chain headers with the Glamsterdam devnet-8 fields `blockAccessListHash` (EIP-7928) and `slotNumber` (EIP-7843) are now decoded and reproduce the canonical block hash. [[commit]](https://github.com/OffchainLabs/nitro/commit/db8ff47bc6a38fcf9ad05f8aabdeef72812751d0)
+- `eth_getProof` now rejects requests with more than 1024 storage keys instead of allocating unbounded memory, matching upstream geth's limit. [[commit]](https://github.com/OffchainLabs/nitro/commit/9a9ea7769b453dcf2987381b2dd9d0e16df9f198)
+- The batch poster no longer treats a reverted gas estimation as a successful estimate of zero gas. [[commit]](https://github.com/OffchainLabs/nitro/commit/7de1094e674a6346a8219f978b7e94563b13a964)
+- `eth_feeHistory` now rejects requests with more than 100 reward percentiles. [[commit]](https://github.com/OffchainLabs/nitro/commit/0208d4ea9efcf1b7d327e6e20bfe320e52b4910d)
+
+## [v3.11.3](https://github.com/OffchainLabs/nitro/compare/v3.11.2...v3.11.3) - 2026-07-29
+
+### Configuration
+
+- Added `execution.stylus-target.max-singlepass-output-size` to limit Singlepass compiler output per Stylus module, defaults to 10 MiB. [[commit]](https://github.com/OffchainLabs/nitro/commit/4072e6103dc5334ba4baea0381c75a4af1dc5240)
+
+### Fixed
+
+- Capture panics on prefetch-tx execution and log them instead of returning. [[commit]](https://github.com/OffchainLabs/nitro/commit/37ea62ee48b233a71792e008246cf0163f2e0c93)
+- Filter retryable submissions by who actually gets funds, and catch filtered L1 senders/depositors that previously slipped through.[[commit]](https://github.com/OffchainLabs/nitro/commit/b668bd3243c8c6392dcf86d1ae06ddccc258493d)
+
+### Changed
+
+- Filtered transactions rejected by the sequencer now return the RPC error message "Transaction rejected by chain policy" instead of the generic "internal error". [[commit]](https://github.com/OffchainLabs/nitro/commit/df606b3a3ae62cf19cd44f3ce54037d03400a9f0)
+- Filtered-tx reports are now logged node-side when reported. Unbounded fields truncated to keep entries compact. [[commit]](https://github.com/OffchainLabs/nitro/commit/6f82a0dfdb256846a25228b7269a7a4b8165f8aa)
+- `cmd/filtering-report` forwarder no longer logs the full report body; its forward success/failure logs now include only the report id and tx hash. [[commit]](https://github.com/OffchainLabs/nitro/commit/6f82a0dfdb256846a25228b7269a7a4b8165f8aa)
+- Onchain-filtered transactions now trace (e.g. `debug_traceTransaction`) with the error message "Transaction rejected by chain policy", matching the RPC rejection message. [[commit]](https://github.com/OffchainLabs/nitro/commit/e1a629fad1f1a87dea3e46263b022c5747d2677c)
+
+
+## [v3.11.2](https://github.com/OffchainLabs/nitro/compare/v3.11.1...v3.11.2) - 2026-06-30
+
+### Configuration
+
+- Add `--node.dangerous.always-fallback-to-parent-chain-da` to support retiring chains off AnyTrust. [[commit]](https://github.com/OffchainLabs/nitro/commit/d71b69788edf8fd41385dcfadd9c8ee3c5ab1481)
+- Add `--execution.transaction-filtering.address-filter.s3.preallocate-memory` (default true) to preallocate and commit the hash-list memory at startup, engaging only when `s3.max-file-size-mb` is set. [[commit]](https://github.com/OffchainLabs/nitro/commit/1ca3775819688f9211f96bb8a33ad5bcc10aae9c)
+
+### Added
+
+- Added consensus-v61 to dockerfile, remove rc and older consensus. [[commit]](https://github.com/OffchainLabs/nitro/commit/e53631372daa8627f8ef086324bb5e3457ee1b46)
+
+### Changed
+
+- Default `--file-logging.max-backups` increased from 20 to 40. [[commit]](https://github.com/OffchainLabs/nitro/commit/d2f354150c3fe2c55a5cf5bc47f5147d9e7bc7f3)
+- The address filter now decodes the S3 hash list directly into preallocated, reused data structures committed at startup, so reloads perform no large allocation and cannot OOM the node. [[commit]](https://github.com/OffchainLabs/nitro/commit/1ca3775819688f9211f96bb8a33ad5bcc10aae9c)
+- Lowered the "Delayed message filtered - HALTING delayed sequencer" log from `Error` to `Info`, since halting on a filtered delayed message is expected operation. [[commit]](https://github.com/OffchainLabs/nitro/commit/b1bcce62784f4bdf9daf32ea64dcca7a1dce5dfc)
+
+### Fixed
+
+- Sequencer fee check now uses the current block's base fee instead of a value cached when block creation started. [[commit]](https://github.com/OffchainLabs/nitro/commit/bc2d34f05eab2f73b9efadaee82bd0355267e36c)
+- With file logging enabled, Go runtime panics and fatal errors are now also written to a `<log-file>.crash` file, not only to stderr. [[commit]](https://github.com/OffchainLabs/nitro/commit/d2f354150c3fe2c55a5cf5bc47f5147d9e7bc7f3)
+- Emit a balanced top-level call frame for EVM-skipped transactions (onchain-filtered txs, pre-recorded reverts, and retryable-redeem error paths) so tracing no longer fails with "incorrect number of top-level calls". [[commit]](https://github.com/OffchainLabs/nitro/commit/f1b2ec24705bf7be11563691ec4c5f422ec25fa3)
+- Fix unnecessary delays handling delayed messages  when address filtering is enabled. [[commit]](https://github.com/OffchainLabs/nitro/commit/b1bcce62784f4bdf9daf32ea64dcca7a1dce5dfc)
+- BoLD auto-deposit now detects WETH-compatible stake tokens via an `eth_call` probe of `deposit()` instead of scanning the token's bytecode, so stake tokens deployed behind a proxy are no longer misclassified as non-WETH. [[commit]](https://github.com/OffchainLabs/nitro/commit/cb652f917a42be2abd37d3d7da2183069580c114)
+
+
+## [v3.11.1](https://github.com/OffchainLabs/nitro/compare/v3.11.0...v3.11.1) - 2026-06-29
+
+### Fixed
+
+- The Stylus warm-start cache is now rolled back when a transaction is dropped after executing. [[commit]](https://github.com/OffchainLabs/nitro/commit/860a15a8b83e0873732c67abd1593653500fb7e9)
+- Use mutex for history reads [[commit]](https://github.com/OffchainLabs/nitro/commit/8512b8cbf477b35e9717f80fb4b32ebe6ea30167)
+
+## [v3.11.0](https://github.com/OffchainLabs/nitro/compare/v3.10.0...v3.11.0) - 2026-06-22
+
+### Added
+
+- ArbOS60 supported.
+- Add `--execution.legacy-zero-base-fee-until` restores the pre-v3.7 behavior of treating headers with `ArbOSFormatVersion <= 40` and `BaseFee == 0` for affected chains.
+- Add `--execution.transaction-filtering.enable` replaces `--execution.address-filter.enable`.
+- Sequencer reports filtered regular transactions to the filtering-report service via FilteringReportRPCClient.
+- Unified replay binary (`cmd/unified-replay/`) combining MEL message extraction and block production into a single WASM-compilable program.
+- `GetEndParentChainBlockHash` host I/O opcode for MEL proving.
+- `melwavmio` package providing WASM imports and native stubs for MEL.
+- Extended `GlobalState` to 4 bytes32 slots with backward-compatible hashing.
+- Makefile targets `build-unified-replay-env` and `build-unified-wasm-bin`.
+- Sign outbound webhook payloads from `cmd/filtering-report` with an Ed25519 leaf certificate issued by an internal CA, so receivers verify the signature against the CA root and rotate keys transparently.
+- Add `scripts/rust-val-entry.sh` Docker entrypoint script that launches a single Rust validation server alongside the nitro node.
+- Add `nitro-node-rust-validator` Docker target.
+- Support for ArbOS 61.
+- Add per-worker slowdown on consecutive retryable HTTP errors from the external endpoint to avoid hammering a degraded service and consuming max receive count quota unnecessarily.
+- Download the consensus-v61-rc.1 replay machine in the Docker build.
+
+### Changed
+
+- `S3SyncManager` now includes `filterSetID` in the successful hash-list load log line so operators can correlate it with the `FilterSetID` reported on filtered tx reports.
+- Replace `sha3`/`digest` keccak with `tiny-keccak` across `prover` and `caller-env`.
+- `--node.transaction-streamer.shutdown-on-blockhash-mismatch` now defaults to `true`: on a feed-vs-local block hash mismatch the node refuses to persist or rebroadcast the result and shuts down gracefully.
+- Update README.md with support policy.
+- Update CONTRIBUTING.md with the new development process.
+- Reduced GC frequency for in replay binary (for wasm targets).
+- Use Option for interface vars that can be empty.
+
+### Fixed
+
+- Skip extra header columns in iostat parsing.
+- Improve locking mechanism in backlogSizeInBytes().
+- Reduce log spam during node sync. `ExecuteNextMsg` now throttles `accumulator not found` errors via an ephemeral error handler.
+- Iterator leak in `deleteWasmEntries`: defer is now late-bound so the post-flush iterator is released.
+- Allow retrying `--init.url` after a prior init created the `wasm/` subdirectory but did not complete chain initialization.
+- Fixed initialization of redis-validator.
+- Re-run genesis assertion validation on startup while the chain head is still at genesis, so a previously failed validation is not silently skipped on subsequent restarts.
+- Canonicalize NaN values returned by soft-float library functions so WAVM and JIT produce identical results when floating-point operations yield NaN.
+- Fixed honest-validator self-challenge bug in BoLD where a slow catchup goroutine could downgrade `latestAgreedAssertion`
+- ArbOS 61: skip multi-gas refund when no constraints are configured.
+- ArbOS 61: use block basefee for the SingleDim refund override.
+- ArbOS 61: account for EVM SSTORE refunds in the multi-gas refund.
+- Stylus pre-VM OOG: when `contract.BurnGas(callCost)` drains the call frame before WASM runs, attribute the residual to `WasmComputation` so `receipt.MultiGasUsed.SingleGas()` matches `receipt.GasUsed`.
+- Updated `log.*` calls to use slog key/value pairs.
+- Address filter now records the L1 destination of `ArbSys.withdrawEth` / `ArbSys.sendTxToL1` via a new `ReasonToL1`, closing a gap where L2→L1 withdrawals to a filtered address were not caught.
+- Fix invalid Prometheus metric names in filtering-report and transaction-filterer components; hyphens in geth metric paths survive the `/`→`_` translation and produce names that violate the Prometheus spec.
+- Removed legacy validator (was included but not working since wasmer upgrade).
+- Removed unnecessary tokens from consensus machine downloads in Dockerfile.
+- pin nitro-testnode master branch.
+- Sequencer no longer rejects clean transactions following a filtered one in the same block. `PreTxFilter` now operates on a fresh per-tx `addressCheckerState` instead of inheriting the previous tx's filter state.
+- Do not combine multi-gas refunds with EVM refunds.
+
+### Internal
+
+- stylus-raw-deploycode - a small utility that helps deploy stylus contracts for testing.
+- Make `validation` crate no-std friendly.
+- Remove JIT wrappers for wasi and wavmio.
+- Fix inner call and pushcontract address filter recording
+- `cmd/filtering-report` forwarder now emits an info log on successful report forwarding and includes the SQS message body in the existing forward-failure error log.
+- NIT-5012: fail fast when delayed-sequencing filtering is active but `transaction-filterer-rpc-client.url` is unset, and pin the `transaction-filterer` binary to serve only the `transactionfilterer` RPC namespace.
+- Make `GuestPtr` field private with checked addition (panics on overflow instead of silent wraparound).
+- Remove JIT wrappers for arbcrypto and arbcompress.
+- Address-filter S3 hash list now expects the upstream `latest.json` schema
+- Address-filter `HashStore` now supports `hashing_scheme: "sha256-rawbytesinput"`
+- Optional `--execution.transaction-filtering.address-filter.s3.max-file-size-mb` flag
+- The transaction prechecker now reports address-filtered transactions to the filtering-report service.
+- Send non-retryable HTTP errors to an optional poison queue for manual inspection or reprocessing.
+- Include transaction-filterer binary in nitro-node and nitro-node-stripped Docker images.
+- Report filtered delayed transactions to filtering-report service with structured FilteredTxReport.
+- Add script to generate large `filtered-addresses-hashed-list.json` test fixtures.
+- Refactor filtering report test infrastructure: rename `CheckReportBlockNumberAndParentBlockHash` to `CheckCommonReportFields` with additional common assertions and update `SetupFilteringReport` to return the RPC stack.
+- Remove `-A static_mut_refs` from `clippy` invocation in CI (we do not use mutable statics anymore).
+- Add forge version validation to `scripts/check-build.sh`.
+- Cache hash keys for MultiGasFees substorage.
+- Add FilterSetID field to FilteredAddressRecord and expose it through the AddressChecker and StateDB interfaces so callers can stamp each record with the active filter set id.
+- `EnableETHCallFilter` now scopes to `eth_estimateGas` only; no longer gates prechecker filtering.
+- Set default `EnableETHCallFilter` to false.
+- Skip prechecker transaction-filter dry-run on sequencer nodes.
+
+# [v3.10.2](https://github.com/OffchainLabs/nitro/compare/v3.10.1...v3.10.2) - 2026-06-02
+
+### Configuration
+
+- Add `TransactionFiltering.Enable` master switch (default `false`), replaces `AddressFilter.Enable`.
+
+### Fixed
+
+- BoLD assertion poster no longer logs `ASSERTION_NOT_EXIST` at error level when the configured RPC head block is `finalized` and an assertion has been observed onchain but not yet finalized.
+- Fixed initialization of redis-validator.
+
+### Added
+
+- NIT-4804: address-filter `HashStore` now supports `hashing_scheme: "sha256-rawbytesinput"` on the S3 hash list payload, hashing `sha256(salt[:] || address[:])` instead of the string-concat form.
+
+### Changed
+
+- `EnableETHCallFilter` now scopes to `eth_estimateGas` only; no longer gates prechecker filtering.
+- Skip prechecker transaction-filter dry-run on sequencer nodes.
+
+### Internal
+
+- Cache hash keys for MultiGasFees substorage.
+
+## [v3.10.1](https://github.com/OffchainLabs/nitro/compare/v3.10.0...v3.10.1) - 2026-05-12
+
+### Configuration
+
+- Add `--execution.legacy-zero-base-fee-until <unix-ts>` opt-in compatibility flag (default 0 = disabled). When set, restores the pre-v3.7 behavior of treating headers with `ArbOSFormatVersion <= 40` and `BaseFee == 0` as non-arbitrum, for blocks with timestamp strictly less than the given value.
+
+### Added
+
+- Include transaction-filterer binary in nitro-node and nitro-node-stripped Docker images.
+
+### Changed
+
+- Set default `EnableETHCallFilter` to false.
+- Update address-filter S3 hash list format
+- Ensure genesis block is appropriately validated
+
+### Fixed
+
+- Resolve BoLD Staking Bug That Attempts Self-Challenge
+
+## [v3.10.0](https://github.com/OffchainLabs/nitro/compare/v3.10.0-rc.9...v3.10.0) - 2026-05-05
+
+**Note for v3.10.0:** Please add this option to nodes running v3.10:
+```--execution.transaction-filtering.enable-ethcall-filter=false```
+ The default of `true` doesn't make anything behave incorrectly, but it does a lot of unnecessary work for the sequencer and for precheckers/forwarders.
+
+### Configuration
+
+- Add `--execution.disable-arbowner-ethcall` flag to disable ArbOwner precompile calls outside on-chain execution. [[PR]](https://github.com/OffchainLabs/nitro/pull/4591)
+- Add `--stylus-target.native-stack-size` config to set the initial Wasmer coroutine stack size for Stylus execution. [[PR]](https://github.com/OffchainLabs/nitro/pull/4538)
+- Add `--execution.disable-arbowner-ethcall` flag to disable ArbOwner precompile calls outside on-chain execution. [[PR]](https://github.com/OffchainLabs/nitro/pull/4591)
+- Add `--stylus-target.native-stack-size` config to set the initial Wasmer coroutine stack size for Stylus execution. [[PR]](https://github.com/OffchainLabs/nitro/pull/4538)
+- Add `--execution.stylus-target.allow-fallback` flag: if true, fall back to an alternative compiler when compilation of a Stylus program fails (default: true). [[PR]](https://github.com/OffchainLabs/nitro/pull/4534)
+- Adds --execution.sequencer.transaction-filtering.disable-delayed-sequencing-filter to enable/disable filtering when sequencing delayed messages. [[PR]](https://github.com/OffchainLabs/nitro/pull/4377)
+- Added `--node.block-validator.validation-spawning-allowed-timeouts` (default `3`): maximum number of timeout errors allowed per validation before treating it as fatal. Timeout errors have their own counter, separate from `--node.block-validator.validation-spawning-allowed-attempts`. [[PR]](https://github.com/OffchainLabs/nitro/pull/4455)
+- The new `--node.batch-poster.compression-levels` flag allows operators to specify different compression strategies based. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+    - `backlog`: The minimum backlog size (in number of batches) at which this configuration applies. First entry must be zero. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+    - `level`: The initial compression level applied to messages when they are added to a batch once the backlog reaches or exceeds the configured threshold. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+    - `recompression-level`: The recompression level to use for already compressed batches when the backlog meets or exceeds the threshold. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+    - Example configuration:. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+- Validation rules:. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+    - The `backlog` values must be in strictly ascending order. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+    - Both level and recompression-level must be weakly descending (non-increasing) across entries. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+    - recompression-level must be greater than or equal to level within each entry (recompression should be at least as good as initial compression). [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+    - All levels must be in valid range: 0-11. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+    - Add `--execution.address-filter.enable` flag to enable/disable address filtering. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+    - Add `--execution.address-filter.poll-interval` flag to set the polling interval for the s3 syncer, e.g. 5m. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+    - Add `--execution.address-filter.cache-size` flag to set the LRU cache size for address lookups (default: 10000). [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+    - Add `--execution.address-filter.s3.*` group of flags to configure S3 access:. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+        - Add `--execution.address-filter.s3.bucket` flag to specify the S3 bucket name for the hashed address list. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+        - Add `--execution.address-filter.s3.region` flag to specify the AWS region. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+        - Add `--execution.address-filter.s3.object-key` flag to specify the S3 object key for the hashed address list. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+        - Add `--execution.address-filter.s3.access-key` flag to specify the AWS access key. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+        - Add `--execution.address-filter.s3.secret-key` flag to specify the AWS secret key. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+        - Add `--execution.address-filter.s3.chunk-size-mb` flag to set S3 multipart download part size in MB (default: 32). [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+        - Add `--execution.address-filter.s3.concurrency` flag to set S3 multipart download concurrency (default: 10). [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+        - Add `--execution.address-filter.s3.max-retries` flag to set maximum retries for S3 part body download (default: 5). [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+- Init config must not have `empty` set to true when `genesis-json-file` is provided. [[PR]](https://github.com/OffchainLabs/nitro/pull/4296)
+- Add `execution.sequencer.event-filter.path` to configure sequencer-side event-based transaction filtering via a JSON rules file. [[PR]](https://github.com/OffchainLabs/nitro/pull/4271)
+   - Extend genesis.json with `serializedConfig` and `arbOSInit.initialL1BaseFee` fields. [[PR]](https://github.com/OffchainLabs/nitro/pull/4292)
+   - Remove `initial-l1-base-fee` CLI flag from genesis-generator. [[PR]](https://github.com/OffchainLabs/nitro/pull/4292)
+- Added `--execution.address-filter.s3.endpoint` for S3-compatible services (MinIO, localstack). [[PR]](https://github.com/OffchainLabs/nitro/pull/4311)
+- Add `--node.data-availability.rest-aggregator.connection-wait` how long to wait for initial anytrust DA connection until it errors (re-attempts every 1 second) (to be deprecated, use `da.anytrust*` instead). [[PR]](https://github.com/OffchainLabs/nitro/pull/4297)
+- Add `--node.da.anytrust.rest-aggregator.connection-wait` how long to wait for initial anytrust DA connection until it errors (re-attempts every 1 second). [[PR]](https://github.com/OffchainLabs/nitro/pull/4297)
+- Add `--anytrust.rest-aggregator.connection-wait` how long to wait for initial anytrust DA connection until it errors (re-attempts every 1 second). [[PR]](https://github.com/OffchainLabs/nitro/pull/4297)
+- Add address-filter.address-checker-worker-count to configure the number of address checker workers. [[PR]](https://github.com/OffchainLabs/nitro/pull/4235)
+- Add address-filter.address-checker-queue-size to configure the address checker queue capacity. [[PR]](https://github.com/OffchainLabs/nitro/pull/4235)
+- `cmd/daserver` -> `cmd/anytrustserver`
+- `cmd/datool` -> `cmd/anytrusttool`
+- `--node.data-availability.*` -> `--node.da.anytrust.*`
+- `--node.batch-poster.das-retention-period` -> `--node.batch-poster.anytrust-retention-period`
+- `--node.data-availability.rpc-aggregator.das-rpc-client.*` -> `--node.data-availability.rpc-aggregator.rpc-client.*`
+- `--node.batch-poster.max-size` -> `--node.batch-poster.max-calldata-batch-size`
+- `--node.da-provider.*` -> `--node.da.external-provider.*`
+- `anytrusttool` `--das-retention-period` -> `--anytrust-retention-period`
+- `anytrusttool` `--das-rpc-client.*` -> `--rpc-client.*`
+- `daprovider` `--anytrust.parent-chain.node-url` -> `--parent-chain-node-url`
+- `daprovider` `--anytrust.parent-chain.connection-attempts` -> `--parent-chain-connection-attempts`
+- `daprovider` `--anytrust.parent-chain.sequencer-inbox-address` -> `--parent-chain-sequencer-inbox-address`
+- `daserver` `--anytrust.parent-chain.node-url` -> `--parent-chain-node-url`
+- `daserver` `--anytrust.parent-chain.connection-attempts` -> `--parent-chain-connection-attempts`
+- `daserver` `--anytrust.parent-chain.sequencer-inbox-address` -> `--parent-chain-sequencer-inbox-address`
+
+### Deprecated
+
+- Deprecate `--node.batch-poster.compression-level` flag in favor of `--node.batch-poster.compression-levels`. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+
+### Added
+
+- ArbOS60 supported.
+- `ValidationInputsAt` debug API now includes an `ExpectedEndState` field in the returned JSON, allowing the arbitrator and JIT provers to verify their computed end state when run from the command line with `--json-inputs`. [[PR]](https://github.com/OffchainLabs/nitro/pull/4563)
+- Add ReportFilteredTransactions RPC endpoint to cmd/filtering-report with shared FilteredTxReport types and client method.
+- Add SQS integration and report forwarder for filtered transactions.
+- Add chainId field to FilteredTxReport so consumers can distinguish mainnet vs testnet events.
+- Added precompile gating for ArbOS >= 60.
+- Add consensus v60-rc.4 to Dockerfile
+- Update the L2 msgs accumulation from merkle tree to a hash-chain based accumulation and implement extracting of message from the accumulator using preimages. [[PR]](https://github.com/OffchainLabs/nitro/pull/4518)
+- Poll parent chain's `eth_config` RPC (EIP-7910) to dynamically fetch blob schedule configuration. [[PR]](https://github.com/OffchainLabs/nitro/pull/4511)
+- Update the delayed msgs accumulation from merkle tree to a hash-chain based accumulation (Inbox-Outbox) and implement recording of their preimages and subsequently reading them using preimages. [[PR]](https://github.com/OffchainLabs/nitro/pull/4520)
+- Change hashing algorithm for address filtering feature to match the provider specs. [[PR]](https://github.com/OffchainLabs/nitro/pull/4586)
+- Log submitted express lane transactions like eth_sendRawTransaction. [[PR]](https://github.com/OffchainLabs/nitro/pull/4588)
+- Preallocate slice capacity across codebase to reduce memory allocations. [[PR]](https://github.com/OffchainLabs/nitro/pull/4605)
+- Update Stylus SDK to v0.10.3. [[PR]](https://github.com/OffchainLabs/nitro/pull/4621)
+- Replace InboxReader and InboxTracker implementation with Message extractor code. [[PR]](https://github.com/OffchainLabs/nitro/pull/4593)
+- Force net.Dialer to use "tcp4" instead of falling back to "tcp6". [[PR]](https://github.com/OffchainLabs/nitro/pull/4611)
+- Update Go to 1.25.9 in Dockerfile. [[PR]](https://github.com/OffchainLabs/nitro/pull/4625)
+- Pin the Dockerfile `emsdk` clone to the `3.1.46` commit while continuing to install and activate `3.1.7`.
+- ArbOS 60: Increase the default Stylus `MaxWasmSize` to 256 KB and default `MaxFragmentCount` to 4.
+- Make multivalue allowance dependent on Stylus version, instead of on ArbOS version.
+- `ValidationInputsAt` debug API now includes an `ExpectedEndState` field in the returned JSON, allowing the arbitrator and JIT provers to verify their computed end state when run from the command line with `--json-inputs`. [[PR]](https://github.com/OffchainLabs/nitro/pull/4563)
+- Nitro metrics for MEL and L3 system test. [[PR]](https://github.com/OffchainLabs/nitro/pull/4424)
+- Added support for id-set-filter for address filter reporting. [[PR]](https://github.com/OffchainLabs/nitro/pull/4594)
+- Linter for checking defer usage inside for loops. [[PR]](https://github.com/OffchainLabs/nitro/pull/4616)
+- Add `/liveness` and `/readiness` HTTP health check endpoints to the transaction-filterer service. Readiness reports 503 until the sequencer client is connected. [[PR]](https://github.com/OffchainLabs/nitro/pull/4495)
+- Prevent MEL node startup if have non-MEL entries in consensus database. [[PR]](https://github.com/OffchainLabs/nitro/pull/4449)
+- Add tip collection ArbOS state field and precompile to allow the chain owner to enable or disable collecting transaction tips. [[PR]](https://github.com/OffchainLabs/nitro/pull/4515)
+- ArbOS 60: `ArbOwner.setWasmActivationGas` / `ArbWasm.activationGas` — chain owners can set a constant gas charge burned before each Stylus contract activation (default 0). [[PR]](https://github.com/OffchainLabs/nitro/pull/4556)
+- Group rollback for cascading redeem filtering using deferred statedb clone. [[PR]](https://github.com/OffchainLabs/nitro/pull/4436)
+- Peform DNS lookups with IPv4 before IPv6. [[PR]](https://github.com/OffchainLabs/nitro/pull/4461)
+- messageSequencingMode messageRunModes. To be used when filtering transactions in the geth layer. [[PR]](https://github.com/OffchainLabs/nitro/pull/4377)
+- Fix Message Extraction function to handle cases when number of batch posting reports are not equal to the number of batches. [[PR]](https://github.com/OffchainLabs/nitro/pull/4464)
+- New dangerous parameters `--node.bold.dangerous.assume-valid` and `--node.bold.dangerous.assume-valid-hash` to have validator assume all messages up to given message have already been validated. [[PR]](https://github.com/OffchainLabs/nitro/pull/4369)
+- Filtered retryable submission redirect: when an ArbitrumSubmitRetryableTx is in the onchain filter, redirect beneficiary/feeRefundAddr and skip auto-redeem. [[PR]](https://github.com/OffchainLabs/nitro/pull/4404)
+- Add consensus v51.1 to dockerfile. [[PR]](https://github.com/OffchainLabs/nitro/pull/4422)
+- `cc_brotli` optional feature which when enabled compiles `brotli` automatically using Rust build scripts. [[PR]](https://github.com/OffchainLabs/nitro/pull/3473)
+- transaction-filterer command, responsible to receive a transaction that should be filtered, and adding that transaction to the ArbFilteredTransactionsManager precompile. [[PR]](https://github.com/OffchainLabs/nitro/pull/4227)
+- Increase Stylus smart contract size limit via merge-on-activate. [[PR]](https://github.com/OffchainLabs/nitro/pull/4193)
+- New `--node.batch-poster.compression-levels` configuration flag that accepts a JSON array of compression configurations based on batch backlog thresholds. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+- Support for defining compression level, recompression level, and backlog threshold combinations. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+- Validation rules to ensure compression levels don't increase with higher backlog thresholds. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+- Add address filter service for compliance chains (`addressfilter` package). This feature enables sequencers to block transactions involving filtered addresses by polling a hashed address list from S3. Key capabilities include:. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+    - S3-based hashed list synchronization with ETag change detection for efficient polling. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+    - Lock-free HashStore using atomic pointer swaps for zero-blocking reads during updates. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+    - Configurable LRU cache for high-performance address lookups (default: 10k entries). [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+    - Privacy-preserving design: addresses are never stored or transmitted in plaintext (SHA256 with salt). [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+    - Forward-compatible hash list JSON format with `hashing_scheme` metadata field. [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+    - Configurable S3 download settings (part size, concurrency, retries). [[PR]](https://github.com/OffchainLabs/nitro/pull/4234)
+- Added a new hook to `replay.wasm` to enable an action just before the first IO (wavmio) instruction. It is expected that every `wasm` execution environment will provide a module `hooks` with a method `beforeFirstIO`. JIT and Arbitrator provers have noop implementations. [[PR]](https://github.com/OffchainLabs/nitro/pull/4283)
+- Introduce event filter module for filtering transaction logs based on event selectors and topic-encoded addresses. [[PR]](https://github.com/OffchainLabs/nitro/pull/4271)
+- Execute onchain-filtered delayed transactions as no-ops: nonce is incremented, all gas is consumed, and a failed receipt is produced. The sender pays for the failed transaction as a penalty. [[PR]](https://github.com/OffchainLabs/nitro/pull/4247)
+- Added a test for batch resizing without fallback (TestBatchResizingWithoutFallback_MessageTooLarge) that validates ErrMessageTooLarge triggers batch rebuild while staying on the same DA provider. [[PR]](https://github.com/OffchainLabs/nitro/pull/4183)
+- Redis Pub/Sub–based executionSpawner implementation, including GetProof support, Redis-first interface selection, and the ability to run without any RPC dependency. [[PR]](https://github.com/OffchainLabs/nitro/pull/2354)
+- Multi-gas constraints to L2-pricing simulator. [[PR]](https://github.com/OffchainLabs/nitro/pull/4330)
+- L2 message accumulation in MEL and added MessageReader struct to extract recorded messages from preimages map. [[PR]](https://github.com/OffchainLabs/nitro/pull/4258)
+- Hashed address filter implementation for address filter interfaces with shared LRU caching. [[PR]](https://github.com/OffchainLabs/nitro/pull/4235)
+- sequencer metrics considering tx size: `arb/sequencer/block/txsize` and `arb/sequencer/transactions/txsize` histograms. [[PR]](https://github.com/OffchainLabs/nitro/pull/4317)
+- sequencer queue metrics: `arb/sequencer/queue/length`, `arb/sequencer/queue/histogram`, `arb/sequencer/waitfortx`. [[PR]](https://github.com/OffchainLabs/nitro/pull/4317)
+- sequencer block counter metrics: `arb/sequencer/block/gaslimited`, `arb/sequencer/block/datalimited`, `arb/sequencer/block/txexhausted`. [[PR]](https://github.com/OffchainLabs/nitro/pull/4317)
+- Add filteredFundsRecipient ArbOS state field and precompile for use on chains with transaction filternig. [[PR]](https://github.com/OffchainLabs/nitro/pull/4347)
+- arb_getL1Confirmations and arb_findBatchContainingBlock RPC APIs in Consensus side. [[PR]](https://github.com/OffchainLabs/nitro/pull/3985)
+- Sequencer calls transaction-filterer command if delayed transaction was filtered. [[PR]](https://github.com/OffchainLabs/nitro/pull/4294)
+- Config option genesis-json-file-directory which specifies the directory where genesis json files are located. [[PR]](https://github.com/OffchainLabs/nitro/pull/4291)
+- Adding/removing ChainOwner and NativeTokenOwner emits corresponding events. [[PR]](https://github.com/OffchainLabs/nitro/pull/4364)
+- Enable Execution and Consensus to connect to the other via json-rpc [[PR]](https://github.com/OffchainLabs/nitro/pull/3617)
+- Merge go-ethereum v1.16.7: [[PR]](https://github.com/OffchainLabs/nitro/pull/3965)
+- Add log for genesis assertion validation: [[PR]](https://github.com/OffchainLabs/nitro/pull/4042)
+- Precompiles for multi dimensional multi constraint pricer: [[PR]](https://github.com/OffchainLabs/nitro/pull/3995)
+- Add return error in case of missing code for SetProgramCached: [[PR]](https://github.com/OffchainLabs/nitro/pull/4077)
+- Guard zero batch count in inbox search and avoid validator underflow: [[PR]](https://github.com/OffchainLabs/nitro/pull/4028)
+- Custom DA Complete Fraud Proof Support: [[PR]](https://github.com/OffchainLabs/nitro/pull/3237)
+- Make uncompressed batch size limit configurable: [[PR]](https://github.com/OffchainLabs/nitro/pull/3947)
+- Add new option to allow BlocksReExecutor to commit state to disk: [[PR]](https://github.com/OffchainLabs/nitro/pull/4132)
+- Implement Execution/Consensus interface over RPC: [[PR]](https://github.com/OffchainLabs/nitro/pull/3617)
+- Add comment about blob decoding failure: [[PR]](https://github.com/OffchainLabs/nitro/pull/4182)
+- Add metric when validator stops validating because of low memory: [[PR]](https://github.com/OffchainLabs/nitro/pull/4196)
+- Add address-based transaction filtering for sequencer. [[PR]](https://github.com//nitro/pull/4157)
+- Add support for Geth state size tracking with a flag `--execution.caching.state-size-tracking`. [[PR]](https://github.com//nitro/pull/4210)
+- Added a note to the `--node.feed.output.signed` flag that this will use batch poster's wallet for signing. [[PR]](https://github.com//nitro/pull/4211)
+- Add GetMultiGasBaseFee precompile to retrieve fees per resource kind. [[PR]](https://github.com//nitro/pull/4188)
+- Add `execution.caching.trie-cap-batch-size` option that sets batch size in bytes used in the TrieDB Cap operation (0 = use geth default). [[PR]](https://github.com//nitro/pull/3221)
+- Add `execution.caching.trie-commit-batch-size` option that sets batch size in bytes used in the TrieDB Commit operation (0 = use geth default). [[PR]](https://github.com//nitro/pull/3221)
+- Add database batch size checks to prevent panic on pebble batch overflow. [[PR]](https://github.com//nitro/pull/3221)
+- new wasm import programPrepare. [[PR]](https://github.com//nitro/pull/4013)
+- new wasm import programRequiresPrepare. [[PR]](https://github.com//nitro/pull/4013)
+- Enable running JIT validation with native input mode. [[PR]](https://github.com//nitro/pull/4228)
+- Enabled consensus node to communicate with ExecutionRecorder over RPC. [[PR]](https://github.com//nitro/pull/4233)
+- Implement recording of txs for MEL validation. [[PR]](https://github.com//nitro/pull/4198)
+- Added a new endpoint to arb namespace called arb_getMinRequiredNitroVersion that returns minimum required version of the nitro node software. [[PR]](https://github.com//nitro/pull/3808)
+- Add new precompile ArbFilteredTransactionsManager to manage filtered transactions. [[PR]](https://github.com//nitro/pull/4174)
+- Add transaction filterers to ArbOwner to limit access to ArbFilteredTransactionsManager. [[PR]](https://github.com//nitro/pull/4174)
+- Limit ArbOwners' ability to create transaction filterers with TransactionFilteringFromTime. [[PR]](https://github.com//nitro/pull/4174)
+
+### Changed
+
+- Improved error messages and log clarity for better node operator UX
+- Update the L2 msgs accumulation from merkle tree to a hash-chain based accumulation and implement extracting of message from the accumulator using preimages. [[PR]](https://github.com/OffchainLabs/nitro/pull/4518)
+- Poll parent chain's `eth_config` RPC (EIP-7910) to dynamically fetch blob schedule configuration. [[PR]](https://github.com/OffchainLabs/nitro/pull/4511)
+- Update the delayed msgs accumulation from merkle tree to a hash-chain based accumulation (Inbox-Outbox) and implement recording of their preimages and subsequently reading them using preimages. [[PR]](https://github.com/OffchainLabs/nitro/pull/4520)
+- Change hashing algorithm for address filtering feature to match the provider specs. [[PR]](https://github.com/OffchainLabs/nitro/pull/4586)
+- Log submitted express lane transactions like eth_sendRawTransaction. [[PR]](https://github.com/OffchainLabs/nitro/pull/4588)
+- Preallocate slice capacity across codebase to reduce memory allocations. [[PR]](https://github.com/OffchainLabs/nitro/pull/4605)
+- Update Stylus SDK to v0.10.3. [[PR]](https://github.com/OffchainLabs/nitro/pull/4621)
+- Replace InboxReader and InboxTracker implementation with Message extractor code. [[PR]](https://github.com/OffchainLabs/nitro/pull/4593)
+- Force net.Dialer to use "tcp4" instead of falling back to "tcp6". [[PR]](https://github.com/OffchainLabs/nitro/pull/4611)
+- Update Go to 1.25.9 in Dockerfile. [[PR]](https://github.com/OffchainLabs/nitro/pull/4625)
+- Disable cranelift fallback for non-onchain execution modes. [[PR]](https://github.com/OffchainLabs/nitro/pull/4541)
+- Add recovery to all stopWaiter threads. [[PR]](https://github.com/OffchainLabs/nitro/pull/4547)
+- Stylus: reject activation of wasm programs using the multi-value extension (functions with multiple return values, or block/loop/if with parameters) starting from ArbOS version 60. [[PR]](https://github.com/OffchainLabs/nitro/pull/4554)
+- Upgrade to wasmer v7.1.0. [[PR]](https://github.com/OffchainLabs/nitro/pull/4569)
+- Added consensus v60-rc.1 to Dockerfile. [[PR]](https://github.com/OffchainLabs/nitro/pull/4574)
+- Update Go to 1.25.8 in Dockerfile. [[PR]](https://github.com/OffchainLabs/nitro/pull/4496)
+- Preflight the worst-case fragment read gas during multi-fragment Stylus activation, then charge the actual EXTCODECOPY-style cost after the fragment code is read. [[PR]](https://github.com/OffchainLabs/nitro/pull/4489)
+- Enable http communication between block validator and validation server. [[PR]](https://github.com/OffchainLabs/nitro/pull/4499)
+- Split `ResourceKindStorageAccess` into `ResourceKindStorageAccessRead` and `ResourceKindStorageAccessWrite` for finer-grained multi-dimensional gas metering. [[PR]](https://github.com/OffchainLabs/nitro/pull/4504)
+- Upgrade to wasmer7. [[PR]](https://github.com/OffchainLabs/nitro/pull/4332)
+- Make `PruneExecutionDB` only depend on `executionDB` by removing `consensusDB` dependency. [[PR]](https://github.com/OffchainLabs/nitro/pull/4217)
+- Part 1 of improving the MEL runner with latest, tested implementation. [[PR]](https://github.com/OffchainLabs/nitro/pull/4398)
+- Use defer to release createBlocksMutex in sequencerWrapper to prevent deadlock on panic. [[PR]](https://github.com/OffchainLabs/nitro/pull/4431)
+- Fix opening classic-msg database. [[PR]](https://github.com/OffchainLabs/nitro/pull/4065)
+- Fix system test triggered panic in `updateFilterMapsHeads`. [[PR]](https://github.com/OffchainLabs/nitro/pull/4399)
+- Fix address filter S3 syncer failing to parse hash list JSON when salt or hash values use `0x`/`0X` hex prefix. Go's `encoding/hex.DecodeString` does not handle the prefix, so it is now stripped before decoding. [[PR]](https://github.com/OffchainLabs/nitro/pull/4435)
+- Fix `debug_executionWitness` endpoint. [[PR]](https://github.com/OffchainLabs/nitro/pull/4401)
+- Improve block validator error message to suggest enabling staker in watchtower mode when wasmModuleRoot is not set from chain. [[PR]](https://github.com/OffchainLabs/nitro/pull/4451)
+- If batchFetcher returns error use existing LegacyBatchGasCost value. [[PR]](https://github.com/OffchainLabs/nitro/pull/4448)
+- Fix `rlp: expected List` error when fetching transaction receipts for blocks with Arbitrum legacy receipt encoding. [[PR]](https://github.com/OffchainLabs/nitro/pull/4469)
+- Block validator no longer crashes on timeout errors during validation. Timeout errors are retried separately from other validation failures, up to a configurable limit. [[PR]](https://github.com/OffchainLabs/nitro/pull/4455)
+- Replace static batch poster compression configuration with dynamic, backlog-based compression level system. [[PR]](https://github.com/OffchainLabs/nitro/pull/4145)
+- Generate `forward_stub.wasm` at compile time using a `build.rs` script. Enables using `prover` as a cargo dependency. [[PR]](https://github.com/OffchainLabs/nitro/pull/3447)
+- improve forwarding transaction log in case of error. [[PR]](https://github.com/OffchainLabs/nitro/pull/4288)
+- Renamed `arbkeccak` wasm module to `arbcrypto`. [[PR]](https://github.com/OffchainLabs/nitro/pull/4290)
+- For wasm compilation target, EC recovery is now expected to be provided by the external `arbcrypto` module. For JIT and arbitrator provers we inject Rust-based implementation. [[PR]](https://github.com/OffchainLabs/nitro/pull/4290)
+- genesis-generator will now read chain config and init message data directly from genesis.json. [[PR]](https://github.com/OffchainLabs/nitro/pull/4292)
+- update ProgramPrepare to accept wasm and wasm_size. [[PR]](https://github.com/OffchainLabs/nitro/pull/4284)
+- remove unecessary statedb, addressForLogging, codePtr, codeSize, time, program, runCtxPtr params from ProgramPrepare. [[PR]](https://github.com/OffchainLabs/nitro/pull/4284)
+- Refactor openInitializeChainDb for Execution/Consensus split. [[PR]](https://github.com/OffchainLabs/nitro/pull/4169)
+- Create new config and init package to expose and organize init and config nitro functionality. [[PR]](https://github.com/OffchainLabs/nitro/pull/4169)
+- Nitro initialization uses the serialized chain config from genesis (instead of the deprecated `Config` field). [[PR]](https://github.com/OffchainLabs/nitro/pull/4313)
+- Arbos storage for multi dimensional constraints: [[PR]](https://github.com/OffchainLabs/nitro/pull/3954)
+- Arbitrator workspace enhancements: [[PR]](https://github.com/OffchainLabs/nitro/pull/4010)
+- Only sign important fields in feed: [[PR]](https://github.com/OffchainLabs/nitro/pull/3996)
+- Post report-only batch after MaxEmptyBatchDelay: [[PR]](https://github.com/OffchainLabs/nitro/pull/3948)
+- Remove bold/util/StopWaiter use util/StopWaiter instead: [[PR]](https://github.com/OffchainLabs/nitro/pull/4044)
+- Enhance state management in StopWaiterSafe: [[PR]](https://github.com/OffchainLabs/nitro/pull/4039)
+- Log critical error when fails to flush batch in setHead: [[PR]](https://github.com/OffchainLabs/nitro/pull/4052)
+- Broadcaster refactor: [[PR]](https://github.com/OffchainLabs/nitro/pull/3982)
+- Use stateless keccak where possible: [[PR]](https://github.com/OffchainLabs/nitro/pull/4025)
+- Optimize ConcatByteSlices to avoid repeated reallocations: [[PR]](https://github.com/OffchainLabs/nitro/pull/4055)
+- Centralize validator worker throttling in BlockValidator #NIT-3339: [[PR]](https://github.com/OffchainLabs/nitro/pull/4032)
+- Do not require BatchMetadata for reading DelayedInbox: [[PR]](https://github.com/OffchainLabs/nitro/pull/4106)
+- redis pubsub: add retries limit and option to disable retries: [[PR]](https://github.com/OffchainLabs/nitro/pull/2803)
+- Extract saturating arithmetics: [[PR]](https://github.com/OffchainLabs/nitro/pull/4126)
+- Add MaxTxSize check to ValidateExpressLaneTx(): [[PR]](https://github.com/OffchainLabs/nitro/pull/4105)
+- Adjust pricing formula with weight normalisation by max weight: [[PR]](https://github.com/OffchainLabs/nitro/pull/4125)
+- Make bids receiver buffer size configurable: [[PR]](https://github.com/OffchainLabs/nitro/pull/4117)
+- Improve utility for ensuring batch posting and processing: [[PR]](https://github.com/OffchainLabs/nitro/pull/4144)
+- Issue refunds based on multi-dimensinal base fee: [[PR]](https://github.com/OffchainLabs/nitro/pull/4082)
+- Rename bold packages: [[PR]](https://github.com/OffchainLabs/nitro/pull/4146)
+- Add isActiveSequencer to ExpressLaneTracker log messages: [[PR]](https://github.com/OffchainLabs/nitro/pull/4131)
+- Remove `ExecutionRecorder.MarkValid` and rely on `ExecutionClient.SetFinalityData`: [[PR]](https://github.com/OffchainLabs/nitro/pull/4154)
+- Unify keccaking: [[PR]](https://github.com/OffchainLabs/nitro/pull/4128)
+- Rename database variable names: [[PR]](https://github.com/OffchainLabs/nitro/pull/4155)
+- Multiple DA provider infrastructure: [[PR]](https://github.com/OffchainLabs/nitro/pull/3949)
+- Rename DAS to AnyTrust: [[PR]](https://github.com/OffchainLabs/nitro/pull/4142)
+- For wasm compilation target, keccak256 hashing is now expected to be provided by an external module. For JIT and arbitrator provers we inject Rust-based implementation. [[PR]](https://github.com//nitro/pull/4001)
+- Renamed execution subpackages and RPC structs, removing redundancy in names and making them more idiomatic. [[PR]](https://github.com//nitro/pull/4206)
+- Reorganize and refactor JIT validator CLI configuration. [[PR]](https://github.com//nitro/pull/4203)
+- Update `contracts-legacy` submodule pin to `v2-main` branch. [[PR]](https://github.com//nitro/pull/4215)
+- Rename database variable names [[PR]](https://github.com/OffchainLabs/nitro/pull/4176)
+- Move whole Rust codebase from `arbitrator/` to `crates/` directory. Move workspace files to the root. [[PR]](https://github.com//nitro/pull/4184)
+- Align the `execution.ExecutionRecorder` interface API with the other execution interfaces. Makes it more suitable for RPC calling. [[PR]](https://github.com//nitro/pull/4186)
+- Fix fifo lock flakey tests and implementation for bold. [[PR]](https://github.com//nitro/pull/4238)
+- Merged ethereum/go-ethereum v1.16.8. [[PR]](https://github.com//nitro/pull/4254)
+- Treat `finality msg count` as an intermittent issue. Only if it doesn't resolve itself within a short period of time, it will be logged as error. [[PR]](https://github.com//nitro/pull/4256)
+- Changed state-history default to zero for path archive. [[PR]](https://github.com//nitro/pull/4197)
+- Make the `--cranelift` flag turned on by default for JIT validator. [[PR]](https://github.com//nitro/pull/4228)
+- Remove manual gas math from ArbRetryableTx.Redeem by using static L2 pricing backlog update cost. [[PR]](https://github.com//nitro/pull/4101)
+
+### Fixed
+
+- Fix ECRECOVER divergence between native execution and the WASM prover
+- Do not require `init.empty=false` when `init.genesis-json-file-directory` provides a custom genesis file
+- Execution RPC client correctly handles ResultNotFound error. [[PR]](https://github.com/OffchainLabs/nitro/pull/4580)
+- Add some micro-optimization to hashing of address filter implementation. [[PR]](https://github.com/OffchainLabs/nitro/pull/4600)
+- Fix deadlock in `StopWaiterSafe.stopAndWaitImpl` by releasing `RLock` before blocking on `waitChan`. [[PR]](https://github.com/OffchainLabs/nitro/pull/4604)
+- Fix Wasmer stack pool reusing stale smaller stacks after a stack size change. [[PR]](https://github.com/OffchainLabs/nitro/pull/4538)
+- Automatically detect native stack overflow during Stylus execution and recover. [[PR]](https://github.com/OffchainLabs/nitro/pull/4538)
+- BoLD autodeposit no longer attempts to wrap ETH via WETH deposit on non-WETH staking tokens with insufficient balance.
+- Fix bug in L2 message extraction from batch segments and enable previously skipped system_tests.
+- Fixed assertion posting heuristics to make meaningful advancements to the assertion chain.
+- Fix extraPostTxFilter hook call to work with statedb rollback.
+- Shard pathdb and pathdb-MEL CI jobs into A/B halves and run them with `--reduce-parallelism` to eliminate timeout-driven flakes under runner contention.
+- propagate Stylus ArbNodeConfig into ephemeral state databases used by `debug_trace*` RPCs so `MaxStylusOpenPages` is enforced on traced calls.
+- ArbOS 60: retryables extended via `Keepalive` past their original 7-day timeout are now reachable throughout their extended lifetime.
+- Wasmer now enforces the Stylus heap bound as a hard memory maximum, preventing `memory.grow(1<<16)` from succeeding in the JIT when it would fail in the prover.
+- Make make init-submodules work zero-config on SSH-agent-forwarded dev boxes.
+- Fix ArbitrumUnsignedTx marshaling and unmarshaling with maxFeePerGas.
+- Execution RPC client correctly handles ResultNotFound error. [[PR]](https://github.com/OffchainLabs/nitro/pull/4580)
+- Fixed flakiness in `TestRetryableFilteringStylusSandwichRollback`. [[PR]](https://github.com/OffchainLabs/nitro/pull/4599)
+- Add some micro-optimization to hashing of address filter implementation. [[PR]](https://github.com/OffchainLabs/nitro/pull/4600)
+- Fix deadlock in `StopWaiterSafe.stopAndWaitImpl` by releasing `RLock` before blocking on `waitChan`. [[PR]](https://github.com/OffchainLabs/nitro/pull/4604)
+- Re-enable erc20 test. [[PR]](https://github.com/OffchainLabs/nitro/pull/4621)
+- Fix Wasmer stack pool reusing stale smaller stacks after a stack size change. [[PR]](https://github.com/OffchainLabs/nitro/pull/4538)
+- Automatically detect native stack overflow during Stylus execution and recover. [[PR]](https://github.com/OffchainLabs/nitro/pull/4538)
+- Fix nil-dereference and log format in `cmd/nitro/nitro.go` when machine locator creation fails; return early instead of falling through to dereference nil locator. [[PR]](https://github.com/OffchainLabs/nitro/pull/4530)
+- Part 3 of integrating MEL into master. [[PR]](https://github.com/OffchainLabs/nitro/pull/4421)
+- Re-enable download of previous consensus machine versions (v50, v51, v51.1, v60-alpha.1) in Docker build. [[PR]](https://github.com/OffchainLabs/nitro/pull/4549)
+- Harden blocks reexecutor with panic recovery for concurrent trie access races. [[PR]](https://github.com/OffchainLabs/nitro/pull/4531)
+- Do not access state in CollectTips for ArbOS < 60. [[PR]](https://github.com/OffchainLabs/nitro/pull/4558)
+- Part 2 of integrating MEL into master. [[PR]](https://github.com/OffchainLabs/nitro/pull/4402)
+- Once timeout attempts are exhausted, treat it as any other, possibly fatal failure. [[PR]](https://github.com/OffchainLabs/nitro/pull/4478)
+- Use proper comparison for attempts. [[PR]](https://github.com/OffchainLabs/nitro/pull/4478)
+- Fix bold StopWaiter usage: start child structs on their own StopWaiters instead of the parent's. Fix StopAndWait ordering. [[PR]](https://github.com/OffchainLabs/nitro/pull/4487)
+- Fix multi-gas refunds in retryables (ArbOS60). [[PR]](https://github.com/OffchainLabs/nitro/pull/4498)
+- Fix StopWaiter lifecycle ordering: stop children before parent in StopAndWait, and pass managed context to children in Start. [[PR]](https://github.com/OffchainLabs/nitro/pull/4510)
+- Fix MEL feature flag bugs: nil message dereference in delayed sequencer, incorrect waitingForFinalizedBlock domain, and missing BatchPoster+MEL config validation. [[PR]](https://github.com/OffchainLabs/nitro/pull/4485)
+- Fix ValidationSpawnerRetryWrapper lifecycle: reuse one wrapper per module root instead of creating and leaking one per validation. [[PR]](https://github.com/OffchainLabs/nitro/pull/4514)
+- Fix BroadcastClients launching coordination goroutine on child Router's StopWaiter instead of its own. [[PR]](https://github.com/OffchainLabs/nitro/pull/4514)
+- Fix ValidationServer and ExecutionSpawner missing StopAndWait for their children. [[PR]](https://github.com/OffchainLabs/nitro/pull/4514)
+- Handle too-short AnyTrust certificate data as empty batches instead of crashing. [[PR]](https://github.com/OffchainLabs/nitro/pull/4517)
+- Fix expose-multigas feature when using a live tracer. [[PR]](https://github.com/OffchainLabs/nitro/pull/4383)
+- Gracefully handle missing sequencerClient in TransactionFilterer. [[PR]](https://github.com/OffchainLabs/nitro/pull/4397)
+- Fix filtered `ArbitrumDepositTx` (L1-to-L2 ETH deposits) permanently stalling the delayed sequencer. [[PR]](https://github.com/OffchainLabs/nitro/pull/4367)
+- Version-gate FilteredTransactionsState so it is not opened on pre-v60 blocks. [[PR]](https://github.com/OffchainLabs/nitro/pull/4407)
+- Fixes bold next batch index and message count computation to cap based on relative comparisons. [[PR]](https://github.com/OffchainLabs/nitro/pull/4279)
+- Fix typed nil ExecutionSequencer in CreateConsensusNode causing crash in RPC client mode. [[PR]](https://github.com/OffchainLabs/nitro/pull/4299)
+- Fix address filter bypass for aliased addressed, unsigned delayed messages (L1-to-L2). [[PR]](https://github.com/OffchainLabs/nitro/pull/4314)
+- Fix calculation in the expected surplus in the sequencer metrics. [[PR]](https://github.com/OffchainLabs/nitro/pull/4038)
+
+### Removed
+
+- Remove aborted snap sync code. [[PR]](https://github.com/OffchainLabs/nitro/pull/4419)
+- remove gas dimension tracers, system tests, and mock contracts. Multigas is now in the stf. [[PR]](https://github.com//nitro/pull/4220)
+- Remove bold/util/backend.go: [[PR]](https://github.com/OffchainLabs/nitro/pull/4134)
+
+### Internal
+
+- Refactor filtering report test infrastructure: rename `CheckReportBlockNumberAndParentBlockHash` to `CheckCommonReportFields` with additional common assertions and update `SetupFilteringReport` to return the RPC stack.
+- Introduce rustfmt.toml. [[PR]](https://github.com/OffchainLabs/nitro/pull/4579)
+- Extract C-FFI related code from prover crate to prover-ffi. [[PR]](https://github.com/OffchainLabs/nitro/pull/4570)
+- Tx pre-checker uses gas estimation dry-run to detect filtered addresses before forwarding. [[PR]](https://github.com/OffchainLabs/nitro/pull/4583)
+- Replace TransactionFiltererAPI mutex with channel-based sequential processing and simplify Filter to not return a transaction hash. [[PR]](https://github.com/OffchainLabs/nitro/pull/4428)
+- Nitro metrics for MEL and L3 system test. [[PR]](https://github.com/OffchainLabs/nitro/pull/4424)
+- Added support for id-set-filter for address filter reporting. [[PR]](https://github.com/OffchainLabs/nitro/pull/4594)
+- Linter for checking defer usage inside for loops. [[PR]](https://github.com/OffchainLabs/nitro/pull/4616)
+- Enable transitioning of node to using MEL when previously ran with Inbox Reader-Tracker.
+- Update TouchAddress to accept FilteredAddressRecord with filtering reason instead of just an address, and update IsFiltered to return filtered address records for use in transaction filtering reports.
+- Introduce rustfmt.toml. [[PR]](https://github.com/OffchainLabs/nitro/pull/4579)
+- Extract C-FFI related code from prover crate to prover-ffi. [[PR]](https://github.com/OffchainLabs/nitro/pull/4570)
+- Added additional tests for stylus contracts redeems. [[PR]](https://github.com/OffchainLabs/nitro/pull/4564)
+- Tx pre-checker uses gas estimation dry-run to detect filtered addresses before forwarding. [[PR]](https://github.com/OffchainLabs/nitro/pull/4583)
+- Replace TransactionFiltererAPI mutex with channel-based sequential processing and simplify Filter to not return a transaction hash. [[PR]](https://github.com/OffchainLabs/nitro/pull/4428)
+- Introduce `ValidationInput` intermediate data structure with optional rkyv serialization in the validation crate. [[PR]](https://github.com/OffchainLabs/nitro/pull/4521)
+- Minor refactor in JIT, prover and validator crates. [[PR]](https://github.com/OffchainLabs/nitro/pull/4521)
+- Moved float-related utilities from arbmath to a new package floatmath. [[PR]](https://github.com/OffchainLabs/nitro/pull/4561)
+- Add TrackChild/StartAndTrackChild to StopWaiter for automatic LIFO child lifecycle management. [[PR]](https://github.com/OffchainLabs/nitro/pull/4536)
+- ArbGasInfo.GetMultiGasPricingConstraints now returns resources in deterministic order. [[PR]](https://github.com/OffchainLabs/nitro/pull/4479)
+- Move exponent validation in ArbOwner.SetMultiGasPricingConstraints outside the per-constraint loop. [[PR]](https://github.com/OffchainLabs/nitro/pull/4482)
+- Add JWT authentication support to the Rust validation server. [[PR]](https://github.com/OffchainLabs/nitro/pull/4500)
+- Move express lane service and tracker from `execution/gethexec` to the `timeboost` package. [[PR]](https://github.com/OffchainLabs/nitro/pull/4484)
+- Block sequencing until address filter rules are loaded. [[PR]](https://github.com/OffchainLabs/nitro/pull/4488)
+- Make Validator request match clients request format. [[PR]](https://github.com/OffchainLabs/nitro/pull/4414)
+- Cache precompiled wasm modules for repeated JIT validation. [[PR]](https://github.com/OffchainLabs/nitro/pull/4429)
+- S3Syncer's context moved out from new to Initialize. [[PR]](https://github.com/OffchainLabs/nitro/pull/4409)
+- `Bytes32`'s `Debug` and `Display` is prefixed with 0x. [[PR]](https://github.com/OffchainLabs/nitro/pull/4439)
+- Allow validator's JitMachine to find jit path. [[PR]](https://github.com/OffchainLabs/nitro/pull/4415)
+- Migrate Rust validation server to JSON RPC to match Go client communication. [[PR]](https://github.com/OffchainLabs/nitro/pull/4450)
+- Move wavmio logic from JIT crate to caller-env (to be reused soon by SP1 validator). [[PR]](https://github.com/OffchainLabs/nitro/pull/4472)
+- Make `ValidationInput.max_user_wasm_size` field non-mandatory. [[PR]](https://github.com/OffchainLabs/nitro/pull/4476)
+- Introduce MachineLocator for Validator. [[PR]](https://github.com/OffchainLabs/nitro/pull/4350)
+- Fix machine locator tests. [[PR]](https://github.com/OffchainLabs/nitro/pull/4391)
+- Add support for consensus v60-alpha.1. [[PR]](https://github.com/OffchainLabs/nitro/pull/4410)
+- Implement capacity endpoint for Rust Validator. [[PR]](https://github.com/OffchainLabs/nitro/pull/4262)
+- Changed the max stylus contract fragments from uint16 to uint8 in ArbOwner and ArbOwnerPublic precompiles to not waste storage space. [[PR]](https://github.com/OffchainLabs/nitro/pull/4285)
+- Add continuous mode to JIT validator. [[PR]](https://github.com/OffchainLabs/nitro/pull/4269)
+- Introduce `JitMachine` (equivalent to Go counterpart `JitMachine`). [[PR]](https://github.com/OffchainLabs/nitro/pull/4269)
+- Introduce graceful shutdown through signals. [[PR]](https://github.com/OffchainLabs/nitro/pull/4269)
+- Move the server side of the validation communication protocol from `jit` to `validation` crate. [[PR]](https://github.com/OffchainLabs/nitro/pull/4280)
+- Add client side implementation. Add tests. [[PR]](https://github.com/OffchainLabs/nitro/pull/4280)
+- Merge wasm-libraries workspace with the main one. [[PR]](https://github.com/OffchainLabs/nitro/pull/4298)
+- Add support for multiple module roots for Validator. [[PR]](https://github.com/OffchainLabs/nitro/pull/4310)
+- Fix Validator continuous mode to run jit binary from inside tokio runtime. [[PR]](https://github.com/OffchainLabs/nitro/pull/4310)
+- Add BurnMultiGas to Burner interface. [[PR]](https://github.com/OffchainLabs/nitro/pull/4312)
+- Fix checking machine status in the Rust validation. [[PR]](https://github.com/OffchainLabs/nitro/pull/4344)
+- Run the continuous mode unit test in CI. [[PR]](https://github.com/OffchainLabs/nitro/pull/4344)
+- Add benchmarks comparing l2-pricing models. [[PR]](https://github.com/OffchainLabs/nitro/pull/4340)
+- Clarify Redis DAS signing key config: [[PR]](https://github.com/OffchainLabs/nitro/pull/3990)
+- Enhance data poster internal state handling: [[PR]](https://github.com/OffchainLabs/nitro/pull/3981)
+- Align ArbOwner precompile docs: [[PR]](https://github.com/OffchainLabs/nitro/pull/4000)
+- Update GenesisBlockNum to first nitro block in chain info: [[PR]](https://github.com/OffchainLabs/nitro/pull/4041)
+- Do not set init.empty to true when init.genesis-json-file is set: [[PR]](https://github.com/OffchainLabs/nitro/pull/4051)
+- Show correct value in redis database number error: [[PR]](https://github.com/OffchainLabs/nitro/pull/4067)
+- Fix timer leak in redislock refresh goroutine: [[PR]](https://github.com/OffchainLabs/nitro/pull/4060)
+- Use RWLock in StopWaiter: [[PR]](https://github.com/OffchainLabs/nitro/pull/4033)
+- Fix RecentWasms cache bug by using pointers in methods: [[PR]](https://github.com/OffchainLabs/nitro/pull/4035)
+- Fix maintenance ticker leak: [[PR]](https://github.com/OffchainLabs/nitro/pull/4102)
+- Prevent unintended mutation of latestHeader.Number [[PR]](https://github.com/OffchainLabs/nitro/pull/4116)
+- Fix invalid DA cert branch in inbox: [[PR]](https://github.com/OffchainLabs/nitro/pull/4149)
+- Solve reexecutor panic if header unavailable: [[PR]](https://github.com/OffchainLabs/nitro/pull/4178)
+- Prevent unintended mutation of latestHeader.Number in ParentChainIsUsingEIP7623: [[PR]](https://github.com/OffchainLabs/nitro/pull/4116)
+- Disable chunked-store in datool dumpkeyset [[PR]](https://github.com/OffchainLabs/nitro/pull/4176)
+- Add sequencer message length check in for the `daprovider.Reader` implementations. [[PR]](https://github.com//nitro/pull/4214)
+- Fix nil pointer panic in `auctioneer_submitBid` RPC method when receiving malformed bid data. [[PR]](https://github.com//nitro/pull/4232)
+- Fixed ValidateCertificate proof generation to panic on preimageType overflow (> 255) instead of silently using a fallback value, aligning with the Solidity one-step prover which reverts for this case. [[PR]](https://github.com//nitro/pull/4187)
+- Update implementation of receipts and txs fetching in mel-replay. [[PR]](https://github.com//nitro/pull/4199)
+- Added testing for recording and fetching of logs and txs needed for MEL validation. [[PR]](https://github.com//nitro/pull/4199)
+- Fixed batch poster on L3s not waiting for transaction receipt before posting next batch, causing duplicate batch attempts and spurious error logs. [[PR]](https://github.com/OffchainLabs/nitro/pull/4273)
+- Implement delayed message accumulation in native mode: [[PR]](https://github.com/OffchainLabs/nitro/pull/3389)
+- Update melextraction package to use logs instead of receipts and implement logs and headers fetcher: [[PR]](https://github.com/OffchainLabs/nitro/pull/4063)
+- Implement preimage recorder for `DelayedMessageDatabase` interface: [[PR]](https://github.com/OffchainLabs/nitro/pull/4119)
+- Implement recording of preimages related to sequencer batches (DA providers): [[PR]](https://github.com/OffchainLabs/nitro/pull/4133)
+- Add new boolean option to `BlocksReExecutor` called `CommitStateToDisk` that will allow `BlocksReExecutor.Blocks` range to not only re-executes blocks but it will also commit their state to triedb on disk. [[PR]](https://github.com/OffchainLabs/nitro/pull/4132)

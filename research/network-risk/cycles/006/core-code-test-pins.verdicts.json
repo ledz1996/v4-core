@@ -1,0 +1,104 @@
+{
+ "unit": "core-code-test-pins",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "The finding states no chain fact and says so in its difference field. Its claims concern this repository, the Foundry test runner and the behaviour of the contracts deployed today, and I checked each. Repository. A search of the checkout finds the name CurrencyNotSettled at src/PoolManager.sol:112, src/test/ProxyPoolManager.sol:66 and src/interfaces/IPoolManager.sol:18 and in no file under test/. 187 lines under test/ and src/test mention expectRevert and 38 of them are bare calls. Of the bare ones only test/PoolManager.t.sol:920 reaches an unlock, and there the take of 100 units from a fresh manager fails in the token transfer before the callback returns (src/test/PoolTakeTest.sol:44, src/types/Currency.sol:82-86). The five bare ones in test/utils/SwapHelper.t.sol (lines 70, 113, 119, 125, 131) stand in front of router calls and fail earlier, in require statements of the helper itself (test/utils/Deployers.sol:220 and 266). The others sit in library, type and mock token tests. No named expectation is CurrencyNotSettled. So no test fails when line 112 is removed, as the finding says. The CI runs forge test --isolate (.github/workflows/tests-pr.yml:37, tests-merge.yml:31) with Foundry v1.3.6 (tests-pr.yml:23-25), and the justfile does the same (justfile:8). Foundry. I fetched crates/cli/src/opts/evm.rs from the master branch: lines 146 to 151 say that in isolation mode all top level calls are executed as a separate transaction in a separate EVM context, which is the sentence the finding quotes. The same file now has a no_isolate option at lines 153 to 156, and crates/config/src/lib.rs line 3301 sets isolate: true in the default configuration. Tests under isolation. The repository's own noIsolate modifier (test/utils/Deployers.sol:78-85) shows the authors rely on that rule: it re-enters the test through one call so that the body runs as one transaction. Three tests use it (test/PoolManager.t.sol:1001 and 1010, test/Sync.t.sol:36). None of them settles, and none makes two unlocks. Every router and helper makes one unlock per external call (src/test/ActionsRouter.sol:92, PoolSwapTest.sol:41, PoolModifyLiquidityTest.sol:49, PoolDonateTest.sol:33, PoolTakeTest.sol:25, PoolClaimsTest.sol:27 and 32), and the nested unlock tests expect AlreadyUnlocked inside the callback (src/test/PoolNestedActionsTest.sol:60 and 113). I found no assertion that the manager is locked after unlock returns. test_settle_twice_doesNotApplyDelta (test/Sync.t.sol:341-374) takes the credited amount between its two settles, so the balance equals the stored reserves again and the second settle credits zero with or without the reset at line 361. Its last assertion reads the delta of address(0). In a run where setUp is one transaction, test/utils/Deployers.sol:203-206 adds token liquidity and then native liquidity with value, which would hit AlreadyUnlocked without line 113 and NonzeroNativeValue without line 361. Under isolation these are separate transactions. The smaller items also hold: locked tests exist for take, settle, mint and burn only (test/PoolManager.t.sol:962-999), SETTLE_FOR appears once and inside an unlock (test/Sync.t.sol:151), clear is called only through ActionsRouter inside an unlock, SafeCastOverflow is expected only in library tests, and the allowance check of _burnFrom is tested on the mock (test/ERC6909Claims.t.sol:15-48). Deployed contracts. I reran the researcher's three probe sequences with my own driver and decoding on all 21 RPC endpoints of state/networks.json on 2026-11-23 (eth_call, forwarder stub placed by state override, no transaction). Every network gave the same words: a callback that only mints ends in 0x5212cba1 (CurrencyNotSettled); mint then burn by the stub succeeds; a burn of claims minted to a third address gives the unapproved stub no credit; take, settleFor and clear from an outside sender revert with 0x54e3ca0d (ManagerLocked); inside the callback the lock slot reads 1, the currency slot reads the stub address after sync and 0 after settle; after unlock returns in the same call the lock slot reads 0 and take reverts with ManagerLocked; mint, take and burn of 2^127 revert with 0x93dafdf1; clear of 1 on a zero delta reverts with 0xbda73abf; a zero take of an address without code succeeds; sync of that address reverts without data; a nested unlock reverts with 0x5090d6c6. Blocks: Ethereum 26478528 and 26478550, Unichain 64696932 and 64697193, Celo 83544535, X Layer 76676261, Tempo 50444717, Arc 32750975, HyperEVM 52041427, and the latest block of each other network. On Arbitrum One two calls of the first run were answered with unsupported block number and gave the same words on the rerun at block 526836202. I recomputed the eight error selectors and the four slot constants with a Keccak routine of my own. Not confirmed: nothing was compiled, so no test was run, and the statement that the deployed PoolManagers are other bytecode than a build of this checkout was tested by nobody. It rests on the brief, which says this build is still to be deployed.",
+   "codeCheck": "I read the cited lines and the whole of src/PoolManager.sol, src/types/Currency.sol, src/ProtocolFees.sol, src/ERC6909.sol, src/ERC6909Claims.sol, src/libraries/Hooks.sol, Lock.sol, NonzeroDeltaCount.sol, CurrencyReserves.sol, CurrencyDelta.sol, SafeCast.sol, CustomRevert.sol and ParseBytes.sol. The three statements the finding centres on are in place. src/PoolManager.sol:112 reverts with CurrencyNotSettled when NonzeroDeltaCount.read() is not zero, after the callback at line 110 and before Lock.lock() at line 113. The counter is maintained only by _accountDelta (lines 368-378): a zero delta returns early, a result of zero decrements, and a start from zero increments. Lock.lock writes 0 to the slot that the modifier at lines 96-99 and the check at line 105 read (src/libraries/Lock.sol:10-27). In _settle the token branch rejects msg.value at line 356, reads the reserves slot and the live balance, subtracts with checked arithmetic at line 360 and calls resetCurrency at line 361, which writes 0 to the currency slot only (src/libraries/CurrencyReserves.sol:21-25). The credit at line 364 goes to the recipient in the synced currency through toInt128, which rejects 2^127 and above (src/libraries/SafeCast.sol:56-59). I looked for guards the finding might have missed and found none that changes its statements. settleFor and clear carry onlyWhenUnlocked (lines 305, 310). take, mint and clear negate a value that toInt128 has limited and book it to msg.sender (lines 294, 317, 326). The unchecked blocks cover the negation only, since called functions keep their own checked arithmetic. burn credits msg.sender and burns from the named account through _burnFrom, which lowers a finite allowance unless the caller is the holder or an operator (src/ERC6909Claims.sol:13-22). collectProtocolFees checks the caller and the synced token and not the lock (src/ProtocolFees.sol:48-52). The token transfer accepts empty return data or a 32 byte word equal to 1 and has no code check (src/types/Currency.sol:64-74), and the native payout forwards all gas (line 48). callHook rejects an answer shorter than 32 bytes or with another first word, and a hook that returns a delta must answer with exactly 64 bytes (src/libraries/Hooks.sol:152, 166). The four slot constants equal keccak256 of Unlocked, NonzeroDeltaCount, ReservesOf and Currency minus one, all four differ, every address mask in these files has 40 hex digits, and all four libraries use TSTORE and TLOAD only. Each statement does what its comment and error name say. I agree with the finding that the source gives an ordinary account no path here and that the observation is about how far the tests can vouch for a build. The finding's own open point on line 375 stays open: in the routers, the nested executor and the hook doubles I read, every delta returns to zero in one step, so I also found no test for a move between two nonzero values.",
+   "corrections": "actor: governance. The finding names no step that an ordinary account can take against the source as written. The loss it describes needs a build that lacks one of the statements, and only the party that compiles and deploys the PoolManager can bring that about. It is a confirmed info item and it is outside the unprivileged scope. Second, the wording on --isolate is dated. On the Foundry master branch the default configuration has isolate: true and a --no-isolate flag exists, so with a current forge a plain forge test also runs every top level call as its own transaction. Lines 113 and 361 are then pinned by no test in any default run, and the setup helper pins them only with --no-isolate or with an older forge that does not isolate by default. I did not check the default of v1.3.6, the version the CI installs. Third, the finding names one bare expectRevert in front of a router call. Five more are in test/utils/SwapHelper.t.sol. They fail in the helper's require statements before any router is called, so the conclusion stands. Fourth, the impact field says earlier cycles relied on the tests to confirm the source. 37 of the 598 items in state/cleared.json cite a test file, and I found none that rests on a test for line 112, 113 or 361. Those items cite the source text. Fifth, the sentence that the deployed PoolManagers are other bytecode than a build of this checkout is an assumption taken from the brief. Nobody compiled the checkout. The consequence the finding draws from it is the safe one: the on-chain probes describe the networks and the contracts deployed today and say nothing about this build.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/foundry-rs/foundry/master/crates/cli/src/opts/evm.rs",
+     "supports": "Fetched 2026-11-23. Lines 146 to 151: in isolation mode all top level calls are executed as a separate transaction in a separate EVM context. Lines 153 to 156: a no_isolate option that conflicts with isolate."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/foundry-rs/foundry/master/crates/config/src/lib.rs",
+     "supports": "Fetched 2026-11-23. Line 608 declares the isolate setting and line 3301, inside impl Default for Config, sets isolate: true."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/foundry-rs/foundry/master/crates/evm/evm/src/inspectors/stack.rs",
+     "supports": "Fetched 2026-11-23. Lines 85 to 88 describe enable_isolation with the same sentence about top level calls."
+    },
+    {
+     "url": "test/utils/Deployers.sol:78-85",
+     "supports": "The noIsolate modifier re-enters the test through one call so that its body runs as one transaction. It is used at test/PoolManager.t.sol:1001 and 1010 and test/Sync.t.sol:36."
+    },
+    {
+     "url": ".github/workflows/tests-pr.yml:23-37",
+     "supports": "The CI installs Foundry v1.3.6 and runs forge test --isolate -vvv."
+    },
+    {
+     "url": "src/PoolManager.sol:104-114",
+     "supports": "unlock: the end check on the nonzero delta count at line 112 and the lock close at line 113 are present."
+    },
+    {
+     "url": "src/PoolManager.sol:349-365",
+     "supports": "_settle: the value guard at line 356, the checked subtraction at line 360 and the reset of the synced currency at line 361 are present."
+    },
+    {
+     "url": "test/Sync.t.sol:341-374",
+     "supports": "test_settle_twice_doesNotApplyDelta takes the credited amount between the two settles and asserts the delta of address(0)."
+    },
+    {
+     "url": "rpc: eth_call with a state override of the stub address on the 21 endpoints of research/network-risk/state/networks.json on 2026-11-23, rerun by the verifier with its own driver",
+     "supports": "All 21 deployed PoolManagers gave the words the finding reports: CurrencyNotSettled after a callback that only mints, ManagerLocked for take, settleFor and clear outside an unlock and for a take after unlock returned, lock slot 0 after unlock, synced currency 0 after settle, SafeCastOverflow for 2^127. Blocks include Ethereum 26478528, Unichain 64696932, Celo 83544535, X Layer 76676261, Tempo 50444717, Arc 32750975, HyperEVM 52041427, Arbitrum One 526836202."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Pin list and second reading of sync, take, settle, settleFor and _settle (src/PoolManager.sol:279-307, 349-365): operators, sign of the delta, the address the delta is booked to, order of the transient write and the external call, and the slot that is read or reset.",
+   "agrees": true,
+   "note": "I read the lines without the researcher's notes and then compared. sync resets only the currency slot for address(0) and stores currency and balance together otherwise (lines 281-287). take books minus the amount to msg.sender before the transfer (294-295). settle books to msg.sender and settleFor to the recipient (301, 306). _settle credits msg.value only when the currency slot is zero, rejects value when a token is synced, and credits the checked balance rise in the synced currency after resetting the slot (353-364). I walked the case of a native asset with an ERC-20 face (Celo, Polygon, Arc): a value credit needs the slot to be zero and a balance credit needs a fresh sync, which reads the balance again, so one inflow cannot be credited under both ids. The named tests exist and expect what the item says (test/Sync.t.sol:36-41, 130-158, 220-225, 255-277, 300-339; test/PoolManager.t.sol:962-989). One detail to add: the three tests that pin the missing lock check of sync (test/PoolManager.t.sol:1001 and 1010, test/Sync.t.sol:36) use the noIsolate modifier, so they hold in an isolated run as well."
+  },
+  {
+   "check": "Pin list and second reading of the four transient slot libraries, with the constants recomputed (src/libraries/Lock.sol, NonzeroDeltaCount.sol, CurrencyReserves.sol, CurrencyDelta.sol).",
+   "agrees": true,
+   "note": "A wrong constant or a shared slot here would break the lock or the end check for every caller, so I recomputed with a Keccak routine I wrote for this check, tested against the empty string hash and the transfer selector. keccak256 minus one of Unlocked, NonzeroDeltaCount, ReservesOf and Currency gives 0xc090fc46...ab23, 0x7d4b3164...9a0b, 0x1e0745a7...bd95 and 0x27e098c5...93b9, the four constants in the source, and no two are equal. The interface id 0x0f632fb3 equals the XOR of the seven ERC-6909 selectors. All four libraries use tstore and tload only. reset writes the currency slot only. The delta slot is keccak256 of the target word followed by the currency word, the same layout as src/libraries/TransientStateLibrary.sol:35-43. applyDelta adds with checked arithmetic. Every address mask in the four files has 40 hex digits. On the deployed contracts exttload of the lock slot and of the currency slot returned the expected words on all 21 networks."
+  },
+  {
+   "check": "Unpinned statements that stand against assumptions A4 and A7 (src/types/Currency.sol:48, 64-74, src/libraries/Hooks.sol:152, 166): a currency or hook address without code or at a precompile, and the gas forwarded to a native recipient.",
+   "agrees": true,
+   "note": "I tried to find a credit in an id whose address has no code. A positive delta comes from settle after sync, from burn, or from a pool that someone funded. sync fails because the return decoder needs 32 bytes, a burn needs claims that only a mint creates at the cost of an equal debit, and nobody can fund such a pool, because the debt of an add cannot be paid. A take of a positive amount therefore leaves a debt that cannot be closed and the unlock reverts at line 112, and a zero take owes nothing and moves nothing. The same holds for a token address that will receive code later: no claim can be created ahead of the deployment. On all 21 deployed contracts a zero take of an address without code succeeded and sync of it reverted without data. A precompile that answers balanceOf with a constant credits zero, which earlier sweeps recorded per network. The item's wording that the caller loses is exact only for a zero take or for an address that answers balanceOf; for a codeless address a positive take reverts the whole unlock. That makes the item safer than stated."
+  },
+  {
+   "check": "Deployed PoolManagers, read-only: is the lock closed when unlock returns, and does settle reset the synced currency (the two statements that the tests pin only without --isolate).",
+   "agrees": true,
+   "note": "Reproduced on all 21 endpoints with my own driver: lock slot 1 inside the callback, currency slot equal to the stub after sync and 0 after settle, a second settle returning 0, lock slot 0 and ManagerLocked for a take after unlock returned in the same call. The result describes the contracts deployed today. It does not test a build of this checkout, as the item itself says. With isolate now the default on the Foundry master branch, the phrase only without --isolate should read only with --no-isolate or an older forge."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "priority": "medium",
+   "question": "Which Foundry version will the pre-deployment test run use, and does it isolate top level calls by default? On the master branch crates/config/src/lib.rs sets isolate: true. If the run is isolated, add four tests before deployment and confirm that each fails when its statement is removed: an unlock whose callback leaves a debt must revert with CurrencyNotSettled (src/PoolManager.sol:112); under the noIsolate modifier a take after an unlock returned must revert with ManagerLocked (113); two settles after one sync and one payment, with no take between them, must credit once (361); settleFor and clear must revert while locked (305, 310).",
+   "why": "The verifier confirmed that no test fails when line 112 is removed and that lines 113 and 361 are pinned only in a run that is not isolated, which neither the CI nor a current default forge test is. Each of the three statements guards all funds: without 112 a take needs no payment, without 113 any call after an unlock in the same transaction takes without an end check, without 361 one payment is credited twice. Two readers found all three in the text. A test is the only check in this repository that survives a later edit or a compiler setting change."
+  }
+ ]
+}

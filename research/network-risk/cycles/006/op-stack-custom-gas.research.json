@@ -1,0 +1,479 @@
+{
+ "unit": "op-stack-custom-gas",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 42220,
+   "lens": "L1",
+   "summary": "The client that Celo release notes address to sequencers is celo-reth from the celo-kona repository. Its newest tag pins the reth revision that forno reports and revm 38.0.0, and the instruction, journal and call frame files of that revm fork are byte identical to upstream tag v107. No opcode or call pattern the PoolManager uses is replaced. Karst is not active and has no date.",
+   "deltas": [
+    {
+     "delta": "Tag celo/reth-v1.0.10 of celo-org/celo-kona patches every reth crate to celo-org/reth revision 74cc8bbce7631c3586ab446460590fef6630d258 and takes every revm crate from celo-org/revm revision bd28f9420c250df2a5c4a6d8103b51ae06b5c222, which the manifest describes as revm 38.0.0 plus one inspector fix for SELFDESTRUCT tracing. forno.celo.org reports reth/v2.2.0-74cc8bb, so the public endpoint runs this line. The node compose file ships image op-reth:celo-v1.0.10. Release notes of celo/reth-v1.0.6 and v1.0.4 say the upgrade is recommended for sequencers, which shows that the sequencer runs celo-reth.",
+     "source": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/Cargo.toml",
+     "relevance": "low"
+    },
+    {
+     "delta": "I compared fourteen files of celo-org/revm at that revision with bluealloy/revm tag v107 (crate version 38.0.0): the instruction files host.rs, contract.rs, call_helpers.rs, system.rs, memory.rs and stack.rs, the journal, the call frame and the handler. They are identical. In that code TSTORE and TLOAD need Cancun and TSTORE fails in a static frame (host.rs lines 300 to 313), transient values are stored under the pair of address and slot and every change is journaled (journal/inner.rs lines 1032 to 1072), commit_tx, discard_tx and finalize each clear the transient map (lines 137 to 246), a call frame moves the value before it runs a precompile and returns success for an account without code (frame.rs lines 181 to 230), and DELEGATECALL hands the caller of the current frame to the callee (contract.rs lines 261 to 263).",
+     "source": "https://raw.githubusercontent.com/celo-org/revm/bd28f9420c250df2a5c4a6d8103b51ae06b5c222/crates/context/src/journal/inner.rs",
+     "relevance": "none"
+    },
+    {
+     "delta": "CeloEvm::new builds its interpreter with EthInstructions::new_mainnet_with_spec for the spec of the block and adds one precompile, so the opcode table is the upstream one (evm.rs lines 40 to 58 at the tag). The transfer precompile that blocks use is the copy in alloy-celo-evm. It halts in a static frame, below 9,000 gas, when input.caller differs from the CELO token address and when the input is not 96 bytes, and then moves value between the two addresses in the input (lib.rs lines 135 to 195). It does not test that the call is a direct call, so a DELEGATECALL from a contract that the CELO token itself called would pass. Earlier cycles read the same logic on the main branch and listed the token functions, none of which calls an outside contract.",
+     "source": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/crates/alloy-celo-evm/src/lib.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "forno.celo.org answered web3_clientVersion with reth/v2.2.0-74cc8bb twice and with Geth/v0.1.0-untagged-c7ed55b8-20260817 once in three calls on 2026-11-23. Celo ended support for op-geth on mainnet on 22 July 2026 and states that a node still on op-geth can follow the wrong chain. The forum post on the migration adds that op-geth will not support the Ethereum Glamsterdam fork. Reads through forno can therefore come from an unsupported client.",
+     "source": "https://docs.celo.org/operate/notices/op-geth-deprecation.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "The creation probe for CLZ (0x60011e5f5260205ff3) still fails with NotActivated on forno on 2026-11-23, so the Osaka subset of Karst is not active. The Celo roadmap of 9 July 2026 lists Karst for the fourth quarter of 2026 pending implementation readiness and gives no date. The closed readiness issue 307 of celo-kona states that no Celo chain schedules a Karst or Osaka based spec. Karst on other OP Stack chains caps a transaction at 16,777,216 gas (EIP-7825, deposits exempt) and adds the L2 Contract Manager, which replaces predeploy implementations through upgrade transactions at the fork block.",
+     "source": "https://forum.celo.org/t/h1-2026-engineering-retro-h2-2026-roadmap/13528",
+     "relevance": "low"
+    },
+    {
+     "delta": "On the main branch the handler sets a negative refund counter to zero from Karst on. Before Karst the counter wraps and the sender of a fee currency transaction receives the maximum refund when the main call refills a storage slot that the fee debit cleared. The comment bounds the remaining mispricing at about 2,800 gas per slot. This concerns the fee paid in a fee currency by the sender of that transaction and no balance of the PoolManager.",
+     "source": "https://raw.githubusercontent.com/celo-org/celo-kona/main/crates/celo-revm/src/handler.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 42220,
+   "lens": "L2",
+   "summary": "At the production tag the fee debit of a fee currency transaction runs inside a journal checkpoint and its transient storage is cleared before the main call. The credit runs after the main frame through the committing system call path and clears transient storage again. The node checks that a fee currency is registered before it calls it, so no unregistered contract is ever called with the zero address as caller.",
+   "deltas": [
+    {
+     "delta": "cip64_rollbackable_debit_and_deduct_caller opens a checkpoint, runs debitGasFees through the system call path that does not commit, and on success commits the checkpoint and calls transient_storage.clear() before the main call starts (handler.rs lines 616 to 690 at tag celo/reth-v1.0.10). On any rejection the checkpoint is reverted, which also undoes transient writes.",
+     "source": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/crates/celo-revm/src/handler.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "credit_gas_fees calls core_contracts::call, the committing path (erc20.rs lines 103 to 137). call_inner clears transient storage after that call (core_contracts.rs lines 211 to 250). The credit therefore runs while the transient values of the main call still exist, inside the code of the registered fee currency, and nothing runs after it in the same transaction.",
+     "source": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/crates/celo-revm/src/contracts/core_contracts.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "cip64_validate_erc20_and_debit_gas_fees first looks the fee currency up in the fee currency context that was loaded from FeeCurrencyDirectory, and returns an invalid transaction error when the address is not registered. The balance read and the debit, both made with caller address(0), come after that lookup (handler.rs lines 509 to 588). Release celo/reth-v1.0.4 also made a zero address fee currency an unregistered currency.",
+     "source": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/crates/celo-revm/src/handler.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Lagoon upgrade of the OP Stack, in development and without a date, adds a post execution transaction of type 0x7D and sequencer defined metering. Its settlement credits the sender of a transaction and debits the block beneficiary, the base fee vault and the operator fee vault. The Celo client already carries the post execution plumbing (begin_post_exec_tx in alloy-celo-evm). No Celo document schedules Lagoon.",
+     "source": "https://github.com/ethereum-optimism/specs/blob/main/specs/protocol/lagoon/sdm.md",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 42220,
+   "lens": "L3",
+   "summary": "The deployed PositionManager and the first Universal Router on Celo were constructed with the CELO token, which is the native balance itself, as their wrapped native address. Their wrap and unwrap actions revert and every settle starts with a sync. The 550 million G$ in the PoolManager sit in one single sided position that holds no second currency.",
+   "deltas": [
+    {
+     "delta": "PositionManager 0xf7965f3981e4d5bc383bfbcb61501763e9068ca9 returns 0x471EcE3750Da237f93B8E339c536989b8978a438 from WETH9(), and its verified constructor arguments name that address as _weth9. The first Universal Router 0xcb695bc5d3aa22cad1e6df07801b061a05a0233a has the same address as weth9 in its RouterParameters. Universal Router 2.1.1 and 2.1.2 have weth9 and spokePool both set to 0x5Dc88340E1c5c6366864Ee415d6034cadd1A9897, a 108 byte contract that reverts on every call with selector 0xea3559ef.",
+     "source": "https://celo.blockscout.com/api/v2/smart-contracts/0xf7965f3981e4d5bc383bfbcb61501763e9068ca9",
+     "relevance": "low"
+    },
+    {
+     "delta": "An eth_call of deposit() with 10^15 wei, of withdraw(10^15) and of an empty call with value, each from the PositionManager address to the CELO token, reverts. NativeWrapper._wrap and _unwrap call exactly these two functions (NativeWrapper.sol lines 22 to 29 of the verified source), so the WRAP and UNWRAP actions of the PositionManager revert on Celo for any nonzero amount. In the first Universal Router unwrapWETH9 reads WETH9.balanceOf(router), which is the native balance of the router, and reverts in withdraw when that balance is above zero.",
+     "source": "https://forno.celo.org eth_call deposit(), withdraw(uint256) and empty calldata with value on 0x471EcE3750Da237f93B8E339c536989b8978a438 from 0xf7965f3981e4d5bc383bfbcb61501763e9068ca9, 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "DeltaResolver._settle in the verified source of the PositionManager and of both router generations calls poolManager.sync(currency) first, then settle with value for address(0), or pays the token and calls settle (DeltaResolver.sol lines 38 to 48). A debt under the CELO token id can be paid from the native balance of the periphery contract, because _pay with the contract as payer calls currency.transfer and the token moves the native balance.",
+     "source": "https://celo.blockscout.com/api/v2/smart-contracts/0xe2023F3FA515cF070e07fD9d51c1d236e07843f4",
+     "relevance": "low"
+    },
+    {
+     "delta": "Initialize logs with G$ (0x62B8B11039FcfE5aB0C56E502b1C372A3d2a9c7A) as currency0 or currency1 show eight pools, all without a hook. Netting the ModifyLiquidity logs per position gives 550,021,143 G$ in five open positions against a token balance of 550,022,104 G$. Token id 523 of the PositionManager, owner 0x14407b859dca16bda5ac1d70794777adc64e5210, holds 550,000,000 G$ in the G$/USDC pool 0x2ecd9ed660b87b6a213713a5ca6f87135a1d409f88a199e92df57f217018f091 (fee 2500, tick spacing 25) between ticks -367475 and -364375. The pool tick is -388836, below the range, so the position holds G$ only and the pool has zero active liquidity. Token ids 178, 361, 405 and 482 hold 19,962, 828, 352 and 0.5 G$ next to 0.46 USDm, 0.20 CELO, a dust amount of token 0xacf3892adf3698221884514c967052df2ffd0724 and 0.0007 CELO.",
+     "source": "https://celo.blockscout.com/api?module=logs&action=getLogs with topic0 Initialize or ModifyLiquidity on 0x288dc841A52FCA2707c6947B3A777c5E56cd87BC; https://forno.celo.org eth_call getSlot0 and getLiquidity on 0xbc21f8720babf4b20d195ee5c6e99c52b76f2bfb and ownerOf on the PositionManager, 2026-11-23",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 42220,
+   "lens": "L4",
+   "summary": "A sweep of 319 special addresses with sixteen call shapes, sent from a forwarding stub at the PoolManager address with a separate transaction origin, gave the same classes as the earlier sweep with the PoolManager as origin. Celo is preparing a migration to the second custom gas token design of the OP Stack, which would add two liquidity predeploys and change which predeploys accept native value.",
+   "deltas": [
+    {
+     "delta": "Sweep at block 83,536,386 with the Multicall3 runtime code placed at the PoolManager address by state override and origin 0x00000000000000000000000000000000000b0b00. Shapes: empty calldata without and with 10^15 wei, transfer with 0 and 1, balanceOf, the ten hook selectors and unlockCallback. Of the 256 addresses 0x4200000000000000000000000000000000000000 to 0xff, 248 revert on all sixteen. 0x11, 0x16, 0x19, 0x1a and 0x1b accept empty calldata and keep the value. 0x13 answers every shape with the L1 block number. 0x06 wraps on every unknown calldata and transfers its own token. 0x42 has no code. Outside that range, Governance and the three EntryPoints accept value with empty calldata, FeeHandler and Reserve accept all sixteen shapes with empty return data, and the registry, FeeCurrencyDirectory, LockedGold, SortedOracles, Permit2, Multicall3 and the beacon root and history contracts revert on all sixteen. The four fee currency adapters answer balanceOf only. The transfer precompile 0xfd fails on all sixteen.",
+     "source": "https://forno.celo.org eth_call aggregate3Value on 0x288dc841A52FCA2707c6947B3A777c5E56cd87BC with a code override, block 83536386, 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "No shape changed the native balance of the stub except by the value it sent, and by the 1 wei that transfer(recipient, 1) on the CELO token moves. No target returned 32 bytes that begin with a hook selector except the identity precompile 0x04, whose address has the flag for a swap return delta without the swap flag and is rejected by isValidHookAddress, as on Ethereum.",
+     "source": "https://forno.celo.org eth_call sweep, block 83536386; src/libraries/Hooks.sol:109-127",
+     "relevance": "none"
+    },
+    {
+     "delta": "The main branch of the Celo client marks an activation block for a custom gas token upgrade group (CgtV2UpgradeGroup::is_activation_transaction in celo-reth), and celo-monorepo issue 11750 with the title Custom Gas Token v2 is open since 19 May 2026. Today L1Block.isCustomGasToken() returns false on Celo and the implementation slots of 0x4200000000000000000000000000000000000029 and 0x2a are zero. In the second design L2ToL1MessagePasser, the messenger, the bridge and the fee vaults refuse native value, NativeAssetLiquidity holds a pre-minted supply and LiquidityController lets authorised minters send native asset to any address. OP Stack documentation says a migration path from the legacy design does not exist yet.",
+     "source": "https://raw.githubusercontent.com/celo-org/celo-kona/main/crates/celo-reth/src/lib.rs",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 196,
+   "lens": "L1",
+   "summary": "The mainnet release tag of xlayer-reth pins the reth revision that the public endpoint reports and takes revm 40.0.3 from crates.io, which is upstream tag v112. The OKX fork of the OP Stack execution crates keeps the upstream instruction table and precompile set. The chain spec has no fork after Jovian, and the Osaka subset is not active.",
+   "deltas": [
+    {
+     "delta": "Tag v0.0.7.3-rc.1 of okx/xlayer-reth, the mandatory patch of 5 November 2026, takes all reth crates from okx/reth revision f60420aaac6457295a38b66bd544bab28ab6ec5d, revm 40.0.3 from crates.io, and op-revm and alloy-op-evm from the submodule deps/optimism. rpc.xlayer.tech reports reth/v2.3.0-f60420a. bluealloy/revm tag v112 carries crate version 40.0.3. Its journal clears the transient map in commit_tx, discard_tx and finalize (inner.rs lines 137 to 246), its TSTORE and TLOAD handlers need Cancun and a frame that is not static (host.rs lines 268 to 294), and its call frame moves value before precompile dispatch and returns success for an account without code (frame.rs lines 188 to 230).",
+     "source": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/Cargo.toml",
+     "relevance": "low"
+    },
+    {
+     "delta": "The okx/optimism repository publishes tags named xlayer-dep followed by a commit hash. At the newest of them, a492b62bbecbdcf3be90719e042c9abca47c8cc6, the files alloy-op-evm/src/lib.rs, block/xlayer_blacklist_contract.rs, block/xlayer_gasless_contract.rs, op-revm/src/handler.rs, evm.rs and precompiles.rs are byte identical to tag xlayer/v0.1.7. OpEvm::new still uses the upstream instruction set and OpPrecompiles::new_with_spec (evm.rs lines 30 to 39), and evm.rs and precompiles.rs contain no X Layer branch. Which commit the mainnet sequencer was built from cannot be read from chain.",
+     "source": "https://raw.githubusercontent.com/okx/optimism/a492b62bbecbdcf3be90719e042c9abca47c8cc6/rust/alloy-op-evm/src/lib.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "The hardfork list of the X Layer mainnet chain spec is the same at tag v0.0.7.3-rc.1 and on the main branch and ends with Jovian at timestamp 1764691201. No Karst entry exists. The CLZ creation probe fails with NotActivated on rpc.xlayer.tech on 2026-11-23. A transaction is therefore still limited by the block gas limit of 210,000,000 only: the largest transaction mined since 10 November 2026 used 95,673,102 gas.",
+     "source": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/chainspec/src/lib.rs",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 196,
+   "lens": "L2",
+   "summary": "The deposit blacklist lookup runs before every user deposit with no activation time, and the contract it reads holds no entry and no operator today. The gasless rule changes one configuration flag for the length of one transaction and restores it on every path. Nothing new was found on transaction boundaries.",
+   "deltas": [
+    {
+     "delta": "OpEvm::transact_raw calls intercept_blacklisted_deposit for every transaction when the chain id has a blacklist address. The lookup applies to a deposit that is not a system transaction and whose sender is not the L1 attributes depositor. There is no timestamp condition. A system call that fails with a database error ends in discard_tx, which clears the journal and the transient map before the real transaction runs (lib.rs lines 289 to 314 and 346 to 427 at tag xlayer/v0.1.7).",
+     "source": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/lib.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "The storage trie of the blacklist contract 0x59055c0ef0be92018b33f877a3eB816355791727 holds exactly four leaves at block 76,668,710 (2026-11-23 12:42 UTC): the EIP-1967 implementation 0xe44bfef30cfd8ecbfb917d78fa2ac215b3397f8e, the EIP-1967 admin 0x57ffb399eb2d8fb1831001ba893483bc13bd8c2f, the owner 0x6EE7bDA7aF04F61ccf93aB4b8Db2289aBe76C6aa and the initialized flag. I walked the whole trie from the storage root 0x84d6f8a2145c426cd92452349876bd7386c8dbff1ee9b5d0476ab923d098a89d and checked the account proof against the state root of that block read from rpc.xlayer.tech. The contract therefore stores no blacklisted source hash and no operator at that block. An entry that was added and removed before would leave no storage trace.",
+     "source": "https://xlayer.drpc.org eth_getProof for 0x59055c0ef0be92018b33f877a3eB816355791727 at latest; https://rpc.xlayer.tech eth_getBlockByNumber 76668710 for the state root, 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "For a gasless transaction transact_raw sets the revm flag disable_base_fee, runs the transaction and restores the saved value on success, on revert, on a validation error and on a database error. The opcode BASEFEE keeps the header value and GASPRICE returns zero. Value handling is unchanged.",
+     "source": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/lib.rs",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 196,
+   "lens": "L3",
+   "summary": "The gasless whitelist allows a zero priced USDT0 transfer with up to 200,000 gas and does not list the PoolManager, the PositionManager, the Universal Routers or Wrapped OKB for the selectors I tried. Block gas use since the hard fork of 10 November 2026 stayed below half of the limit.",
+   "deltas": [
+    {
+     "delta": "getGaslessAllowance(to, input) on 0x19787404b0c70021b4752028f7e3a92313885B27, called from 0xfffffffffffffffffffffffffffffffffffffffe, returns true with a gas limit of 200,000 for USDT0 (0x779Ded0c9e1022225f8E0630b35a9b54bE713736) and the transfer selector. It returns false for the PoolManager, the PositionManager, both Universal Routers and Wrapped OKB with the selectors of unlock, execute, modifyLiquidities, transfer, settle, sync, deposit and with empty calldata. The storage trie of the whitelist has more than two hundred branches below the root, so it holds many entries that I did not enumerate.",
+     "source": "https://rpc.xlayer.tech eth_call getGaslessAllowance(address,bytes) on 0x19787404b0c70021b4752028f7e3a92313885B27; https://xlayer.drpc.org eth_getProof, 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "eth_feeHistory for blocks 75,524,964 (2026-11-10 07:00 UTC) to 76,667,516 shows 16 of 1,142,553 blocks above 30 percent of the gas limit and a maximum of 46.3 percent (97,312,645 gas in block 76,589,451). Eleven transactions in those blocks used more than 40,000,000 gas, and eight of them are EIP-7702 transactions with 2,358 to 3,538 logs.",
+     "source": "https://rpc.xlayer.tech eth_feeHistory in windows of 1,024 blocks and eth_getBlockReceipts, 2026-11-23",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 196,
+   "lens": "L4",
+   "summary": "The sweep through a forwarding stub gave the same classes as the earlier sweep with the PoolManager as origin. At the mainnet release tag the risk control filter counts every internal native transfer of a transaction whether or not a rule matches, and no mined transaction comes near that limit, so chain data cannot show whether the filter is on.",
+   "deltas": [
+    {
+     "delta": "Sweep of 311 addresses at block 76,668,110 with the same sixteen shapes and the same stub. 248 of the 256 predeploy addresses revert on all sixteen. 0x11, 0x19, 0x1a and 0x1b accept empty calldata and keep the value, 0x16 accepts empty calldata without value only, 0x13 answers every shape with the L1 block number, 0x06 and Wrapped OKB 0xe538905cf8410324e03A5A23C1c177a474D59b2b wrap on unknown calldata, and 0x42 has no code. The gasless whitelist, the deposit blacklist, the AggLayer bridge, the global exit root contract, Permit2 and Multicall3 revert on all sixteen. The three EntryPoints accept value and answer balanceOf. 0xfd and the L1 OKB token address hold no code.",
+     "source": "https://rpc.xlayer.tech eth_call aggregate3Value on 0x360e68faccca8ca495c1b759fd9eee466db9fb32 with a code override, block 76668110, 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "At tag v0.0.7.3-rc.1 the filter has two limits per transaction. max_native_transfers_per_tx (default 10,000) counts every nonzero internal CALL value transfer, CREATE endowment and SELFDESTRUCT payout that the capture inspector sees, independent of the rules, and the transaction after the limit fails closed to a deny verdict (rcs_capture.rs lines 373 to 401, context.rs lines 101 to 175). max_event_bindings_per_tx (default 10,000) counts event bindings evaluated across the loaded rules, so it depends on the rules. The limit on call frame observations exists on the main branch only, where rules can also match call frames by selector. The capture inspector is installed only when a filter handle exists (context.rs lines 731 to 735).",
+     "source": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/builder/src/flashblocks/rcs_capture.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "debug_traceTransaction with the call tracer on the eleven transactions above 40,000,000 gas mined since 10 November 2026 shows at most four internal native transfers per transaction and up to 36,369 call frames. The largest, 0x349b40443331dbfec3a5ecd1fb666b0dc59935b76f4b688546c4d4278864f04f with 95,673,102 gas, has 39 frames and no native transfer. Ten thousand and one internal transfers need at least about 91,000,000 gas, and no other transaction reached that amount.",
+     "source": "https://xlayer.drpc.org debug_traceTransaction with callTracer for the eleven hashes listed in the work directory file raw/xlayer/big_tx_traces.jsonl, 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "The node registers an RPC extension that its source calls the side effect free L1 deposit audit RPC, next to the X Layer RPC extension, without a condition (bin/node/src/main.rs lines 186 to 200 at the tag). The OKX risk control report for the first half of 2026 states that screening logic is written into the protocol and that for Exchange OS a sanctioned and risk address library is kept at the protocol layer. Neither text says whether the block builder filter is enabled on the mainnet sequencer.",
+     "source": "https://web3.okx.com/learn/risk-control-report-h1-2026",
+     "relevance": "low"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "F-024",
+   "title": "X Layer block builder can exclude PoolManager transactions through a rule driven risk control filter, which leaves L1 deposits as the exit",
+   "chainIds": [
+    196
+   ],
+   "lens": "L6",
+   "assumptions": [
+    "A6",
+    "A9"
+   ],
+   "effect": "freeze",
+   "actor": "operator",
+   "severity": "low",
+   "difference": "Ethereum has no protocol component that screens transactions by content. The X Layer execution client contains a risk control filter in the block builder. The release that every mainnet node had to run by 10 November 2026 contains it: tag v0.0.7.3-rc.1 pins the reth revision f60420a that the public endpoint reports and includes the crate rcs-filter, the capture inspector of the builder and the bridge interceptor. The filter evaluates each transaction after simulation against rules supplied by an external service and fails closed when a capture limit is exceeded.",
+   "mechanism": "1. All funds of all pools sit at one address and leave only through take (src/PoolManager.sol:291-297), which runs inside unlock (src/PoolManager.sol:104-114). An exit is a transaction that the sequencer must include. 2. With the filter enabled, the builder runs every candidate transaction under a capture inspector and passes the logs and the observed native transfers to the rule matcher. A deny verdict marks the transaction invalid and removes it from the pool. An audit verdict holds it until the external service approves it. 3. Read at the mainnet tag in this cycle: the limit max_native_transfers_per_tx (default 10,000) counts every nonzero internal value transfer, CREATE endowment and SELFDESTRUCT payout whether or not a rule matches, and the transaction after the limit is denied. The limit max_event_bindings_per_tx (default 10,000) counts bindings evaluated against the loaded rules. A limit on call frame observations and rules that match call frames by selector exist on the main branch only. A rule of that kind could match the selector of take or unlock directly. 4. FilterConfig::default() sets enabled to false and the filter needs a service URL, so the release does not screen unless the operator configures it. 5. Deposits are outside the builder filter. The separate deposit blacklist of F-046 is empty: at block 76,668,710 the blacklist contract stores four values, which are its implementation, its admin, its owner and its initialized flag, and no source hash and no operator. 6. I looked for the observation that lead L-263 names. Between 10 November 2026 07:00 UTC and block 76,667,516 no block used more than 97,312,645 gas. The eleven transactions above 40,000,000 gas have at most four internal native transfers each. A transaction with more than 10,000 internal transfers needs about 91,000,000 gas or more and none exists, so mined transactions neither prove that the filter is off nor suggest that it is on.",
+   "impact": "While a matching rule is active, liquidity providers and swappers cannot move funds through sequencer submitted transactions in the affected pools, or in all pools if a rule targets the PoolManager address. No funds are lost and the code in src/ has no time dependence. Exit through an L1 deposit remains while no source hash is listed, which is the state today.",
+   "preconditions": "The sequencer operator must run with the filter enabled and the risk control service must deliver a rule that matches PoolManager activity. Whether the mainnet sequencer runs with the filter enabled is still not confirmed. It is a start parameter of a node that the public cannot query, the release notes of v0.0.7.3 and v0.0.7.3-rc.1 do not mention the filter, and I found no operator statement about the sequencer setting. The rule set is not public.",
+   "mitigations": "Liquidity providers who hold positions through contracts should keep an EOA controlled path so that an L1 deposit can reach the position. Integrators can watch the deposit blacklist contract for an operator appointment or a first entry, since its storage is empty today and any change shows in the storage root. The deployer can ask OKX to state whether the filter runs on mainnet and which contracts and tokens its rules may match.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:104-114"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/Cargo.toml",
+     "supports": "The mainnet patch tag pins okx/reth revision f60420aaac6457295a38b66bd544bab28ab6ec5d, the revision in the client version string of rpc.xlayer.tech, and lists the crates rcs-filter and intercept as workspace members."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/rcs-filter/src/config.rs",
+     "supports": "enabled is false by default, a base URL is required when enabled, and the two per transaction limits default to 10,000. The comments define the native transfer limit as a count of observation candidates during simulation and the event limit as bindings evaluated across all rules."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/builder/src/flashblocks/rcs_capture.rs",
+     "supports": "observe_native_transfer counts each nonzero internal transfer that is not a self transfer, never rolls the count back and sets a sticky overflow above the limit. The call, create and selfdestruct hooks feed it."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/builder/src/flashblocks/context.rs",
+     "supports": "Every capture outcome other than complete maps to Screen::Deny, the capture inspector is built from filter.max_native_transfers_per_tx() when a filter handle exists, and a deny verdict removes the transaction."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/rcs-filter/src/config.rs",
+     "supports": "The main branch adds max_callstack_observations_per_tx with default 10,000 and describes a callstack section of the rule format."
+    },
+    {
+     "url": "https://github.com/okx/xlayer-reth/releases",
+     "supports": "v0.0.7 introduced the filter and the interceptor for testnet, v0.0.7.3 required a coordinated mainnet upgrade by 10 November 2026, and v0.0.7.3-rc.1 of 5 November 2026 is a mandatory patch. The notes of the last two do not mention the filter."
+    },
+    {
+     "url": "https://rpc.xlayer.tech eth_feeHistory for blocks 75524964 to 76667516, eth_getBlockReceipts for the 16 blocks above 30 percent gas use; https://xlayer.drpc.org debug_traceTransaction with callTracer, 2026-11-23",
+     "supports": "The maximum block gas use in the range is 97,312,645, and the eleven transactions above 40,000,000 gas have between zero and four internal native transfers."
+    },
+    {
+     "url": "https://xlayer.drpc.org eth_getProof for 0x59055c0ef0be92018b33f877a3eB816355791727; https://rpc.xlayer.tech eth_getBlockByNumber 76668710, 2026-11-23",
+     "supports": "The storage trie of the deposit blacklist has four leaves under storage root 0x84d6f8a2145c426cd92452349876bd7386c8dbff1ee9b5d0476ab923d098a89d, and the account proof matches the state root of block 76,668,710."
+    },
+    {
+     "url": "https://web3.okx.com/learn/risk-control-report-h1-2026",
+     "supports": "OKX describes its risk control as screening written into the protocol and names a protocol layer address library for Exchange OS on X Layer. The text does not mention the sequencer filter."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L1",
+   "check": "Opcode differential on Celo at the production tag: does the client that produces blocks change TSTORE and TLOAD (rollback on revert, clearing at the end of a transaction), CALL with value, CALLVALUE, SELFBALANCE, STATICCALL, RETURNDATASIZE and RETURNDATACOPY, MCOPY, PUSH0, gas forwarding, calls to accounts without code, or precompile dispatch.",
+   "result": "No. Tag celo/reth-v1.0.10 takes revm from a fork whose instruction files, journal, call frame and handler are byte identical to upstream tag v107, and CeloEvm::new uses the upstream instruction table for the block spec. The one addition is the transfer precompile at 0xfd, which the PoolManager can reach only as the recipient of a take or as a currency address. Both calls fail there, because the caller is not the CELO token, so the take reverts (src/types/Currency.sol:44-52 and 60-86). The sweep of this cycle shows 0xfd failing on all sixteen shapes. The repository's settlement path relies on transient storage being cleared per transaction (src/libraries/CurrencyReserves.sol:15-38, src/libraries/Lock.sol:10-27, src/libraries/CurrencyDelta.sol:18-41), which commit_tx, discard_tx and finalize of that journal do.",
+   "source": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/Cargo.toml"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L1",
+   "check": "Opcode differential on X Layer at the mainnet release tag: the same list of opcodes and call patterns, read in the revm version and the OKX execution crates that tag v0.0.7.3-rc.1 builds.",
+   "result": "No difference found. revm 40.0.3 comes from crates.io and equals upstream tag v112, where the transient map is cleared in commit_tx, discard_tx and finalize, TSTORE fails in a static frame, value moves before precompile dispatch and a call to an account without code returns success with no data. The OKX fork leaves op-revm evm.rs and precompiles.rs without an X Layer branch and its six consensus files are identical between tag xlayer/v0.1.7 and the newest xlayer-dep tag. X Layer changes sit in the handler (fee handling for gasless transactions) and in transact_raw (the blacklist lookup before deposits), which do not touch a call that an ordinary transaction makes to the PoolManager.",
+   "source": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/Cargo.toml"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L2",
+   "check": "A1 on Celo at the production tag: can a value in the PoolManager's transient slots (unlock flag, deltas, synced currency and reserves) cross from the fee debit into the main call, or from one transaction into the next, for a transaction that pays gas in a fee currency.",
+   "result": "No. The debit runs inside a checkpoint and the handler clears the transient map after committing it, before the main call (handler.rs lines 616 to 690). The credit uses the committing system call path and call_inner clears the transient map after it (erc20.rs lines 103 to 137, core_contracts.rs lines 211 to 250). The debit and the credit execute the code of a registered fee currency and never the PoolManager, so they cannot write its transient slots. A sync left open by the main call (src/PoolManager.sol:279-288) is still set while the credit runs, and the credit pays the sender, the block beneficiary and the fee handler, none of which is the PoolManager.",
+   "source": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/crates/celo-revm/src/handler.rs"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L2",
+   "check": "Can an ordinary account make the Celo node call the PoolManager, or a contract of its own, with msg.sender equal to address(0), by naming that address as the fee currency of a transaction. The protocol fee controller is address(0), and collectProtocolFees checks the sender only (src/ProtocolFees.sol:44-57).",
+   "result": "No. The handler rejects a transaction whose fee currency is missing from the fee currency context before it makes any call to that address (handler.rs lines 509 to 588 at tag celo/reth-v1.0.10), and the context is loaded from FeeCurrencyDirectory, which Governance owns. The calls the node makes with caller address(0) carry the selectors of balanceOf(address), debitGasFees and creditGasFees. The PoolManager has none of the three, since its balanceOf takes an owner and an id (src/ERC6909.sol:17).",
+   "source": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/crates/celo-revm/src/handler.rs"
+  },
+  {
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L4",
+   "check": "Critic gap of cycles 2 and 5: repeat the special address sweep with a forwarding stub at the PoolManager address, so that tx.origin differs from msg.sender as in a real take, sync or hook call. Sixteen shapes (empty calldata with and without value, transfer with 0 and 1, balanceOf, ten hook selectors, unlockCallback) against the predeploy range, the precompiles, the Celo core contracts, the X Layer system contracts, the EntryPoints and the usual preinstalls, with the stub's native balance read before and after every call.",
+   "result": "No target gives the caller more than it is debited. On both chains 248 of 256 predeploys revert on every shape. The targets that accept value keep it or wrap it one to one, as F-047 records, and the caller still owes the full amount (src/PoolManager.sol:291-297). No target answers transfer with success while moving a third party's balance: the successes are real tokens that need a balance of the PoolManager, accounts without code, the ecrecover and P256 precompiles and two Celo contracts with a catch all fallback (FeeHandler and Reserve), where nothing moves and the caller is debited (src/types/Currency.sol:64-74). No balanceOf answer rises inside the call sequence except where the stub paid. No target returns a hook selector except the identity precompile 0x04, whose address fails isValidHookAddress (src/libraries/Hooks.sol:109-127). The classes equal those of the cycle 2 sweep with the PoolManager as origin, so no swept contract treats the two caller shapes differently.",
+   "source": "https://forno.celo.org and https://rpc.xlayer.tech eth_call aggregate3Value with the Multicall3 runtime code placed at the PoolManager address, blocks 83536386 and 76668110; results in the work directory files raw/sweep/celo.json and raw/sweep/xlayer.json"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "check": "Lead L-218, Celo half: do the deployed Universal Routers and the PositionManager sync before every native settle, do they treat the CELO token as wrapped native, and what happens to a route that names both address(0) and the CELO token.",
+   "result": "No loss path. All three verified sources call sync before every settle. The PositionManager and the first Universal Router name the CELO token as WETH9, and the two later routers name a contract that always reverts. Wrap and unwrap revert, because the CELO token has neither deposit nor withdraw. Nothing needs them: both ids are backed by the native balance, a debt under the CELO token id can be paid from native value held by the periphery contract through an ordinary token transfer, and a debt under address(0) is paid with msg.value after sync(address(0)). A route that names both ids is handled as two currencies. Paying the wrong id leaves the other delta open and unlock reverts with CurrencyNotSettled (src/PoolManager.sol:112). The guard at src/PoolManager.sol:356 is not reached, because the periphery sends value only after it synced address(0).",
+   "source": "https://celo.blockscout.com/api/v2/smart-contracts/0xcb695bc5d3aa22cad1e6df07801b061a05a0233a"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "check": "Lead L-246: which pools and positions hold the G$ that the issuer froze in the Celo PoolManager, and is a second currency frozen with it because the periphery offers no exit that leaves the G$ side behind.",
+   "result": "One position holds 550,000,000 of the 550,022,104 G$: token id 523 in the hookless G$/USDC pool, out of range and single sided, with zero USDC. The other four open positions in G$ pools hold 21,143 G$ and less than one unit of USDm and CELO together. The periphery can close a position and give up one side through CLEAR_OR_TAKE, which calls clear for the G$ credit (src/PoolManager.sol:310-319) and takes the other currency, as F-083 describes. No material second currency is locked behind the G$ freeze.",
+   "source": "https://celo.blockscout.com/api?module=logs&action=getLogs on 0x288dc841A52FCA2707c6947B3A777c5E56cd87BC with topic0 0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438 and the G$ address as topic2 or topic3; positions computed in the work directory file raw/celo-gd/positions.json"
+  },
+  {
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L1",
+   "check": "Upcoming fork, Karst on Celo and X Layer (planned for Celo in the fourth quarter of 2026 without a date, not present in the X Layer chain spec): what changes for the PoolManager and for funds inside it when a transaction is capped at 16,777,216 gas, CLZ becomes an opcode, MODEXP and P256VERIFY are repriced and predeploys are replaced by the L2 Contract Manager.",
+   "result": "No loss or freeze path for an ordinary account. Liquidity removal has no loop: Pool.modifyLiquidity updates two ticks, flips at most two bitmap bits and clears at most two ticks (src/libraries/Pool.sol:146-204), so its gas does not depend on what other accounts did. A swap loops over initialized ticks (src/libraries/Pool.sol:344-437) and stops at the caller's price limit, so a swap that would exceed the cap can be sent in parts. A stranger who fills ticks with dust raises the cost of crossing them and cannot stop an exit. The PoolManager makes no fixed gas call: take, the token transfer and the hook call forward all gas (src/types/Currency.sol:48 and 73, src/libraries/Hooks.sol:134). CLZ occupies an opcode that the build for Cancun does not emit. The replaced predeploys can change which special addresses accept value or answer token calls, which is left as a lead.",
+   "source": "https://docs.optimism.io/notices/archive/upgrade-19"
+  },
+  {
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L2",
+   "check": "Upcoming fork, Lagoon (in development, no date, announced for OP Mainnet and Unichain first): can the post execution transaction or the settlement of sequencer defined metering raise or lower a balance of the PoolManager outside a transfer (A2).",
+   "result": "No. The settlement credits the sender of each refunded transaction and debits the block beneficiary, the base fee vault and the operator fee vault. The PoolManager cannot be the sender of a transaction, because it has no private signer and EIP-7702 delegation applies to accounts with a signer, and it is none of the three debited accounts. The post execution transaction itself charges no fee and moves no balance. Both chains' clients contain the plumbing, and neither chain has announced Lagoon.",
+   "source": "https://specs.optimism.io/protocol/lagoon/post-exec.html"
+  },
+  {
+   "chainIds": [
+    42220,
+    196
+   ],
+   "lens": "L1",
+   "check": "Upcoming fork on Ethereum, Glamsterdam (not scheduled for mainnet, earliest mid January 2027 according to the 19 November core developer call, held up by EIP-8037 and EIP-8038): does the L1 fork change execution on Celo or X Layer for the PoolManager.",
+   "result": "No. The fork changes Ethereum execution and headers. The X Layer op-node release xlayer/v0.1.7 supports the new L1 header fields, and Celo moved to celo-reth because op-geth will not support the L1 fork. L2 gas rules stay at the OP Stack fork of each chain. A third party survey of 11 October 2026 found a tracking issue for Amsterdam on the OP Stack without a schedule (https://nonceworks.com/notes/glamsterdam-gas-changes-operators.html). Two side effects are operational. Nodes on op-geth cannot follow after the L1 fork, and forno still answers part of its requests from an op-geth build. The cost of an L1 deposit used as forced exit changes with L1 gas rules. The mid January estimate comes from a press report of 21 November 2026 (https://cryptoslate.com/ethereums-glamsterdam-delay-reveals-a-troubling-pattern-behind-its-biggest-network-upgrades/).",
+   "source": "https://blog.ethereum.org/2026/11/06/glamsterdam-8037-8038"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L4",
+   "check": "Proposed change on Celo, migration to the second custom gas token design of the OP Stack: would the new predeploys NativeAssetLiquidity and LiquidityController, or the changed value rules of the other predeploys, give an ordinary account a way to move the PoolManager's native balance or to be credited for value it did not pay.",
+   "result": "Not from the published specification. NativeAssetLiquidity accepts calls from LiquidityController only. LiquidityController.mint is limited to minters that the owner of the L1 ProxyAdmin authorises, and burn needs a caller that sends its own value. A mint to the PoolManager address by an authorised minter would raise the native balance without a settle, which is a governance action. The value sink at L2ToL1MessagePasser that F-047 lists for Celo would close, as it is closed on X Layer. Celo has not published its migration, so the fate of the CELO token proxy and of the transfer precompile under that design is an open lead.",
+   "source": "https://specs.optimism.io/protocol/custom-gas-token/predeploys.html"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L4",
+   "check": "Leads L-187 and L-216, second part: has any deposit source hash been written to the X Layer blacklist contract, and which accounts are operators.",
+   "result": "None at block 76,668,710. The contract's storage trie has four leaves, which are the implementation slot, the admin slot, the owner and the initialized flag, verified from the storage root up to the state root of the block. A listed hash or an appointed operator would each add a leaf. The finding F-046 describes a capability that has not left a trace in state. An entry added and removed again inside the 85 percent of the log range that cycle 3 could not read would not show in storage.",
+   "source": "https://xlayer.drpc.org eth_getProof for 0x59055c0ef0be92018b33f877a3eB816355791727 and https://rpc.xlayer.tech eth_getBlockByNumber 76668710; output in the work directory files raw/xlayer/blacklist_storage_trie.txt and raw/xlayer/blacklist_account_proof.txt"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L3",
+   "check": "Does the X Layer gasless whitelist give zero priced transactions to the PoolManager or its periphery, which would let an ordinary account run the dust tick filling of F-038 or other spam against pools at no cost.",
+   "result": "No for the selectors tested. getGaslessAllowance returns false for the PoolManager, the PositionManager, both Universal Routers and Wrapped OKB with the selectors of unlock, execute, modifyLiquidities, transfer, settle, sync and deposit and with empty calldata. It returns true with 200,000 gas for a USDT0 transfer, which lets any account send USDT0 to any address for free, the PoolManager included. Such a transfer outside a sync and settle pair credits nobody (src/PoolManager.sol:349-364) and stays in the PoolManager as surplus. The whitelist has many more entries, which I did not enumerate.",
+   "source": "https://rpc.xlayer.tech eth_call getGaslessAllowance(address,bytes) on 0x19787404b0c70021b4752028f7e3a92313885B27 from 0xfffffffffffffffffffffffffffffffffffffffe, 2026-11-23"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L1",
+   "check": "Known weakness of the Celo client before Karst: the refund counter of a fee currency transaction can go negative and wrap, which gives the sender the maximum gas refund. Can it move a balance of the PoolManager or be used against a pool.",
+   "result": "No. The wrap changes how much of the debited fee the sender of that transaction gets back through creditGasFees, at the expense of the fee recipients. The amounts are minted and burned on the sender, the block beneficiary and the fee handler. A pooled fee currency held by the PoolManager is not touched, and the main branch clamps the counter from Karst on.",
+   "source": "https://raw.githubusercontent.com/celo-org/celo-kona/main/crates/celo-revm/src/handler.rs"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L4",
+   "priority": "medium",
+   "question": "When Celo schedules Karst, which predeploy implementations do its upgrade transactions install, and does the sixteen shape sweep from a stub at the PoolManager address give a different class for any of the 256 predeploy addresses or for 0xfd on the first day after activation?",
+   "why": "The L2 Contract Manager replaces predeploy code at the fork block. The sweeps of cycles 2 and 6 describe the code that is there now. A new fallback, a new payable function or a changed fee vault route at one of these addresses changes what a take or a currency call from the PoolManager does. The scripts stub_sweep.py and stub_single.py in the work directory of this unit rerun the test in three minutes."
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L4",
+   "priority": "medium",
+   "question": "What does the planned migration of Celo to the second custom gas token design (celo-monorepo issue 11750, CgtV2UpgradeGroup in the client) do with the CELO token proxy and the transfer precompile, who would be authorised minters of LiquidityController, and does LiquidityController.mint deliver value to a recipient that has no receive function, such as the PoolManager?",
+   "why": "Celo is the only chain of the 21 where an ERC-20 address moves the native balance through a precompile that trusts one caller. A migration that changes the trusted caller, adds a second contract that can move native balances, or lets a minter push native value into the PoolManager between another account's sync and settle would reopen assumptions A2 and A3, which were cleared for the current design only. No specification of the Celo migration was found."
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L6",
+   "priority": "low",
+   "question": "Does OKX state anywhere whether the mainnet sequencer of X Layer starts xlayer-reth with the risk control filter enabled, and which rule categories the risk control service delivers?",
+   "why": "The chain data route is closed: the limit that does not depend on rules needs more than 10,000 internal native transfers in one transaction, and no such transaction was mined or is likely to be sent. F-024 can be settled only by an operator statement or by a test transaction that someone is willing to pay about 91,000,000 gas for, which this review does not send."
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L3",
+   "priority": "low",
+   "question": "Which target and selector pairs does the X Layer gasless whitelist at 0x19787404b0c70021b4752028f7e3a92313885B27 hold, and does any of them reach the PoolManager indirectly, for example a router or an aggregator that calls unlock on behalf of the sender?",
+   "why": "A zero priced path into the PoolManager would make dust tick filling (F-038) and other griefing free for an ordinary account inside the per block gasless budget. The contract has more than two hundred storage branches and the public endpoints limit log queries to 100 blocks, so the entries were not listed."
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-187",
+   "outcome": "cleared",
+   "answer": "Operator only hazard. No source hash is listed and no operator is appointed at block 76,668,710 (2026-11-23): the storage trie of 0x59055c0ef0be92018b33f877a3eB816355791727 has exactly four leaves (implementation, admin, owner, initialized flag), walked from the storage root and tied to the state root of that block from rpc.xlayer.tech. An entry added and later removed inside the unread log range would not show. The commit of the okx/optimism submodule in the sequencer build cannot be read from chain. The repository publishes tags named xlayer-dep with a commit hash, and at the newest one, a492b62bbecbdcf3be90719e042c9abca47c8cc6, the six consensus files (alloy-op-evm lib.rs, the blacklist and gasless contract files, op-revm handler.rs, evm.rs and precompiles.rs) are byte identical to tag xlayer/v0.1.7."
+  },
+  {
+   "leadId": "L-216",
+   "outcome": "inconclusive",
+   "answer": "Operator only hazard. Second part answered: the blacklist stores no source hash and no operator at block 76,668,710. First part still open: the filter flag of the mainnet sequencer is a start parameter that no public interface exposes, the release notes do not mention it, and I found no operator statement. F-024 is reported again with the evidence of this cycle."
+  },
+  {
+   "leadId": "L-218",
+   "outcome": "cleared",
+   "answer": "Celo half. The PositionManager (WETH9() and constructor argument) and the first Universal Router (constructor argument weth9) name the CELO token 0x471EcE3750Da237f93B8E339c536989b8978a438 as wrapped native. Universal Router 2.1.1 and 2.1.2 name 0x5Dc88340E1c5c6366864Ee415d6034cadd1A9897, a contract that reverts on every call. deposit() and withdraw(uint256) revert on the CELO token, so wrap and unwrap actions revert. All three verified sources call sync before every settle (DeltaResolver.sol lines 38 to 48). A route that names both address(0) and the CELO token is two currencies to the periphery and to core. Each is settled under its own id, the CELO token id can be paid from native value the periphery holds, and a mistake ends in CurrencyNotSettled. No path credits value to nobody."
+  },
+  {
+   "leadId": "L-246",
+   "outcome": "cleared",
+   "answer": "Eight G$ pools exist, all without a hook. 550,000,000 G$ sit in one position: PositionManager token id 523, owner 0x14407b859dca16bda5ac1d70794777adc64e5210, pool G$/USDC 0x2ecd9ed660b87b6a213713a5ca6f87135a1d409f88a199e92df57f217018f091 (fee 2500, tick spacing 25), ticks -367475 to -364375, with the pool tick at -388836. It is single sided and holds zero USDC. Four small positions hold the other 21,143 G$ with less than one unit of USDm and CELO together. The PositionManager can close a position and give up the G$ side through CLEAR_OR_TAKE while taking the other currency (F-083), so no material second currency is frozen."
+  },
+  {
+   "leadId": "L-263",
+   "outcome": "inconclusive",
+   "answer": "Operator only hazard. At the mainnet tag v0.0.7.3-rc.1 the native transfer limit counts every nonzero internal value transfer, CREATE endowment and SELFDESTRUCT payout of a transaction, independent of rules. The event limit counts bindings evaluated against rules, so it depends on the rules. The call frame limit exists on the main branch only. Between 10 November 2026 07:00 UTC (block 75,524,964) and block 76,667,516 the maximum block gas use was 97,312,645, and the eleven transactions above 40,000,000 gas have at most four internal native transfers. No mined transaction exceeds a rule independent limit, and one would need about 91,000,000 gas. The route cannot settle F-024 in either direction and is closed."
+  },
+  {
+   "leadId": "L-075",
+   "outcome": "inconclusive",
+   "answer": "Operator only hazard. Whether the filter or the bridge interceptor is enabled on the mainnet sequencer is still unknown. No evidence of a denied or held PoolManager transaction was found, the deposit blacklist is empty at block 76,668,710, and chain data cannot show the flag (see L-263)."
+  }
+ ]
+}

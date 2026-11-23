@@ -1,0 +1,563 @@
+{
+ "unit": "theme-hook-ledgers",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "F-084",
+   "title": "The Klik factories pay creator fees in a token's listed pair currency whatever currency the hook delivered, and two Ethereum transactions used this to take the fees of other creators",
+   "chainIds": [
+    1,
+    8453,
+    130,
+    57073,
+    42161,
+    4663,
+    43114,
+    143,
+    4217
+   ],
+   "lens": "L4",
+   "assumptions": [
+    "A6"
+   ],
+   "effect": "both",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "difference": "None. The behaviour does not depend on the network. It comes from the Klik launch pad contracts (KlikLauncher, AnyLauncher, KlikHook, AnyHook) that third parties deployed on nine of the 21 networks. The PoolManager behaves as written.",
+   "mechanism": "This answers lead L-378 and adds a direct gain to the finding. 1. Verified source of KlikLauncher 0xb6da931df2ed2c80db47923d4eb46fd913ee01c3 on Ethereum: launch (lines 310 to 328) has no caller check. _launch (lines 362 to 404) requires launchEnabled and an enabled pair, deploys a new KlikToken, and records creatorOf[token] = msg.sender and pairOf[token] = pair. An eth_call of launch from an ordinary account returns a token address on Ethereum and on the unverified Tempo factory 0x20839c453a0ed8bcab1095ea068669469098297c. 2. creditCreatorFee(token, amount) (lines 559 to 564) is callable by the hook and only adds amount to creatorFees[token]. It takes no currency argument. collectFees(token) (lines 566 to 574) lets the creator withdraw creatorFees[token] and pays it with _safeTransfer(pairOf[token], creator, amount), that is in the pair recorded at launch. AnyLauncher 0x95e0da371711502eed78bcc3f17856b4415120ca has the same two functions (lines 596 to 609). Its launch has no caller list either, and it needs a price quote signed by the platform priceSigner (_verifyQuote, lines 296 to 301). 3. Verified source of KlikHook 0x1d06faa7ff674ccfd8a5736c0c0973cb0a8fa0cc: _tokenOf (lines 373 to 378) takes the token from currency1 of the PoolKey when the factory knows it, and takes the pair from currency0 of the PoolKey, without comparing it with pairOf(token). _beforeSwap (lines 446 to 485) mints the buy fee as claims of currency0 and adds it to pendingClaims[token], pendingPlatform[token] and pendingCreator[token]. At the next swap _flushClaims (lines 245 to 266) burns pendingClaims[token] in currency0 of that PoolKey, takes the currency, sends the platform share to the treasury and the creator share to the factory in that currency, and calls creditCreatorFee(token, share). 4. PoolManager.initialize has no access control (src/PoolManager.sol:117-142) and these hooks accept any caller, so an account that launched token T can open a pool that pairs T with a currency X it issues. A swap there accrues a fee in X at no cost. The next swap makes the hook send X to the factory and credit creatorFees[T] by the same number. collectFees(T) then pays that number of units of the real pair from the factory balance, which is the uncollected fee money of every creator who launched against that pair. 5. This has run on Ethereum. Transaction 0xe91af1e1dfb2e1bc9d8026fa275275b16f40c94512207eb3b6936b52b12a9a11 (block 26078723, sender 0x690193287a9f3e0095adae116f4260818332ce0a through contract 0xdb9b1e94b5b69df7e401ddbede43491141047db3): the hook mints and burns 2439181612486875092 claims of currency 0x8b74867835f2207cd61710fc3fd7ffdc6c5d1ca8 for token 0xec2d248beff7f0424fd5d6c602dfd3e6a11c8ce6, whose listed pair is SPCXon. The factory logs a credit of 975672644994750037 and then transfers 975672644994750037 SPCXon to the token creator 0x1ec0e76d1a7f023995cf603dc2802863e5821ec3, which forwards 975770212259253512 SPCXon to the sender. No SPCXon enters the factory in that transaction. Transaction 0x341ecc661e5a52595f908573ae1d560ae8964990ea7c57ab229fc93b8504ceb9 (block 26151960, sender 0x888ddf6a86fd6e6da39395cd3f333ecba55ff364 through contract 0x6730d584c0e5f84b6af8698a16a11d6f82089b1e) repeats it for seven tokens created by that contract. The fees arrive at the factory in token 0x43c6b27489139debfdb71463f83552cc7264968b, which is minted from the zero address in the same transaction, and the factory pays out 36032480969017805 units of 0x2d1f7226bd1f780af6b9a49dcc0ae00e8df4bdee, 15311085289905665 of 0xf6b1117ec07684d3958cad8beb1b302bfd21103f, 8548104401245769 SPCXon, 6797353818778040 of 0xba47214edd2bb43099611b208f75e4b42fdcfedc, 4284309310775460 of 0xfedc5f4a6c38211c1338aa411018dfaf26612c08, 2836402531014289 of 0x14c3abf95cb9c93a8b82c1cdcb76d72cb87b2d4c and 470446068834558 of 0x59644165402b611b350645555b50afb581c71eb2. 6. The factory books no longer match its holdings. For the 16 tokens launched against SPCXon the factory logged credits of 2873155228010260120, the hook sent it 1888836911349760839 SPCXon, and the difference of 984318316660499281 is exactly the two transactions above. Creators collected 1884499543919557792, creatorFees still records 988655684090702328, and the factory holds 4337367430203047 SPCXon. In an eth_simulateV1 run collectFees for token 0xe413ebda258f05cd12aea2aaf9348b1045a136e4 from its creator, with 752539572571985445 recorded, reverts with \"transfer failed\". The pairs 0xf6b1117e, 0xfedc5f4a, 0x59644165 and 0xba47214e show owed amounts equal to what the second transaction took, against a factory balance of zero. 7. On Tempo an eth_simulateV1 run of creditCreatorFee(DUCK, 100000) from the hook address followed by collectFees(DUCK) from the creator makes the factory transfer 2946234 pathUSD, its whole balance, where creatorFees(DUCK) was 2846234 before.",
+   "impact": "Creator fees that the Klik factories hold between collection calls, and the ability of honest creators to collect. On Ethereum about 0.984 SPCXon (about 130 USD at the 132 USD price recorded in cycle 5) and small amounts of six other pair tokens were taken, and at least 0.9887 SPCXon of recorded creator fees can no longer be paid. What the factories hold today is small: 0.0043 SPCXon, 0.0040 AAPLon, 0.0050 NVDAon and two other tokens at 0xb6da931df2ed2c80db47923d4eb46fd913ee01c3 (about 3 USD), about 2 USD of tokens at 0x95e0da371711502eed78bcc3f17856b4415120ca, 2.946234 pathUSD on Tempo, 0.212 UNI on Unichain, 20.65 MON on Monad, about 5 USD of stock tokens on Robinhood Chain, 0.0012 ETH on Ink, 0.2868 AVAX on Avalanche and 14.99 units of one token on Base. Every later fee payment into these factories is exposed in the same way. No liquidity in the PoolManager is touched by this step. The swap freeze of the earlier finding still applies.",
+   "preconditions": "None beyond what any account has: launch a token through the factory (open on Ethereum and Tempo by eth_call), initialize a second pool, swap twice, call collectFees. The source was read for the two Ethereum factories and the Ethereum and Unichain hooks. The Tempo factory is unverified and was tested by simulation. The factories on Base, Ink, Arbitrum One, Robinhood Chain, Avalanche and Monad were not read. launchEnabled() returns 1 on every one of them, including the Avalanche factory 0x5e91ca49f5e94319755634539bd9a1d2f15467a2, which holds 0.2868 AVAX. On Robinhood Chain a launch call from an ordinary account fails only with \"pair not enabled\" for the pair I chose. The AnyLauncher factories (second Ethereum factory, Unichain, and by the hook version string also Base, Ink, Arbitrum One, Avalanche and Monad) need the signed price quote for a launch. I did not examine who can obtain such a quote, so open launch is unconfirmed there. The newer Ethereum hook 0xcba49142a75da64a679f32a159f4316f11a7e0cc rejects a foreign initialize, and its factory 0xfe4a23bbe27be16955f4d8599c73bac88ef647d1 (0.118 ETH and about 480 USD of tokens) was not read.",
+   "mitigations": "The PoolManager deployer cannot change this. The factory author can record the currency with each credit and pay each credit in the currency received, and the hook author can compare currency0 with pairOf(token) and reject initialize from any caller other than the factory. Creators should collect often. Interfaces should treat a second pool of a Klik token as hostile.",
+   "coreRefs": [
+    "src/PoolManager.sol:117-142",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:322-336",
+    "src/libraries/Hooks.sol:248-282"
+   ],
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0xb6da931df2ed2c80db47923d4eb46fd913ee01c3",
+     "supports": "Verified KlikLauncher source: launch without caller check (lines 310 to 328), _launch (362 to 404), creditCreatorFee (559 to 564), collectFees paying pairOf[token] (566 to 574)."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x1d06faa7ff674ccfd8a5736c0c0973cb0a8fa0cc",
+     "supports": "Verified KlikHook source: _tokenOf reads the pair from currency0 of the PoolKey (373 to 378), _mintClaim and _flushClaims (236 to 266), _beforeSwap (446 to 485)."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x95e0da371711502eed78bcc3f17856b4415120ca",
+     "supports": "Verified AnyLauncher source: creditCreatorFee and collectFees with the same shape (lines 596 to 609). _launch requires launchEnabled, the pair lists and a price quote signed by priceSigner (lines 421 to 433 and 296 to 301)."
+    },
+    {
+     "url": "https://mainnet.gateway.tenderly.co",
+     "supports": "Receipts of 0xe91af1e1dfb2e1bc9d8026fa275275b16f40c94512207eb3b6936b52b12a9a11 and 0x341ecc661e5a52595f908573ae1d560ae8964990ea7c57ab229fc93b8504ceb9, 2412 logs of the factory from block 25901115 to 26478259, and SPCXon Transfer logs to and from the factory: 561 transfers from the hook summing to 1888836911349760839."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "Block 26478259: pairOf, creatorOf and creatorFees for the tokens in the factory logs, factory balances per pair, eth_call of launch from 0x00000000000000000000000000000000c0ffee05 returning a token address, and eth_simulateV1 of collectFees for token 0xe413ebda258f05cd12aea2aaf9348b1045a136e4 reverting with \"transfer failed\"."
+    },
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "Block 50439162: eth_call of launch from an ordinary account returns a token address. eth_simulateV1 of creditCreatorFee(DUCK, 100000) from the hook and collectFees(DUCK) from the creator shows a pathUSD Transfer of 2946234 from the factory. launchEnabled() is 1 and the factory holds 2946234 units."
+    },
+    {
+     "url": "https://mainnet.unichain.org",
+     "supports": "Block 64693564: factory 0xd4fde2ed5d11c5aa1260937435d1653836b2a14d (verified name AnyLauncher) holds 0.211998 UNI, launchEnabled() is 1. debug_traceCall through the Quoter for a pool of token 0xf5271d1cd37469baee21e30d1e640e2f6b7fdb76 against a codeless currency shows the hook minting claims of that currency."
+    },
+    {
+     "url": "https://rpc.monad.xyz",
+     "supports": "Block 124735457: factory 0xc06a4464e54af8818af23c666fb0b524bbc71aa9 holds 20.654 MON, launchEnabled() is 1. The Quoter trace for a foreign pool shows burn(hook, foreign currency, 54489710721685566614) reverting with Panic(0x11)."
+    },
+    {
+     "url": "src/PoolManager.sol:117",
+     "supports": "initialize has no access control, so the hook alone decides whether a second pool of a token exists."
+    },
+    {
+     "url": "src/PoolManager.sol:322",
+     "supports": "mint and burn move claims of whatever currency id the hook names and debit or credit the hook in that currency."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Three route hooks on Arbitrum One pay swaps from their own token balance whatever currencies the pool names, so a pool against a worthless token empties them",
+   "chainIds": [
+    42161
+   ],
+   "lens": "L4",
+   "assumptions": [
+    "A4"
+   ],
+   "effect": "siphon",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "difference": "None. The behaviour does not depend on the network. Three third party hooks on Arbitrum One (CamelotHook proxies 0x9b21e1cdd975e58f714fd1bd5a803198d5520088 and 0x157af7a18e040b9c8dc409c13140873d5bb24088, and GoldenGateFeeHook 0x195b3936afeae0f9ada52473bb34d67466a4c0c8) route swaps to an external exchange and hold working balances. The PoolManager behaves as written.",
+   "mechanism": "1. The hooks have the flags beforeSwap and beforeSwapReturnDelta and no initialize flag, so PoolManager.initialize accepts any PoolKey that names them from any account (src/PoolManager.sol:117-142, src/libraries/Hooks.sol:178-182). An eth_call of initialize from an ordinary account succeeded for all seven PoolKey variants on each hook. 2. Verified source of the CamelotHook implementation 0x57ea4782fbdb6cd8256aae28075ce3a0e7e13f0f, _beforeSwap lines 71 to 176: for an exact input swap the hook calls poolManager.take(sourceCurrency, hook, amount) where sourceCurrency is the input currency of the PoolKey, then swaps on the Algebra pool 0xB1026b8e7276e7AC75410F1fcbbe21796e8f7526 with hardcoded WETH and USDC. In algebraSwapCallback (lines 178 to 207) it pays that pool with IERC20(WETH).transfer or IERC20(USDC).transfer from its own balance. It then settles the bought amount in the output currency of the PoolKey and returns a delta of plus the input and minus the output. Nothing compares the currencies of the PoolKey with WETH and USDC. 3. In a pool that pairs a token W the attacker issues with USDC, a swap of W for USDC therefore takes W from the PoolManager, sells the hook's own WETH and hands the USDC to the swapper. The hook ends with W. Its deltas net to zero: the take debits it W (src/PoolManager.sol:291-297), the returned delta credits it W and debits it the output (src/libraries/Hooks.sol:287-311, src/PoolManager.sol:216-217), and its settle credits the output (src/PoolManager.sol:349-364). The unlock therefore completes once the swapper has paid W. The mirror pool, WETH against a token W2 with the swap going from W2 to WETH, sells the hook's USDC. 4. Test inside a real unlock, without sending anything: debug_traceCall of the deployed Quoter 0x8928074CA1b241D8Ec02815881c1Af11E8bC5219 from an unrelated address, with a state override that writes slot0 of the foreign pool id in the PoolManager as initialize would. For 0x9b21e1cd, pool (codeless W, USDC), input 1650159984937101: the trace shows take(W, hook, 1650159984937101), WETH.transfer(Algebra pool, 1649829952940113) from the hook, sync(USDC), USDC.transfer(PoolManager, 2840657), settle, and the Quoter returns 2840657. For pool (WETH, codeless W2), input 64130252: USDC.transfer(Algebra pool, 64117425) from the hook and WETH.transfer(PoolManager, 37171745553261727), Quoter returns 37171745553261727. For 0x157af7a1 the same two runs return 14148521 USDC for its 8221214982138125 WETH and 20257073477671002 WETH for its 34923926 USDC. For GoldenGateFeeHook the runs return 3759006195674900 WETH for its 10843 units of WBTC and 1851 units of WBTC for its 659454474487714 WETH, through pool 0x03a3be7ab4aa263d42d63b6cc594f4fb3d3f3951. 5. The exact output branch of CamelotHook takes real WETH or USDC from the PoolManager in the callback (lines 193 and 203) and is credited in the pool currency. In a foreign pool that leaves the hook with an open WETH or USDC debt, so the unlock reverts with CurrencyNotSettled (src/PoolManager.sol:104-114). PoolManager funds are not reachable through it.",
+   "impact": "The token balances of the three hooks: 64.130252 USDC and 0.00165 WETH at 0x9b21e1cd, 34.923926 USDC and 0.00822 WETH at 0x157af7a1, 0.00010843 WBTC and 0.00066 WETH at 0x195b3936, about 124 USD together at block 526824360. The balances belong to the hook operators. No funds held by the PoolManager for other pools are involved, and the pools of these hooks (five, one and one) keep working after the balances are gone because the normal path pays the exchange with the tokens it just took. The amount grows with whatever the operators leave on the hooks.",
+   "preconditions": "None. Any account can deploy a token, initialize the pool, add no liquidity and swap. The cost is gas. The runs above used a codeless address as the foreign currency, which works for the take because a transfer call to an address without code succeeds (src/types/Currency.sol:60-75). A real run needs a token contract so that the swapper can settle its input. I did not send a transaction. Proxy 0x157af7a1 points at the unverified implementation 0xe43403ad1f3b53d1a59d31756bdb1b28b45631e7 and was judged from its traces, which match the verified one call for call.",
+   "mitigations": "The PoolManager deployer cannot change this. The hook owner can add a beforeInitialize check or compare the PoolKey currencies with the hardcoded tokens in beforeSwap, and can sweep the balances with the owner only multicall function. Until then the owners should keep no balance on the hooks.",
+   "coreRefs": [
+    "src/PoolManager.sol:117-142",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:349-364",
+    "src/libraries/Hooks.sol:248-311",
+    "src/types/Currency.sol:60-75"
+   ],
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/42161/0x57ea4782fbdb6cd8256aae28075ce3a0e7e13f0f",
+     "supports": "Verified CamelotHook source: _beforeSwap takes the PoolKey input currency and trades hardcoded WETH and USDC (lines 71 to 176), algebraSwapCallback pays from the hook balance (178 to 207), owner only setFee, multicall and setEnabled (209 to 221)."
+    },
+    {
+     "url": "https://arbitrum.drpc.org",
+     "supports": "debug_traceCall of Quoter.quoteExactInputSingle with a state override of the pool slot0, from 0x00000000000000000000000000000000c0ffee03: the call sequences and returned amounts quoted in the mechanism for the three hooks."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc",
+     "supports": "Blocks 526821824 to 526824360: EIP-1967 implementation slots of the two proxies, WETH, USDC and WBTC balances of the three hooks, eth_call of PoolManager.initialize from an ordinary account with seven PoolKey variants succeeding on each hook."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/42161/0x195b3936afeae0f9ada52473bb34d67466a4c0c8",
+     "supports": "GoldenGateFeeHook is verified. Its source was fetched and scanned for value moves. The behaviour was established by trace."
+    },
+    {
+     "url": "https://api.dexscreener.com/tokens/v1/ethereum/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+     "supports": "ETH at 1721 USD on 23 November 2026, used for the USD estimates of this unit. Token prices in the ranking come from the same endpoint per network, pair with the most liquidity, position capped at half that liquidity."
+    },
+    {
+     "url": "src/PoolManager.sol:291",
+     "supports": "take debits the caller in the currency it names and transfers that currency."
+    },
+    {
+     "url": "src/libraries/Hooks.sol:299",
+     "supports": "The hook delta returned from beforeSwap is accounted in the two currencies of the PoolKey."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "SpawnerHook on Base keeps one pending ETH fee bucket for every spawn token and pays it to the creator of whichever token is sold when the threshold is crossed",
+   "chainIds": [
+    8453
+   ],
+   "lens": "L4",
+   "assumptions": [],
+   "effect": "siphon",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "None. The behaviour does not depend on the network. SpawnerHook 0xb476c448da4453208df4e371fee26f4e630d3044 is a third party hook with 15,249 pools in the Base census.",
+   "mechanism": "Verified source, _afterSwap lines 234 to 310. The hook charges its fee in the unspecified currency of the swap. For an exact input sale of a spawn token the fee currency is native ETH, and the pending amount is kept in spawnerFeesBalance[feeToken] with feeToken equal to the zero address (line 290), so one number serves all pools. When the number reaches minimumFeeDistribution the hook resets it and calls _distributeFees(spawnToken, creator, total) for the token of the current swap (lines 295 to 297): a quarter goes to the Spawner owner, half buys tokens that are sent to that creator, a quarter is deposited for that creator (lines 320 to 360). Fees taken in a spawn token are converted and stored under that token, so only the ETH side is shared. beforeInitialize accepts any caller for a pool of native ETH against a spawn token (lines 188 to 198), and every swap through a whitelisted router calls spawner.createSpawn(swapper, spawnToken) (line 303), which makes the swapper the creator of a new spawn token, so an account can become a creator and sell its token when the bucket is close to the threshold. I did not read Spawner.createSpawn in full.",
+   "impact": "ETH fees pending for other tokens, at most the distribution threshold per round. spawnerFeesBalance(address(0)) was 945018262798261 wei (about 1.6 USD) at block 61256529. The hook holds 0.5627 ETH in total. The rest of that balance is not tracked by this ledger and I found no function that pays it out to a caller.",
+   "preconditions": "The sale must go through a router on the hook whitelist. minimumFeeDistribution is not public and was not read. Not simulated.",
+   "mitigations": "The hook author can keep the pending ETH per pool id. The PoolManager deployer cannot change this.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/libraries/Hooks.sol:285-311"
+   ],
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/8453/0xb476c448da4453208df4e371fee26f4e630d3044",
+     "supports": "Verified SpawnerHook source: _beforeInitialize (188 to 198), _afterSwap with spawnerFeesBalance[feeToken] (234 to 310), _distributeFees (320 to 360)."
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "Block 61256529: spawnerFeesBalance(address(0)) is 945018262798261, totalCreatorFees() is 26132431268132716624, native balance 562744349885641100 wei. The in unlock test with foreign PoolKeys ends in revert 0xb76b08ae from afterSwap."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L4",
+   "check": "L-395 for Ethereum: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "11557 hook addresses from the cycle 5 census were queried at block 26478088: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (2368 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (324821 calls through Multicall3). 1432 addresses hold something. Priced through DexScreener the holdings come to about 3465098 USD. Largest: 0x0000f07d2b5f1ddf3244b8780f972f306efd2888 (SatoHook) about 1688763 USD; 0xc81fd894c0ace037d133af4886550ac8133568e8 about 947537 USD; 0x0000000aa232009084bd71a5797d089aa4edfad4 (Angstrom) about 455950 USD. Of the 20 ranked hooks that were probed, 11 reject initialize from an ordinary account in all seven PoolKey variants, 5 accept only a second pool of their own currency pair, and 4 accept a foreign pair. Sources read in full or in the relevant part: SatoHook, RobinVistaHook and its factory, OndexHook, TurbineHook, LaunchHook, LaunchpadHook, EthCreatorFeeHookV3. The four that accept a foreign pair are PrismHook, FeeHookV3 (cleared in cycle 5), GeodeHook and UniswapV4KEMHook. In the Quoter test inside an unlock GeodeHook and PrismHook made no PoolManager call, no token transfer and no value send for pools that pair their currencies with a foreign one. The KEM hook reverts in beforeSwap with 0x3b99b53d without its signed data. Answer for the 20 largest: no. The Klik hooks of F-084 rank below them by value.",
+   "source": "https://ethereum-rpc.publicnode.com"
+  },
+  {
+   "chainIds": [
+    10
+   ],
+   "lens": "L4",
+   "check": "L-395 for Optimism: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "137 hook addresses from the cycle 5 census were queried at block 159920591: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (10 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (3837 calls through Multicall3). 28 addresses hold something. Priced through DexScreener the holdings come to about 329 USD. Largest: 0x2a25885a29d884e1eabd6e118468de5600221040 (LimitOrderHook) about 100 USD; 0x00ea3af681d56101bd43d04eb4342d83563b7a80 about 49 USD; 0xb4f4ad63bcc0102b10e6227236e569dce0d97a80 about 49 USD. Of the 20 ranked hooks that were probed, 3 reject initialize from an ordinary account in all seven PoolKey variants, 13 accept only a second pool of their own currency pair, and 4 accept a foreign pair. The holdings are about 100 USD of USDC claims at LimitOrderHook, whose afterSwap reverts for a foreign pool, and DCA tokens on the SuperDCAGauge hooks, which accept only their own pair. GlueHook accepts foreign pairs and made no value call in the test. Answer: no.",
+   "source": "https://mainnet.optimism.io"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L4",
+   "check": "L-395 for Base: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "81347 hook addresses from the cycle 5 census were queried at block 61248385: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (2036 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (1546483 calls through Multicall3). 971 addresses hold something. Priced through DexScreener the holdings come to about 465989 USD. Largest: 0xbdf938149ac6a781f94faa0ed45e6a0e984c6544 (DopplerHookInitializer) about 204515 USD; 0xc81fd894c0ace037d133af4886550ac8133568e8 about 168051 USD; 0x5e178bb3407f80f29f542129853244e7ef409040 (LimitOrderHook) about 19616 USD. Of the 22 ranked hooks that were probed, 13 reject initialize from an ordinary account in all seven PoolKey variants, 4 accept only a second pool of their own currency pair, and 5 accept a foreign pair. The census for Base is sampled for blocks 37,000,001 to 49,000,000, so the pool lists per hook are partial. The five that accept a foreign pair are LimitOrderHook (afterSwap reverts for the foreign pool), wFiatHook and SpectrumToken (beforeSwap reverts with 0x19d5b294 and 0xd3c913ea), the unverified 0xa51c24cd70750521d747641d0267c4a315cb4040 and BrismHook (no value call in the test). SpawnerHook accepts a second pool of its own pair and is reported as a low finding. DopplerHookInitializer was cleared in cycle 5. Answer for the 20 largest: no path to holdings of other pools apart from that finding.",
+   "source": "https://mainnet.base.org/"
+  },
+  {
+   "chainIds": [
+    130
+   ],
+   "lens": "L4",
+   "check": "L-395 for Unichain: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "1254 hook addresses from the cycle 5 census were queried at block 64691613: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (89 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (35133 calls through Multicall3). 76 addresses hold something. Priced through DexScreener the holdings come to about 571 USD. Largest: 0x44ae6071d11476ac6c53b7b715182b0386c320cc (UnicredHook) about 500 USD; 0xad9df9f8c82f7972c972eb9658415ae4bc994888 about 21 USD; 0x0000fe59823933ac763611a69c88f91d45f81888 about 16 USD. Of the 20 ranked hooks that were probed, 9 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 11 accept a foreign pair. Eleven of the 20 accept a foreign pair. They hold 21 USD or less each. The prediction market hooks answer beforeSwap with \"Market not found\", VolatilityFeeHook and the unverified 0x38be9482eebec99aef5972b8c2a4f5ff35408888 and GlueHook made no value call in the test, and AnyHook 0x9463925bdeee2be5eade2a60857442b4a15ca0cc is the Klik hook of F-084 (1.28 USD of claims). The two 268 byte proxies 0xad78e0a3b5a552813feb5eb8ecbe842f7b5e9088 and 0xb495b142a8ce051d0eab328d6baffda451069088 hold nothing. Answer: only the known Klik hook.",
+   "source": "https://mainnet.unichain.org"
+  },
+  {
+   "chainIds": [
+    7777777
+   ],
+   "lens": "L4",
+   "check": "L-395 for Zora: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "10 hook addresses from the cycle 5 census were queried at block 54373048: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (0 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (240 calls through Multicall3). 2 addresses hold something. Priced through DexScreener the holdings come to about 0 USD. Largest: none above 1 USD. Of the 1 ranked hooks that were probed, 0 reject initialize from an ordinary account in all seven PoolKey variants, 1 accept only a second pool of their own currency pair, and 0 accept a foreign pair. Ten hooks, 9.45e-5 ETH in total. Answer: no value to reach.",
+   "source": "https://rpc.zora.energy/"
+  },
+  {
+   "chainIds": [
+    480
+   ],
+   "lens": "L4",
+   "check": "L-395 for Worldchain: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "39 hook addresses from the cycle 5 census were queried at block 38052155: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (4 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (1093 calls through Multicall3). 7 addresses hold something. Priced through DexScreener the holdings come to about 0 USD. Largest: none above 1 USD. Of the 2 ranked hooks that were probed, 0 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 2 accept a foreign pair. Seven addresses hold dust (0.3 WLD at most). LendingHook and GlueHook accept foreign pairs. LendingHook reverts in afterSwap with \"Oracle Not Defined\". Answer: no value to reach.",
+   "source": "https://worldchain-mainnet.g.alchemy.com/public"
+  },
+  {
+   "chainIds": [
+    57073
+   ],
+   "lens": "L4",
+   "check": "L-395 for Ink: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "223 hook addresses from the cycle 5 census were queried at block 61941537: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (202 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (6300 calls through Multicall3). 70 addresses hold something. Priced through DexScreener the holdings come to about 9864 USD. Largest: 0x4cc8f6d5b7ce150ccc0a9b7664532b1283b96ac4 (ERC1967Proxy) about 8027 USD; 0x09be5fbb826de70a3e14fe0fda6a8516307fe8cc (LaunchHook) about 985 USD; 0xbd7e7815c640a67cabd9a93a15d1f250aaeeaac8 (MasterLaunchHook) about 225 USD. Of the 20 ranked hooks that were probed, 17 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 3 accept a foreign pair. The largest is the ERC-1967 proxy 0x4cc8f6d5b7ce150ccc0a9b7664532b1283b96ac4 (implementation InkLegacyMarketOrderAdapter, 4.66 ETH), which rejects initialize with 0x3dc3a7cc or InvalidPool in all seven variants. The three that accept a foreign pair are the unverified 0x26b86c03bd6576b8661d53a48d70faf8c85b8044 (afterSwap reverts with 0x49faf160), StocktopusV4FeeHook (PoolNotRegistered) and FoundryHookV4R2E2 (zero delta). debug_traceCall failed on the Ink endpoints I tried, so the in unlock test did not run here. The Klik hook 0x71b7a448b96a01de73b0caf1267d33558d2620cc is covered by F-084. Answer for the 20 largest: no by probe, in unlock test missing.",
+   "source": "https://rpc-gel.inkonchain.com"
+  },
+  {
+   "chainIds": [
+    1868
+   ],
+   "lens": "L4",
+   "check": "L-395 for Soneium: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "18 hook addresses from the cycle 5 census were queried at block 31152592: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (0 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (504 calls through Multicall3). 4 addresses hold something. Priced through DexScreener the holdings come to about 0 USD. Largest: none above 1 USD. Of the 1 ranked hooks that were probed, 0 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 1 accept a foreign pair. Four addresses hold dust (3.18 ASTR at most). Answer: no value to reach.",
+   "source": "https://rpc.soneium.org"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L4",
+   "check": "L-395 for Celo: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "15 hook addresses from the cycle 5 census were queried at block 83539186: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (0 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (420 calls through Multicall3). 1 addresses hold something. Priced through DexScreener the holdings come to about 0 USD. Largest: none above 1 USD. Of the 0 ranked hooks that were probed, 0 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 0 accept a foreign pair. One address holds 0.01 CELO. Answer: no value to reach.",
+   "source": "https://forno.celo.org"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L4",
+   "check": "L-395 for X Layer: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "10 hook addresses from the cycle 5 census were queried at block 76670912: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (0 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (280 calls through Multicall3). 0 addresses hold something. Priced through DexScreener the holdings come to about 0 USD. Largest: none above 1 USD. Of the 1 ranked hooks that were probed, 1 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 0 accept a foreign pair. The census for X Layer covers only the last 1.4 million blocks (10 hooks). None of them holds claims, the 14 most used currencies or native OKB. TaxLaunchHook 0x9a935223eabd30b00fa680a5f3f8e7485e26aacc keeps its configuration per pool id and its escrow under (recipient, currency) and accepts initialize from its factory only. Answer: no for the hooks seen, unknown for the unread range.",
+   "source": "https://rpc.xlayer.tech"
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L4",
+   "check": "L-395 for Arbitrum One: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "924 hook addresses from the cycle 5 census were queried at block 526815269: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (266 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (26036 calls through Multicall3). 129 addresses hold something. Priced through DexScreener the holdings come to about 11318 USD. Largest: 0xdfaa3cfa545cd488776c43b284187a771ab8aa88 about 2874 USD; 0x18a6ba193352036ef8a7c22be2cb288bb26da8cc (OdysHook2) about 2463 USD; 0x6bc99d37114ae54b782c7694368ed5430e9c0ac8 about 2001 USD. Of the 20 ranked hooks that were probed, 12 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 8 accept a foreign pair. Eight of the 20 accept a foreign pair. Two CamelotHook proxies and GoldenGateFeeHook pay from their own balance for any pool and are reported as a finding. The unverified 0x6bc99d37114ae54b782c7694368ed5430e9c0ac8 (1001 USDC and 1001 USDT) runs its own liquidity rebalance in afterSwap for any pool and the foreign swap reverts there. 0x83863f772f93e2a209dab0af924ca3d6764a40c4 and the KEM hook revert in beforeSwap without signed data. LimitOrderHook reverts in afterSwap. Answer: yes for the three route hooks, no for the rest.",
+   "source": "https://arb1.arbitrum.io/rpc"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L4",
+   "check": "L-395 for Robinhood Chain: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "32968 hook addresses from the cycle 5 census were queried at block 121437434: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (10244 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (633488 calls through Multicall3). 3290 addresses hold something. Priced through DexScreener the holdings come to about 887861 USD. Largest: 0xbef9c77ec3c1a0d92c4cb6264f8923b37a63eae0 (UniwallHook) about 219872 USD; 0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544 (DopplerHookInitializer) about 192517 USD; 0x02973ca0c6f13cec5dfd9262f1cef08c4082a888 (SazareImmutableHookProxy) about 159564 USD. Of the 21 ranked hooks that were probed, 19 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 2 accept a foreign pair. Sources read for the ledger shape: UniwallHook (one pool, every callback checks the PoolKey), CashCatHook and CashCatHookV2, PonsV2MemeHook, LunchTaxHookPair (implementation of proxy 0x4eb1976978756bd56802d8162f2271844924e0cc), FablesRamp, CreatorFeeHookV1, RatchetHook. The two that accept a foreign pair are OrynthEthFeeHook (PoolNotRegistered) and the RatchetHook proxy 0x4bb9e0005efd43999344d3243ebaa575d16b8ac8 (beforeSwap reverts with 0xefded148). The Klik hook 0x41b82571eaaed65f18ad3428f066cd23b9b3a0cc is covered by F-084. Answer for the 20 largest: no.",
+   "source": "https://rpc.mainnet.chain.robinhood.com"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L4",
+   "check": "L-395 for Elysium: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "736 hook addresses from the cycle 5 census were queried at block 9926896: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (380 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (20685 calls through Multicall3). 206 addresses hold something. Priced through DexScreener the holdings come to about 24230 USD. Largest: 0x6b1216a40b65c83e9c9e18a562c446697b8cf8ec about 13903 USD; 0x4de07902f28d00736e29aa5739dea2d4ce98aacc about 4224 USD; 0x10f11002b148be522005f9b5d666bef339392aec about 814 USD. Of the 21 ranked hooks that were probed, 19 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 2 accept a foreign pair. No hook on Elysium has verified source on Sourcify. The native asset was priced at 60 USD as an estimate. 0x6b1216a40b65c83e9c9e18a562c446697b8cf8ec holds 177.6 native units, 36.6 native claims and claims in 60 other currencies and rejects initialize with NotFactory. The two that accept a foreign pair are 0xb10c21608a021b494606f80ce19846a2acabc088 (InvalidCurrency) and 0x6b2306f30d8bff413f99e582c0bb32b4fe58c8cc. The endpoint refuses debug_traceCall, so the test was an eth_call of the Quoter with the same state override. Every foreign pool quoted returned the Quoter error for a swap without output, which shows that no hook paid out of its own holdings. A mint of claims in the foreign currency would not show in that test. Answer: no by probe, the ledgers behind the factories are unread.",
+   "source": "https://rpc.elysium.kinetiq.xyz"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L4",
+   "check": "L-395 for Polygon: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "327 hook addresses from the cycle 5 census were queried at block 97822987: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (32 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (9164 calls through Multicall3). 44 addresses hold something. Priced through DexScreener the holdings come to about 466814 USD. Largest: 0x95603129ab43954dbb771420ad7427d39dba9a88 (UUPSProxy) about 486 USD; 0x48dc7983ea1f130a6dc8cb41671d63c61ab0c0cc (ValeonFeeHook) about 11 USD; 0xa33c9bcd5cada0636f19350d7461003c38814088 (PolHook) about 3 USD. Of the 20 ranked hooks that were probed, 6 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 14 accept a foreign pair. The total above includes 466,294 USD held by the USDC.e token contract 0x2791bca1f2de4661ed88a30c99a7a9449aa84174, which appears in the census because one pool names it as its hook. It is a token and its balance is its own. Without it the hooks hold about 520 USD, of which 486 USD are DAI claims at the UUPS proxy 0x95603129ab43954dbb771420ad7427d39dba9a88, whose beforeSwap reverts with 0x3ec8a600 for a foreign pool. The two PolHook addresses are covered in a separate entry. Answer: no.",
+   "source": "https://polygon.drpc.org"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L4",
+   "check": "L-395 for BNB Smart Chain: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "6919 hook addresses from the cycle 5 census were queried at block 135277791: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (473 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (193963 calls through Multicall3). 396 addresses hold something. Priced through DexScreener the holdings come to about 30720 USD. Largest: 0x12a8d42654213d66096c7c13aad893290ca56888 (SatoHook) about 7485 USD; 0xfffff5962193fbdc458e81cac67437e426c708c0 about 4631 USD; 0xb32343c31653479aea96af86f19eb8099186e888 (SatoHook) about 4430 USD. Of the 20 ranked hooks that were probed, 4 reject initialize from an ordinary account in all seven PoolKey variants, 6 accept only a second pool of their own currency pair, and 10 accept a foreign pair. The single token curve hooks (SatoHook clones, AizoHook) accept only their own pair. Ten accept a foreign pair. In the Quoter test 0xfffff5962193fbdc458e81cac67437e426c708c0 (8.33 BNB), 0x08b7263ba741efed0c31ca1f4290ec768872c5cf, 0x83fbb2e704149c18573108a5f40fa694405340c4, 0x63ada45efd00c9c2cd90e9d53f62bd20d5b90044, 0xffb0ce88cbeefa8a8c7108129caf5dcb5c72c5c7 and 0x3f35af08e01e4caeb488505a65839bd5e640c5c7 made no value call for foreign pools (four of the 38 runs failed at the endpoint). 0x83863f772f93e2a209dab0af924ca3d6764a40c4 and the KEM hook need signed data, and the two 0x..8088 and 0x..80cc hooks answer PoolNotRegistered. Answer: no.",
+   "source": "https://bsc-dataseed1.bnbchain.org"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L4",
+   "check": "L-395 for Avalanche: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "286 hook addresses from the cycle 5 census were queried at block 101168121: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (143 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (8115 calls through Multicall3). 62 addresses hold something. Priced through DexScreener the holdings come to about 1179 USD. Largest: 0xf65f55aebca1bd055a6520a9b41bc7c642a765cf about 664 USD; 0x046a23058b1e56d6aa3e9ac11565bbe8a89728cc about 220 USD; 0x5ed8ecaf3debf477b2041a4f88a26372c42a28cc about 59 USD. Of the 20 ranked hooks that were probed, 12 reject initialize from an ordinary account in all seven PoolKey variants, 2 accept only a second pool of their own currency pair, and 6 accept a foreign pair. Six accept a foreign pair and answer UnknownPool, InvalidPoolKey, InvalidPool or 0xfdf79845 in beforeSwap. Two of them were also run inside an unlock without a value call. The Klik hook 0xb2c964edbac922f006a09bd293b6c42ee147e0cc is covered by F-084. Answer for the 20 largest: no.",
+   "source": "https://api.avax.network/ext/bc/C/rpc"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L4",
+   "check": "L-395 for Monad: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "2773 hook addresses from the cycle 5 census were queried at block 124728880: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (95 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (77690 calls through Multicall3). 46 addresses hold something. Priced through DexScreener the holdings come to about 1147 USD. Largest: 0xb18f6636dd3a782f230c3620ebaacee7880b68cc about 867 USD; 0xee3680dfb0d602fd64eb44feb0e53d16ab8b68cc about 74 USD; 0x2a27462199df20a0b3c599073ce2480344ef6acc about 50 USD. Of the 20 ranked hooks that were probed, 14 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 6 accept a foreign pair. Six accept a foreign pair: the KEM hook clone 0x4445520306c9c70952bdfec28f3989f53d9f80c4 (needs signed data), three that answer PoolNotRegistered or UnknownPool, 0xbc07443314b8b2b018784af6c24c76aeddf71040 (afterSwap reverts) and the Klik hook 0xdd1e195f536e5375ada2eeb179270ac23af8e0cc, where the trace again shows burn(hook, foreign currency, 54489710721685566614). Answer: only the known Klik hook.",
+   "source": "https://rpc.monad.xyz"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L4",
+   "check": "L-395 for MegaETH: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "31 hook addresses from the cycle 5 census were queried at block 32642926: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (6 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (868 calls through Multicall3). 10 addresses hold something. Priced through DexScreener the holdings come to about 7 USD. Largest: 0xc0b267c6c35ac06c12e2e2557e4c3c86bc3120c8 (MegaHook) about 6 USD. Of the 3 ranked hooks that were probed, 2 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 1 accept a foreign pair. Ten addresses hold 6.5 USD in total. Answer: no value to reach.",
+   "source": "https://mainnet.megaeth.com/rpc"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "L-395 for Tempo: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "9 hook addresses from the cycle 5 census were queried at block 50434731: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (4 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (234 calls through Multicall3). 7 addresses hold something. Priced through DexScreener the holdings come to about 0 USD. Largest: none above 1 USD. Of the 0 ranked hooks that were probed, 0 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 0 accept a foreign pair. Seven addresses hold TIP-20 stablecoin dust: 0.230765 pathUSD claims at the Klik hook 0x50995539e4afaca479bb59b0d795d94e0efea0cc (F-084) and 0.6 units of three currencies at 0x55aeb9ebfa15c28ff9d9a675e8574a5bbe186aa8. DexScreener has no prices for Tempo, so the USD figure is zero by construction. Answer: only the known Klik hook.",
+   "source": "https://rpc.mainnet.tempo.xyz"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L4",
+   "check": "L-395 for Arc: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "194252 hook addresses from the cycle 5 census were queried at block 32740439: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (739 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (3691299 calls through Multicall3). 282 addresses hold something. Priced through DexScreener the holdings come to about 16099 USD. Largest: 0xb6a65950534f061618b4ae102fbcbb8541a8e0cc (MinaraFeeHook) about 3378 USD; 0xef17ff990c468636fb23fc97f5da234cfb25c0cc about 1794 USD; 0xac9b0ef27801942c63322ccf262de2cd144b68cc about 1760 USD. Of the 22 ranked hooks that were probed, 18 reject initialize from an ordinary account in all seven PoolKey variants, 2 accept only a second pool of their own currency pair, and 2 accept a foreign pair. The ten largest code groups are covered in a separate entry. Sources read for the ledger shape: MinaraFeeHook (creator fees per pool id, platform fees per currency, launcher only initialize), WonkHook (per pool id), LongHook, LaunchHook. The two that accept a foreign pair are 0xef17ff990c468636fb23fc97f5da234cfb25c0cc (1704 native USDC, UnknownPool in both swap callbacks) and 0x729e46e02219f63f2d73b61dbcd7875fc43dc0cc (zero delta). debug_traceCall was rate limited on Arc, so the test was an eth_call of the Quoter with the state override, which returned no output for the foreign pools. Answer: no.",
+   "source": "https://rpc.mainnet.arc.io"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L4",
+   "check": "L-395 for HyperEVM: rank every hook address by what it holds (claims at the PoolManager, token balances, native balance), take the 20 largest, and test whether an ordinary account can open a pool that names the hook and reach those holdings.",
+   "result": "52 hook addresses from the cycle 5 census were queried at block 52035971: ERC-6909 claims for every (hook, currency id) pair in the cycle 5 claim mint logs (30 pairs) and for the most used currencies, ERC-20 balances of the 14 most used currencies, and the native balance (1460 calls through Multicall3). 28 addresses hold something. Priced through DexScreener the holdings come to about 258 USD. Largest: 0xad2e990ad6995e6ee50403b8c007acabfded20cc about 225 USD; 0xf375b7b88a430debcc2d78ce4203db178d77e8cc about 23 USD; 0x13d4a4e22e5c65a7567ca78c1a03487e0e94a0cc (PurrHook) about 5 USD. Of the 12 ranked hooks that were probed, 9 reject initialize from an ordinary account in all seven PoolKey variants, 0 accept only a second pool of their own currency pair, and 3 accept a foreign pair. The largest holding is 3.75 native claims at 0xad2e990ad6995e6ee50403b8c007acabfded20cc, which rejects initialize. EquoHook and 0x314cf21649625c6e7244e015d0970292db9148c4 accept foreign pairs and made no value call in 16 runs inside an unlock. Answer: no.",
+   "source": "https://rpc.hyperliquid.xyz/evm"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L4",
+   "check": "Arc: group the 194,252 hook addresses by code and examine the ten largest groups.",
+   "result": "Grouping by code hash gives 193,626 different hashes, because nearly every hook is deployed once per pool with its own constants. Grouping by code size and flag bits gives 605 groups. The ten largest: 5175 bytes, flags 0x2044, 180653 hooks, 0 with holdings, about 0 USD; 10423 bytes, flags 0x20cc, 11999 hooks, 0 with holdings, about 0 USD; 12193 bytes, flags 0x840, 298 hooks, 0 with holdings, about 0 USD; 5205 bytes, flags 0x2044, 94 hooks, 0 with holdings, about 0 USD; 16139 bytes, flags 0x840, 77 hooks, 7 with holdings, about 1 USD; 4102 bytes, flags 0xcc, 52 hooks, 0 with holdings, about 0 USD; 8951 bytes, flags 0x80, 45 hooks, 0 with holdings, about 0 USD; 19222 bytes, flags 0xc4, 21 hooks, 6 with holdings, about 36 USD; 1478 bytes, flags 0x2080, 19 hooks, 0 with holdings, about 0 USD; 19351 bytes, flags 0x5c7, 18 hooks, 8 with holdings, about 113 USD. The two largest groups (180,653 hooks of 5,175 bytes and 11,999 hooks of 10,423 bytes) hold no claims, none of the 14 most used currencies and no native balance, reject initialize from an ordinary account with 0x3f94bdf3 and answer the swap callbacks with 0xe524afd1 and the pool id for a pool they did not create. The groups that accept any initialize return a zero delta or revert for a foreign pool. The ten groups hold about 150 USD together. None has verified source on Sourcify or the Arc explorer. One sample per group was probed.",
+   "source": "https://rpc.mainnet.arc.io"
+  },
+  {
+   "chainIds": [
+    1,
+    8453,
+    56,
+    43114,
+    4663
+   ],
+   "lens": "L4",
+   "check": "Single token bonding curve hooks with flags beforeInitialize, beforeAddLiquidity, beforeSwap, beforeSwapReturnDelta that hold native ETH, BNB or AVAX (SatoHook 0x0000f07d2b5f1ddf3244b8780f972f306efd2888 with 981.27 ETH, SurtHook, Sat1Hook, VitaHook, SatopegHook on Ethereum, BloomHook, HookTemplate, J3sseHook on Base, three SatoHook copies and AizoHook on BNB Smart Chain, one on Avalanche, NakamotoHook with 25.89 ETH on Robinhood Chain): they accept a second pool. Can it reach the reserve?",
+   "result": "No. SatoHook source lines 224 to 231: beforeInitialize requires currency0 native, currency1 the hook's own token, fee 3000 and this hook, so a second pool can differ in tick spacing only. beforeSwap (253 to 272) checks the two currencies again and trades against one curve state (ethCum, totalMintedFair), so every pool of the hook is the same market for the same token. beforeAddLiquidity always reverts. The probe confirms it for the family: foreign pairs revert with InvalidPool and only the own pair with another tick spacing is accepted. For the hooks other than SatoHook I relied on the probe and on the matching error selectors, without reading each source.",
+   "source": "https://sourcify.dev/server/v2/contract/1/0x0000f07d2b5f1ddf3244b8780f972f306efd2888"
+  },
+  {
+   "chainIds": [
+    1,
+    5042
+   ],
+   "lens": "L4",
+   "check": "RobinVistaHook 0xc2988a37d611779ad34b561231ee33603d15a0cc on Ethereum (160 pools, claims of 9.24 ETH plus PEPE, UNI, ONDO and others, about 18,100 USD) keeps accrued and banked fees per launch token, and poolIdOf[launchToken] is overwritten on every registerPool. Can an account register a second pool of a token with another base currency and withdraw in it? LongHook 0xfb6369c30573f9af1b88314c732fca944a34e0cc on Arc has the same mappings.",
+   "result": "Not through the deployed factory. The ledger has the Klik shape: fees are added to accrued[launchToken] in the base token of the swapping pool and withdrawn in the base token of the pool that poolIdOf[launchToken] points at (hook lines 178 to 199, 296 to 366). registerPool and beforeInitialize accept allowed factories only, and one FactorySet log exists, for RobinVistaFactory 0x5407f136d0ddd6e6edcf5d2720ee7e26eeb9ac9a. Its launchToken (lines 309 to 419) deploys a new clone token for every launch and takes the base token from an owner curated registry, so each launch token has one pool and one base token. The fault would open if the owner allowed a factory that registers a pool for an existing token. For LongHook I read the mappings and the factory gate only, and did not read its factory.",
+   "source": "https://sourcify.dev/server/v2/contract/1/0x5407f136d0ddd6e6edcf5d2720ee7e26eeb9ac9a"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L4",
+   "check": "OndexHook 0xf6ce7756e6813f259a2b2bcb746f8cf0042fe0cc (179 pools, claims of 1.68 ETH, ONDO, SPCXon, TSLAon, about 5,400 USD), LaunchHook 0x322dcec4958c14e021a9f1cd49df11b9457968cc (6,691 pools, about 10,000 USD of claims), LaunchpadHook 0x51768f5da32ba2008304cc81674da51acb802888 (211 pools) and EthCreatorFeeHookV3 0x35fe236ea82f7cf525c9719d7df8f49f94d720cc (346 pools): under what is the fee ledger stored and who may initialize?",
+   "result": "OndexHook stores treasury, creator, holder and liquidity amounts in ledger[PoolId] (lines 100 to 108) and accepts initialize from its factory only (258 to 263). LaunchHook stores launches per pool id, its FeeEscrow is claimable[recipient][currency], and beforeInitialize requires the hook itself as sender. LaunchpadHook stores curves per pool id and creatorEthOwed per coin, all 211 pools pair with native ETH, and beforeInitialize requires a curve already registered for the pool id. EthCreatorFeeHookV3 stores its configuration per pool id and accepts the registrar of that configuration only. None of them pays from a ledger that omits both the pool id and the currency.",
+   "source": "https://sourcify.dev/server/v2/contract/1/0xf6ce7756e6813f259a2b2bcb746f8cf0042fe0cc"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L4",
+   "check": "TurbineHook 0x1be2e33d8f468c09c1aa9e53d54e400470b2a088 (three pools, claims of 14,720 USDC and 0.4 WETH): beforeInitialize registers any currency pair with tick spacing 1 from any caller, and beforeSwap mints input claims and burns output claims. Can a pool opened by a stranger burn the claims of the real pools?",
+   "result": "No. beforeSwap, mint and burn carry the routerOnly modifier (lines 222 to 280 and 370 to 424), so only swaps sent by the Turbine router reach the claim moves, with the output amount supplied by that router. The hook keeps reserve0 and reserve1 per pool id and updates them with checked arithmetic, and a source comment at line 246 states that the ERC-6909 balance cannot be used because it aggregates all pools of the hook. A new pool starts with zero reserves, so a swap out of it reverts on the subtraction. The router itself was not read.",
+   "source": "https://sourcify.dev/server/v2/contract/1/0x1be2e33d8f468c09c1aa9e53d54e400470b2a088"
+  },
+  {
+   "chainIds": [
+    4663,
+    5042,
+    196,
+    8453
+   ],
+   "lens": "L4",
+   "check": "Launch pad hooks named in L-395 that have verified source: CashCatHook and CashCatHookV2, PonsV2MemeHook, the proxy 0x4eb1976978756bd56802d8162f2271844924e0cc and FablesRamp on Robinhood Chain, MinaraFeeHook, WonkHook and LaunchHook on Arc, TaxLaunchHook on X Layer and Base. Is the ledger that decides a payout stored under the pool id, a token or a currency, and who may initialize?",
+   "result": "All are stored under the pool id or under the currency that is paid. CashCatHookV2: pending and tab per pool id, platformTab per currency, initialize from the factory only and currency0 must equal the configured quote (line 273). CashCatHook: per pool id, native quote only. PonsV2MemeHook: pendingFees, pendingCreatorTax and pendingBuyback per pool id and currency, factory only. 0x4eb19769 is an ERC-1967 proxy of LunchTaxHookPair: accruedQuote per pool id, owed per recipient and quote token, launcher only. FablesRamp: range ledgers per pool, distributorOwed and claimFeeOwed per currency, initialize needs a fee cap configured for the pool id. MinaraFeeHook: creatorAccrued per pool id, platformAccrued per currency, launcher only with an allowed quote. WonkHook: per pool id and currency, initialize needs a registered launch. TaxLaunchHook: configuration and fee slots per pool id, escrow per recipient and currency, factory only. The factories were not read, so whether a launcher may choose the quote currency is answered only where the hook checks it (CashCatHookV2, MinaraFeeHook). ZoraV4CoinHook 0x0469a4bd3724dc86c9542f4694c976da13c450c0 on Base holds nothing in the currencies checked and rejects initialize.",
+   "source": "https://sourcify.dev/server/v2/contract/4663/0x75a54357d9c78a2db19004a5fdc76c50f9242aec"
+  },
+  {
+   "chainIds": [
+    1,
+    8453,
+    4663
+   ],
+   "lens": "L4",
+   "check": "The unverified hook 0xc81fd894c0ace037d133af4886550ac8133568e8 (6,024 bytes, same address on three networks) holds 550.25 WETH on Ethereum, 2.70 cbBTC and 1.65 WETH on Base and stock tokens on Robinhood Chain, about 1.1 million USD. Can an ordinary account open a pool on it?",
+   "result": "Not by the probe. initialize reverts in beforeInitialize with 0x55e83950 for all seven PoolKey variants, including its own currency pair with another tick spacing. Called from the PoolManager address with a foreign PoolKey, beforeAddLiquidity reverts with 0x880bb123, beforeSwap with 0x19cfd260 and beforeDonate with 0xc4bfabc3, and afterSwap returns a zero delta. The code was not decompiled, so the owner and any registration path are unread. This is the largest unread balance in the ranking and is listed as a lead.",
+   "source": "https://ethereum-rpc.publicnode.com"
+  },
+  {
+   "chainIds": [
+    4663,
+    1
+   ],
+   "lens": "L4",
+   "check": "Other large single market hooks: UniwallHook 0xbef9c77ec3c1a0d92c4cb6264f8923b37a63eae0 (126.84 ETH of claims, one pool), the Sazare hooks 0x02973ca0c6f13cec5dfd9262f1cef08c4082a888 (92.73 WETH) and 0xbbe4baf7d38b7465beddffeaf29f96fc50c8a888 (10.63 WETH) on Robinhood Chain, and Angstrom 0x0000000aa232009084bd71a5797d089aa4edfad4 on Ethereum (268,605 USDC, 144,472 USDT, 108.26 WETH).",
+   "result": "Each rejects initialize from an ordinary account in all seven variants (InvalidPool, 0x0dc149f0, empty revert) and each swap callback reverts for a foreign PoolKey. UniwallHook source: every callback carries a modifier that checks the PoolKey and beforeInitialize reverts with Unauthorized. The Sazare proxies and Angstrom were judged from the probe. Angstrom balances are deposits of its own users under its own ledger, which I did not review.",
+   "source": "https://rpc.mainnet.chain.robinhood.com"
+  },
+  {
+   "chainIds": [
+    1,
+    42161,
+    56,
+    143
+   ],
+   "lens": "L4",
+   "check": "UniswapV4KEMHook 0x4440854b2d02c57a0dc5c58b7a884562d875c0c4 (107 pools on Ethereum, claims of about 4,700 USD in many currencies, also on Arbitrum One and BNB Smart Chain, same code on Monad at 0x4445520306c9c70952bdfec28f3989f53d9f80c4) and the unverified 0x83863f772f93e2a209dab0af924ca3d6764a40c4 (about 2,000 USD of claims on BNB Smart Chain, 618 USD on Arbitrum One) have no initialize flag and no ledger at all. Can a foreign pool spend the claims?",
+   "result": "No path found. The hooks have no state mapping, and the claims are surplus kept for the hook operator, so there is no balance owed to a particular pool. For a foreign pool beforeSwap reverts with 0x3b99b53d (0x87fa6e44 on the unverified one) because the swap carries no signed quote, and afterSwap alone reverts with Panic(0x12). The claim withdrawal function was not read.",
+   "source": "https://sourcify.dev/server/v2/contract/1/0x4440854b2d02c57a0dc5c58b7a884562d875c0c4"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L4",
+   "check": "PolHook 0xa33c9bcd5cada0636f19350d7461003c38814088 and 0xb721b4f9771ed66f85c0ffbf9504f1eaab154088 on Polygon have the same shape as the Arbitrum route hooks: beforeSwap takes the PoolKey input currency and trades hardcoded DAI and USDT on a Curve pool from the hook balance (source lines 53 to 115). They hold 3.0 DAI each and 2.24 USDT. Can a foreign pool empty them?",
+   "result": "Not today. In the Quoter test inside an unlock the hook takes the foreign currency and Curve pulls 2.9994 DAI from the hook, and then exchange_underlying reverts because the Aave V2 lending pool 0x8dff5e27ea6b7ac08ebfdf9eb090f32ee9a30fcf rejects the deposit with error string \"3\". The same revert hits the hooks' own DAI and USDT pool, so the hooks are out of service. The balances are about 3 USD each. beforeSwap in this source has no caller check either. If the Aave reserve accepts deposits again the path opens.",
+   "source": "https://sourcify.dev/server/v2/contract/137/0xa33c9bcd5cada0636f19350d7461003c38814088"
+  },
+  {
+   "chainIds": [
+    130,
+    42161
+   ],
+   "lens": "L4",
+   "check": "Hooks that call PoolManager.take or PoolManager.swap with hardcoded currencies inside beforeSwap for any pool, and hold nothing: Unichain proxy 0xad78e0a3b5a552813feb5eb8ecbe842f7b5e9088 (takes native ETH and swaps on a real pool for a foreign PoolKey) and the exact output branch of CamelotHook on Arbitrum One. Can this move PoolManager funds to the swapper?",
+   "result": "No. take debits the hook in the currency it names (src/PoolManager.sol:291-297) and the delta it returns is credited in the currencies of the foreign PoolKey (src/libraries/Hooks.sol:299-311), so the hook is left with a debt in the real currency that nobody settles and unlock reverts with CurrencyNotSettled (src/PoolManager.sol:104-114). The Quoter shows a result only because it reverts before that check. A loss needs a hook that owns claims or balances, as in the two findings.",
+   "source": "src/PoolManager.sol:104"
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L4",
+   "check": "Unverified hook 0x6bc99d37114ae54b782c7694368ed5430e9c0ac8 on Arbitrum One (1001 USDC and 1001 USDT on the hook, two pools, no initialize flag): afterSwap does not look at the PoolKey. For any pool it reads prices from 0x451d7e6f and calls PositionManager.modifyLiquiditiesWithoutUnlock on its own position 0x2afe.",
+   "result": "No loss shown. In the Quoter test for five foreign PoolKeys the third modifyLiquiditiesWithoutUnlock call reverts and afterSwap fails with a wrapped error, so a foreign pool cannot be swapped at all. The rebalance uses the oracle price and the hook's own position, and anyone can trigger the same code by swapping in the real pool. Whether a foreign swap can succeed in another state and move the position at a price the attacker sets was not established and is listed as a lead.",
+   "source": "https://arbitrum.drpc.org"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1,
+    8453,
+    4663
+   ],
+   "lens": "L4",
+   "question": "What is the unverified hook 0xc81fd894c0ace037d133af4886550ac8133568e8 (6,024 bytes, flags beforeInitialize, beforeAddLiquidity, beforeSwap, afterSwap, beforeDonate, beforeSwapReturnDelta), who can register a pool on it (error 0x55e83950 in beforeInitialize), and whose are the 550.25 WETH on Ethereum and 2.70 cbBTC on Base it holds?",
+   "why": "It is the second largest balance on any hook in the ranking, about 1.1 million USD, and the only hook above 100,000 USD whose code nobody read. The probe shows that an ordinary initialize fails, which leaves the registration path and the owner functions open.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L4",
+   "question": "Decompile or find source for the Elysium hooks 0x6b1216a40b65c83e9c9e18a562c446697b8cf8ec (104,615 pools, 177.6 native units and claims in 61 currencies), 0x4de07902f28d00736e29aa5739dea2d4ce98aacc (70.4 native units) and 0x10f11002b148be522005f9b5d666bef339392aec, and find an endpoint that serves debug_traceCall: is the fee ledger per pool id, and can a launcher choose the quote currency at the factory?",
+   "why": "No Elysium hook has verified source, the public endpoint refuses traces, and the in unlock test there can only see payouts, so a ledger with the Klik shape behind a public factory would not have been noticed. The first hook is the most used hook on the network.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    8453,
+    130,
+    57073,
+    42161,
+    4663,
+    43114,
+    143
+   ],
+   "lens": "L4",
+   "question": "Repeat the ledger reconciliation done for the Ethereum KlikLauncher (credits and collections per pair from the factory logs against the pair tokens the hook sent) for the Klik factories 0x55fd4a4c5f852c1fafda40333fef65d8c948035d and 0xc6c34e9e2db62eae58632fb7a5757ecf6b85e4eb on Base, 0xd4fde2ed5d11c5aa1260937435d1653836b2a14d on Unichain, 0x8d787a97be89d59dc58d8784e079f4361430ff6a on Ink and Arbitrum One, 0xb2585cf66680776caaab892f2ad7141c5a927d54 on Robinhood Chain, 0xc06a4464e54af8818af23c666fb0b524bbc71aa9 on Monad and the Avalanche factory, and for AnyLauncher 0x95e0da371711502eed78bcc3f17856b4415120ca on Ethereum.",
+   "why": "Two transactions drained the Ethereum factory through credits in a foreign currency. The other factories share the hook code and were only checked for balances and launchEnabled, so earlier thefts and the present shortfall per pair are unknown there.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    42161,
+    137
+   ],
+   "lens": "L4",
+   "question": "Who operates the CamelotHook proxies and GoldenGateFeeHook on Arbitrum One and PolHook on Polygon (PolHook names 0xdA88261bfed59aB29ee3C1407cd0060411812347 as controller), do the three empty Arbitrum proxies 0xae16067d23a8a93b370a3dc5ba28f2ce0a0c4088, 0xdf5310961c870f36647407891758777e96abd088 and 0xed3f5c8d7b19a1f502aeda8ab2d79b6202331088 (MarketMakerHookV3) share the fault, and has any transaction already used a foreign pool against them?",
+   "why": "The balances at risk are small today and grow with use. A scan of Initialize logs that name these hooks with an unexpected currency pair would show whether the path is in use and would let the report give the operators a concrete warning.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L4",
+   "question": "For hook 0x6bc99d37114ae54b782c7694368ed5430e9c0ac8 on Arbitrum One: under which state does afterSwap complete for a foreign pool, and does the liquidity it then re-centres use only the oracle 0x451d7e6f or also values taken from the calling pool?",
+   "why": "The hook rebalances its own USDC and USDT position (about 2,000 USD on the hook plus the position) for any pool that names it. If a value from the calling pool enters the range choice, a foreign pool could place that liquidity at a price the attacker sets and trade against it.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    8453,
+    196
+   ],
+   "lens": "L4",
+   "question": "Complete the holdings ranking where its inputs are partial: on Base the pool rows per hook are a sample and only the 14 most used currencies were read for token balances of 81,347 hooks, and on X Layer the census has 10 hooks from the last 1.4 million blocks. Read claim balances from a full ERC-6909 Transfer index and rerun the ranking.",
+   "why": "A hook that holds a large balance in a currency outside the 14 most used ones, or that was created in the unread X Layer range, is missing from the top 20.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-395",
+   "outcome": "finding",
+   "answer": "Hooks were ranked by holdings on all 21 networks (claims from the cycle 5 mint logs plus the most used currencies, token balances, native balance), the 20 largest per network were probed, sources were read for the largest and for the named launch pad hooks, and open hooks were run inside an unlock through the Quoter with a state override. Two new hook faults came out: three route hooks on Arbitrum One pay any pool from their own balance (about 124 USD), and SpawnerHook on Base shares one ETH fee bucket across tokens (about 1.6 USD pending). The named launch pad hooks with source store their ledgers per pool id or per paid currency. The hooks with large balances (SatoHook 981 ETH, Uniwall 127 ETH of claims, Angstrom, Doppler, Sazare) pin their currencies or reject foreign pools. Unread: the unverified 0xc81fd894 hook with about 1.1 million USD and every Elysium hook. On Arc the 194,252 hooks form 605 groups by size and flags, and the ten largest groups hold about 150 USD together."
+  },
+  {
+   "leadId": "L-378",
+   "outcome": "finding",
+   "answer": "Yes to both parts. launch has no caller check in the verified KlikLauncher and AnyLauncher sources, and an eth_call from an ordinary account returns a token on the Ethereum and Tempo factories. collectFees(token) pays creatorFees[token] in pairOf[token], and creditCreatorFee records no currency, so fees credited in a worthless currency are paid in the real pair from the factory balance. Collected fees go to creatorOf[token]. Two Ethereum transactions (0xe91af1e1 and 0x341ecc66) took about 0.984 SPCXon and six other pair tokens this way, and the factory now records 0.9887 SPCXon of creator fees against a balance of 0.0043 SPCXon. On Tempo a simulated credit and collect moves the whole 2.946234 pathUSD of the factory."
+  }
+ ]
+}
