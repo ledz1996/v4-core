@@ -29,14 +29,15 @@ def main():
     for uid, u in L["units"].items():
         cells = [L["cells"][f"{c}:{l}"] for c in u["chainIds"] for l in lenses]
         fresh = sum(1 for c in cells if c["depth"] == 0)
-        open_leads = [l for l in L["leads"] if l["status"] == "open" and set(l["chainIds"]) & set(u["chainIds"])]
+        # leads that span more than ten networks are cross-network questions; they go to themes, not to a unit
+        open_leads = [l for l in L["leads"] if l["status"] == "open" and len(l["chainIds"]) <= 10 and set(l["chainIds"]) & set(u["chainIds"])]
         unsettled = [f for f in F if f["status"] in ("plausible", "unverified") and set(f["chainIds"]) & set(u["chainIds"])]
         live = [f for f in F if f["status"] == "confirmed" and set(f["chainIds"]) & set(u["chainIds"])]
         age = cycle - max(c["lastCycle"] for c in cells)
         thin = sum(1 for c in cells if c["depth"] == 1)
         # leads raised from cycle 2 on were written under the unprivileged threat model and count in full
         score = (100 * fresh + 6 * sum(1 for l in open_leads if l["priority"] == "high" and l["cycle"] >= 2) + sum(2 if l["cycle"] >= 2 else 0.25 for l in open_leads)
-                 + 5 * len(unsettled) + thin + 3 * max(0, age - 1) + (20 if age >= STALE else 0)
+                 + 5 * len(unsettled) + thin + 15 * max(0, age - 1) + (20 if age >= STALE else 0)
                  + 2 * sum(1 for f in live if cycle - f.get("lastVerifiedCycle", 0) >= STALE))
         mode = "baseline" if fresh else "deepen"
         units.append({"score": score, "id": uid, "title": u["title"], "chainIds": u["chainIds"], "mode": mode,
@@ -45,6 +46,10 @@ def main():
     units.sort(key=lambda u: -u["score"])
     baseline = [u for u in units if u["mode"] == "baseline"]
     chosen = baseline if baseline else units[:max_units]
+    # --units a,b,c overrides the scoring and takes exactly these network families
+    if "--units" in sys.argv:
+        want = sys.argv[sys.argv.index("--units") + 1].split(",")
+        chosen = [u for w in want for u in units if u["id"] == w]
     for i, u in enumerate(chosen):
         if u["mode"] == "baseline":
             u["lenses"] = lenses; u["angles"] = [ANGLES[0]]
