@@ -1,0 +1,516 @@
+{
+ "unit": "stablecoin-l1",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 4217,
+   "lens": "L1",
+   "summary": "The stock build of the mainnet release has no JIT backend, and the deployed PoolManager bytecode returned the amounts that a transcription of src/libraries gives for 256 simulated swaps and 288 paid liquidity adds. A differential over 21 arithmetic and comparison opcodes found no deviation. The T14 account marker is read from source ahead of its activation on 8 December 2026.",
+   "deltas": [
+    {
+     "delta": "At commit 697ea97, which the endpoint reports as tempo/v1.19.0-697ea97, the jit feature of the tempo binary is optional. The default feature list is asm-keccak, jemalloc, otlp and keccak-cache-global, and the release Dockerfile builds with asm-keccak, jemalloc and otlp. A node built that way runs the evm2 interpreter only. I could not establish which features each validator compiled in.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/bin/tempo/Cargo.toml and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/Dockerfile",
+     "relevance": "low"
+    },
+    {
+     "delta": "256 swaps simulated through unlock on the deployed PoolManager at block 50,361,051 (8 hookless pools, 128 exact input and 128 exact output swaps in both directions, amounts from 1 to 9 * 10^21, 60 of them with 9 to 12 swap steps across initialized ticks) returned the same two amounts as a Python transcription of Pool.swap in this repository that was fed the pool state read with extsload. This shows how the chain executes the deployed contract. It says nothing about a build of this checkout.",
+     "source": "eth_call and eth_simulateV1 via https://rpc.mainnet.tempo.xyz",
+     "relevance": "low"
+    },
+    {
+     "delta": "1,008 cases over ADD, MUL, SUB, DIV, SDIV, MOD, SMOD, ADDMOD, MULMOD, EXP, SIGNEXTEND, LT, GT, SLT, SGT, BYTE, SHL, SHR, SAR, NOT and XOR, with shift counts and operands at the 8, 64, 128, 160, 255 and 256 bit edges, returned the reference result in every case.",
+     "source": "eth_call with override code via https://rpc.mainnet.tempo.xyz",
+     "relevance": "low"
+    },
+    {
+     "delta": "From T14 (timestamp 1796742000, 8 December 2026) an account whose code is the single byte 0xef and whose configuration is registered runs a native shim. The shim returns success with empty data for empty calldata, answers isValidSignature and onERC721Received, and reverts with empty data for every other selector. The precompile at 0xAACC000000000000000000000000000000000000 dispatches deriveAccount, getConfigCommitment, updateConfig and upgradeAccount only.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/configurable_account/shim.rs, https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/configurable_account/dispatch.rs and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/chainspec/src/spec.rs",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4217,
+   "lens": "L2",
+   "summary": "Tempo accepts five transaction forms: legacy, EIP-2930, EIP-1559, EIP-7702 and the type 0x76 batch. Every form rejects native value before execution, every call runs with the signer as msg.sender and tx.origin, and one transient map lasts for the whole transaction. The only system transaction form is the subblock metadata call, which the block executor rejects from T4 on.",
+   "deltas": [
+    {
+     "delta": "prepare_legacy, prepare_eip2930, prepare_eip1559 and prepare_eip7702 each call validate_no_native_value first, which fails with ValueTransferNotAllowed when the envelope value is not zero. The 0x76 path fails with ValueTransferNotAllowedInAATx in the intrinsic gas step and again in prepare_aa when any call of the batch carries value. settle on the PoolManager therefore always sees msg.value 0 (src/PoolManager.sol:352-354).",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler/config.rs (lines 494-566) and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler.rs (lines 372 and 1440)",
+     "relevance": "low"
+    },
+    {
+     "delta": "execute_batch sets tx.origin to the signer, takes one state checkpoint, runs each call of the batch as an initial frame with the signer as caller, and rolls back to the checkpoint when any call fails. Nothing between two calls touches transient storage, so a sync made in call 1 is still set in call 2 of the same sender. An unlock cannot span two calls, because the lock is set and cleared inside one call (src/PoolManager.sol:104-114).",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler.rs (lines 1277-1372)",
+     "relevance": "low"
+    },
+    {
+     "delta": "A legacy transaction flagged as a system transaction runs as a system call with the recovered signer as caller. validate_system_tx accepts only the subblocks metadata call at the end of a block and returns 'subblocks are disabled in T4+' on the current fork. The block level system calls go to the CurrentCommittee precompile and to the EIP-2935 history contract. None of them reaches the PoolManager.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/block.rs (lines 536-551, 573-615 and 812-826) and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler/config.rs (lines 508-538)",
+     "relevance": "none"
+    },
+    {
+     "delta": "The Tempo SSTORE instruction calls the storage credit accounting, which reads and writes transient state. That state sits at the address of the StorageCredits precompile, at the slot equal to the account address, and settlement at the end of the transaction removes the transient slots of that precompile address only. The transient slots of the PoolManager address are not touched.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/instructions.rs (lines 86-139), https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/storage_credits/mod.rs (lines 113-218) and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler/config.rs (lines 444-490)",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4217,
+   "lens": "L3",
+   "summary": "Since T7 the base fee follows the EIP-1559 formula against a fixed target of 10,000,000 gas and is clamped between 600,000,000 and 12,000,000,000 attodollars per gas. PoolManager transactions count against the 30,000,000 gas general limit of each block and are ordered by tip. A first crossing of a tick whose two fee growth slots are empty costs 504,684 gas in simulation. The pools of the PoolManager name 73 currencies, and one of them, GABAGOOL, already rejects every transfer.",
+   "deltas": [
+    {
+     "delta": "tempo_t7_next_block_base_fee applies the EIP-1559 update with denominator 8 against a target of 10,000,000 gas used in the parent block and clamps the result to the floor 600,000,000 and the cap 12,000,000,000. The value 600,000,000 that earlier cycles read in every block is the floor. A parent block with 30,000,000 gas used at the floor gives 750,000,000 for the child.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/hardfork/src/constants.rs (lines 50-80), https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/chainspec/src/spec.rs (lines 362-377 and 743-750) and https://tempo.com/developers/docs/protocol/fees/spec-fee.md",
+     "relevance": "low"
+    },
+    {
+     "delta": "The payload builder defers a transaction that is not a payment when the general gas used so far plus that transaction would pass the general gas limit, and the pool orders transactions by effective tip to the proposer. Calls to the PoolManager are not payments.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/payload/builder/src/lib.rs (lines 345-346 and 580-637) and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/transaction-pool/src/ordering.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "Gas measured with eth_simulateV1 at block 50,363,527 in the pathUSD and USDC.e pool with fee 375 and spacing 4: one dust position on a fresh tick pair costs about 540,000 gas when positions share ticks, a first crossing of a tick with one empty fee growth slot costs about 254,500 gas, and a first crossing with both slots empty costs 504,684 gas (5,819,042 gas for 11 crossings and 10,865,864 gas for 21 crossings above a swap without crossings).",
+     "source": "eth_simulateV1 with state overrides via https://rpc.mainnet.tempo.xyz at block 50,363,527",
+     "relevance": "high"
+    },
+    {
+     "delta": "The PoolManager emitted 167 Initialize logs between blocks 6,475,884 and 44,284,250, and none after that up to block 50,360,041. 147 pools have no hook. The pools name 73 currencies, 31 of them TIP-20 precompile tokens and 42 ordinary token contracts. Balances at block 50,360,217: 406,692 OUSD, 49,998 BRLA, 41,469 USDC.e, 19,629 pathUSD, 3,366 USDT0, and smaller amounts of stcUSD, syrupUSDC, USDY, cUSD, cbBTC, jEUR, sUSDe and USDe.",
+     "source": "eth_getLogs in 504 ranges of 100,000 blocks and eth_call balanceOf via https://rpc.mainnet.tempo.xyz",
+     "relevance": "low"
+    },
+    {
+     "delta": "The TIP-20 token GABAGOOL at 0x20c000000000000000000000030a4c7f7b8f3586 has transferPolicyId 0, the built in policy that rejects every account. A take of 1 unit from the PoolManager reverts with PolicyForbids (0x54cfe659) wrapped in ERC20TransferFailed. The PoolManager holds 0.6 GABAGOOL for two pools. The total supply is 310.6 tokens.",
+     "source": "eth_call transferPolicyId, isAuthorized and a simulated take via https://rpc.mainnet.tempo.xyz between blocks 50,360,217 and 50,363,527",
+     "relevance": "high"
+    },
+    {
+     "delta": "The TIP-403 registry knows three policy types, WHITELIST, BLACKLIST and COMPOUND. None counts amounts or transfers, and the TIP-20 source has no volume, count, cooldown or holding limit. The spending limits of session credentials apply to the signing account of a transaction only, as cycle 2 recorded.",
+     "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/contracts/src/precompiles/tip403_registry.rs and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/tip20/mod.rs",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4217,
+   "lens": "L4",
+   "summary": "I repeated the special address sweep with the PoolManager as an inner frame: a forwarding stub placed at the PoolManager address by state override, called from another account. 67 targets and 16 call shapes gave the same picture as the earlier top level sweeps. The wrapped native address stored in the periphery is a 53 byte contract that reverts on every call.",
+   "deltas": [
+    {
+     "delta": "With the stub as caller and 0x00000000000000000000000000000000c0ffee01 as tx.origin, 14 native precompiles and the ZoneVerifier answer empty calldata with a bare revert and every other shape with UnknownFunctionSelector (0xaa4bc69a). StorageCredits answers balanceOf(PoolManager) with 13 under STATICCALL and rejects the rest. pathUSD and OUSD accept transfer of 0 and 1 and reject the eleven callback selectors. Unused addresses under the TIP-20 prefix revert with Uninitialized (0x1c72fad4). A value call fails on every target because the PoolManager has no native balance.",
+     "source": "eth_call with state override at block 50,360,217 via https://rpc.mainnet.tempo.xyz",
+     "relevance": "low"
+    },
+    {
+     "delta": "PositionManager.WETH9() returns 0xbbbcc62853a5fa27b93d6bab3e6f7ce841e25df2, a 53 byte contract whose every call reverts with selector 0xea3559ef. Both Universal Router deployments hold the same address as an immutable. No wrapped native token exists for the periphery to use.",
+     "source": "eth_call and eth_getCode via https://rpc.mainnet.tempo.xyz at block 50,363,131",
+     "relevance": "low"
+    },
+    {
+     "delta": "The selector of setReceivePolicy(uint64,uint64,address), 0xdda03d86, does not occur in the bytecode of the PoolManager, PositionManager, either Universal Router, Permit2, Quoter, StateView or PositionDescriptor. receivePolicy returns all zeros for each of them at block 50,363,131.",
+     "source": "eth_getCode and eth_call on 0x403c000000000000000000000000000000000000 via https://rpc.mainnet.tempo.xyz",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L1",
+   "summary": "The client source sets the Zero7 and Zero8 forks for mainnet at timestamp 1789052400, 10 September 2026, and the changelog requires a Zero8 capable release from that moment. Mainnet is past that time, so the release with the ruint correction is in force. A differential over 21 arithmetic and comparison opcodes found no deviation, and 64 swaps simulated through the deployed PoolManager returned the amounts of the source formulas.",
+   "deltas": [
+    {
+     "delta": "ARC_ZERO7_HARDFORK_TIMESTAMP_ACTIVATION_MAINNET and ARC_ZERO8_HARDFORK_TIMESTAMP_ACTIVATION_MAINNET are both 1789052400. The v0.8.0 changelog says mainnet operators must run a version that supports Zero7 and Zero8 before that time, and the same release lists the ruint update that corrects overflow flags and shift amount handling. Block 32,660,300 has timestamp 1795399374.",
+     "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/execution-config/src/hardforks.rs (lines 295-311 and 407-411), https://raw.githubusercontent.com/circlefin/arc-node/main/CHANGELOG.md and eth_getBlockByNumber via https://rpc.mainnet.arc.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "1,008 cases over ADD, MUL, SUB, DIV, SDIV, MOD, SMOD, ADDMOD, MULMOD, EXP, SIGNEXTEND, LT, GT, SLT, SGT, BYTE, SHL, SHR, SAR, NOT and XOR, with shift counts and operands at the 8, 64, 128, 160, 255 and 256 bit edges, returned the reference result in every case on the Arc endpoint.",
+     "source": "eth_call with override code via https://rpc.mainnet.arc.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "64 swaps simulated through unlock on the deployed PoolManager at block 32,666,820 (4 hookless pools on the token face of USDC with protocol fees of 20, 193 and 1000 pips per direction, exact input and exact output in both directions, 28 of them with 2 to 9 swap steps) returned the same two amounts as the Python transcription of Pool.swap in this repository. This shows how the chain executes the deployed contract. It says nothing about a build of this checkout.",
+     "source": "eth_call with state overrides via https://rpc.mainnet.arc.io",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L2",
+   "summary": "Arc adds no transaction type of its own. The one execution context that departs from Ethereum is the CallFrom subcall, and the deployed helper Memo passes its own msg.sender as the sender, as Multicall3From does. In the last two million blocks the PoolManager initialized 7,481 pools, 7,252 of them on address(0) and 154 on the token face of USDC, and none that pairs the two.",
+   "deltas": [
+    {
+     "delta": "Memo.memo calls CALL_FROM.callFrom(msg.sender, target, data). The EVM rejects the subcall unless the child caller equals the contract that called the precompile or equals the transaction signer, rejects any value on the subcall, and rejects static context and every call scheme other than CALL. A contract that runs in the middle of a user's transaction and calls Memo is itself the sender argument and is refused.",
+     "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/contracts/src/memo/Memo.sol (line 43) and https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs (lines 884-955)",
+     "relevance": "low"
+    },
+    {
+     "delta": "Initialize logs of the PoolManager from block 30,660,000 to 32,661,734 (395 of 401 ranges of 5,000 blocks answered): 7,481 pools, 7,321 without a hook. 7,252 pools have address(0) as currency0 and 154 name 0x3600000000000000000000000000000000000000. No pool in that window pairs address(0) with 0x3600 or names the USDC implementation address.",
+     "source": "eth_getLogs via https://rpc.mainnet.arc.io",
+     "relevance": "high"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L3",
+   "summary": "The deployed Universal Router, Universal Router 2.1.2 and PositionManager all complete a native settle after another caller left the token face of USDC or EURC synced, so they call sync(address(0)) first. Their wrapped native immutable is a contract that reverts on every call, so the periphery never treats 0x3600 as wrapped native. No pooled token on Arc limits how much the PoolManager may send in a period.",
+   "deltas": [
+    {
+     "delta": "A direct settle with value after sync(0x3600) reverts with NonzeroNativeValue (0xb0ec849e) on the deployed PoolManager. The same value settle sent through execute on 0x4fcA4a51Ab4F23A7447b3284fBd7D73289A89Fb1 and 0x8702463e73f74d0b6765aBceb314Ef07aCb92650 and through modifyLiquidities on 0x6049c9a0e26405C0985f9E3685C87d0aE917f82B succeeds after sync(0x3600) and after sync(EURC). The verified source of the 2.1.2 router calls poolManager.sync(currency) before both branches of _settle, and each of the three bytecodes contains the sync selector once.",
+     "source": "eth_call with state overrides at block 32,662,000 via https://rpc.mainnet.arc.io and https://sourcify.dev/server/v2/contract/5042/0x8702463e73f74d0b6765aBceb314Ef07aCb92650?fields=compilation,sources",
+     "relevance": "high"
+    },
+    {
+     "delta": "PositionManager.WETH9() returns 0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f, and both routers hold the same address as an immutable. Its code is 53 bytes and every call reverts with selector 0xea3559ef. The wrap and unwrap actions of the periphery cannot run on Arc.",
+     "source": "eth_call and eth_getCode via https://rpc.mainnet.arc.io at block 32,660,300",
+     "relevance": "low"
+    },
+    {
+     "delta": "Universal Router 2.1.2 settles a debt in currency 0x3600 out of the value sent with the call: SETTLE with the contract balance constant reads USDC.balanceOf(router), which is the router's native balance in 6 decimals, and pays through the token face. The simulated sequence with 10^15 wei of value succeeded.",
+     "source": "eth_call with state overrides at block 32,662,000 via https://rpc.mainnet.arc.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "Inside one unlock at block 32,661,762 the whole PoolManager balance was taken and paid back three times in a row for the token face of USDC (2,438,707.72264 USDC), for native USDC (2438707722640960327598942 wei), and at nearby blocks for EURC, cirBTC and bridged WETH. Paying a native debt through the token face leaves CurrencyNotSettled (0x5212cba1), as two currency ids require.",
+     "source": "eth_call with state overrides via https://rpc.mainnet.arc.io",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 5042,
+   "lens": "L4",
+   "summary": "I repeated the special address sweep with the PoolManager as an inner frame, using a forwarding stub at the PoolManager address and another account as transaction origin. 68 targets and 16 call shapes behave as in the top level sweeps of the earlier cycles. The EIP-2935 history contract exists on Arc and rejects every shape.",
+   "deltas": [
+    {
+     "delta": "Inner frame results at block 32,660,300: transfer returns true only on USDC, EURC, cirBTC and bridged WETH. Empty calldata with 10^12 wei is accepted by 0x01 to 0x08, 0x12, 0x13, 0x100, the log emitter address, the three EntryPoints, the PositionManager, both Universal Routers and the fee jar. balanceOf under STATICCALL answers with a balance on the two USDC addresses, the tokens, the EntryPoints, USYC, the PositionManager and the ERC-8004 identity registry, and with a fixed hash on 0x02 and 0x03. The eleven callback selectors succeed only on 0x01 to 0x04, 0x12, 0x13, 0x100 and the log emitter, and none of those returns 32 bytes that start with the selector at an address with valid hook flags.",
+     "source": "eth_call with state override at block 32,660,300 via https://rpc.mainnet.arc.io",
+     "relevance": "low"
+    },
+    {
+     "delta": "The EIP-2935 history contract at 0x0000F90827F1C53a10cb7A02335B175320002935 holds 83 bytes of code and reverts on all 16 shapes when the PoolManager calls it. The EIP-4788, EIP-7002 and EIP-7251 addresses hold no code. The Arachnid CREATE2 factory answers a transfer shaped call by deploying the calldata tail and returning 20 bytes, which fails the success test of src/types/Currency.sol:64-74 and the length test of src/libraries/Hooks.sol:152.",
+     "source": "eth_getCode and eth_call with state override at block 32,660,300 via https://rpc.mainnet.arc.io",
+     "relevance": "none"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Dust positions on fresh ticks make each first crossing cost about 505,000 gas on Tempo, so a price raising swap through more than about 58 such ticks cannot fit in one transaction",
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A9"
+   ],
+   "effect": "degrade",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "Tempo charges 250,000 gas for a write to an empty storage slot, where Ethereum charges 20,000, and caps a transaction at 30,000,000 gas. Calls to the PoolManager also share a general limit of 30,000,000 gas per block.",
+   "mechanism": "1. Pool.updateTick copies the global fee growth into a newly initialized tick only when the tick is at or below the current tick. A tick above the current tick starts with both fee growth outside values at zero (src/libraries/Pool.sol:532-538). 2. Any account can initialize ticks above the price by adding positions with a dust amount of liquidity in a pool it does not own. In simulation each such add costs about 540,000 gas when neighbouring positions share ticks. 3. When a swap that raises the price (currency1 in, currency0 out) first crosses such a tick, Pool.crossTick writes global minus outside into both slots (src/libraries/Pool.sol:602-611). With fees accrued in both currencies both writes go from zero to nonzero. 4. I measured this on the pathUSD and USDC.e pool with fee 375 and spacing 4 through eth_simulateV1 with state overrides: 5,819,042 gas for a swap over 11 fresh ticks and 10,865,864 gas for 21, against 267,513 gas for the same swap without crossings. That is 504,684 gas per crossing. With only one nonzero global fee growth the figure is about 254,500. 5. A transaction of 30,000,000 gas therefore holds about 58 first crossings with both slots fresh. A swap that has to move the price further runs out of gas and reverts as a whole. 6. Once a tick has been crossed its slots are nonzero and later crossings are cheap. The account can remove and add its dust positions again to reset ticks above the price to zero. 7. Liquidity removal does not cross ticks. It writes at most the two fee growth inside values of the position from zero to nonzero (src/libraries/Position.sol:76-102), about 500,000 gas, so withdrawals stay possible.",
+   "impact": "No funds are lost and no withdrawal is blocked. Swappers who buy currency0 in the affected pool pay up to 30,000,000 gas per 58 ticks, which is 0.018 USD at the base fee floor and 0.36 USD at the cap, and a trade that needs a larger price move has to be split with a price limit over several transactions. One such swap fills the general gas limit of its block. On a spacing 1 stable pool 58 ticks are a price move of 0.58 percent. The account that plants the ticks pays about 0.0003 USD per tick at the floor.",
+   "preconditions": "A pool with fees accrued in both currencies. The planted ticks must lie above the current price and below the price that a later price raising swap reaches. Swaps that lower the price cross ticks whose slots were filled at initialization and are not affected. No role is needed.",
+   "mitigations": "Routers and integrators should pass a price limit and accept partial fills on Tempo, and should size the gas limit from a simulation of the actual route. Pool creators can use a wider tick spacing, which lowers the number of ticks per price move. Nothing in core needs to change.",
+   "coreRefs": [
+    "src/libraries/Pool.sol:532-538",
+    "src/libraries/Pool.sol:602-611",
+    "src/libraries/Pool.sol:279-463",
+    "src/libraries/Position.sol:76-102",
+    "src/PoolManager.sol:187-227"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/hardfork/src/constants.rs",
+     "supports": "SSTORE_CREATE_COST is 250,000 gas, the general gas limit is 30,000,000 per block and the transaction gas cap is 30,000,000"
+    },
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "eth_simulateV1 at block 50,363,527 with a harness contract and TIP-20 balances placed by state override: gas of the adds alone and of the adds followed by the swap for 0, 10 and 20 dust positions"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/payload/builder/src/lib.rs",
+     "supports": "transactions that are not payments are deferred once the general gas limit of the block is reached"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/protocol/fees/spec-fee.md",
+     "supports": "base fee floor of 600 million and cap of 12 billion attodollars per gas, general gas limit of 30M per block"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "F-031",
+   "title": "A TIP-20 issuer has already frozen a pooled token on Tempo by setting the always reject transfer policy",
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A4",
+    "A6"
+   ],
+   "effect": "freeze",
+   "actor": "issuer",
+   "severity": "high",
+   "difference": "A TIP-20 token carries a transfer policy id that its admin can change at any time. Policy 0 is built in and rejects every sender and recipient.",
+   "mechanism": "1. GABAGOOL at 0x20c000000000000000000000030a4c7f7b8f3586 was used as a currency in two pools of the PoolManager, which still holds 600,000 base units (0.6 tokens). 2. transferPolicyId() on the token now returns 0, and isAuthorized(0, PoolManager) is false. 3. take calls transfer on the token (src/PoolManager.sol:291-297, src/types/Currency.sol:55-86). The precompile reverts with PolicyForbids and the take reverts with the wrapped ERC20TransferFailed error. I simulated a take of 1 unit and of the full balance. Both revert. 4. A holder of a position in those pools can still remove liquidity, take the other currency and turn the GABAGOOL delta into an ERC-6909 claim or clear it (src/PoolManager.sol:310-329). The GABAGOOL itself cannot leave. 5. Of the 73 currencies that Tempo pools name, this is the only one where a take of the PoolManager balance fails today.",
+   "impact": "This instance concerns 0.6 tokens of a token with a supply of 310.6. It shows that the issuer control described in F-031 is used in practice on this network. The same single call by the policy admin of OUSD or pathUSD would stop takes of 406,692 OUSD and 19,629 pathUSD.",
+   "preconditions": "The admin of the token calls changeTransferPolicyId, or the admin of the policy changes its lists. No action by an ordinary account produces this state.",
+   "mitigations": "List the transfer policy id and its admin for each pooled TIP-20 in the deployment notes and monitor changes. Liquidity providers should treat TIP-20 tokens with an active admin as revocable.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:55-86",
+    "src/PoolManager.sol:310-329"
+   ],
+   "sources": [
+    {
+     "url": "https://rpc.mainnet.tempo.xyz",
+     "supports": "eth_call transferPolicyId() returns 0 on the token, isAuthorized(0, PoolManager) returns false, balanceOf(PoolManager) returns 600000, and a simulated take through unlock reverts with 0x54cfe659 inside the WrappedError of the PoolManager"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/contracts/src/precompiles/tip403_registry.rs",
+     "supports": "the registry interface with WHITELIST, BLACKLIST and COMPOUND policies and the authorisation checks a transfer runs"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "Sweep of Tempo special addresses with the PoolManager as an inner frame, which the critic of cycles 2 and 3 asked for. A forwarding stub was placed at the PoolManager address by state override and called from another account, so tx.origin differs from msg.sender. 67 targets: 0x01 to 0x13 and 0x100, 18 Tempo precompile and zone addresses, 0xAACC..., pathUSD, OUSD, two unused TIP-20 addresses, Multicall3, CreateX, Permit2, two CREATE2 factories, two ERC-8004 registries, the three EntryPoints, the periphery and its immutables, the owner contract, the Wormhole core, the EIP-2935 and EIP-4788 addresses and the system address. 16 shapes: empty calldata with and without value, transfer of 0 and 1, balanceOf(PoolManager) under STATICCALL, unlockCallback and the ten IHooks selectors.",
+   "result": "The inner frame results equal the top level results of cycles 1 and 2. No target returns a callback selector with 32 bytes that start with that selector except the identity precompile, whose address has an invalid flag combination (src/libraries/Hooks.sol:109-124). transfer returns true only on live TIP-20 tokens. Addresses without code return success with empty data, which debits the caller of take and moves nothing (src/types/Currency.sol:64-74). Value calls fail everywhere. No target reads tx.origin in a way that changes the outcome.",
+   "source": "eth_call with state override at block 50,360,217 via https://rpc.mainnet.tempo.xyz"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Transaction types on Tempo: for legacy, EIP-2930, EIP-1559, EIP-7702, the type 0x76 batch with fee sponsor, session credential and authorization list, and system transactions, what msg.sender, msg.value and transient storage look like inside the PoolManager, walked through unlock, sync, settle and take.",
+   "result": "msg.value is 0 in every form, because each prepare function rejects value before execution. msg.sender is the signer or a contract the signer called, and a fee sponsor never becomes a caller. A batch shares one transient map and one checkpoint among the calls of one signer, so a sync or a delta can only reach later calls of the same account, and an unlock cannot stay open between calls. System transactions are limited to the subblock metadata call, which is disabled, and the block level calls to CurrentCommittee and to the EIP-2935 history contract. No form lets a second party run inside another party's transient state, and no form credits or debits the PoolManager's TIP-20 balance outside a transfer call.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler.rs, https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler/config.rs and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/block.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "L-146: does a liquidity add paid in TIP-20 tokens cost exactly what the source formulas give. 288 adds on 12 hookless pools of pathUSD, OUSD and USDC.e: six ranges per pool (around the price, above, below, the highest and the lowest usable tick pair, full range) and four liquidity amounts including 519,766,372,000. The payer held TIP-20 balances placed by a state override of the balance mapping at slot 9.",
+   "result": "In all 288 cases the unlock completes when the payer transfers exactly the two amounts that the transcription of Pool.modifyLiquidity returns, and it reverts with CurrencyNotSettled (0x5212cba1) when one unit less is paid. Adding and removing the same liquidity inside one unlock leaves a debt of 0 or 1 unit per currency, as the rounding rules of src/libraries/SqrtPriceMath.sol:261-288 give. The result describes how Tempo executes the deployed contract.",
+   "source": "eth_call with state overrides between blocks 50,361,051 and 50,363,527 via https://rpc.mainnet.tempo.xyz and src/libraries/Pool.sol:146-236"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "L-197 in part: do swaps through the deployed PoolManager bytecode on Tempo give the results of the source formulas, including tick crossings, and do the arithmetic opcodes behave as specified.",
+   "result": "256 of 256 simulated swaps at block 50,361,051 matched the transcription of Pool.swap to the unit, among them 128 exact output swaps and 60 swaps with 9 to 12 steps. 1,008 opcode cases matched. The stock build at the mainnet commit contains no JIT, so the interpreter is the only execution path of that build. The content of the v1.18.2 and v1.18.4 execution fixes stays unidentified.",
+   "source": "eth_call with state overrides via https://rpc.mainnet.tempo.xyz, https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/bin/tempo/Cargo.toml and src/libraries/Pool.sol:279-463"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "check": "L-259 on Tempo: does any pooled token limit what one address may send or hold over a period, so that a take that is paid back in the same unlock uses up an allowance of the PoolManager. Read of the TIP-20 and TIP-403 source, and a test on every currency of every initialized pool: take the whole PoolManager balance, sync, transfer it back, settle, three times inside one unlock.",
+   "result": "No. TIP-20 has no volume, count, cooldown or holding rule, and TIP-403 policies are membership lists. 72 of the 73 currencies, among them 30 of the 31 TIP-20 tokens and all 42 ordinary token contracts, passed three full balance rounds. The one failure is GABAGOOL, whose policy rejects every transfer whatever the amount, which is an issuer freeze and is recorded under F-031.",
+   "source": "eth_call with state override between blocks 50,360,217 and 50,363,527 via https://rpc.mainnet.tempo.xyz and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/contracts/src/precompiles/tip403_registry.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "check": "L-212: can an ordinary account keep liquidity providers out by filling the 30,000,000 gas general limit of every block, given the fee rule and the ordering rule.",
+   "result": "Not at a bounded cost. PoolManager transactions do count against the general limit. The base fee is dynamic since T7: 30,000,000 gas per block is three times the 10,000,000 target, so the fee rises 25 percent per block from the floor of 600,000,000 to the cap of 12,000,000,000 attodollars within about 14 blocks. At the cap one full general lane costs 0.36 USD per block, about 57,600 USD per day at 0.54 seconds per block. The pool orders by tip, so a withdrawal of a few hundred thousand gas that offers a higher tip than the filler is taken first, and the filler has to pay that tip on 30,000,000 gas in every block. A withdrawal is delayed only while its sender bids below the filler.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/hardfork/src/constants.rs, https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/payload/builder/src/lib.rs and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/transaction-pool/src/ordering.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "L-198: can the Universal Router deployments, the PositionManager or Permit2 on Tempo be made to call TIP403Registry.setReceivePolicy as themselves.",
+   "result": "No path found. The selector 0xdda03d86 is absent from all of their bytecode. The routers forward caller supplied calldata only to their immutable position manager addresses and to the PoolManager, the PositionManager calls subscribers and Permit2 calls tokens and signers with fixed selectors, and none of those immutables is the registry address. receivePolicy is unset for all of them at block 50,363,131, so TIP-20 payouts they receive before forwarding are credited to them and are not diverted to ReceivePolicyGuard.",
+   "source": "eth_getCode and eth_call via https://rpc.mainnet.tempo.xyz at block 50,363,131"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "T14 on 8 December 2026: what will the ConfigurableAccount precompile and an account that carries the 0xef marker do when the PoolManager calls them with the shapes P1, P2, P3 and P5. Read from the source at the mainnet commit, because the current sweep of these addresses expires at the fork.",
+   "result": "The precompile dispatches four functions and rejects every other selector, so transfer, balanceOf, unlockCallback and the hook selectors revert there after the fork, where today the codeless address returns success with empty data. A registered account returns success with empty data for empty calldata, as an account without code does, and reverts for transfer, balanceOf, unlockCallback and the hook selectors. Such an account cannot serve as a currency, as a hook or as the direct caller of unlock. Both changes make the call paths stricter. The reading needs an on-chain repeat after activation.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/configurable_account/shim.rs, https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/configurable_account/dispatch.rs and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/instructions.rs (lines 140-186)"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Does the storage credit accounting, which the Tempo SSTORE instruction runs inside every contract including the PoolManager, read or write transient slots that the PoolManager uses for its lock, deltas and synced currency (src/libraries/Lock.sol:8, src/libraries/CurrencyReserves.sol:11-13, src/libraries/NonzeroDeltaCount.sol:8-9).",
+   "result": "No. The accounting keeps its transient state under the StorageCredits precompile address at a slot derived from the account address. Transient storage is scoped by address, and the settlement step takes the transient slots of 0x1060000000000000000000000000000000000000 only.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/precompiles/src/storage_credits/mod.rs and https://raw.githubusercontent.com/tempoxyz/tempo/697ea97/crates/evm/src/handler/config.rs (lines 444-490)"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L4",
+   "check": "Sweep of Arc special addresses with the PoolManager as an inner frame, through a forwarding stub at the PoolManager address called from another account. 68 targets: 0x01 to 0x13 and 0x100, 0x1800...00 to ...07, the system proxies 0x3600...00 to ...04, the USDC implementation, the log emitter address, the EIP-2935 contract, Memo, Multicall3From, Multicall3, Permit2, three EntryPoints, EURC, USYC with its entitlement and teller contracts, cirBTC, bridged WETH, five CCTP contracts, two Gateway contracts, FxEscrow, three ERC-8004 registries, the periphery, the fee adapter, the fee jar, the owner contract, the Wormhole core and the CREATE2 factory. The same 16 shapes as on Tempo, with 10^12 wei for the value call.",
+   "result": "The inner frame results equal the top level results of cycle 2. transfer returns true only on the four real tokens, and the USDC implementation rejects transfer. No address with valid hook flags answers a callback selector with 32 bytes that start with the selector. Value is accepted by the plain precompile addresses, the EntryPoints, the periphery and the fee jar, which strands the caller's own payout as F-049 records. The USDC proxy rejects a value call with a revert string. No target treats a contract caller differently from an account that sends a transaction.",
+   "source": "eth_call with state override at block 32,660,300 via https://rpc.mainnet.arc.io"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "L-199 and the Arc half of L-218: do the deployed Universal Router, Universal Router 2.1.2 and PositionManager call sync(address(0)) before a native settle, so that a token sync left by an earlier user operation of the same bundle cannot make them revert.",
+   "result": "Yes for all three. A wrapper first called sync(0x3600) or sync(EURC) on the PoolManager and then sent 10^15 wei with a SETTLE of address(0) followed by a TAKE. All six runs succeed. The control without periphery, a direct settle with value after sync(0x3600), reverts with NonzeroNativeValue, so the test separates the two behaviours. The 2.1.2 router source shows the sync call before both branches of _settle.",
+   "source": "eth_call with state overrides at block 32,662,000 via https://rpc.mainnet.arc.io and https://sourcify.dev/server/v2/contract/5042/0x8702463e73f74d0b6765aBceb314Ef07aCb92650?fields=compilation,sources"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "The rest of L-218 for Arc: does the periphery treat 0x3600 as the wrapped native currency, and what does it do with a route that names both address(0) and 0x3600.",
+   "result": "It does not. The WETH9 immutable of the PositionManager and of both routers is 0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f, a contract that reverts on every call, so wrap and unwrap actions fail. The periphery handles address(0) and 0x3600 as two unrelated currencies: a native settle goes through sync(address(0)) and msg.value, a 0x3600 settle through sync(0x3600), a transfer on the token face and settle without value. A user who pays a native debt through the face ends with CurrencyNotSettled and loses nothing. The 2.1.2 router can pay a 0x3600 debt out of the value sent with the call, because its balance on the face is its native balance.",
+   "source": "eth_call and eth_getCode via https://rpc.mainnet.arc.io at blocks 32,660,300 to 32,662,000"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L2",
+   "check": "Transaction types and execution contexts on Arc: legacy, EIP-2930, EIP-1559 and EIP-7702 transactions, the CallFrom subcall behind Memo and Multicall3From, and ERC-4337 bundles. Can any of them give the PoolManager a msg.sender that did not authorise the call, a msg.value without a debit, or a second transient map.",
+   "result": "No. Memo passes msg.sender as the sender of the subcall, the EVM refuses a child caller that is neither the helper's own caller nor the transaction signer, and the subcall cannot carry value or run in static context. A contract in the middle of a user's transaction is refused when it calls Memo or Multicall3From. Arc has no sponsored or batched transaction type at protocol level. A bundle is one transaction, and the periphery resets a stale sync before a native settle, as the L-199 item shows.",
+   "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/contracts/src/memo/Memo.sol and https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs (lines 884-955)"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L1",
+   "check": "Critic gap of cycle 2: is Zero8 active on Arc mainnet and does mainnet contain the ruint correction of v0.8.0 for shift and overflow handling, on which BalanceDelta, TickMath and BitMath depend (src/types/BalanceDelta.sol:19-66).",
+   "result": "Zero7 and Zero8 are set for mainnet at timestamp 1789052400 and current blocks are past it, so validators must run a Zero8 capable release, and v0.8.0 is the release that carries both Zero8 and the ruint update. On the endpoint, 1,008 opcode cases with edge shift counts matched the reference, and 64 swaps through the deployed PoolManager at block 32,666,820 matched the transcription of Pool.swap, which uses SAR and SIGNEXTEND on every delta.",
+   "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/execution-config/src/hardforks.rs, https://raw.githubusercontent.com/circlefin/arc-node/main/CHANGELOG.md and eth_call via https://rpc.mainnet.arc.io"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "L-259 style test on Arc, which the lead did not list: does a take of the whole PoolManager balance that is paid back in the same unlock hit a per sender limit on native USDC, the token face, EURC, cirBTC or bridged WETH.",
+   "result": "No. Three full balance rounds inside one unlock succeed for each of the five. The USDC implementation source that cycle 2 read has no volume rule, and the native transfer rules of Arc concern the zero address, the blocklist and self-destructed recipients only.",
+   "source": "eth_call with state overrides at block 32,661,762 via https://rpc.mainnet.arc.io and https://docs.arc.io/arc/references/evm-differences.md"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "question": "After T14 activates at timestamp 1796742000, repeat the 16 shape sweep on 0xAACC000000000000000000000000000000000000 and on one registered configurable account, and confirm on chain that transfer, balanceOf, unlockCallback and the hook selectors revert as the source at commit 697ea97 says.",
+   "why": "The clearance for T14 rests on source text of a fork that is not active. The codeless behaviour recorded by earlier sweeps ends on that date.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "question": "The T14 instruction for the 0xef account marker reads the registration from the code address and passes the call destination to the shim. Under DELEGATECALL into a registered account the two differ. Does the shim then answer isValidSignature for the delegating contract, and does any periphery contract that verifies ERC-1271 signatures on Tempo reach such a path?",
+   "why": "The PoolManager never uses DELEGATECALL, so core is not affected. Permit2 and the PositionManager accept ERC-1271 signatures, and a wrong answer there would move user allowances.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "question": "Which commits are behind the v1.18.2 item 'EVM call input hardening' and the v1.18.4 'fix for EVM execution', and do the validators of Tempo mainnet build with the optional jit feature?",
+   "why": "The stock build has no JIT and 544 simulated PoolManager operations matched the source formulas, but the two fixes are still undescribed and a validator may compile other features than the release Dockerfile.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "List the Initialize logs of the Arc PoolManager from its deployment to block 30,660,000 and check whether any pool pairs address(0) with 0x3600000000000000000000000000000000000000 or names the USDC implementation 0xc6ad664ac6679f4ce74e10e91449c93ec1ae3ca6 as a currency, and how much such a pool holds.",
+   "why": "The endpoint serves 5,000 blocks per log query, so this unit read the last two million blocks only. A pool that pairs the two faces of one balance gives its liquidity providers a position in one asset against itself, and its price is the only link between the two currency ids if one face is paused (F-032).",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "question": "Obtain the source of the Universal Router at 0x4fcA4a51Ab4F23A7447b3284fBd7D73289A89Fb1 and of the PositionManager at 0x6049c9a0e26405C0985f9E3685C87d0aE917f82B on Arc, which Sourcify does not hold, and read every native payment path.",
+   "why": "This unit tested the SETTLE action of both contracts by simulation. Other entry points that pay native value were not exercised, and the explorer API is behind a browser check.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-259",
+   "outcome": "cleared",
+   "answer": "Tempo part. No pooled token on Tempo limits what one address may send or hold over a period. The TIP-20 precompile has no volume, count, cooldown or holding rule and TIP-403 policies are lists of accounts (WHITELIST, BLACKLIST, COMPOUND). I listed the 73 currencies of all 167 initialized pools and ran, for each, three rounds of take of the whole PoolManager balance, sync, transfer back and settle inside one unlock. 72 pass. GABAGOOL fails for any amount because its issuer set the always reject policy, which is F-031 and is no quota. The same three round test passes on Arc for native USDC, the token face, EURC, cirBTC and bridged WETH. The other chains of this lead belong to other units."
+  },
+  {
+   "leadId": "L-146",
+   "outcome": "cleared",
+   "answer": "Yes. 288 liquidity adds on 12 hookless pathUSD, OUSD and USDC.e pools were simulated with a payer that held real TIP-20 balances by state override. Each unlock completes when exactly the amounts of the transcribed source formulas are transferred and reverts with CurrencyNotSettled when one unit less is paid. That includes the highest and lowest usable tick pairs at spacings 1 to 5000 and the liquidity value 519,766,372,000. Add followed by remove leaves 0 or 1 unit of debt per currency."
+  },
+  {
+   "leadId": "L-197",
+   "outcome": "inconclusive",
+   "answer": "Answered in part. The jit feature is optional at the mainnet commit 697ea97 and is absent from the default features and from the release Dockerfile, so the stock build runs the evm2 interpreter only. I could not confirm what each validator builds. Through the deployed PoolManager bytecode, 256 swaps and 288 paid adds gave the amounts of the source formulas, and 1,008 arithmetic opcode cases matched. The commits behind the v1.18.2 and v1.18.4 notes remain unidentified, because the commit history could not be read from this environment."
+  },
+  {
+   "leadId": "L-198",
+   "outcome": "cleared",
+   "answer": "No. The setReceivePolicy selector 0xdda03d86 is absent from the bytecode of the PositionManager, both Universal Routers and Permit2, and none of them forwards caller supplied calldata to an address other than their immutable position managers, the PoolManager, tokens and subscribers with fixed selectors. Their receive policies are unset at block 50,363,131. The routers do take TIP-20 payouts to themselves before forwarding, and those payouts are credited normally."
+  },
+  {
+   "leadId": "L-199",
+   "outcome": "cleared",
+   "answer": "Both routers and the PositionManager on Arc call sync(address(0)) before a native settle. With sync(0x3600) or sync(EURC) left by an earlier call in the same transaction, a native SETTLE through each of the three contracts succeeds at block 32,662,000, while a direct settle with value reverts with NonzeroNativeValue. The contracts treat address(0) and 0x3600 as unrelated currencies, and their wrapped native immutable is a contract that always reverts."
+  },
+  {
+   "leadId": "L-211",
+   "outcome": "finding",
+   "answer": "Measured by simulation at block 50,363,527. A first crossing of a tick with both fee growth outside slots empty costs 504,684 gas, with one slot empty about 254,500 gas. 58 such crossings fit in the 30,000,000 gas of one transaction. A dust position on a fresh tick costs about 540,000 gas, which is 0.0003 USD at the base fee floor. A removal of liquidity can write two empty slots, the fee growth inside values of the position, about 500,000 gas, and never crosses ticks, so it stays possible. Filed as a low finding with effect degrade."
+  },
+  {
+   "leadId": "L-212",
+   "outcome": "cleared",
+   "answer": "PoolManager transactions count against the general limit: the payload builder defers a transaction that is not a payment once 30,000,000 general gas is used. The base fee is no longer fixed. Since T7 it follows the EIP-1559 formula against a 10,000,000 gas target between 600,000,000 and 12,000,000,000 attodollars, so the 600,000,000 seen in 1,024 blocks is the floor of a quiet chain. Ordering is by tip. Filling the general lane costs 0.018 USD per block at the floor and 0.36 USD at the cap, about 57,600 USD per day at the cap, and a withdrawal that outbids the filler's tip is included first."
+  },
+  {
+   "leadId": "L-218",
+   "outcome": "inconclusive",
+   "answer": "Arc half answered and safe, Celo half not examined by this unit. On Arc the Universal Router, Universal Router 2.1.2 and PositionManager sync address(0) before every native settle that the SETTLE action makes, never treat 0x3600 as wrapped native (their WETH9 immutable is a contract that reverts on every call), and handle a route that names both ids as two currencies. Paying the wrong id ends in CurrencyNotSettled."
+  }
+ ]
+}

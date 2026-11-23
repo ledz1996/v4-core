@@ -1,0 +1,525 @@
+{
+ "unit": "high-throughput",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 143,
+   "lens": "L1",
+   "summary": "The interpreter and the compiled code path of the Monad client call the same runtime functions for TSTORE, TLOAD, SLOAD, SSTORE, CALL and STATICCALL, so the PoolManager's transient accounting does not depend on which path runs. The deployed PoolManager returned the same amounts as reth for 600 simulated swaps once it had enough gas. The self-destruct result that the critic could not explain comes from how eth_call applies state overrides.",
+   "deltas": [
+    {
+     "delta": "The compiler emits a call to runtime::tload and runtime::tstore for the TLoad and TStore instructions (compiler/ir/x86.cpp lines 250 to 254, emitter.hpp lines 494 to 500). The interpreter calls the same two functions (instruction_table.hpp lines 1357 to 1389). Both read and write host transient storage under the address of the executing account, and tstore exits with an error under a static call (runtime/storage.hpp lines 38 to 62). The emitter uses the shared runtime functions for selfbalance, sload, sstore, mcopy, call and staticcall as well (emitter.hpp lines 470 to 573).",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/runtime/storage.hpp, https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/x86/emitter.hpp, https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/x86.cpp and https://raw.githubusercontent.com/category-labs/monad/main/category/vm/interpreter/instruction_table.hpp",
+     "relevance": "low"
+    },
+    {
+     "delta": "Differential run on deployed bytecode. 600 calls to the deployed Quoter (quoteExactInputSingle and quoteExactOutputSingle, both directions, five sizes from 0.001 to 100,000 tokens) on 30 pools without hooks were executed by the Monad node at block 124,613,635. For each call the storage that the PoolManager read was taken from the Monad prestate tracer and placed, with the Monad PoolManager and Quoter code, at the same two addresses on an Ethereum node (reth v2.11.0) by state override. 556 calls gave the same first return word or the same revert data on both nodes (517 amounts, 495 of them distinct, and 39 reverts). The other 44 calls, in 15 pools, ran out of gas on Monad at 25 million gas while reth finished below 25 million. One of them was tried at 30 million gas, the cap of a Monad transaction, and failed there too. All 44 gave the reth result on Monad at 100 million gas. Each of them walks about 2,000 storage slots.",
+     "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23 and rpc https://ethereum-rpc.publicnode.com (client reth/v2.11.0, eth_call with state overrides) on 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "SELFDESTRUCT with the contract itself as beneficiary removes the balance only when the account was created in the current transaction (State::selfdestruct_to_self_burns returns is_current_incarnation, state.cpp lines 448 to 480). eth_call applies state overrides with the same incarnation as the call itself and creates a missing override account in that step (monad_executor.cpp lines 163 to 175 and 258 to 261). An override contract therefore counts as created in the call, and its self-destruct burns the balance. This explains the balance of 0 that the cycle 3 probe saw on Monad. It is a property of the simulation path. The PoolManager bytecode has no SELFDESTRUCT.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/state.cpp and https://raw.githubusercontent.com/category-labs/monad/main/category/rpc/monad_executor.cpp",
+     "relevance": "none"
+    },
+    {
+     "delta": "eth_createAccessList on the public Monad endpoints leaves out storage that was read inside a frame that reverted. For a Quoter call it listed 2 PoolManager slots where the prestate tracer of debug_traceCall listed 4 to 2,145. Tools that prewarm or replay from that list miss slots.",
+     "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 143,
+   "lens": "L2",
+   "summary": "Nothing in the state model changed since cycle 2. Mainnet still runs release v0.16.5 with revision MONAD_TEN. No new batching or system transaction type was found.",
+   "deltas": [
+    {
+     "delta": "The documentation page for current facts lists Monad mainnet at v0.16.5 and MONAD_TEN on 2026-11-23, the same release and revision that cycles 1 and 2 read.",
+     "source": "https://docs.monad.xyz/ai/current-facts.md",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 143,
+   "lens": "L3",
+   "summary": "The Monad PoolManager has 19,402 initialized pools over 11,268 token addresses and the native asset, and 8,375 of those tokens have a balance. After USDC the largest class is ten wrapped stock tokens of one issuer, worth about 7.9 million dollars, of which the PoolManager holds 89 to 99.8 percent of the supply. No pooled token mirrors the native balance, none limits how much or how often one address may send, and the only balances that move without a transfer are Aave and Neverland deposit tokens worth a few hundred dollars.",
+   "deltas": [
+    {
+     "delta": "Initialize logs of the PoolManager from its deployment block 29,255,895 to block 124,607,111: 19,402 pools, 11,268 distinct token currencies, 1,531 pools on the native asset and 2,774 distinct hook addresses. 10,259 pools have no hook. balanceOf(PoolManager) is above zero for 8,375 tokens.",
+     "source": "rpc https://rpc2.monad.xyz eth_getLogs in 9,536 ranges of 10,000 blocks, topic 0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438, and eth_call balanceOf on https://rpc.monad.xyz, 2026-11-23",
+     "relevance": "high"
+    },
+    {
+     "delta": "Largest holdings at block 124,616,006 with GeckoTerminal prices: 16.4 million USDC (0x754704bc059f8c67012fed69bc8a327a5aafb603), 216.2 million MON (2.65 million dollars), 2.64 million GHO, 40.0 cbBTC (2.46 million dollars), 1.56 million syrupUSDC (1.87 million dollars), 1.52 million AUSD, 1.51 million mUSD, 337 bridged WETH (0.59 million dollars) and ten wrapped stock tokens: wSPYx 940,722, wSPCXx 928,140, wTSLAx 897,914, wQQQx 896,061, wEWYx 804,947, wSMHx 784,503, wNVDAx 736,966, wSKHYx 728,956, wMUx 682,167 and wANTx 521,092 dollars, 7.92 million in total. cbBTC, bridged WETH, WBTC and the wrapped stock tokens were not in the token lists that cycles 1 and 2 used.",
+     "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23 and https://api.geckoterminal.com/api/v2/simple/networks/monad/token_price/0xe7e553cd128f0011777323a0b44a7b96ea1cb540",
+     "relevance": "high"
+    },
+    {
+     "delta": "Each wrapped stock token is a transparent proxy (admin 0x312063009e74142339edc92bcff6cfcfaa958bfa) over one implementation at 0x76c6851ea0b2741eedcbbed240715e8817e85583. Its 46 selectors are the ERC-4626, permit, owner, pauser, terms and delegatedTransfer functions of WrappedBackedTokenImplementation in the Backed repository. The wrapper holds the rebasing stock token and issues shares at the stock token's multiplier, so a wrapper balance does not rebase. Transfers require that the token is not paused and that sender and recipient are not on the sanctions list of the underlying token. The owner of the wrappers, of the proxy admin and of the sanctions list is a Safe with threshold 2 of 3 (0x49754062e35f7591b93cc4f9915965be89643a65). The pauser is a Safe with threshold 2 of 4 (0x8768cda7a463dae1baa6b2500efb025ebd7ffc50). I matched selectors and did not compile the source to compare bytecode.",
+     "source": "https://raw.githubusercontent.com/backed-fi/backed-token-contract/main/contracts/WrappedBackedTokenImplementation.sol and rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23",
+     "relevance": "high"
+    },
+    {
+     "delta": "cbBTC on Monad (0xd18b7ec58cdf4876f6afebd3ed1730e4ce10414b) is a proxy whose implementation has freeze, unfreeze, pause, burn(address,uint256), FREEZER_ROLE, PAUSER_ROLE, BURNER_ROLE and the CCIP admin functions. paused() is false and isFrozen(PoolManager) is false. The PoolManager holds 43 percent of its supply of 93 coins.",
+     "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23",
+     "relevance": "high"
+    },
+    {
+     "delta": "One day reconciliation. For 8,379 tokens I compared the change of balanceOf(PoolManager) between blocks 124,321,281 and 124,609,281 with the 347,008 Transfer logs that name the PoolManager in that range. 18 tokens do not reconcile. Seven are Aave deposit tokens (aMonUSDC 253.7, others below 3 units), five are Neverland deposit tokens (nWMON 24,696, nUSDC 74, nAUSD 18, nUSDT0 2.8, nWETH 0.06), four are unwrapped stock tokens with balances of a few thousand wei that differ by 2 to 6 wei, one is WMON, and one token did not answer at the older block. WMON differs by 18,572.57 because WMON credits a deposit without a Transfer log, and routers wrap by sending a native payout from the PoolManager to WMON.",
+     "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "Transfer census at block 124,612,088. With Multicall3 code placed at the PoolManager address and at a second address by state override, each of the 8,375 tokens was asked to send one seventh of the PoolManager balance, a zero amount and a transfer to itself, and then the whole balance out and back four times in one call. 8,017 tokens moved exact amounts in every step. 293 reject a transfer to self, 53 reject a zero amount, 38 reject the test transfer from the PoolManager, 26 change total supply during a transfer, 15 move the sender's balance by 1 or 2 wei more or less than asked, 2 charge the recipient a fee of 2 to 2.5 percent, and for 22 single pool tokens the simulated round trips ran out of gas. A token can be in more than one group, and 358 tokens are in at least one. The 45 tokens with the largest pool reserves are all in the exact group.",
+     "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "Two Curvance deposit tokens that the PoolManager holds, cWBTC (0xdb3e888c3b50771821226d30ab6ec14eb5ba85ba, 0.00134 units, five pools) and ceBTC (0x2840772e14ffbe337ab966727b7d1dd09bdc76e4, 0.00134 units, five pools) reject every transfer of a nonzero amount with MarketManager__Paused() today. Their market manager is 0xbc4cd7bbd8d38027a88838b88ba04561fa778c35. The amounts are worth about 83 dollars each.",
+     "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "The Aave pool on Monad (0x69a5f9ad4f96ebf0a0c792dd42a01cc5c0102fef, revision 12) reports a flash loan premium of 5 basis points with 10,000 of 10,000 going to the protocol, so a flash loan does not move the supplier index. The Neverland pool (0x80f00661b13cc5f6ccd3885be7b4c9c67545d585, revision 2) reports a premium of 50 with 40 to the protocol, so part of each premium raises the supplier index inside the transaction. The PoolManager holds 0.00028 percent of aMonUSDC and 0.044 percent of nWMON.",
+     "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "Several heavily pooled tokens imitate known names. 0x4a765ed3f58df05ed13a06adbef1408f5f1ca888 calls itself USDC, has 18 decimals and a fixed supply of one billion and is in 2,743 pools. 0x8660937b811cd410789c4ef62e6a34637265ab8b calls itself USDT and is in 496 pools. 0x0ff7a742b035504118a9d435c8264619a8428e1c is named Wrapped USDC, reports totalAssets of zero against a supply of 100 million, and has ownerMint, ownerBurn, setBlacklisted, execute and an upgrade function. The PoolManager holds 542,000 units of it across 64 pools. These are plain third party tokens and do not affect other pools.",
+     "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 143,
+   "lens": "L4",
+   "summary": "The precompile set is unchanged, because the release and revision are the ones swept in cycles 1 and 2. No new special address was found among the 11,268 pool currencies.",
+   "deltas": []
+  },
+  {
+   "chainId": 4326,
+   "lens": "L1",
+   "summary": "The public stateless validator, which checks every mainnet block, pins mega-evm v1.7.3, and the specification list of that release ends at REX6. The deployed PoolManager returned the same amounts as reth for 400 simulated swaps.",
+   "deltas": [
+    {
+     "delta": "stateless-validator 2.1.0 depends on mega-evm at tag v1.7.3 (Cargo.toml line 44). The mega-evm changelog for v1.7.3 lists the removal of REX7, and the MegaSpecId list in evm/spec.rs ends at REX6. The node binary mega-reth v2.2.3 is not public, so its own dependency line could not be read.",
+     "source": "https://raw.githubusercontent.com/megaeth-labs/stateless-validator/main/Cargo.toml, https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/CHANGELOG.md and https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/evm/spec.rs",
+     "relevance": "low"
+    },
+    {
+     "delta": "Differential run on deployed bytecode. 400 Quoter calls on 25 pools without hooks were executed by the MegaETH node at block 32,608,417 and repeated on an Ethereum node (reth v2.11.0) with the MegaETH PoolManager and Quoter code and the storage named by eth_createAccessList placed at the same addresses. All 400 gave the same first return word or the same revert data: 293 amounts, 266 of them distinct, and 107 reverts. The largest case read 4,381 storage slots.",
+     "source": "rpc https://mainnet.megaeth.com/rpc (eth_call with state overrides, eth_getLogs, eth_getBlockByNumber, eth_getBlockReceipts, eth_createAccessList, debug_traceTransaction) at blocks 32,206,276 to 32,609,052 on 2026-11-23 and rpc https://ethereum-rpc.publicnode.com (client reth/v2.11.0, eth_call with state overrides) on 2026-11-23",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4326,
+   "lens": "L2",
+   "summary": "User deposits sit directly after the L1 attributes transaction in every sampled block, ahead of system and sequencer transactions. The condition that keeps the KeylessDeploy sandbox at the top of a transaction is the same in release v1.7.3 as on the main branch. The documented transaction types all have one top-level call.",
+   "deltas": [
+    {
+     "delta": "The 25 most recent L1 deposits listed by the explorer are each at index 1 of their block. In each of those blocks index 0 is the L1 attributes deposit and the first transaction that is not a deposit is at index 2.",
+     "source": "https://megaeth.blockscout.com/api/v2/optimism/deposits and rpc https://mainnet.megaeth.com/rpc (eth_call with state overrides, eth_getLogs, eth_getBlockByNumber, eth_getBlockReceipts, eth_createAccessList, debug_traceTransaction) at blocks 32,206,276 to 32,609,052 on 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "The OptimismPortal of MegaETH (0x7f82f57F0Dd546519324392e408b01fcC7D709e8) points to SystemConfig 0x1ed92e1bc9a2735216540eddd0191144681cb77e, whose resource config allows at most 20,000,000 gas of deposits per L1 block.",
+     "source": "rpc https://ethereum-rpc.publicnode.com eth_call systemConfig() and resourceConfig() at block 26,475,057",
+     "relevance": "low"
+    },
+    {
+     "delta": "system/intercept.rs at tag v1.7.3 is byte identical to the main branch, including the test at line 301 that returns without acting when the call is inside a sandbox or its depth is not zero. The mega-evme reference lists five transaction types: legacy, EIP-2930, EIP-1559, EIP-7702 and deposit.",
+     "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/system/intercept.rs and https://docs.megaeth.com/mega-evme/reference/transaction-types.md",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4326,
+   "lens": "L3",
+   "summary": "The MegaETH PoolManager has 143 pools over 81 currencies and holds about 17,000 dollars. All 67 tokens with a balance move exact amounts. Transactions inside a block are not ordered by priority fee, and no transaction close to 1,000 new state entries appears in 400,000 recent blocks.",
+   "deltas": [
+    {
+     "delta": "Initialize logs from block 0 to 32,606,013: 143 pools, 81 currencies, 32 hook addresses, 73 pools without a hook. 67 tokens have a balance. A second wrapper of ETH named Wrapped Native (0x9707983a643063d7829d1f34098bdf915af11d79) is pooled twice. Its total supply equals its own ETH balance of 285,377,015,925 wei, so it is a separate wrapper with its own funds.",
+     "source": "rpc https://mainnet.megaeth.com/rpc (eth_call with state overrides, eth_getLogs, eth_getBlockByNumber, eth_getBlockReceipts, eth_createAccessList, debug_traceTransaction) at blocks 32,206,276 to 32,609,052 on 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "In 300 blocks sampled at steps of 37 blocks between blocks 32,596,100 and 32,607,300 there are 3,620 transactions that are neither deposits nor system transactions. In 525 of 3,316 neighbouring pairs from different senders the later transaction pays the higher priority fee, and 232 of the 300 blocks contain such a pair. The sequencer therefore does not sort a block by priority fee. This fits arrival order per mini-block, which the documentation does not state.",
+     "source": "rpc https://mainnet.megaeth.com/rpc (eth_call with state overrides, eth_getLogs, eth_getBlockByNumber, eth_getBlockReceipts, eth_createAccessList, debug_traceTransaction) at blocks 32,206,276 to 32,609,052 on 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "Headers of 400,000 blocks (32,206,276 to 32,606,276) show 359 blocks above 20 million gas. I traced the 30 transactions above 12 million gas in the blocks between 20 and 80 million gas with the prestate tracer in diff mode. The largest state growth among them is 27 entries (2 accounts and 25 slots). They are contract deployments whose gas goes to code storage. No transaction near the limit of 1,000 new entries was found.",
+     "source": "rpc https://mainnet.megaeth.com/rpc (eth_call with state overrides, eth_getLogs, eth_getBlockByNumber, eth_getBlockReceipts, eth_createAccessList, debug_traceTransaction) at blocks 32,206,276 to 32,609,052 on 2026-11-23",
+     "relevance": "low"
+    },
+    {
+     "delta": "The documentation states that an account can have at most 500 pending transactions in the pool, that the pool is persistent, and that no per-account rate limit exists. It does not describe the order in which pending transactions are taken.",
+     "source": "https://docs.megaeth.com/developer-docs/faq.md",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4326,
+   "lens": "L4",
+   "summary": "No new system contract or predeploy behaviour was found. The checks of cycle 2 stand.",
+   "deltas": []
+  }
+ ],
+ "findings": [
+  {
+   "ref": "F-015",
+   "title": "A two signature Safe can pause ten wrapped stock tokens or list the PoolManager as sanctioned, which would stop pools that hold 7.9 million dollars on Monad",
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A4",
+    "A6"
+   ],
+   "effect": "freeze",
+   "actor": "issuer",
+   "severity": "high",
+   "difference": "On Monad the second largest asset class at the PoolManager is a set of wrapped stock tokens (wSPYx, wSPCXx, wTSLAx, wQQQx, wEWYx, wSMHx, wNVDAx, wSKHYx, wMUx, wANTx). The PoolManager holds between 89.4 and 99.8 percent of the supply of each. Every transfer of these tokens checks a pause flag and a sanctions list that the issuer controls. cbBTC on Monad adds freeze, pause and burn roles. The exposure comes from the tokens that make up the pooled value on this network. The Monad client plays no part in it.",
+   "mechanism": "1. All pools of a currency share one balance at the PoolManager address, and take pays out with currency.transfer and reverts when the token call fails (src/PoolManager.sol:291-297, src/types/Currency.sol:60-86). 2. The wrapper's transfer hook requires that isPaused is false and that neither sender nor recipient is on the sanctions list of the underlying stock token (WrappedBackedTokenImplementation.sol lines 178 to 193). 3. setPause can be called by the pauser, a Safe with threshold 2 of 4. The sanctions list at 0x615dd3b9445a94334c1579f68115042d77cc7c44 has addToSanctionsList and is owned by a Safe with threshold 2 of 3, which also owns the wrappers and the proxy admin and can replace the wrapper code. 4. If the pauser pauses a wrapper, or the owner lists the PoolManager address, every take of that wrapper reverts, so no liquidity removal and no swap that pays out the wrapper can settle in any pool of that token. Transfers into the PoolManager revert as well, so settle cannot be funded. 5. isPaused is false for all ten wrappers and isSanctioned(PoolManager) is false today. 6. cbBTC (40.0 coins at the PoolManager, 43 percent of supply) has freeze(address), pause() and burn(address,uint256) behind FREEZER_ROLE, PAUSER_ROLE and BURNER_ROLE. A freeze of the PoolManager or a pause has the same effect, and a burn would leave pool accounting above the balance. 7. A live example of this class exists at small size. Curvance has paused the market manager 0xbc4cd7bbd8d38027a88838b88ba04561fa778c35, and a transfer of cWBTC or ceBTC from the PoolManager reverts today with MarketManager__Paused(). Five pools use each of the two tokens, and the PoolManager holds about 83 dollars of each. 8. No ordinary account can trigger any of these steps. A third party cannot move the PoolManager's wrapper shares, because redeem and withdraw spend an allowance of the owner (lines 265 to 273) and delegatedTransfer needs an ECDSA signature that recovers to the owner address (lines 112 to 131).",
+   "impact": "A pause or a sanctions entry freezes about 7.9 million dollars of wrapped stock tokens together with the other side of those pools while it lasts, for every liquidity provider in them. A freeze or pause of cbBTC does the same for about 2.5 million dollars of cbBTC. A burn of the PoolManager's cbBTC would leave the last providers unpaid. The Curvance pause already locks about 170 dollars.",
+   "preconditions": "Two signers of the pauser Safe or of the owner Safe act, or the holder of a cbBTC role acts. No action by an ordinary account leads there.",
+   "mitigations": "Liquidity providers should treat the issuer's pause and sanctions rights as a condition of these pools. The deployer can list these tokens in user documentation as issuer controlled. Core cannot route around a token that rejects transfers from the PoolManager.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:60-86",
+    "src/PoolManager.sol:349-364"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/backed-fi/backed-token-contract/main/contracts/WrappedBackedTokenImplementation.sol",
+     "supports": "Transfer hook with pause and sanctions checks, setPause by the pauser, delegatedTransfer with ECDSA recovery, redeem spending the owner's allowance"
+    },
+    {
+     "url": "rpc https://rpc.monad.xyz eth_call owner(), pauser(), isPaused(), asset(), sanctionsList(), isSanctioned(PoolManager), getThreshold(), getOwners(), balanceOf(PoolManager), totalSupply() and EIP-1967 slots for the ten wrappers at block 124,616,006",
+     "supports": "Roles, Safe thresholds 2 of 3 and 2 of 4, pause state false, PoolManager share of supply 89.4 to 99.8 percent"
+    },
+    {
+     "url": "https://api.geckoterminal.com/api/v2/simple/networks/monad/token_price/0xe7e553cd128f0011777323a0b44a7b96ea1cb540",
+     "supports": "Prices used for the 7.92 million dollar total and for cbBTC at 61,511 dollars"
+    },
+    {
+     "url": "rpc https://rpc.monad.xyz eth_call from the PoolManager address: transfer on cWBTC 0xdb3e888c3b50771821226d30ab6ec14eb5ba85ba and ceBTC 0x2840772e14ffbe337ab966727b7d1dd09bdc76e4 returns error 0xf47323f4",
+     "supports": "Transfers of the two Curvance tokens from the PoolManager revert with MarketManager__Paused() today"
+    },
+    {
+     "url": "rpc https://rpc.monad.xyz eth_getCode of cbBTC implementation 0xd1611e6e93ec512bfbd2b6428a26c463c1dce6f9 and eth_call paused(), isFrozen(PoolManager)",
+     "supports": "cbBTC selectors freeze, pause, burn(address,uint256) and the three roles, current state not paused and not frozen"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "F-042",
+   "title": "MegaETH blocks are not ordered by priority fee, so a queue of transactions that each fill the block budget for new state delays every later transaction by the length of the queue",
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A9"
+   ],
+   "effect": "degrade",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "MegaETH skips every candidate transaction of a block once the block has reached 1,000 new state entries, and its sequencer does not sort a block by priority fee. Ethereum has no per block cap on new state and orders by fee.",
+   "mechanism": "1. BlockLimiter::pre_execution_check rejects every candidate once block_state_growth_used has reached the block limit of 1,000 (block/limit.rs lines 765 to 893), and the transaction that reaches the limit is itself included. Cycle 2 measured the cost of one such transaction at 22,559,525 gas, about 0.0000226 ETH at the base fee of 1,000,000 wei. 2. New in this cycle: in 232 of 300 sampled blocks a transaction with a lower priority fee sits ahead of one with a higher fee from another sender, so a user cannot move ahead of the filling transaction by paying more. 3. If the pool hands out pending transactions in arrival order and skipped ones keep their place, a sender who queues N filling transactions from several accounts closes N consecutive one second blocks, and a withdrawal that arrives later waits N blocks. The documentation allows 500 pending transactions per account and names no other rate limit. The sequencer's pool is not public, so this ordering is an inference from the block contents. 4. The delay is bounded by the queue that stood when the user's transaction arrived, and each second of delay costs the sender about 0.0000226 ETH. An hour costs about 0.08 ETH and a day about 1.95 ETH. 5. A liquidity removal or take through the PoolManager has no path around the limiter (src/PoolManager.sol:145-184, 291-297). 6. The L1 deposit route stays open. Deposits sit at index 1 in all 25 sampled deposit blocks, ahead of sequencer transactions, and the L1 portal sells at most 20,000,000 gas of deposits per L1 block, which pays for fewer than 900 new slots at about 22,500 gas each. The deposits of one L1 block can therefore not reach the limit of 1,000 before the last of them runs. 7. No use of this was found on chain: among 400,000 recent blocks the largest state growth of a traced heavy transaction is 27 entries.",
+   "impact": "No funds are lost. All users of the chain, including liquidity providers who want to withdraw, wait as long as the sender keeps a queue and pays for it. A user can leave through an L1 deposit, which costs L1 gas and lands within minutes.",
+   "preconditions": "The sender funds several accounts and pays about 0.0000226 ETH per second of delay. The sequencer keeps its present ordering and does not filter the sender.",
+   "mitigations": "Integrators who must exit under load can send the exit as an L1 deposit through the OptimismPortal. The operator can order or filter the pool so that transactions with large state growth do not come first in each block.",
+   "coreRefs": [
+    "src/PoolManager.sol:145-184",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs",
+     "supports": "pre_execution_check rejects every later candidate once the block state growth counter has reached the limit, and deposits are exempt from the data availability tests only"
+    },
+    {
+     "url": "https://docs.megaeth.com/spec/megaevm/resource-limits.md",
+     "supports": "The first transaction that reaches a block level limit is included and later candidates are skipped and may be reconsidered in a later block"
+    },
+    {
+     "url": "rpc https://mainnet.megaeth.com/rpc eth_getBlockByNumber with transactions for 300 blocks below 32,607,200",
+     "supports": "525 of 3,316 neighbouring pairs from different senders have the higher priority fee second"
+    },
+    {
+     "url": "https://megaeth.blockscout.com/api/v2/optimism/deposits",
+     "supports": "List of recent L1 deposits whose L2 transactions were then read at index 1 of their blocks"
+    },
+    {
+     "url": "rpc https://ethereum-rpc.publicnode.com eth_call resourceConfig() on SystemConfig 0x1ed92e1bc9a2735216540eddd0191144681cb77e",
+     "supports": "maxResourceLimit 20,000,000 gas of deposits per L1 block"
+    },
+    {
+     "url": "https://docs.megaeth.com/developer-docs/faq.md",
+     "supports": "500 pending transactions per account and no per-account rate limit"
+    }
+   ],
+   "evidence": "inferred"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "check": "Faces of the native asset among all pooled tokens. Does any of the 11,268 token currencies of initialized pools report the PoolManager's MON balance as balanceOf(PoolManager), so that pools on address(0) and on that token would draw on one balance (src/PoolManager.sol:279-288, 349-364)?",
+   "result": "No. The native balance was 216,232,025 MON. Six tokens answer with a value within 3 percent of it. Three are fixed supply tokens with 222,222,222 units at the PoolManager. The other three (SWO, GEN7, DOKU) report zero for the WMON contract, which holds 361.9 million MON, so their balances do not follow native balances. WMON remains the only wrapper with size, and its balance at the PoolManager is separate (927,087 WMON).",
+   "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "check": "Faces of the native asset among the 81 currencies of the 143 MegaETH pools, including the second wrapper named Wrapped Native.",
+   "result": "No token reports a balance within 3 percent of the PoolManager's 2.2249 ETH. Wrapped Native (0x9707983a643063d7829d1f34098bdf915af11d79) has deposit and withdraw and the ERC-20 functions, its total supply equals its own ETH balance, and it holds no WETH. It is a second ordinary wrapper with its own balance, and the wrapper sequence cleared in cycle 2 applies to it.",
+   "source": "rpc https://mainnet.megaeth.com/rpc (eth_call with state overrides, eth_getLogs, eth_getBlockByNumber, eth_getBlockReceipts, eth_createAccessList, debug_traceTransaction) at blocks 32,206,276 to 32,609,052 on 2026-11-23"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "check": "Two currency ids over one balance among tokens. Do two pooled token addresses report the same nonzero balance for the PoolManager because they are two entry points to one ledger?",
+   "result": "No such pair was found. 256 groups of tokens share an identical balance, and all of them are launchpad tokens with the same initial supply and the same unsold remainder (for example 1,551 tokens with 98,999,999,999.999999999999999792). The wrapped stock tokens and their underlying tokens are different ledgers: the PoolManager holds 1,317 wSPYx and 3,234 wei of SPYx.",
+   "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "check": "Transfer quotas, cooldowns and per block movement rules (lead L-259) for every token with a balance at the Monad PoolManager. Can a take of the whole balance that is paid back in the same unlock, repeated, leave the PoolManager unable to send (src/PoolManager.sol:291-297, src/types/Currency.sol:60-86)?",
+   "result": "No token of size has such a rule. For 8,375 tokens the PoolManager address sent its whole balance to a second contract and received it back four times inside one call at block 124,612,088. 8,310 tokens completed all four rounds, and 8,017 of them also passed every other step with exact amounts, among them all 45 tokens with the largest pool reserves (USDC, syrupUSDC, GHO, mUSD, cbBTC, WBTC, AUSD, the wrapped stock tokens, WETH, apxUSD, WMON, USDT0, shMON). Of the 38 tokens that reject the first transfer, 36 are single pool creator tokens with their own gates (for example InvalidTransfer on BROKERSTR, OnlyController on a PKM token and the message Bot is not allowed on BATKNIGHT) and two are the paused Curvance tokens. Five tokens fail the return leg of the first round because they charge a fee or hold a few wei. For 22 single pool tokens the simulation ran out of gas, so they are untested. No token failed in a later round after passing the first, which is what a quota or cooldown would produce.",
+   "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "check": "Wrapped stock tokens (lead L-259 names them): source of the wrapper for a limit on what one address may send or hold, and for a way in which another account can move or lock the PoolManager's shares.",
+   "result": "The wrapper has no volume, count, cooldown or holding rule. _beforeTokenTransfer tests the pause flag and the sanctions list only (lines 178 to 193). redeem and withdraw by another account spend the owner's allowance, which the PoolManager never grants (lines 265 to 273). delegatedTransfer requires ECDSA recovery of the owner address (lines 112 to 131), and no signature recovers to a contract address. Conversion uses the multiplier of the underlying token and not the wrapper's holdings (lines 235 to 250), so a donation to the wrapper does not change what a share is worth. The four round test passed for all ten wrappers.",
+   "source": "https://raw.githubusercontent.com/backed-fi/backed-token-contract/main/contracts/WrappedBackedTokenImplementation.sol"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "check": "Curvance deposit tokens ask their market manager before each transfer. Can a third party put the PoolManager into a state in which that test fails for a while, for example by depositing for it (lead L-259)?",
+   "result": "No. In a simulated call on cWMON (0x1e240e30e51491546dec3af16b0b4eac8dd110d4) a second account wrapped 1 MON and called deposit(assets, PoolManager) and mint(shares, PoolManager). Both succeeded and raised the PoolManager balance, and the PoolManager's transfers directly afterwards succeeded. depositAsCollateral, depositAsCollateralFor and repayFor with the PoolManager as account reverted for the third party. A zero amount transfer of these tokens reverts, which only affects a caller who asks for a zero take.",
+   "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "check": "Balances that change without a transfer (lead L-172). Which pooled tokens move balanceOf(PoolManager) outside Transfer logs, and can an ordinary account raise such a balance between sync and settle and keep the credit (src/PoolManager.sol:279-288, 349-364)?",
+   "result": "Over one day 18 of 8,379 tokens did not reconcile and none of them is large. Aave deposit tokens (253.7 aMonUSDC and six below 3 units) and Neverland deposit tokens (24,696 nWMON, about 300 dollars, and smaller) grow with interest. The growth belongs to no pool and nobody can claim it, as recorded for other chains. The active case does not pay. On Aave the whole flash loan premium goes to the protocol, so the index does not move inside a transaction. On Neverland a share of each premium raises the index, and the PoolManager holds 0.044 percent of nWMON, so a caller who pays a premium of 0.5 percent on a loan would be credited at most 0.0002 percent of the loan. The four unwrapped stock tokens differ by 2 to 6 wei on balances of a few thousand wei. WMON differs because deposits emit no Transfer log.",
+   "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23"
+  },
+  {
+   "chainIds": [
+    143,
+    4326
+   ],
+   "lens": "L3",
+   "check": "Tokens whose transfer lowers the sender by a different amount than requested. take debits the caller the requested amount (src/PoolManager.sol:294), so a token that takes more from the sender would let a caller grind down the PoolManager balance.",
+   "result": "On Monad 15 tokens differ, each by 1 or 2 wei: Aave and Neverland deposit tokens lose 1 wei more than requested, and unwrapped stock tokens lose 1 or 2 wei less. On MegaETH no token differs among 67 when all calls read one block. One wei per take is far below the gas of the call, and the largest such balance is 24,696 nWMON. Two Monad tokens (DPIX and XXX) deliver 2 to 2.5 percent less to the recipient and take the exact amount from the sender, which only affects their own pools.",
+   "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23; rpc https://mainnet.megaeth.com/rpc (eth_call with state overrides, eth_getLogs, eth_getBlockByNumber, eth_getBlockReceipts, eth_createAccessList, debug_traceTransaction) at blocks 32,206,276 to 32,609,052 on 2026-11-23"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "check": "Transfer behaviour of every token with a balance at the MegaETH PoolManager: exact amounts, zero amount, transfer to self, and four round trips of the whole balance in one call.",
+   "result": "67 tokens were tested at block 32,609,052. All 67 send exact amounts and complete four round trips of the whole balance. Five tokens with a balance of one unit (two named DANK and three named EQUO) reject a transfer to self, which a take can only reach when the caller names the PoolManager as recipient. A first run that read different blocks per step showed 1 wei differences on Aave deposit tokens, and the run on one block did not.",
+   "source": "rpc https://mainnet.megaeth.com/rpc (eth_call with state overrides, eth_getLogs, eth_getBlockByNumber, eth_getBlockReceipts, eth_createAccessList, debug_traceTransaction) at blocks 32,206,276 to 32,609,052 on 2026-11-23"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Critic gap of cycle 2: does the compiled execution path of the Monad client treat TSTORE and TLOAD like the interpreter, so that the lock, the deltas and the synced reserves (src/libraries/Lock.sol:13-25, src/libraries/CurrencyDelta.sol:21-39, src/libraries/CurrencyReserves.sol:17-36) behave the same whichever path runs the PoolManager?",
+   "result": "Yes. Both paths call runtime::tstore and runtime::tload, which act on host transient storage under the address of the executing account, and tstore fails under a static call. The compiled path has no implementation of its own for these instructions or for SLOAD, SSTORE, CALL and STATICCALL.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/x86/emitter.hpp lines 470 to 573 and https://raw.githubusercontent.com/category-labs/monad/main/category/vm/runtime/storage.hpp lines 38 to 62"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Critic gap of cycle 3: the self-destruct probe left a balance of 0 on Monad for a contract that names itself as beneficiary. Is this a consensus rule that differs from Ethereum?",
+   "result": "No. The client burns the balance only when the account was created in the current transaction, as EIP-6780 does. eth_call creates override accounts with the incarnation of the call, so the probe contract counted as created in the same transaction. A contract deployed in an earlier transaction keeps its balance.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/state.cpp lines 448 to 480 and https://raw.githubusercontent.com/category-labs/monad/main/category/rpc/monad_executor.cpp lines 163 to 175 and 258 to 261"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Critic gap of cycle 2: swap results of the deployed PoolManager on Monad against a reference client, on real pool state.",
+   "result": "600 Quoter calls on 30 pools without hooks gave the same amounts and the same revert data on the Monad node and on reth v2.11.0 with the same code and storage. 44 of them needed 100 million gas on Monad, which is a difference in price and not in result. This covers Pool.swap, SwapMath, SqrtPriceMath, TickBitmap and TickMath as the deployed bytecode runs them, for exact input and exact output in both directions. It does not cover hooks, modifyLiquidity or settlement.",
+   "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23 and rpc https://ethereum-rpc.publicnode.com (client reth/v2.11.0, eth_call with state overrides) on 2026-11-23"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "Swap results of the deployed PoolManager on MegaETH against a reference client, on real pool state.",
+   "result": "400 Quoter calls on 25 pools without hooks gave the same amounts and the same revert data on the MegaETH node and on reth v2.11.0 with the same code and storage. 293 calls returned amounts and 107 reverted alike.",
+   "source": "rpc https://mainnet.megaeth.com/rpc (eth_call with state overrides, eth_getLogs, eth_getBlockByNumber, eth_getBlockReceipts, eth_createAccessList, debug_traceTransaction) at blocks 32,206,276 to 32,609,052 on 2026-11-23 and rpc https://ethereum-rpc.publicnode.com (client reth/v2.11.0, eth_call with state overrides) on 2026-11-23"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "check": "A9 with measured numbers: can a swap that must cross a long run of initialized ticks fit under the 30 million gas cap of a Monad transaction?",
+   "result": "A single transaction cannot walk a whole deep pool. 44 quotes that asked for more than 15 pools could supply needed more than 25 million and at most 100 million gas on Monad, each reading about 2,000 storage slots, while reth finished them below 25 million. The one case tried at the 30 million cap failed. A real swap stops at the caller's price limit (src/libraries/Pool.sol:344) and continues in the next transaction, and a liquidity removal touches two ticks. No withdrawal is blocked. This confirms the cycle 1 clearance with figures.",
+   "source": "rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23 and rpc https://ethereum-rpc.publicnode.com (client reth/v2.11.0, eth_call with state overrides) on 2026-11-23"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "Lead L-171: are L1 deposits placed ahead of sequencer transactions, and can a deposit be skipped because the block's state growth counter has reached 1,000 while deposits remain?",
+   "result": "Deposits come first. In 25 of 25 sampled deposit blocks the user deposit is at index 1, after the L1 attributes transaction and before every system and sequencer transaction, so the counter is near zero when deposits run. The OP Stack derivation rule places the user deposits of an L1 block in the first L2 block of its epoch. The L1 portal sells at most 20,000,000 gas of deposits per L1 block, and cycle 2 measured 20,333,678 gas for 900 new slots, so the deposits of one L1 block cannot create 1,000 entries. The limiter also applies its test before a transaction and admits the one that reaches the limit. A deposit can fail on its own transaction limits and is then included as failed with its mint kept.",
+   "source": "https://megaeth.blockscout.com/api/v2/optimism/deposits, rpc https://mainnet.megaeth.com/rpc (eth_call with state overrides, eth_getLogs, eth_getBlockByNumber, eth_getBlockReceipts, eth_createAccessList, debug_traceTransaction) at blocks 32,206,276 to 32,609,052 on 2026-11-23, https://specs.optimism.io/protocol/derivation.html, rpc https://ethereum-rpc.publicnode.com resourceConfig() and https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs lines 765 to 893"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "Lead L-251 and critic gap of cycle 3: does the KeylessDeploy sandbox start only at depth zero in the release that mainnet runs, and does any later specification or transaction type let it start next to other contract code of the same transaction (src/PoolManager.sol:279-288, 349-364, 322-329)?",
+   "result": "The depth test is present at tag v1.7.3, which the public stateless validator pins and uses to check every mainnet block. The file is byte identical to the main branch. The specification list ends at REX6 and the changelog of v1.7.3 records that REX7 was removed. The documented transaction types are legacy, EIP-2930, EIP-1559, EIP-7702 and deposit, each with one top-level call, and a delegated account whose code points at KeylessDeploy has a different target address, so the interceptor does not match it. The dependency line of the closed mega-reth binary was not read. That the validator agrees with the node on state roots is taken from the documentation and was not run here.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/system/intercept.rs line 301, https://raw.githubusercontent.com/megaeth-labs/stateless-validator/main/Cargo.toml line 44 and https://docs.megaeth.com/node-operation/stateless-validation.md"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "Lead L-213 for MegaETH: does the execution layer contain a rule that turns a user deposit into a failed deposit or leaves it out because of its sender or target, as the X Layer client does?",
+   "result": "No such rule exists in mega-evm. The handler hook before_run treats only transactions sent from the system address specially and restricts them to the Oracle contract (evm/execution.rs lines 87 to 157, system/tx.rs line 25). The block executor passes deposits through the same limiter as other transactions and exempts them from the data availability tests (block/executor.rs lines 489 to 530, block/limit.rs lines 822 and 924). The files contain no list of blocked senders or targets. A deposit fails only on the per transaction resource limits that apply to every transaction. The payload builder of mega-reth is closed source and was not read.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/evm/execution.rs, https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/executor.rs and https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/system/tx.rs"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L4",
+   "check": "Whether the Monad precompile sweep of cycles 1 and 2 still describes mainnet, and whether a pooled currency is a special address.",
+   "result": "Mainnet runs the same release v0.16.5 and revision MONAD_TEN as in cycle 1, and the client source on the main branch was fetched again: the Ethereum list still ends at 0x11 and 0x0100 (precompiles.cpp lines 100 to 137) and the Monad list adds only the staking and reserve balance addresses (monad_precompiles.cpp lines 83 to 90). Every one of the 8,375 tokens with a balance has contract code, and none of the 11,268 currency addresses lies in the precompile range.",
+   "source": "https://docs.monad.xyz/ai/current-facts.md, https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/precompiles.cpp, https://raw.githubusercontent.com/category-labs/monad/main/category/execution/monad/monad_precompiles.cpp and rpc https://rpc.monad.xyz, https://rpc1.monad.xyz, https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_call with state overrides, eth_getLogs, eth_getCode, eth_getStorageAt, debug_traceCall) at blocks 124,321,281 to 124,616,006 on 2026-11-23"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "question": "In which order does the MegaETH sequencer take pending transactions, and does a transaction that was skipped for a block level limit keep its place ahead of later arrivals? Ask the operator, or watch the mini-block stream while two accounts send marked transactions in a known order.",
+   "why": "Blocks are not sorted by priority fee. Under arrival order a queue of state filling transactions delays everyone by its length, which is what F-042 now assumes. Measuring it needs sent transactions, which this review does not do.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "question": "Does the wrapped stock token implementation at 0x76c6851ea0b2741eedcbbed240715e8817e85583 compile from WrappedBackedTokenImplementation.sol of the Backed repository? Its 46 selectors match. The bytecode was not compared because no compiler is installed, and the contract is not verified on Sourcify.",
+   "why": "The clearance of quotas and third party moves for 7.9 million dollars of pooled tokens rests on that source.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "question": "Read the shMON implementation (120,874 bytes, source in FastLane-Labs/fastlane-contracts) for functions through which an account other than the holder changes a holder's plain balance, such as agent transfers and zero yield tranche conversions.",
+   "why": "The PoolManager holds 262,377 shMON, about 5,300 dollars. The transfer tests passed, and the committed balance functions were not read line by line.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L4",
+   "question": "Classify the hooks of the Monad pools. 2,774 hook addresses appear in Initialize logs, 4,726 pools use 0x94f802a9efe4dd542fdbd77a25d9e69a6dc828cc and 900 use 0x580ca49389d83b019d07e17e99454f2f218e2dc0. Which of them hold PoolManager claims or can change fees or block removals for pools with pooled value?",
+   "why": "Hook risk is recorded in general as F-004. The hooks that carry most Monad pools were never read.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-259",
+   "outcome": "cleared",
+   "answer": "Monad part. No pooled token of size limits what one address may send or hold over a period. For all 8,375 tokens with a balance the PoolManager address sent its whole balance out and received it back four times in one simulated call. 8,310 complete all rounds, including the 45 tokens with the largest reserves, and 22 single pool tokens ran out of gas in simulation. The 38 tokens that reject a transfer do so on the first attempt because of creator gates or the Curvance pause, which is no quota. The wrapped stock tokens were read from source: the transfer hook tests pause and the sanctions list only. A third party deposit into a Curvance market for the PoolManager does not start a hold period for it. The network level part is covered by the cycle 1 clearance that the reserve balance rule skips accounts with contract code. MegaETH is not named in the lead. Its 67 tokens pass the same test, and its block budget for new state is F-042."
+  },
+  {
+   "leadId": "L-170",
+   "outcome": "inconclusive",
+   "answer": "The order is not by priority fee. In 232 of 300 sampled blocks a transaction with a lower priority fee precedes one with a higher fee from another sender (525 of 3,316 neighbouring pairs). That fits arrival order per mini-block. Whether skipped transactions keep their place could not be established, because the sequencer's pool is closed source, the documentation is silent, and no block with a full state budget exists in 400,000 recent blocks to observe."
+  },
+  {
+   "leadId": "L-171",
+   "outcome": "cleared",
+   "answer": "Deposits sit at index 1 in 25 of 25 sampled deposit blocks, ahead of system and sequencer transactions. One L1 block can carry at most 20,000,000 gas of deposits (resourceConfig on the L1 SystemConfig), which pays for fewer than 900 new slots, so deposits alone cannot bring the counter to 1,000, and the transaction that reaches the limit is itself admitted. The forced inclusion route of F-017 has no gap from this limit."
+  },
+  {
+   "leadId": "L-172",
+   "outcome": "finding",
+   "answer": "Enumerated from Initialize logs since deployment: 19,402 pools, 11,268 token currencies, 8,375 with a balance. New holdings of size are ten wrapped stock tokens worth 7.9 million dollars, 40 cbBTC, 337 bridged WETH and 1.7 WBTC. The wrapped stock tokens and cbBTC carry pause, sanctions, freeze and burn rights and are added to F-015. No second entry point to a pooled balance and no mirror of the native balance was found. Balances that change without transfers are Aave and Neverland deposit tokens with at most 24,696 nWMON (about 300 dollars) and unwrapped stock tokens at dust size."
+  },
+  {
+   "leadId": "L-176",
+   "outcome": "inconclusive",
+   "answer": "Not observed and not excluded. Blocks are not ordered by fee, so under arrival order a queue of N filling transactions from several accounts would hold N blocks and delay later arrivals by N seconds at about 0.0000226 ETH per second. The only documented pool limit is 500 pending transactions per account. The delay is bounded by the queue length at arrival and does not reach L1 deposits, which are placed first. F-042 is updated with this bound and stays low."
+  },
+  {
+   "leadId": "L-177",
+   "outcome": "inconclusive",
+   "answer": "No example in either direction. Headers of blocks 32,206,276 to 32,606,276 were read. 359 blocks exceed 20 million gas. The 30 transactions above 12 million gas in blocks of 20 to 80 million gas were traced, and the largest state growth is 27 entries. The heavy transactions are contract deployments. Blocks before 32,206,276 were not scanned."
+  },
+  {
+   "leadId": "L-213",
+   "outcome": "cleared",
+   "answer": "MegaETH part. mega-evm has no rule that fails or drops a deposit because of its sender or target. before_run handles only transactions from the system address, and the block executor sends deposits through the general limiter with an exemption from the data availability tests. A deposit fails only on resource limits that apply to its own execution. The closed mega-reth payload builder was not read. The other chains of this lead belong to other units."
+  },
+  {
+   "leadId": "L-251",
+   "outcome": "cleared",
+   "answer": "The public stateless validator pins mega-evm v1.7.3, and the depth test at system/intercept.rs line 301 is identical at that tag and on main. The specification list ends at REX6 and v1.7.3 removed the REX7 draft. The five documented transaction types each have one top-level call. No path was found that starts a sandbox beside other contract code of the same transaction. The dependency line of mega-reth v2.2.3 itself is not public and stays unconfirmed."
+  }
+ ]
+}

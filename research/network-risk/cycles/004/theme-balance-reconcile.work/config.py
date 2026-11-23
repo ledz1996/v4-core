@@ -1,0 +1,25 @@
+# Endpoints chosen from raw/endpoints*.json. state: serves old state. logs: serves Transfer logs filtered by topic only.
+T = 'gateway.tenderly.co'
+CFG = {
+ 1:       dict(state=['https://mainnet.' + T, 'https://eth.drpc.org'], logs='https://mainnet.' + T, chunk=2000, init='https://mainnet.' + T, initChunk=100000),
+ 10:      dict(state=['https://mainnet.optimism.io', 'https://optimism.' + T], logs='https://optimism.' + T, chunk=10000, init='https://optimism.' + T, initChunk=100000, scout='https://optimism.blockscout.com'),
+ 8453:    dict(state=['https://base.' + T, 'https://base.drpc.org'], logs='https://base.' + T, chunk=1000, init=None, initChunk=0),
+ 130:     dict(state=['https://mainnet.unichain.org', 'https://unichain.' + T], logs='https://unichain.' + T, chunk=10000, init='https://unichain.' + T, initChunk=100000, scout='https://unichain.blockscout.com'),
+ 7777777: dict(state=['https://rpc.zora.energy/'], logs='https://rpc.zora.energy/', chunk=10000, init='https://rpc.zora.energy/', initChunk=2000000),
+ 480:     dict(state=['https://worldchain-mainnet.g.alchemy.com/public'], logs='https://worldchain-mainnet.g.alchemy.com/public', chunk=100, init=None, initChunk=0, scout='https://worldchain-mainnet.explorer.alchemy.com'),
+ 57073:   dict(state=['https://rpc-gel.inkonchain.com', 'https://ink.' + T], logs='https://ink.' + T, chunk=10000, init='https://ink.' + T, initChunk=100000, scout='https://explorer.inkonchain.com'),
+ 1868:    dict(state=['https://rpc.soneium.org', 'https://soneium.' + T], logs='https://soneium.' + T, chunk=10000, init='https://soneium.' + T, initChunk=100000, scout='https://soneium.blockscout.com'),
+ 42220:   dict(state=['https://forno.celo.org', 'https://celo.' + T], logs='https://celo.' + T, chunk=10000, init='https://celo.' + T, initChunk=100000, scout='https://celo.blockscout.com'),
+ 196:     dict(state=['https://rpc.xlayer.tech', 'https://xlayerrpc.okx.com'], logs='https://rpc.xlayer.tech', chunk=100, init=None, initChunk=0),
+ 42161:   dict(state=['https://arbitrum.' + T], logs='https://arb1.arbitrum.io/rpc', chunk=20000, init='https://arb1.arbitrum.io/rpc', initChunk=2000000),
+ 4663:    dict(state=['https://robinhood.drpc.org'], logs='https://rpc.mainnet.chain.robinhood.com', chunk=20000, init='https://rpc.mainnet.chain.robinhood.com', initChunk=500000),
+ 99901:   dict(state=['https://rpc.elysium.kinetiq.xyz'], logs='https://rpc.elysium.kinetiq.xyz', chunk=50000, init='https://rpc.elysium.kinetiq.xyz', initChunk=500000),
+ 137:     dict(state=['https://polygon.' + T, 'https://polygon.drpc.org'], logs='https://polygon.' + T, chunk=5000, init='https://polygon.' + T, initChunk=100000),
+ 56:      dict(state=['https://bsc-mainnet.public.blastapi.io'], logs='https://rpc-bsc.48.club', chunk=500, workers=6, init=None, initChunk=0),
+ 43114:   dict(state=['https://api.avax.network/ext/bc/C/rpc', 'https://avalanche.' + T], logs='https://avalanche.' + T, chunk=10000, init='https://avalanche.' + T, initChunk=100000),
+ 143:     dict(state=['https://rpc.monad.xyz', 'https://rpc2.monad.xyz'], logs='https://rpc2.monad.xyz', chunk=10000, init='https://rpc2.monad.xyz', initChunk=10000),
+ 4326:    dict(state=['https://mainnet.megaeth.com/rpc'], logs='https://mainnet.megaeth.com/rpc', chunk=20000, init='https://mainnet.megaeth.com/rpc', initChunk=2000000, scout='https://megaeth.blockscout.com'),
+ 4217:    dict(state=['https://rpc.mainnet.tempo.xyz'], logs='https://rpc.mainnet.tempo.xyz', chunk=50000, init='https://rpc.mainnet.tempo.xyz', initChunk=100000),
+ 5042:    dict(state=['https://rpc.mainnet.arc.io', 'https://arc.' + T], logs='https://arc.' + T, chunk=10000, init='https://arc.' + T, initChunk=100000),
+ 999:     dict(state=['https://rpc.purroofgroup.com', 'https://hyperliquid-json-rpc.stakely.io'], logs='https://rpc.purroofgroup.com', chunk=10000, init='https://rpc.purroofgroup.com', initChunk=100000),
+}

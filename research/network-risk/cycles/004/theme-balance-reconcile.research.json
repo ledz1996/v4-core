@@ -1,0 +1,493 @@
+{
+ "unit": "theme-balance-reconcile",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Anyone can run the staking rebase of five Olympus forks on Polygon and BNB Smart Chain, and on Polygon bots already book each sLGNS and sATH rebase on the PoolManager balance as ERC-6909 claims",
+   "chainIds": [
+    137,
+    56
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A5"
+   ],
+   "effect": "siphon",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "difference": "The cause is a token design, and Polygon and BNB Smart Chain are where pools hold such tokens. Staked Longinus (sLGNS), Staked Aegis (sATH) and Staked Klima (sKLIMA) on Polygon, and Staked NovaBank (sNVB) and sShadowsClaw (sSAC) on BNB Smart Chain, raise every holder's balance when their staking contract runs rebase(). That function has no caller check and takes effect once per epoch. F-041 recorded this class on Ethereum for AMPL, where an origin check stands in the way. These five tokens have no such check, and the Polygon PoolManager shows the path in use since May 2026.",
+   "mechanism": "1. sync has no lock check and stores balanceOf(PoolManager) for any currency (src/PoolManager.sol:279-289). _settle credits the caller with the whole rise of that balance since the sync (src/PoolManager.sol:349-365). Pool accounting never reads balances, so a rise that comes from a rebase is booked as a payment by whoever brackets it. 2. The Longinus staking contract 0x1964ca90474b11ffd08af387b110ba6c96251bfc exposes rebase() to any caller. When epoch.endBlock <= block.number it calls sLGNS.rebase(epoch.distribute, epoch.number), which raises the total supply and lowers the gons per fragment, so every balance grows inside that call (Staking source lines 672 to 693, sLGNS source lines 1068 to 1090 and 1121 to 1123). 3. Observed on chain: transaction 0xfe645530665d1f424807e4ef99fc8cd3569d3fbaab75af4dca893749098eae11 in Polygon block 97,799,112, the block in which epoch 3018 became due, at transaction index 0. An externally owned account calls a contract of 851 bytes. The trace shows unlock, then inside unlockCallback sync(sLGNS), Staking.rebase(), settle() and mint(). The PoolManager emitted an ERC-6909 Transfer from the zero address with the sLGNS id for 9.015568747 sLGNS. The sender paid 3.39 POL at 5,250 gwei to be first in the block. 4. The same gain needs no settle credit: a caller can take the whole pooled balance (src/PoolManager.sol:291-297), call rebase() while holding it, pay the principal back and keep the growth. 5. Read-only tests through Multicall3 with the call list balanceOf(PoolManager), rebase(), balanceOf(PoolManager): KlimaStaking.rebase() raised the PoolManager's sKLIMA balance by 1,276,529 base units at the latest block, with about 1,232 epochs outstanding. The NovaBank StakingV2.rebase() raised its sNVB balance by 82,488,131 base units on BNB Smart Chain. The same call for sLGNS, sATH and sSAC succeeded and changed nothing, because their epoch was not yet due at the time of the call; the sATH and sSAC staking contracts contain the rebase() selector.",
+   "impact": "sLGNS: the PoolManager held 36,908.56 sLGNS, about 5,900 USD at 0.16 USD, in 267 pools of which 265 have no hook. An epoch is 14,400 blocks and the next rebase adds 8.78 sLGNS on that balance, four times a day. From block 87,258,312 (22 May 2026) to block 97,799,112, 661 ERC-6909 mints with the sLGNS id went to six recipients for 20,418.69 sLGNS in total, about 3,300 USD at today's price, and every one of them sits in a block where an epoch became due. In the one day window the sLGNS balance rose 36.92 beyond its Transfer logs. sATH: 150 mints for 328.86 sATH to two recipients against a balance of 389.04. sKLIMA: 8 mints for 0.0102 sKLIMA against a balance of 247.67. BNB Smart Chain: the PoolManager holds 38,313.74 sNVB and 2,287.62 sSAC; the endpoint returned no claim mint for either id in the last 1,344,000 blocks, and a payout through take would not appear in that search. Who loses: liquidity providers in these pools would have earned this growth by holding the token outside the pool. Inside the PoolManager the growth belongs to no pool, position or claim, and core has no function that pays it to them. The amount taken was therefore never an accounted balance of any user, and principal is not reduced. The balance does not fall back afterwards.",
+   "preconditions": "A pool or claim balance in a token whose rebase any account can start. The taker must be the first caller after the epoch becomes due. No role, no hook and no token of the taker's making is needed. I did not run the sequence. The call order comes from debug_traceTransaction of one of the 661 transactions; the other 660 were checked by their mint logs and block numbers only. The sLGNS price is the figure the DexScreener API returned for the LGNS and sLGNS pairs. The sATH, sNVB and sSAC staking sources are not on Sourcify and I read their selectors from bytecode.",
+   "mitigations": "Core cannot tell a rebase from a payment and keeps no total of what is owed per currency, so it cannot compute or redirect the surplus. Liquidity providers should pool a wrapped form with a fixed balance where the project offers one. Interfaces and routers should warn on or hide pools whose currency changes balance without transfers; reconcile.py in the work directory finds them from chain data. A deployer who wants the growth to reach liquidity providers needs a wrapper or a vault held by a hook around the token, outside core.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-289",
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:322-329",
+    "src/PoolManager.sol:104-114"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:279-289",
+     "supports": "sync has no lock check and stores balanceOf(PoolManager) for any currency in transient storage."
+    },
+    {
+     "url": "src/PoolManager.sol:349-365",
+     "supports": "_settle credits the recipient with the balance now minus the synced balance, with a checked subtraction, and resets the synced currency."
+    },
+    {
+     "url": "src/PoolManager.sol:291-297",
+     "supports": "take debits the caller and transfers before anything is paid in."
+    },
+    {
+     "url": "src/PoolManager.sol:322-329",
+     "supports": "mint turns a positive delta into an ERC-6909 claim."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0x1964ca90474b11ffd08af387b110ba6c96251bfc?fields=sources,abi,compilation",
+     "supports": "Longinus Staking source: rebase() is public with no caller check and calls sOHM.rebase when epoch.endBlock <= block.number (lines 672 to 693); stake and unstake call it too."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0x99a57e6c8558bc6689f894e068733adf83c19725?fields=sources,abi,compilation",
+     "supports": "sLGNS source: rebase is limited to the staking contract and raises the supply; balanceOf is gons divided by gons per fragment (lines 1068 to 1090, 1121 to 1123)."
+    },
+    {
+     "url": "https://polygon.drpc.org",
+     "supports": "debug_traceTransaction with callTracer for 0xfe645530665d1f424807e4ef99fc8cd3569d3fbaab75af4dca893749098eae11: unlock, unlockCallback, sync(sLGNS), Staking.rebase(), settle(), mint(). Saved as research/network-risk/cycles/004/theme-balance-reconcile.work/raw/polygon_sLGNS_trace_0xfe645530.json."
+    },
+    {
+     "url": "https://polygon.gateway.tenderly.co",
+     "supports": "eth_getLogs on the PoolManager for the ERC-6909 Transfer topic 0x1b3d7edb2e9c0b0e7c525b20aaaef0f5940d2ed71663c7d39266ecafac728859 with from zero and id sLGNS, blocks 66,980,384 to head: 661 logs, six recipients, 20,418.69 sLGNS, all in blocks where (97,813,512 minus block) is a multiple of 14,400. Same query for sATH: 150 logs, 328.86. For sKLIMA: 8 logs, 0.0102. Receipt of the traced transaction: mint of 9,015,568,747 base units, fee 3.389 POL. epoch() returned length 14,400, number 3019, endBlock 97,813,512, distribute 1,626,667.27 LGNS; circulatingSupply 6,840,830,136.40; balanceOf(PoolManager) 36,908.562773129."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/137/0x25d28a24ceb6f81015bb0b2007d795acac411b4d?fields=sources,abi,compilation",
+     "supports": "KlimaStaking source with the same public rebase(). eth_call through Multicall3 at the latest block: sKLIMA balance of the PoolManager 247,670,486,325 before and 247,671,762,854 after rebase(); epoch() endBlock 83,607,730 with length 11,520 against head 97,800,242."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/56/0x6bcd1273eba684ff62614e41eff87123113112d1?fields=sources,abi,compilation",
+     "supports": "NovaBank StakingV2 is verified here. eth_call through Multicall3 on https://bsc-mainnet.public.blastapi.io: sNVB balance of the PoolManager 38,313,740,210,271 before and 38,313,822,698,402 after rebase(); epoch() endBlock 135,135,655 against head 135,205,477."
+    },
+    {
+     "url": "https://api.dexscreener.com/latest/dex/tokens/0x99a57e6c8558bc6689f894e068733adf83c19725",
+     "supports": "sLGNS pairs priced at 0.16 USD; the Uniswap sLGNS and DAI pool shows 33,470 USD of liquidity."
+    },
+    {
+     "url": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/polygon_sLGNS_6909_mints.json:1",
+     "supports": "The 661 mint logs with block, transaction hash, recipient and amount. raw/polygon_sATH_sKLIMA_6909_mints.json and raw/bsc_sNVB_sSAC_6909_mints.json hold the other three searches, raw/polygon_sLGNS_pools.json the 267 pools."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "F-041",
+   "title": "Interest Protocol lets any caller accrue interest, which raised the PoolManager's USDI balance by 399,373 in one transaction and can raise it again today",
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A5"
+   ],
+   "effect": "siphon",
+   "actor": "unprivileged",
+   "severity": "medium",
+   "difference": "This is a second token for the class in F-041 and it needs no EIP-7702 delegation. USDI at 0x2a54ba2964c8cd459dc568853f79813a60761b58 is a rebasing token. Its VaultController at 0x4aae9823fb4c70490f1d802fc697f3fff8d5cbe3 has calculateInterest(), which any contract can call and which distributes accrued interest to all holders by raising their balances.",
+   "mechanism": "1. sync, settle and take work as in F-041 (src/PoolManager.sol:279-297, 349-365). 2. Transaction 0xad36440ffe69062fe8b57599f3d5e77ae69f38b81bf19667c2e39957464ebc4d in block 26,469,396 was sent through Multicall3 by an ordinary account. It made the VaultController donate 874,691 USDI of interest, which moved the supply from about 1.53 million to 2.40 million. The sender took 158,347 USDI out of a v2 style pair in the same transaction and sold 118,000 USDI through v4 pools. 3. In that block the PoolManager's USDI balance rose from 697,167.03 to 1,214,540.56. Of the rise 118,000 arrived by Transfer and 399,373.53 came from the rebase. The sender did not bracket the rebase with sync and settle, so the 399,373.53 USDI stayed in the PoolManager and belongs to no pool. 4. Read-only test through Multicall3 with balanceOf(PoolManager), calculateInterest(), balanceOf(PoolManager): at block 26,469,395 the balance rises by 399,373.08, and at the latest block it rises by 4,636.71. A caller who runs sync before and settle after that call, or who takes the pooled USDI, makes the call and pays the principal back, is credited that amount.",
+   "impact": "The PoolManager holds 1,214,540.56 USDI, which is 47.5 percent of the supply, in six pools without a hook. Any account can book 4,636.71 USDI today and more as interest accrues. The market value is small: the 118,000 USDI sold through v4 pools in the observed transaction returned 9.04 USDC. Liquidity providers do not receive this growth in either case, because core has no function that pays out an unaccounted balance. The amount was never an accounted balance of any user. The balance does not fall back afterwards.",
+   "preconditions": "A pool or claim balance in USDI and interest that has accrued since the last call. The VaultController implementation at 0xffc8c49c5b38bc9bafd0bb0f5f189eecd35e35e2 is not on Sourcify, so the statement that anyone may call calculateInterest() rests on the two simulations from Multicall3 and on the observed transaction, which also came from Multicall3. I did not run the bracket.",
+   "mitigations": "Same as for the Polygon finding. Core cannot separate this growth from a payment. Liquidity providers should not pool USDI, and interfaces should warn on currencies whose balance changes without transfers.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-289",
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:279-289",
+     "supports": "sync has no lock check and stores balanceOf(PoolManager) for any currency in transient storage."
+    },
+    {
+     "url": "src/PoolManager.sol:349-365",
+     "supports": "_settle credits the recipient with the balance now minus the synced balance, with a checked subtraction, and resets the synced currency."
+    },
+    {
+     "url": "src/PoolManager.sol:291-297",
+     "supports": "take debits the caller and transfers before anything is paid in."
+    },
+    {
+     "url": "https://mainnet.gateway.tenderly.co",
+     "supports": "Receipt of 0xad36440ffe69062fe8b57599f3d5e77ae69f38b81bf19667c2e39957464ebc4d (block 26,469,396, to Multicall3, 22 logs): USDI donation event from the VaultController with value 874,691.17 and new supply 2,401,597.20, one Transfer of 118,000 USDI to the PoolManager, USDC Transfer of 9,043,076 base units from the PoolManager to the sender. eth_call balanceOf(PoolManager) at blocks 26,469,395 and 26,469,396: 697,167.03 and 1,214,540.56. eth_call through Multicall3 at block 26,469,395 with calculateInterest(): balance after 1,096,540.11, a rise of 399,373.08."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "eth_call through Multicall3 at the latest block: balanceOf(PoolManager) 1,214,540.56 before and 1,219,177.27 after calculateInterest(), a rise of 4,636.71 USDI. totalSupply 2,555,954.47."
+    },
+    {
+     "url": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/ethereum_USDI_pools.json:1",
+     "supports": "Six Initialize logs name USDI and all six have the zero address as hook."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "xStocks tokens multiply every balance by a figure the issuer schedules, and the 8 for 1 split of SNDKx raised the PoolManager balance eightfold on Ethereum and X Layer with no transfer",
+   "chainIds": [
+    1,
+    56,
+    143,
+    196
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2"
+   ],
+   "effect": "siphon",
+   "actor": "issuer",
+   "severity": "medium",
+   "difference": "The Robinhood stock tokens cleared in an earlier cycle keep balanceOf fixed and change a display multiplier. The xStocks tokens (symbols ending in x, one implementation behind every proxy) do the opposite: balanceOf is shares times a multiplier, and the multiplier changes at a time the issuer sets. The PoolManager holds them on Ethereum (5 tokens in the window), BNB Smart Chain (42), Monad (4) and X Layer (7 over 6.9 days).",
+   "mechanism": "1. BackedAutoFeeTokenImplementation.balanceOf returns shares times getCurrentMultiplier() (lines 254 to 259). getCurrentMultiplier returns lastMultiplier until newMultiplierActivationTime and newMultiplier from that second on, reduced by feePerPeriod for each period that has passed (lines 265 to 283). Only the multiplier updater may schedule a change (lines 445 to 452) and only the owner may set feePerPeriod (lines 392 to 397). 2. SNDKx 0xb63efbc28860c8097e341de1fcf59456161e9d98 has a stored update from 1e18 to 8e18 with activation time 1795167000 (20 November 2026) on Ethereum and on X Layer. On X Layer the block with that timestamp is 76,397,964. The token emitted no log in that block, and balanceOf(PoolManager) went from 137,059,273,049,122,723 to 1,096,474,184,392,981,784 base units, a factor of exactly 8. 3. Pool accounting did not change (src/PoolManager.sol never reads a balance outside sync and settle), so seven eighths of the SNDKx the PoolManager now holds belong to no pool. A provider who had put in one token before the split can take out one token, which is worth one eighth. 4. A pool that still held liquidity at its old price after the activation time would quote eight times the market value for each token sold into it, and any account could sell new tokens there and take the other currency. I did not observe this: the pool that traded SNDKx before the split on X Layer had 1.04 SNDKx removed 21,405 seconds before activation, and later swaps went through another pool at about 26 units of the 6 decimal quote token per SNDKx, against about 267 before. 5. Dividends use the same path in small steps: STRCx has 26 stored updates and a multiplier of 1.1058, and each step raises the PoolManager balance without a transfer. feePerPeriod is 0 on the six token contracts I read on four networks; a value above 0 would lower every balance each period, which would leave pools short. 6. Transfers convert amounts to shares and back, which explains differences of 1 to 8 base units between Transfer logs and balances.",
+   "impact": "Every pool in an xStocks token on the four networks. Balances today: 569.57 STRCx, 17.34 NVDAx and 1.40 SNDKx on Ethereum; 1.88 SNDKx on X Layer; 42 tokens of up to 9.96 units each on BNB Smart Chain; a few thousand base units on Monad, where 14,932 NVDAx transfers passed through in a day. A split strands the added tokens in the PoolManager and cuts the value of the token side of each position by the split ratio. Each dividend strands the dividend. The other currency of the pool is exposed to whoever trades first after an activation time that is public in advance. I did not measure what share of the 569.57 STRCx is already unaccounted.",
+   "preconditions": "The issuer schedules a multiplier change, which is a routine corporate action for these tokens, and liquidity stays in the pool past the activation time. An ordinary account cannot bracket the change with sync and settle or with take and repay, because the change happens at a timestamp or inside the updater's own transaction. The arbitrage in step 4 is my reading of the pool mechanics and was not seen on chain.",
+   "mitigations": "Liquidity providers must remove liquidity before every scheduled activation and should prefer a wrapped form with a fixed balance. Interfaces should read newMultiplierActivationTime and multiplierUpdates and warn when a change is pending. A hook cannot recover the stranded tokens, because core has no payout for an unaccounted balance.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-289",
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:279-289",
+     "supports": "sync has no lock check and stores balanceOf(PoolManager) for any currency in transient storage."
+    },
+    {
+     "url": "src/PoolManager.sol:349-365",
+     "supports": "_settle credits the recipient with the balance now minus the synced balance, with a checked subtraction, and resets the synced currency."
+    },
+    {
+     "url": "src/PoolManager.sol:291-297",
+     "supports": "take debits the caller and transfers before anything is paid in."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x65c40d624af3b18c109fbf87b7deff34cdc5f19b?fields=sources,abi,compilation",
+     "supports": "BackedAutoFeeTokenImplementation source, the EIP-1967 implementation of SNDKx on Ethereum: balanceOf, getCurrentMultiplier, updateMultiplierValue, updateFeePerPeriod and _transfer at the lines given."
+    },
+    {
+     "url": "https://rpc.xlayer.tech",
+     "supports": "eth_call balanceOf(PoolManager) on SNDKx at blocks 76,397,963 and 76,397,964: 137059273049122723 and 1096474184392981784. Block timestamps 1795166999 and 1795167000. eth_getLogs for the token in both blocks: none. multiplierUpdates(1) returns old 1e18, new 8e18, activation 1795167000. Swap logs before and after are in research/network-risk/cycles/004/theme-balance-reconcile.work/raw/xlayer_SNDKx_swaps.json."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "SNDKx on Ethereum: getCurrentMultiplier 8e18, the same stored update, sharesOf(PoolManager) 174847457395616099 and balanceOf 1398779659164928792. STRCx: multiplier 1105774914969160700, multiplierUpdatesLength 26, balance 569.568. feePerPeriod 0 and periodLength 604,800 on all tokens read. Values in research/network-risk/cycles/004/theme-balance-reconcile.work/raw/xstocks_multiplier.json."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Tokens whose balance falls with time leave the PoolManager short of what pools record: TURING on Ethereum has lost 73 percent of its pooled balance in 263 days",
+   "chainIds": [
+    1,
+    4663,
+    42161
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2"
+   ],
+   "effect": "freeze",
+   "actor": "pool-creator",
+   "severity": "low",
+   "difference": "These are token designs with a balance that decays by a time formula. Nobody has to send a transaction for the balance to fall, and no Transfer log is emitted.",
+   "mechanism": "1. Pool accounting records amounts and never reads balanceOf again. take pays out recorded amounts with a plain transfer (src/PoolManager.sol:291-297, src/types/Currency.sol:40-87). 2. Thirteen tokens named TURING on Ethereum lost 0.5 percent of their PoolManager balance in the one day window with no log. For 0x11fb7c5e6fe7e42fb9e28929b673d3eee20048d4 getDecayInfo(PoolManager) returns a stored amount of 999,999,999.99 tokens, a current balance of 267,590,219.70 and 263 days of decay. The contract has checkIn(uint256,bytes), lastCheckIn and hook() among its selectors, so holders who check in keep their balance and the PoolManager cannot. 3. Once withdrawals and swaps have paid out the 267.6 million that exist, every later take of this token reverts in the transfer, and the last positions cannot be closed in that currency. 4. On Robinhood Chain three tokens named PYRE fell 5.3 to 5.6 percent in the window and SMK2 fell 0.39 percent. On Arbitrum One DDL fell 3.7 percent. All without logs.",
+   "impact": "Each TURING token has a supply of 1,000,000,000 and the PoolManager holds about 26.8 percent of it after decay, 5.3 percent for two of them. The stored amount for the token I read equals almost the whole supply, so the liquidity is the deployer's own. The other balances are small: 9.34 PYRE, 2.12 SMK2, 3.34 DDL. I found no third party funds at risk today. The pattern matters for any future pool in a token with demurrage.",
+   "preconditions": "A pool in a token whose balance decays. No attacker is needed. The TURING source is not verified; I read selectors from bytecode and state through its getters. I did not read the pool positions, so the split between the deployer and others is inferred from the stored amount.",
+   "mitigations": "Do not pool tokens with a decaying balance unless the token exempts the PoolManager address. Interfaces can detect them with the reconcile script.",
+   "coreRefs": [
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:40-87"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:291-297",
+     "supports": "take debits the caller and transfers before anything is paid in."
+    },
+    {
+     "url": "src/types/Currency.sol:40-87",
+     "supports": "The payout is a transfer call that reverts with ERC20TransferFailed when the token refuses it."
+    },
+    {
+     "url": "https://mainnet.gateway.tenderly.co",
+     "supports": "eth_call on 0x11fb7c5e6fe7e42fb9e28929b673d3eee20048d4: getDecayInfo(PoolManager) returns 999999999999999999999997062, 267590219702701977999999213, 263, 732409780297298021999997849, 0. balanceOf(PoolManager) at blocks 26,467,827 and 26,475,001 for the thirteen tokens is in research/network-risk/cycles/004/theme-balance-reconcile.work/raw/mismatch_1.json."
+    },
+    {
+     "url": "https://robinhood.drpc.org",
+     "supports": "eth_call balanceOf(PoolManager) at blocks 120,299,181 and 121,117,362 for PYRE (three addresses) and SMK2, read twice; no Transfer log naming the PoolManager between them. Rows in research/network-risk/cycles/004/theme-balance-reconcile.work/raw/mismatch_4663.json."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "F-037",
+   "title": "Interest bearing receipt tokens and time indexed tokens grow in the PoolManager on thirteen networks and the growth can be neither claimed nor captured",
+   "chainIds": [
+    1,
+    10,
+    8453,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    57073,
+    1868,
+    42220,
+    42161,
+    4663
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2"
+   ],
+   "effect": "degrade",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "F-037 recorded four Aave aTokens on Arbitrum One. The sweep finds the same class on eleven more networks and in more protocols: Aave v2 and v3, Spark, Radiant, Seamless, Moola, Neverland, Horizon, DeltaPrime, ExtraFi, Compound III and Wildcat. It also finds tokens with a pure time index: 666, EXPT and EXPT2 on Robinhood Chain and two test tokens on Arbitrum One.",
+   "mechanism": "balanceOf of these tokens is a stored amount times an index that is computed from block.timestamp at read time. Inside one transaction the timestamp is constant, so a sync and a settle in the same transaction see the same index and no caller is credited (src/PoolManager.sol:279-289, 349-365). The growth between transactions stays in the PoolManager balance and belongs to no pool. 666 at 0x73eb4a9db8d8c7539ba5701cf1cdd3452038970b has DAILY_GROWTH 1.33e18, MAX_DAYS 200 and a start time 4.3 days before the read, and the PoolManager balance rose from 1,936,719 to 2,595,372 in 93,084 seconds while one Transfer of 34,778 went out. Two side observations. First, when someone supplies to Aave v3 on behalf of the PoolManager, the aToken logs a Transfer for the supplied amount plus the interest accrued since the PoolManager's last index update, so the logs overstate what arrived; this explains the negative differences on aEthDAI, aEthUSDT, aAvaUSDT, aAstarASTR and aBnbUSDT. Second, Compound III lets anyone call CometRewards.claim for a third party; simulated for the PoolManager on Ethereum, Arbitrum One and Optimism it moved no reward token, with 0.000016 COMP owed on Ethereum and nothing on the other two.",
+   "impact": "Liquidity providers in these pools forgo the interest or the index growth for as long as the tokens stay pooled. Largest balances: 3,410.66 aEthUSDC, 2,268.28 aEthUSDT and 4,565.90 USPD on Ethereum, 60,244 rzRDNT and 1,504.67 aArbUSDT on Arbitrum One, 24,696 nWMON on Monad, 2,786.51 aBasUSDC on Base, 2,501.34 aASTR on Soneium, 548.71 aBnbUSDT on BNB Smart Chain, 845.05 aOptUSDC on Optimism. 666: the PoolManager holds 2,595,372 tokens, 37.9 percent of the supply, and its balance grows by about a third per day. Principal is not affected and no ordinary account can collect the surplus.",
+   "preconditions": "A pool in such a token. Nobody has to act. I did not test whether a flash loan premium or another call can move an Aave style index inside one transaction on these networks; F-037 checked that for Arbitrum One only. A caller who paid such a premium would be credited only the PoolManager's share of it, which is below 1 percent of supply for every receipt token found except rzRDNT at 3.8 percent.",
+   "mitigations": "Pool the wrapped form with a fixed balance, for example the static or wrapped aToken, or accept that the yield is lost. Interfaces should mark these currencies.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-289",
+    "src/PoolManager.sol:349-365"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:279-289",
+     "supports": "sync has no lock check and stores balanceOf(PoolManager) for any currency in transient storage."
+    },
+    {
+     "url": "src/PoolManager.sol:349-365",
+     "supports": "_settle credits the recipient with the balance now minus the synced balance, with a checked subtraction, and resets the synced currency."
+    },
+    {
+     "url": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/classified.json:1",
+     "supports": "All 289 rows that did not reconcile on the 21 networks with class, both balances, summed Transfer logs and the second read. 177 rows are lending receipt tokens: Ethereum 65, Arbitrum One 27, Avalanche 15, Polygon 14, Optimism 13, Monad 12, Soneium 6, Ink 6, Celo 5, MegaETH 4, Base 4, BNB Smart Chain 2."
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com",
+     "supports": "eth_call on 666: index 3.4568e18, DAILY_GROWTH 1.33e18, MAX_DAYS 200, startTime 1795033136, totalSupply 6,866,820. Balances at both blocks read on https://robinhood.drpc.org."
+    },
+    {
+     "url": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/comet_claim_sim.json:1",
+     "supports": "Multicall3 simulation of CometRewards.claim(comet, PoolManager, true) on Ethereum, Arbitrum One and Optimism with the reward token balance of the PoolManager before and after."
+    },
+    {
+     "url": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/aave_targets_8453.json:1",
+     "supports": "Base: balances of the PoolManager in the 15 Aave v3 aTokens and 5 other candidates at both blocks; 11 aTokens with a balance that grew without logs."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    57073,
+    143,
+    56
+   ],
+   "lens": "L3",
+   "check": "Wrapped native tokens showed the largest unexplained rise: 298.98 WETH on Ethereum, 18,572.57 WMON on Monad, 13.85 WBNB, 5.77 WETH on Base, 1.05 on Unichain, 0.47 on Optimism and 0.02 on Ink in one day. Does the PoolManager gain wrapped native without paying?",
+   "result": "No. On each chain the difference equals the sum of Deposit(dst, wad) logs with the PoolManager as dst, to the base unit (359 such logs on Ethereum). A native take to the wrapper address makes the PoolManager call the wrapper with value and empty calldata (src/types/Currency.sol:48), the wrapper credits msg.sender, and the caller is debited the native amount (src/PoolManager.sol:294). A sync and settle around it credit the same amount in the wrapped currency. Value is conserved one to one.",
+   "source": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/verify_1.log and verify_10, 130, 143, 56, 8453, 57073: column afterWrap is 0 for every wrapped native row"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "check": "Arc: USDC at 0x3600000000000000000000000000000000000000 rose 415.53 beyond its Transfer logs in one day, and 0xfffffffffffffffffffffffffffffffffffffffe emitted 86,069 Transfer logs naming the PoolManager. Is any of this an unpaid gain or a shortfall?",
+   "result": "No. The native balance change of the PoolManager, 4,952.463804115787157019 in 18 decimals, equals the net of the logs from 0xff..fe exactly, and the ERC-20 balance equals the native balance divided by 1e12 and rounded down at both blocks. The difference at the ERC-20 address is value that moved as msg.value or by native take. This is the two faces of one balance already recorded in F-032 and F-050. All other 261,428 currencies on Arc reconcile.",
+   "source": "https://rpc.mainnet.arc.io eth_getBalance at blocks 32,501,227 and 32,671,826; research/network-risk/cycles/004/theme-balance-reconcile.work/raw/reconcile_5042.json.gz"
+  },
+  {
+   "chainIds": [
+    1,
+    137
+   ],
+   "lens": "L3",
+   "check": "Monerium EURe has two token addresses over one ledger: 0x3231cb76718cdef2155fc47b5286d82e6eda273f and 0x39b8b6385416f4ca36a20319f70d28621895279d on Ethereum, 0x18ec0a6e18e5bc3784fdd3a3634b31245ab704f6 and 0xe0aea583266584dafbb3f9c3211d5588c73fea8d on Polygon. Both are pool currencies (30 and 36 Initialize logs on Ethereum, 21 and 27 on Polygon) and balanceOf(PoolManager) is identical at both. Can one deposit be credited in both currency ids, or one face be paid from the other's pools?",
+   "result": "No path found. Only one currency can be synced at a time (src/libraries/CurrencyReserves.sol:27-32), settle resets it (src/PoolManager.sol:361), and a credit always equals a real rise of the shared balance, while every take debits the id it names. The sum of what both ids are owed therefore stays equal to the shared balance. The older address logs only its own transfers, so it fails the reconcile (minus 433.38 and minus 5,812.69 in the window) while the newer one passes. The PoolManager holds 4,188.47 EURe on Ethereum and 67,861.00 on Polygon.",
+   "source": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/reconcile_1.json.gz and raw/reconcile_137.json.gz, rows for the four addresses; src/libraries/CurrencyReserves.sol:27-32"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "check": "Currency 0x4f95c5ba0c7c69fb2f9340e190ccee890b3bd87c on Ethereum reports a PoolManager balance that fell 3.4 percent with no Transfer log. What is it?",
+   "result": "It is the Frax custodian contract FrxUSDCustodianUsdc, named as a currency in a pool by mistake or on purpose. Its balanceOf returns the frxUSD balance of the account: both calls return 75,016,586,273,325,944,925,532 for the PoolManager. frxUSD itself reconciles. A credit in this currency id needs a real frxUSD payment that is then stranded, so the mirror gives nothing to its user. Same class as F-050.",
+   "source": "https://eth.drpc.org eth_call balanceOf(PoolManager) on the custodian and on frxUSD 0xcacd6fd266af91b8aed52accc382b4e165586e29; https://sourcify.dev/server/v2/contract/1/0x0a2d27a86a2ea07bcc34e457c65aeca7631c0f10?fields=sources,abi,compilation"
+  },
+  {
+   "chainIds": [
+    1,
+    137,
+    8453,
+    56
+   ],
+   "lens": "L3",
+   "check": "Reflection and fee tokens: KISHU on Ethereum, #GMM and HKU on Polygon, Share and BRTM on Base, PIT, ASS, DRP, CATE and GFH on BNB Smart Chain, and RISE on Ethereum. Any transfer by anyone raises the PoolManager balance of a reflection token. Can a caller profit by bracketing its own transfer with sync and settle, and does a payout cost the PoolManager more than the debited amount?",
+   "result": "No profit path. The caller pays the whole fee and is credited only the PoolManager's share of the reflected part, which is its share of supply: 0.00007 percent for KISHU, 4.6 percent for BRTM, 5.2 percent for Share. The BRTM source takes the fee only on transfers to or from a listed pair and its burn is limited to the bonding curve. RISE: the PoolManager balance fell by 1,231,670.27 while the log shows 1,170,086.75 to the recipient, a ratio of 0.95, and the next hop shows the same ratio, so the fee comes out of the amount sent and the PoolManager loses what was debited. I could not fetch the trace for the RISE payout and did not read the five BNB Smart Chain tokens.",
+   "source": "https://sourcify.dev/server/v2/contract/8453/0x74f84a0add717a6c405b2c8c0b82d94b514e113e?fields=sources,abi,compilation lines 187-201 and 258-300; research/network-risk/cycles/004/theme-balance-reconcile.work/raw/classified.json"
+  },
+  {
+   "chainIds": [
+    137,
+    56
+   ],
+   "lens": "L3",
+   "check": "Tokens whose Transfer logs name the PoolManager while no balance moves: a look-alike USDC at 0x20204018a5a97149168faa73477bd5db9756a141 on Polygon and 130 contracts on BNB Smart Chain.",
+   "result": "Harmless for core. The Polygon token logged a transfer of 377.85 from the PoolManager while its reported balance went from 0 to 377.85. The 130 BNB Smart Chain contracts had no code at the first block, log transfers from the PoolManager, and revert on balanceOf. The PoolManager never called them; core does not read logs. They matter only to explorers and indexers.",
+   "source": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/unreadable_56.json and raw/mismatch_137.json"
+  },
+  {
+   "chainIds": [
+    480,
+    7777777,
+    4217,
+    999,
+    99901,
+    130
+   ],
+   "lens": "L3",
+   "check": "Networks where every token with a balance passed: World Chain (851 tokens), Zora (42), Tempo (73), HyperEVM (307), Elysium (129,516) and Unichain (5,149, wrapped native aside). Is any pooled token there moving without logs?",
+   "result": "None in the window. Zora, Tempo and HyperEVM were run a second time over 6.9 days with the same result. On HyperEVM the PoolManager received one Transfer in a day and holds no stHYPE (balance 0 at three blocks), so the rebasing face in F-043 is not pooled today. Tempo: all 73 TIP-20 currencies reconcile over 1,151 and 1,061 logs. Elysium: 25 currencies have a zero balance and the rest match.",
+   "source": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/reconcile_480.json.gz, reconcile_7777777_7d.json.gz, reconcile_4217_7d.json.gz, reconcile_999_7d.json.gz, reconcile_99901.json.gz, reconcile_130.json.gz"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L3",
+   "check": "Robinhood Chain: 746,342 currencies from 1,170,653 Initialize logs. Which do not reconcile over blocks 120,299,181 to 121,117,362?",
+   "result": "Seven, all with a balance that follows a time formula: 666, EXPT and EXPT2 upward, three PYRE and SMK2 downward. They are covered in the findings. 43 tokens could not be read at the old blocks because the only endpoint with old state answered Unknown state on every retry; 445 others that failed in the bulk pass were read one by one and match.",
+   "source": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/mismatch_4663.json and raw/unreadable_4663.json; state from https://robinhood.drpc.org, logs from https://rpc.mainnet.chain.robinhood.com"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L3",
+   "check": "Base: 158 tokens at addresses starting 0xb2 could not be read at the first block, and the first pass reported 231 mismatches.",
+   "result": "The 158 tokens were created inside the window; the call for a token that does not exist yet fails, and their balance at the second block equals their net Transfer logs. The 231 mismatches of the first pass were an artefact: old-block multicalls sent to https://mainnet.base.org came back with the same value for both blocks, while single calls to four endpoints agreed with the logs for the three tokens I rechecked. Every multicall now carries Multicall3.getCurrentBlockTimestamp() and a reply from the wrong block is discarded. After that Base shows 7 rows: four aTokens, two reflection tokens and WETH.",
+   "source": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/unreadable_8453.json, raw/run1/ (first pass) and reconcile.py function mc"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L3",
+   "check": "Celo: does the CELO token at 0x471ece3750da237f93b8e339c536989b8978a438, which is the ERC-20 face of the native asset, reconcile?",
+   "result": "Yes in both windows. balanceOf equals eth_getBalance of the PoolManager at all four blocks, and the change of minus 139.34 CELO over 6.9 days equals the net of 133 Transfer logs. The only rows that fail on Celo are four Aave aTokens and two Moola tokens with dust balances.",
+   "source": "https://forno.celo.org eth_getBalance and research/network-risk/cycles/004/theme-balance-reconcile.work/raw/reconcile_42220_7d.json.gz"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    130,
+    42161,
+    137
+   ],
+   "lens": "L3",
+   "check": "Currencies whose balanceOf always reverts: 10 on Ethereum, 1 on Optimism, 2 on Unichain, 9 on Arbitrum One, 1 on Polygon.",
+   "result": "They are addresses without a token interface that someone named in initialize, for example 0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419, whose description() returns ETH / USD. sync reverts for them, no Transfer log names the PoolManager, and nothing can be settled or taken in them.",
+   "source": "research/network-risk/cycles/004/theme-balance-reconcile.work/raw/unreadable_1.json and the files for 10, 130, 42161 and 137"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    8453,
+    56,
+    196
+   ],
+   "lens": "L3",
+   "question": "Which pooled tokens on Base, BNB Smart Chain and X Layer had no transfer in the window and so were never tested? Build the currency list from the full Initialize history through an archive log endpoint or an explorer export and rerun reconcile.py.",
+   "why": "On these three networks the list holds only tokens that moved in the window (plus the Aave list on Base). A rebasing token that sat still for a day is missing, and that is the kind this method exists to find. BNB Smart Chain already shows two staked tokens with a public rebase.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    1,
+    8453,
+    42161,
+    43114
+   ],
+   "lens": "L3",
+   "question": "Which other pooled tokens have a balance increase that any account can start: staking contracts with a public rebase(), public interest accrual, harvest or distribute functions? Search the PoolManager on every network for ERC-6909 mints that are not matched by a Transfer of that currency into the PoolManager in the same transaction.",
+   "why": "That log pattern is what the sLGNS takers leave behind. It finds live extraction without knowing the token. On BNB Smart Chain the same search over a longer range, and a search for take payouts in rebase blocks, would show whether sNVB and sSAC are already taken.",
+   "priority": "high"
+  },
+  {
+   "chainIds": [
+    1,
+    56,
+    143,
+    196
+   ],
+   "lens": "L3",
+   "question": "For each xStocks token held by a PoolManager: is a multiplier change pending (newMultiplierActivationTime above now), how much of the balance is already above what pools record, and did any pool keep liquidity through the SNDKx activation on Ethereum, BNB Smart Chain or Monad?",
+   "why": "A pool that keeps liquidity through a split pays the old price for tokens worth a fraction, to whoever trades first. I checked one pool on X Layer only.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1,
+    4663,
+    56
+   ],
+   "lens": "L3",
+   "question": "Which pooled tokens count locked, staked or vesting amounts in balanceOf and let a third party assign such an amount to any address (stakeFor, lockFor, transferWithLock)? PYRE on Robinhood Chain has stakeFor, stakedBalanceOf and liquidBalanceOf.",
+   "why": "A caller could sync, assign a locked amount to the PoolManager, settle, and take the same amount in liquid tokens. The caller ends even and the PoolManager holds tokens it cannot transfer, so later withdrawals revert. The reconcile cannot see this because the logs match.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L5",
+   "question": "Which earlier results for Base rest on eth_call at an old block through https://mainnet.base.org? Repeat them on a second endpoint with a block timestamp check.",
+   "why": "In this unit old-block multicalls on that endpoint returned the same balance for two blocks a day apart for 231 tokens, and direct calls on four endpoints later disagreed with those values.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L3",
+   "question": "Does the hook named by the TURING tokens (hook() returns a nonzero address) account for the decay, and do the thirteen pools hold liquidity from anyone other than the deployer?",
+   "why": "The PoolManager holds 26.8 percent of what the stored amount says. If others provided liquidity, the last of them cannot withdraw.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-257",
+   "outcome": "finding",
+   "answer": "Method. For each network the currency list came from the Initialize logs of the PoolManager over its whole life where an endpoint served them, from the explorer holdings page where one answered, and from every token with a Transfer log naming the PoolManager inside the window. For every token balanceOf(PoolManager) was read at two blocks one day apart through Multicall3 with a block timestamp check, and all Transfer logs with the PoolManager as sender or recipient in between were summed. The 289 rows that failed were checked again: a second balance read by direct calls confirmed 287 of them, the logs were fetched again with an address filter for 282, and the two Arc rows were checked against the native balance. 1,262,679 token rows were tested. Scripts and raw results are in research/network-risk/cycles/004/theme-balance-reconcile.work. Answer per network. Ethereum (1): 67,221 tokens tested; list built from the currencies of 210,157 Initialize logs since block 21,688,329. Blocks 26,467,827 to 26,475,001, 86,340 seconds. Tokens that do not reconcile: 65 lending receipt, grows with time (aEthUSDC, aEthUSDT, aSNX, aUSDT); 13 rebase down by time (TURING); 5 share rate, rounding of a few base units (STRCx, NVDAx, SKHYx, KOx); 4 rebase by role (stETH, eETH, USDO, rUSDY); 2 second address of one ledger (0x4f95c5ba, EURe); 2 share rate that follows another contract (USPD, stkWALLET); 1 other (TKN); 1 rebase up, public trigger (USDI); 1 reflection (KISHU); 1 wrapped native credited through Deposit events (WETH); 1 fee on transfer (RISE). Optimism (10): 3,383 tokens tested; list built from the currencies of 11,730 Initialize logs and the explorer holdings page. Blocks 159,859,816 to 159,903,016, 86,400 seconds. Tokens that do not reconcile: 13 lending receipt, grows with time (aOptUSDC, aOptOP, exOptOP, aOptUSDT); 1 wrapped native credited through Deposit events (WETH). Base (8453): 9,116 tokens tested; list built from tokens with a Transfer log naming the PoolManager inside the window, plus the 15 Aave v3 aTokens and 5 other candidates read from chain; the endpoints do not serve the Initialize history. Blocks 60,641,638 to 61,073,638, 86,400 seconds. Tokens that do not reconcile: 4 lending receipt, grows with time (sUSDC, aBasGHO, aBasWETH, aBascbBTC); 2 reflection (BRTM, Share); 1 wrapped native credited through Deposit events (WETH). Unichain (130): 5,149 tokens tested; list built from the currencies of 7,812 Initialize logs and the explorer holdings page. Blocks 64,570,249 to 64,656,649, 86,400 seconds. Tokens that do not reconcile: 1 wrapped native credited through Deposit events (WETH). Zora (7777777): 42 tokens tested; list built from the currencies of 73 Initialize logs. Blocks 54,312,252 to 54,355,452, 86,400 seconds. Tokens that do not reconcile: none. Worldchain (480): 851 tokens tested; list built from 848 tokens from the explorer holdings page plus tokens active in the window. Blocks 37,991,385 to 38,034,585, 86,400 seconds. Tokens that do not reconcile: none. Ink (57073): 4,944 tokens tested; list built from the currencies of 6,237 Initialize logs and the explorer holdings page. Blocks 61,820,302 to 61,906,702, 86,400 seconds. Tokens that do not reconcile: 6 lending receipt, grows with time (aInkWlUSDT, aInkWlGHO, aInkWlUSDG, aInkWlUSDC); 1 wrapped native credited through Deposit events (WETH). Soneium (1868): 88 tokens tested; list built from the currencies of 297 Initialize logs and the explorer holdings page. Blocks 31,091,880 to 31,135,080, 86,400 seconds. Tokens that do not reconcile: 6 lending receipt, grows with time (aASTR, aAstarASTR, aAstarwstASTR, aSoneUSDCe). Celo (42220): 149 tokens tested; list built from the currencies of 394 Initialize logs and the explorer holdings page. Blocks 83,417,954 to 83,504,354, 86,400 seconds. Tokens that do not reconcile: 5 lending receipt, grows with time (aCelcEUR, aCelUSDC, mCREAL, mCELO). X Layer (196): 97 tokens tested; list built from tokens with a Transfer log naming the PoolManager inside the window only, because the endpoint serves logs 100 blocks at a time; a second run over 6.9 days tested 351 tokens and 7 xStocks tokens failed, SNDKx by 0.96 tokens. Blocks 76,549,574 to 76,635,974, 86,400 seconds. Tokens that do not reconcile: 2 share rate, rounding of a few base units (SOXLx, LRCXx). Arbitrum One (42161): 9,419 tokens tested; list built from the currencies of 28,694 Initialize logs. Blocks 526,402,704 to 526,694,497, 88,689 seconds. Tokens that do not reconcile: 27 lending receipt, grows with time (rzRDNT, aArbUSDT, aArbARB, aArbUSDCn); 2 rebase up by time (TKN); 1 rebase by role (USD+); 1 other (CRYSTAL); 1 rebase down by time (DDL). Robinhood Chain (4663): 746,342 tokens tested; list built from the currencies of 1,170,653 Initialize logs. Blocks 120,299,181 to 121,117,362, 93,084 seconds. Tokens that do not reconcile: 4 rebase down by time (PYRE, SMK2); 3 rebase up by time (EXPT, EXPT2, 666). Elysium (99901): 129,516 tokens tested; list built from the currencies of 131,786 Initialize logs. Blocks 9,266,942 to 9,743,237, 127,509 seconds. Tokens that do not reconcile: none. Polygon (137): 7,460 tokens tested; list built from the currencies of 20,314 Initialize logs since block 66,980,384. Blocks 97,742,097 to 97,799,697, 86,400 seconds. Tokens that do not reconcile: 14 lending receipt, grows with time (aPolMATICX, aPolWMATIC, aPolGHST, aPolDAI); 3 rebase up, public trigger (sLGNS, sATH, sKLIMA); 2 second address of one ledger (POL, EURe); 2 reflection (#GMM, HKU); 1 spoofed logs (U⁯S⁯DС). BNB Smart Chain (56): 3,502 tokens tested; list built from tokens with a Transfer log naming the PoolManager inside the window only; no endpoint served the Initialize history. Blocks 135,011,652 to 135,203,588, 86,394 seconds. Tokens that do not reconcile: 42 share rate, rounding of a few base units (DFDVx, OPENx, TQQQx, CMCSAx); 5 fee or reflection token, source not read (PIT, ASS, DRP, CATE); 2 lending receipt, grows with time (aBnbUSDT, aBnbUSDC); 2 rebase up, public trigger (sNVB, sSAC); 1 wrapped native credited through Deposit events (WBNB). Avalanche (43114): 2,242 tokens tested; list built from the currencies of 5,778 Initialize logs. Blocks 101,029,441 to 101,128,785, 91,327 seconds. Tokens that do not reconcile: 15 lending receipt, grows with time (aAvaUSDT, aAvaAUSD, aAvaGHO, aAvaUSDe). Monad (143): 11,268 tokens tested; list built from the currencies of 19,402 Initialize logs. Blocks 124,329,143 to 124,614,291, 86,848 seconds. Tokens that do not reconcile: 12 lending receipt, grows with time (nWMON, aMonUSDC, nUSDC, nAUSD); 4 share rate, rounding of a few base units (NVDAx, QQQx, SPYx, SNDKx); 1 wrapped native credited through Deposit events (WMON). MegaETH (4326): 80 tokens tested; list built from the currencies of 143 Initialize logs and the explorer holdings page. Blocks 32,521,531 to 32,607,931, 86,400 seconds. Tokens that do not reconcile: 4 lending receipt, grows with time (aMegUSDm, aMegUSDe, aMegUSDT0, aMegWETH). Tempo (4217): 73 tokens tested; list built from the currencies of 167 Initialize logs. Blocks 50,208,939 to 50,369,787, 86,441 seconds. Tokens that do not reconcile: none. Arc (5042): 261,430 tokens tested; list built from the currencies of 286,916 Initialize logs. Blocks 32,501,227 to 32,671,826, 86,399 seconds. Tokens that do not reconcile: 1 second address of one ledger (USDC); 1 system log emitter (0xffffffff). HyperEVM (999): 307 tokens tested; list built from the currencies of 344 Initialize logs. Blocks 51,912,557 to 52,000,397, 86,400 seconds. Tokens that do not reconcile: none. Classes and who can move them. Public trigger: sLGNS, sATH, sKLIMA on Polygon, sNVB and sSAC on BNB Smart Chain, USDI on Ethereum; any account can raise the balance inside one transaction, the balance does not fall back, and sync then settle, or take then repay, yields 8.78 sLGNS per epoch and 4,636.71 USDI today. On Polygon 661 sLGNS and 150 sATH rebases have already been taken as ERC-6909 claims. The surplus was never an accounted balance of any user. Scheduled multiplier set by the issuer: xStocks tokens on Ethereum, BNB Smart Chain, Monad and X Layer; SNDKx went up eightfold at a timestamp; no ordinary account can bracket it. Time formula upward: lending receipt tokens on twelve networks and 666, EXPT, EXPT2; no trigger, nothing to capture. Time formula downward, where the last to withdraw are locked: TURING on Ethereum, PYRE and SMK2 on Robinhood Chain, DDL on Arbitrum One. Rebase by a role: stETH, eETH, USDO, rUSDY, USD+ and USPD through the stETH rate. Second address of one ledger: EURe, the Frax custodian, POL at 0x1010, USDC on Arc. I found no token whose PoolManager balance an ordinary account can raise inside a transaction and that falls back later. Limits. Base, BNB Smart Chain and X Layer were tested for tokens active in the window only. 43 tokens on Robinhood Chain could not be read at old blocks. A token that changes balance less often than once a day passes this test unless the change fell inside the window."
+  }
+ ]
+}
