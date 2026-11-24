@@ -87,7 +87,7 @@ class World:
 
         def ext(off, size):
             if size == 0: return
-            if off + size > (1 << 32): raise Halt('memory too large')
+            if off + size > (1 << 24): raise Halt('memory too large')  # 16 MB: no call with the gas a node grants gets this far
             need = (off + size + 31) // 32 * 32
             if need > len(mem): mem.extend(bytes(need - len(mem)))
 

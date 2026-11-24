@@ -13,7 +13,7 @@ No difference was found. Four independent checks on the networks agree, and each
 
 One thing came out of the reading that deserves a place in the deployment checklist. The big integer library behind reth based nodes shipped a release on 20 October 2026 that returned wrong `MULMOD` results in one edge case. It was withdrawn three days later. No network on the list runs it or ran it, and the vectors built to hit it pass everywhere. Ethereum's reth nodes and Tempo run the first fixed release, whose arithmetic paths are one month old, and Tempo has no second client to disagree with it.
 
-5. This checkout builds to a PoolManager of 24,009 bytes whose creation code hash equals the one recorded in `snapshots/PoolManagerTest.json`. Run in a reference interpreter written for this review, the bytecode gives the Ethereum node's answer on every script the node could finish, its step trace equals Tempo's at each of 2.9 million steps, and its swap and liquidity amounts equal the source's formulas on 4,000 random pools.
+5. This checkout builds to a PoolManager of 24,009 bytes whose creation code hash equals the one recorded in `snapshots/PoolManagerTest.json`. Run in a reference interpreter written for this review, the bytecode gives the same answer as every one of the 21 networks on 1,287 scripts that execute 95.6 percent of its instructions, apart from scripts a node could not afford. Its step trace equals Tempo's at each of 2.9 million steps, and its swap and liquidity amounts equal the source's formulas on 4,000 random pools.
 
 ## What the source asks of the EVM
 
@@ -147,7 +147,19 @@ What is in the bytecode. A linear disassembly gives 10,418 instructions and 112 
 
 A reference interpreter. `pyevm.py` is an EVM in Python written from the specification for this review, without gas and with no client code. It runs the 550 scripts of check 2 instruction by instruction, 525 million instructions in all. For 512 scripts its output equals the Ethereum node's byte for byte. In the other 38 the node stopped at its gas limit: its record is empty, shorter, or first differs at a call that failed with empty return data (`opcodes/bytecode-gas.json`). The networks were compared with the node, and the node is now compared with the specification, so the chain of evidence no longer rests on any client being right.
 
-Coverage. The scripts execute 8,004 of the 10,418 instructions, 77 percent. Of 387 conditional jumps, 148 were taken both ways, 166 one way and 73 never. Eight opcodes are present and never ran: `MCOPY`, `SELFBALANCE`, `LOG1`, `LOG2`, `ADDMOD`, `EXP`, `INVALID` and `PUSH26`. They belong to paths the scripts do not reach: a callback that returns normally, so that `unlock` copies its result out, the owner and fee controller functions with their events, the protocol fee branch of a swap, the claim transfer and approval functions, and non-empty hook data. Scripts for those paths are the next addition.
+Three more script sets, compared with the reference directly. With a reference that needs no node, each network can be compared with the specification itself. Three sets were written to reach the bytecode the first two leave out, and all 21 networks, Ethereum included, were compared with the reference interpreter's answer.
+
+| Set | What it adds | Scripts and calls | Result on the 21 networks |
+|---|---|---|---|
+| `pmdiff3.py` | Owner and fee controller functions, protocol fees in swaps and their collection, ERC-6909 transfer, approval and operator functions, array reads of storage and transient storage, `settleFor`, hook data, a dynamic fee set by the hook, and 185 callbacks that pay what they owe and return, so that `unlock` completes | 300 scripts, 10,200 calls, 656 of them failing | 19 networks equal on all 300. Arc and HyperEVM equal on 299 |
+| `pmdiff4.py` | Malformed calldata on a third of the calls: truncation, appended junk, words with dirty high bits, flipped bytes, wrong offsets, another function's selector | 300 scripts, 10,773 calls, 2,893 failing | 18 networks equal on all 300. Tempo 298, Arc and HyperEVM 299 |
+| `pmdiff5.py` | Pools at extreme prices with liquidity up to 2^126: the 512 bit branch of `mulDiv` with denominator 2^96, amounts above 2^160, the overflow branches of the price functions and the SafeCast reverts behind them | 137 scripts compared (12 more were too long for the reference), 5,074 calls, 513 failing | 18 networks equal on all 137. Polygon, Arc and HyperEVM 133 |
+
+Every script that is not equal is a long one, 6 to 12 million instructions in the reference, and the node's record is empty or stops at a call that failed with empty return data. Arc and HyperEVM grant a simulated call 30 million gas, the lowest of the 21.
+
+The 512 bit branch deserves a note. `SqrtPriceMath.getAmount1Delta` goes through it when liquidity times the price difference needs more than 256 bits, which takes liquidity above about 2^100 at a price near the top of the range. In a swap the result is compared with the amount the caller offers and so decides whether the step reaches its target (`src/libraries/SwapMath.sol`, the comparison of `amountRemainingLessFee` with `amountIn`). No ordinary pool gets there, the scripts of the first four sets never did, and it is the one place where a wrong `MULMOD` would steer control flow without first showing up in a paid amount. Set five reaches it on every network.
+
+Coverage. The five sets together execute 9,959 of the 10,418 instructions, 95.6 percent. Of 387 conditional jumps, 255 were taken both ways, 129 one way and 3 never. One real opcode is present and never ran: `SELFBALANCE`, in the native branch of `Currency.balanceOfSelf`, which sits behind a currency check its callers have already made and looks unreachable. The other opcodes that a linear disassembly shows and that never ran (`LOG1`, `ADDMOD`, `EXP`, `INVALID`) are the bytes of the compiler's version trailer at the end of the code. The largest ranges still not executed are the error wrapper for a failed call with long return data, a hook call path, and `mulDivRoundingUp` on an output amount above 2^160, which would need a pool holding more than 2^160 units of a token.
 
 Step traces. Tempo's endpoint is the only one of the 21 that serves `debug_traceCall`. For 92 scripts the trace it returns was compared with the reference interpreter's at every step: call depth, program counter, opcode and the top four stack words, leaving aside words produced by `GAS`. All 2,925,870 steps agree. Twenty heavy scripts were skipped and eight requests failed at the endpoint. Tempo is the network with the newest interpreter and no second client, so this is the strongest single statement the review has about it.
 
@@ -167,7 +179,7 @@ Check 3 was also run over a longer window on the six networks that never had a s
 
 ## What this does not cover
 
-- The 23 percent of the bytecode the scripts do not execute yet, listed under coverage above.
+- The 4.4 percent of the bytecode the scripts do not execute, and the 129 conditional jumps taken only one way, described under coverage above.
 - The repository's own test suite. It needs forge, which is not installed, so whether the tests pass on this build is still open.
 - Compiled code on Monad beyond the 17,434 mined swaps, and the parts of its emitter that were not read.
 - Validators that run other hardware or other builds than the public endpoints: the vector code for jump destinations in evm2, the optional dispatch loop in bor, and any operator on the withdrawn ruint release.
@@ -222,6 +234,22 @@ python3 research/network-risk/tools/opdiff/bytecode.py research/network-risk/opc
 python3 research/network-risk/tools/opdiff/trace.py research/network-risk/opcodes/trace-tempo.json 60
 ```
 
-With `PM_BUILD` set, `pmdiff.py`, `pmdiff2.py`, `bytecode.py` and `trace.py` run the built bytecode instead of the deployed one.
+```bash
+PM_BUILD=research/network-risk/build/PoolManager.json python3 research/network-risk/tools/opdiff/pmdiff3.py research/network-risk/opcodes/build-pmdiff3.json 300
+```
+
+```bash
+PM_BUILD=research/network-risk/build/PoolManager.json python3 research/network-risk/tools/opdiff/pmdiff4.py research/network-risk/opcodes/build-pmdiff4.json 300
+```
+
+```bash
+PM_BUILD=research/network-risk/build/PoolManager.json python3 research/network-risk/tools/opdiff/pmdiff5.py research/network-risk/opcodes/build-pmdiff5.json
+```
+
+```bash
+PM_BUILD=research/network-risk/build/PoolManager.json python3 research/network-risk/tools/opdiff/coverage.py research/network-risk/opcodes/build-pmdiff3-coverage.json,research/network-risk/opcodes/build-pmdiff4-coverage.json,research/network-risk/opcodes/build-pmdiff5-coverage.json research/network-risk/opcodes/coverage.json
+```
+
+With `PM_BUILD` set, every script runs the built bytecode instead of the deployed one.
 
 Each takes a list of chain ids as further arguments to run on some networks only. The battery and the scripts use fixed seeds, so a rerun after a network upgrade tests the same inputs. A rerun is worth doing after every client release on the single-client networks (Monad, MegaETH, Tempo, HyperEVM, Arc, Robinhood Chain, Elysium) and after any ruint, revm or evm2 upgrade.

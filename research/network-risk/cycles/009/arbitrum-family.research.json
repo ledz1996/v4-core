@@ -1,0 +1,285 @@
+{
+ "unit": "arbitrum-family",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 42161,
+   "lens": "L1",
+   "summary": "The interpreter of the pinned fork commit 0e44603 was read against the specification and matches it for every opcode the source depends on. The public node is an arm64 build made with go1.27.3, a Go release that carries a silent dead store miscompile fixed in go1.27.4. All opcode and PoolManager reruns on this endpoint match the specification.",
+   "deltas": [
+    {
+     "delta": "The interpreter loop at fork commit 0e44603 takes each frame stack from one arena per EVM instance (core/vm/stack.go lines 27 to 70, core/vm/interpreter.go line 126) and each frame memory from a sync.Pool that is zeroed up to its length when returned (core/vm/memory.go lines 25 to 49). The CALL family pops its seven arguments by value and pushes the success word through the current backing array after the child returns (core/vm/instructions.go lines 730 to 774), so a growth of the arena inside a child call cannot leave a stale write. Return data and LOG data are copies (lines 892 to 905 and 1142 to 1164).",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/stack.go; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/memory.go; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/instructions.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "Nitro v3.12.4 pins holiman/uint256 v1.3.2 (go.mod line 39), and the fork pins the same version (go.mod line 44). Read paths: AddMod has a fast path for moduli of 2^192 or more that reduces each operand once (uint256.go lines 215 to 267), MulMod reduces through reduce4 when the top limb of the modulus is nonzero and through udivrem otherwise (lines 720 to 750), SAR is guarded by GtUint64(256) and then SRsh, which returns all ones or zero for a shift of 256 (instructions.go lines 221 to 235, uint256.go lines 1110 to 1149). Each of these gives the result the specification requires as read.",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/go.mod; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/go.mod; https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go",
+     "relevance": "none"
+    },
+    {
+     "delta": "web3_clientVersion on 2026-11-24 is nitro/v3.13.0-rc.9+b72783f built for linux-arm64 with go1.27.3. go1.27.4 (2026-11-10) includes the backport of Go issue 81863, a miscompile in which the dead store pass ignores a conditional select of two local addresses and drops a store, so that the program silently reads a stale value. The bad compiler commit dates from 2025-07-24 and backports were opened for Go 1.26 and 1.27 only.",
+     "source": "https://arb1.arbitrum.io/rpc web3_clientVersion; https://go.dev/doc/devel/release; https://github.com/golang/go/issues/81863; https://github.com/golang/go/issues/81866; https://go.googlesource.com/go/+/00ba484%5E%21/",
+     "relevance": "low"
+    },
+    {
+     "delta": "Reruns on this endpoint with the client version logged before each run: battery.py 99,985 of 99,985 vectors as specified, targeted.py 85,544 of 85,544, a new set of 22,424 vectors aimed at the uint256 v1.3.2 branches named above, all as specified; pmdiff.py 250 of 250 scripts, pmdiff2.py 300 of 300 and pmdiff3.py 200 of 200 identical to the reference; swaps.py 5,892 mined swaps all pass the tick relation and 5,271 of 5,285 pairs match a single step to the unit.",
+     "source": "research/network-risk/cycles/009/arbitrum-family.work/raw/battery.json, targeted.json, nitro_vectors.json, pmdiff.json, pmdiff2.json, pmdiff3.json, swaps.json, clientVersions.log; queried https://arb1.arbitrum.io/rpc on 2026-11-24",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 42161,
+   "lens": "L2",
+   "summary": "Transient storage at the fork commit is a map reset at the start of every transaction and journaled on every change, so a reverted frame rolls it back. Nothing new on transaction boundaries.",
+   "deltas": [
+    {
+     "delta": "SetTransientState journals the previous value before every change (core/state/statedb.go lines 615 to 625) and Prepare replaces the map at the start of each transaction (line 1650). TSTORE refuses to run in a static frame (core/vm/eips.go lines 213 to 220).",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/state/statedb.go; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/eips.go; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/state/transient_storage.go",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 42161,
+   "lens": "L3",
+   "summary": "Nothing new on gas or tokens. The 63/64 rule for call gas is the standard one at the fork commit.",
+   "deltas": [
+    {
+     "delta": "callGas subtracts the base cost and caps the forwarded gas at all but one 64th (core/vm/gas.go lines 40 to 55). The GAS opcode returns the regular gas of the frame (instructions.go lines 568 to 571).",
+     "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/gas.go",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 42161,
+   "lens": "L4",
+   "summary": "Nothing new for precompiles that the PoolManager reaches. The ArbOS 60 and 61 review lists a high finding about non-deterministic return data of ArbGasInfo, which the PoolManager never calls.",
+   "deltas": [
+    {
+     "delta": "Trail of Bits finding TOB-ARBOS60-1: GetMultiGasPricingConstraints in ArbGasInfo built its result by ranging over a Go map, so the order of the returned array could differ between nodes. Only a contract that calls ArbGasInfo is exposed; src/ makes no such call.",
+     "source": "https://docs.arbitrum.io/assets/files/2026_07_10_trail_of_bits_arbitrum_arbos_60_61_code_review_final_comprehensive_report-b07649fde7599b13706214e36dd2e0ac.pdf",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L1",
+   "summary": "The public endpoint is served by both an arm64 and an amd64 build of nitro v3.13.0-rc.9 with go1.27.3, alternating between requests. Both builds answered the reruns and every result matches the specification.",
+   "deltas": [
+    {
+     "delta": "Of seven web3_clientVersion reads taken around the reruns on 2026-11-24, the Robinhood endpoint reported linux-amd64 on some and linux-arm64 on others, with the same commit b72783f and go1.27.3. The batteries therefore ran on both architectures.",
+     "source": "research/network-risk/cycles/009/arbitrum-family.work/raw/clientVersions.log; https://rpc.mainnet.chain.robinhood.com web3_clientVersion",
+     "relevance": "low"
+    },
+    {
+     "delta": "Reruns: battery.py 99,985 of 99,985, targeted.py 85,544 of 85,544, the 22,424 new vectors, pmdiff.py 250 of 250, pmdiff2.py 300 of 300, pmdiff3.py 200 of 200, all as specified or identical. swaps.py: 6,147 mined swaps pass the tick relation; two pairs fit no single step, and replay.py reproduces both as two step swaps to the unit, as it does 25 multi step samples.",
+     "source": "research/network-risk/cycles/009/arbitrum-family.work/raw/targeted.json, nitro_vectors.json, pmdiff3.json, swaps.json, replay.json",
+     "relevance": "none"
+    },
+    {
+     "delta": "Same build as Arbitrum One, so the go1.27.3 compiler fault of Go issue 81863 applies to this endpoint and, if the sequencer runs the same release, to block production.",
+     "source": "https://github.com/golang/go/issues/81863",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L2",
+   "summary": "A mined transaction shows the block producer rolling back the transient writes of a reverted unlock frame: a later unlock in the same transaction succeeded.",
+   "deltas": [
+    {
+     "delta": "Transaction 0x222fe1797dd7dcfd16c424c6d6abc0fd48c589c5194ea44ad7184fc932a73e10 in block 122,127,614 has status 1. Its trace from robinhood.drpc.org shows a successful unlock with a swap, then an unlock by 0x1caddf... whose callback swapped and reverted, then a third unlock from another branch that swapped and returned. The receipt has two Swap logs from the PoolManager, which matches the two unlocks that stood.",
+     "source": "https://robinhood.drpc.org debug_traceTransaction and https://rpc.mainnet.chain.robinhood.com eth_getTransactionReceipt, queried 2026-11-24; research/network-risk/cycles/009/arbitrum-family.work/raw/l547_hit_trace.json, l547_hit_receipt.json",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4663,
+   "lens": "L3",
+   "summary": "Nothing new.",
+   "deltas": []
+  },
+  {
+   "chainId": 4663,
+   "lens": "L4",
+   "summary": "Nothing new.",
+   "deltas": []
+  },
+  {
+   "chainId": 99901,
+   "lens": "L1",
+   "summary": "The locally built client reports go1.25.12 on amd64, a Go release that predates the compiler fault of Go issue 81863. All reruns match, except one pmdiff2 script that runs out of gas at 25 million and is identical at 50 million.",
+   "deltas": [
+    {
+     "delta": "Reruns: battery.py 99,985 of 99,985, targeted.py 85,544 of 85,544, the 22,424 new vectors, pmdiff.py 250 of 250, pmdiff3.py 200 of 200. pmdiff2.py gives 299 of 300; the exception, script 189, returns no record at 25 million gas on Elysium and 71 calls on Ethereum, and both return the same 71 calls at 50 million gas. swaps.py: 4,223 mined swaps pass the tick relation and 3,909 pairs all fit, with 7 multi step samples replayed to the unit.",
+     "source": "research/network-risk/cycles/009/arbitrum-family.work/raw/pmdiff2.json; research/network-risk/cycles/009/arbitrum-family.work/explain2.py run on 2026-11-24 against https://rpc.elysium.kinetiq.xyz",
+     "relevance": "none"
+    },
+    {
+     "delta": "The bad compiler commit of Go issue 81863 is dated 2025-07-24 and backports exist for Go 1.26 and 1.27 only, so the go1.25.12 build does not carry it.",
+     "source": "https://github.com/golang/go/issues/81863; https://rpc.elysium.kinetiq.xyz web3_clientVersion",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L2",
+   "summary": "No trace endpoint is open to the public, so the L-547 observation could not be made here.",
+   "deltas": [
+    {
+     "delta": "debug_traceTransaction on https://rpc.elysium.kinetiq.xyz answers \"authenticated API key required for method\".",
+     "source": "https://rpc.elysium.kinetiq.xyz debug_traceTransaction, queried 2026-11-24",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 99901,
+   "lens": "L3",
+   "summary": "Nothing new.",
+   "deltas": []
+  },
+  {
+   "chainId": 99901,
+   "lens": "L4",
+   "summary": "Nothing new.",
+   "deltas": []
+  }
+ ],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "Lead L-577: the arithmetic, comparison, shift, BYTE, SIGNEXTEND, EXP, KECCAK256, CALLDATALOAD, MLOAD, MSTORE, MCOPY, PUSH, DUP and SWAP implementations and their jump table entries at fork commit 0e44603, read against the specification.",
+   "result": "Every entry maps the opcode to the matching function with the specified stack arity (core/vm/jump_table.go). Operand order follows the specification (instructions.go lines 34 to 235). SAR clamps above 256 and SRsh handles 256 itself, SHL and SHR clear at 256 or more, BYTE clears for an index of 32 or more including indexes above 2^64, SIGNEXTEND returns x for a byte index above 30, EXP of an even base by an exponent of 256 or more is zero, PUSH pads missing bytes with zeros on the right (lines 1166 to 1216). The PoolManager depends on these at src/libraries/FullMath.sol:24 and 48, src/libraries/TickMath.sol:61-63, src/libraries/TickBitmap.sol:20-67, src/libraries/BitMath.sol:22 and 45 and src/libraries/SqrtPriceMath.sol:219 and 252, and each gets the specified result.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/instructions.go; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/jump_table.go; https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "Jump destination analysis and JUMP/JUMPI at fork commit 0e44603, and its cache.",
+   "result": "codeBitmap marks the data bytes of PUSH1 to PUSH32 with the 8 and 16 byte helpers, which overwrite only bytes for positions not yet visited, and keeps 4 spare bytes for a trailing PUSH32 (core/vm/analysis_legacy.go lines 33 to 118). validJumpdest rejects targets at or past the code end and targets above 2^64, requires a JUMPDEST byte and a code segment (core/vm/contract.go lines 77 to 123). JUMPI tests the whole 256 bit word with IsZero (instructions.go lines 540 to 552). The cache is keyed by the code hash that resolveCodeHash returns, which for a delegated account is the hash of the code that resolveCode runs; the one mismatch, a delegation to a precompile under ArbOS 50 or later, runs no code (evm.go lines 791 to 821).",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/analysis_legacy.go; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/contract.go; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/evm.go"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "Lead L-577, CALL success flag, RETURNDATACOPY bounds and return data handling at fork commit 0e44603, against src/types/Currency.sol:64-74 and src/libraries/Hooks.sol:134-148.",
+   "result": "opCall pushes 1 or 0 after the child returns, then copies at most retSize bytes of the child output into memory only on success or revert, and sets the return data buffer to the full output (instructions.go lines 730 to 774). RETURNDATACOPY fails when offset plus length overflows or passes the buffer end (lines 312 to 328). Memory.Set copies the shorter of the two lengths (memory.go lines 52 to 64). The success test of Currency.transfer, which reads the word at 0 only when the return data is 32 bytes or more, and the return data copy of Hooks.callHook therefore see what they see on Ethereum.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/instructions.go; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/memory.go"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "Stack arena and pooled memory introduced in the fork interpreter: can a nested call, a Stylus program calling back into the EVM, or a pooled buffer change a value the PoolManager computed or the return data it reads.",
+   "result": "The arena guarantees 1,024 free slots at the start of each frame and grows by reallocation (stack.go lines 55 to 70). Every opcode that runs a child frame pops its arguments by value before the call and pushes through the arena after it, so no pointer into the old backing array is written after a growth. Memory taken from the pool is zeroed up to its length on return and is never shrunk while in use, so a reused buffer exposes only zeros; buffers above 16 KiB are dropped (memory.go lines 25 to 49). Data handed to a child, to a LOG or returned by RETURN and REVERT is a copy or the caller memory that stays unchanged during the child. Stylus programs run through ExecuteWASM with the same arena (interpreter.go lines 168 to 172).",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/stack.go; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/memory.go; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/interpreter.go"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "Lead L-578: do both the arm64 and the amd64 builds of nitro v3.13.0-rc.9 with go1.27.3 give the specified results for the targeted MULMOD, ADDMOD, division and shift vectors.",
+   "result": "The client version was logged before each run. Arbitrum One answered as linux-arm64 and Robinhood Chain answered as both linux-arm64 and linux-amd64. 99,985 battery vectors, 85,544 targeted vectors and 22,424 new vectors ran on each endpoint with no mismatch, and the PoolManager script sets were identical to the reference. The go1.27.4 security list names no fix to math/bits or to code generation for arithmetic.",
+   "source": "research/network-risk/cycles/009/arbitrum-family.work/raw/clientVersions.log, battery.json, targeted.json, nitro_vectors.json; https://www.openwall.com/lists/oss-security/2026/11/10/28"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L2",
+   "check": "Lead L-547 on Robinhood Chain: a mined transaction in which an unlock frame reverted and a later unlock of the same transaction succeeded.",
+   "result": "Of 2,000 recent transactions that touched the PoolManager, traced with debug_traceTransaction, three contain a reverted unlock and one has a later successful unlock: 0x222fe179... in block 122,127,614. Had the producer kept the unlock flag written by the reverted frame (src/libraries/Lock.sol:13), the third unlock would have reverted with AlreadyUnlocked (src/PoolManager.sol:105). It succeeded and the transaction has status 1, so the producer of that block rolled the transient writes back with the frame.",
+   "source": "research/network-risk/cycles/009/arbitrum-family.work/raw/l547_robinhood_2000.json, l547_hit_trace.json, l547_hit_receipt.json; https://robinhood.drpc.org debug_traceTransaction"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L1",
+   "check": "Elysium pmdiff2 script 189, the one script that differed from Ethereum in the rerun.",
+   "result": "At 25 million gas Elysium returns no record and Ethereum returns 71 calls; at 50 million both return the same 71 calls. The difference is gas only and is the one already noted for Elysium in OPCODES.md.",
+   "source": "research/network-risk/cycles/009/arbitrum-family.work/explain2.py run against https://rpc.elysium.kinetiq.xyz on 2026-11-24"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "Known weaknesses since the cycle 6 list: Nitro changelog on master, the ArbOS 60 and 61 review, the go1.27.4 security fixes.",
+   "result": "The master changelog fetched on 2026-11-24 adds no entry about the interpreter, opcodes, memory, stack or transient storage. The ArbOS 60 and 61 review has one high finding on ArbGasInfo return order and eight informational findings on multi-gas pricing and Stylus fragments; none touches a call the PoolManager makes. The twelve go1.27.4 security fixes concern cgo, linker and directive handling and an HTTP crash.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/CHANGELOG.md; https://docs.arbitrum.io/assets/files/2026_07_10_trail_of_bits_arbitrum_arbos_60_61_code_review_final_comprehensive_report-b07649fde7599b13706214e36dd2e0ac.pdf; https://www.openwall.com/lists/oss-security/2026/11/10/28"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "question": "Does any function on the state transition path of nitro v3.13.0-rc.9 (go-ethereum fork core/vm and core/state, holiman/uint256 v1.3.2, arbos) contain the shape that go1.27.3 miscompiles in Go issue 81863, a pointer chosen by a branch between the addresses of two local variables followed by a store through it, and does the sequencer run a go1.27.3 build?",
+   "why": "The fault silently drops a store. The public nodes run go1.27.3 and every opcode test passed, but a dropped store on a path the tests do not reach would make that node compute another state than validators built with a fixed compiler. The fix was released in go1.27.4 on 2026-11-10. I could not build with go1.27.3 here, and the sequencer architecture and toolchain are not published.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L2",
+   "question": "Can an Elysium transaction with a reverted unlock followed by a successful unlock be found through an authenticated trace endpoint or an explorer that lists failed internal calls?",
+   "why": "Elysium answers debug_traceTransaction only with an API key, so L-547 stays open for this chain.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-577",
+   "outcome": "cleared",
+   "answer": "At fork commit 0e44603 the interpreter, jump table, jump destination analysis, memory, stack arena, call family, return data and transient storage code match the specification for every opcode in the OPCODES.md table. The SAR guard at 256 hands a shift of exactly 256 to SRsh, which returns the specified result. b72783f is still not public (raw.githubusercontent.com answers 404 for nitro at that commit), so the deployed build was covered by reruns on the live endpoints instead, all matching."
+  },
+  {
+   "leadId": "L-578",
+   "outcome": "cleared",
+   "answer": "Both builds answered: Arbitrum One as linux-arm64 and Robinhood Chain alternately as linux-arm64 and linux-amd64, all nitro v3.13.0-rc.9+b72783f with go1.27.3. No mismatch in 207,953 opcode vectors per endpoint. The go1.27.4 milestone lists no fix to math/bits or to arm64 arithmetic, but it does carry Go issue 81863, a silent dead store miscompile on both architectures, recorded as a new lead. The sequencer architecture is not published and could not be confirmed."
+  },
+  {
+   "leadId": "L-547",
+   "outcome": "inconclusive",
+   "answer": "Robinhood Chain: yes. Transaction 0x222fe1797dd7dcfd16c424c6d6abc0fd48c589c5194ea44ad7184fc932a73e10 has an unlock that reverted after its callback swapped, followed by an unlock that succeeded, so the producer rolled back the transient unlock flag. Elysium: not answerable, because its trace method needs an API key. HyperEVM, MegaETH and OP Mainnet belong to other units."
+  }
+ ]
+}
