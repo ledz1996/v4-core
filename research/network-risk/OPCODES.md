@@ -205,6 +205,8 @@ Cycle 10 took the three questions cycle 9 left open and reran the checks on elev
 
 After the cycle, the one deployment with different bytes was run as well. Unichain's PoolManager is a genesis predeploy of 24,050 bytes whose trailer differs. With `PM_FROM=130` the script tools load its bytecode in place of Ethereum's. All 250 and 300 scripts of the first two sets give the same records as the Ethereum bytecode, on the Ethereum node and on the Unichain node, and 400 scripts of the third set equal the reference interpreter on both nodes, the first 300 with the same records as this build (`opcodes/unichain-predeploy.json`).
 
+One more differential was added on the state side. `statekeys.py` writes one storage slot and then reads 762 other slot indexes that differ from it in a single bit, in the top byte, in the low byte or by truncation, for eight base slots, three of them slots the PoolManager really uses. It does the same with transient storage. Of 256,158 reads on the 21 networks, the only ones that returned the written value are on Avalanche, for the index that differs in bit 248 alone. That is the known rule of the C-Chain (F-040), and it shows the check can see a fold. No network folds transient slots, and no other network folds storage slots (`opcodes/statekeys.json`).
+
 ## What this does not cover
 
 Simulated calls and source reading cover the interpreter of every network. The open part is block production on the networks where blocks are made by code a simulated call does not run.
@@ -224,6 +226,14 @@ Simulated calls and source reading cover the interpreter of every network. The o
 
 ```bash
 python3 research/network-risk/tools/opdiff/v4math.py
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/statekeys.py research/network-risk/opcodes/statekeys.json
+```
+
+```bash
+PM_FROM=130 python3 research/network-risk/tools/opdiff/pmdiff.py /tmp/unichain-pmdiff.json 250 130
 ```
 
 ```bash
