@@ -25,6 +25,12 @@ const SUMMARY = {
   required: ['file', 'validated', 'findings', 'inScope', 'headline'],
 }
 
+// "model" in the args runs every agent of the cycle on that model (used when the session model is out of quota).
+const MODEL = plan.model ? { model: plan.model } : {}
+// The owner of the review narrowed its focus on 2026-11-24. Cycles planned with "focus": "opcodes" carry this paragraph.
+const FOCUS = plan.focus === 'opcodes' ? `
+Focus of this cycle, set by the owner of the review: the network itself, its opcodes and how its client implements them, and what that does to the arithmetic and the logic of the code in src/. Earlier cycles spent most of their effort on particular tokens and third-party hooks; that is no longer wanted. Do not sweep tokens or hooks, and record a token or hook hazard you happen to meet in one line. Spend the time on: the interpreter and any compiler, bytecode rewriting, code analysis or cache in front of it; the 256 bit integer library and its version; results of MULMOD, ADDMOD, DIV, SDIV, MOD, SMOD, SIGNEXTEND, SAR, SHL, SHR, BYTE, EXP and the comparisons at their edges; JUMP and JUMPI with jump destination analysis; KECCAK256, MCOPY, memory, calldata and return data operations; storage and transient storage semantics; gas rules only where they change what a call returns; and, for each difference or past fault, which line of src/libraries (TickMath, BitMath, FullMath, UnsafeMath, SqrtPriceMath, SwapMath, TickBitmap, Position, LiquidityMath, Pool) or of the settlement code would compute or decide something else because of it. Read ${ROOT}/OPCODES.md first: it holds what is already tested and read (a battery of 185,529 opcode vectors on all 21 networks, the same PoolManager bytecode run under identical state on every network, 99,903 mined swaps checked against the source's math, and readings of several clients) and what is not yet covered. Build on it, use the scripts in ${ROOT}/tools/opdiff (run them only for your own chain ids, and write outputs to your work directory), and do not repeat what it already settles.
+` : ''
 const COMMON = `
 You are part of a defensive security review. The repository at /home/user/v4-core holds the Solidity source of a Uniswap v4 style PoolManager. This build is a CTF variant that will be deployed to 21 EVM networks. The organisers say a weakness has been planted that is really usable on at least one of those networks, and that it follows from how that network differs from Ethereum (opcodes, precompiles, system contracts, the node's own source, known network weaknesses). The review must find it, and every other path like it, so it can be closed before deployment. Analysis only: do not write exploit code or proof-of-concept contracts, and do not send transactions. Read-only JSON-RPC calls (eth_call including the "from" field and state overrides, eth_getCode, eth_getStorageAt, eth_getBlockByNumber, debug_traceCall where the endpoint allows it) are fine and encouraged.
 
@@ -38,7 +44,7 @@ Ground rules
 - Evidence: every chain fact needs a source URL you fetched in this session (official docs, specs, improvement proposals, client source, explorers) or an on-chain query you ran, with the result. Every code claim needs a file:line in this repo that you read. Never invent a URL. If something may postdate your training data, look it up. Name any link in the reasoning you could not confirm.
 - Tools: load web tools with ToolSearch (query "select:WebSearch,mcp__Exa__web_search_exa,mcp__Exa__web_fetch_exa"). curl works for public RPC endpoints, docs sites and raw.githubusercontent.com (use it to read node client source). The GitHub API and git clone of other repositories are not available.
 - Do not edit anything outside ${DIR}/. Do not run git commands that change state. Do not create notes or planning files.
-- Read first: ${ROOT}/ASSUMPTIONS.md (threat model, what the code assumes about the chain, and the list P1 to P8 of what an ordinary caller can make the PoolManager do), ${ROOT}/SCHEMA.md (output format, the "actor" field, severity scale, prose style), ${ROOT}/state/networks.json (the 21 networks with PoolManager address, a working RPC URL and facts read from chain), ${ROOT}/state/findings.json and ${ROOT}/state/cleared.json (what earlier cycles established; filter by your chain IDs, build on it, and do not repeat it), and the "criticNotes" in ${ROOT}/state/ledger.json.
+${FOCUS}- Read first: ${ROOT}/ASSUMPTIONS.md (threat model, what the code assumes about the chain, and the list P1 to P8 of what an ordinary caller can make the PoolManager do), ${ROOT}/SCHEMA.md (output format, the "actor" field, severity scale, prose style), ${ROOT}/state/networks.json (the 21 networks with PoolManager address, a working RPC URL and facts read from chain), ${ROOT}/state/findings.json and ${ROOT}/state/cleared.json (what earlier cycles established; filter by your chain IDs, build on it, and do not repeat it), and the "criticNotes" in ${ROOT}/state/ledger.json.
 `
 
 function researchPrompt(u) {
@@ -107,8 +113,8 @@ log(`Cycle ${plan.cycle}: ${plan.units.length} network units, ${plan.code.length
 
 const results = await pipeline(
   jobs,
-  j => keepR.has(j.id) ? kept(j.id, 'research') : agent(j.prompt, { label: `research:${j.id}`, phase: 'Research', schema: SUMMARY }),
-  (r, j) => (keepV.has(j.id) ? Promise.resolve(kept(j.id, 'verdicts')) : agent(verifyPrompt(j.id), { label: `verify:${j.id}`, phase: 'Verify', schema: SUMMARY }))
+  j => keepR.has(j.id) ? kept(j.id, 'research') : agent(j.prompt, { label: `research:${j.id}`, phase: 'Research', schema: SUMMARY, ...MODEL }),
+  (r, j) => (keepV.has(j.id) ? Promise.resolve(kept(j.id, 'verdicts')) : agent(verifyPrompt(j.id), { label: `verify:${j.id}`, phase: 'Verify', schema: SUMMARY, ...MODEL }))
     .then(v => ({ id: j.id, research: r, verify: v })),
 )
 
@@ -132,6 +138,6 @@ Write leads as concrete questions a researcher can answer in one sitting. Mark "
 ${plan.done ? `A critic file from an earlier, partial run of this cycle exists at ${DIR}/critic.json. Read it first. Keep every lead, gap and duplicate in it that is still open, remove what the files written since then have settled, and add what those files show. The result replaces the old file.
 
 ` : ''}Output: write ${DIR}/critic.json in the "critic" format from SCHEMA.md. Run \`python3 ${ROOT}/tools/validate.py critic ${DIR}/critic.json\` until it prints OK. Return the summary object; "findings" is the number of leads, "inScope" the number marked high, and the headline is the most important lead.`,
-  { label: 'critic', phase: 'Critic', schema: SUMMARY })
+  { label: 'critic', phase: 'Critic', schema: SUMMARY, ...MODEL })
 
 return { cycle: plan.cycle, dir: DIR, units: done, dropped, critic }
