@@ -1,6 +1,6 @@
 # All findings
 
-118 findings on record after cycle 10, in-scope ones first.
+120 findings on record after cycle 11, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -3038,6 +3038,61 @@ Sources:
 - https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/master/lib/compiler/aot_compiler.hpp (The PUSHnJUMPI macro pops the full word and tests it. The gas check sits before jumps (GAS_CHECK_LOC 1).)
 - https://raw.githubusercontent.com/chfast/intx/v0.10.1/include/intx/intx.hpp (Line 997: uint<N>::operator bool compares the whole value with zero.)
 - rpc https://mainnet.megaeth.com/rpc web3_clientVersion on 2026-11-24 (The endpoint reports mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2.)
+
+## F-119. Arbitrum family validators compute the settled state with a go1.25.9 WebAssembly build that public endpoints do not run
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Arbitrum One, Robinhood Chain, Elysium.
+
+What differs on the network: On Ethereum the client that answers eth_call also produces the state. On these three chains the state that the parent chain accepts, and so the state behind every withdrawal, is defined by the replay binary compiled by go1.25.9 to WebAssembly (GOOS=wasip1 GOARCH=wasm) and published as WAVM machine consensus-v61. The public endpoints and, as far as anyone can see, the sequencers run a native arm64 or amd64 build of nitro v3.13.0-rc.9 made with go1.27.3. The two paths compile the same go-ethereum fork and holiman/uint256 v1.3.2 with different Go releases and different code generators.
+
+How it meets the code: Every opcode test in this review, including the 185,529 vectors, the 550 scripts and the reruns of this cycle, ran on the native build. If the WebAssembly build of uint256 or core/vm computed one MULMOD in FullMath.sol:24 or 48, one SDIV in TickBitmap, or one JUMPI differently, a swap would produce one state on the sequencer and another in the replay. The sequencer's state is what users see and what the next transactions build on; the replay's state is what an honest validator asserts on the parent chain. An ordinary account cannot cause such a split unless a codegen difference exists, and none is known. The comparison of confirmed assertions with node block hashes over 31 assertions on Arbitrum One, 57 on Robinhood Chain and 6 on Elysium found no split, which covers every PoolManager transaction in those ranges.
+
+What is at risk: No loss path. A split would stall confirmations and withdrawals to the parent chain for all users until the operators reconciled the two paths, and pool funds would stay where they are.
+
+What it takes: A difference between the go1.25.9 WebAssembly build and the go1.27.3 native build on an instruction the PoolManager uses. None is known.
+
+What can be done: Deployers can watch confirmed assertions against their own node, as done here. Operators can build the native node with the Go release of the consensus machine.
+
+Second reviewer's corrections: The statement that the assertion comparison covers every PoolManager transaction as an independent check holds only for Arbitrum One, whose rollup returns validatorWhitelistDisabled() = 1. The Robinhood Chain rollup returns validatorWhitelistDisabled() = 0 with two whitelisted validators (0xa0a1d8cd6f867a583a39232a477ff231afd8ec4c, 0x992d8d50548fcccaf11147a9a692c496011c8aa0), and the Elysium rollup returns 0 with one whitelisted validator 0x8e87f7c65750c25c6708de33823124cf457676b2, an EOA that sent the confirming transaction 0x249e9127...4269 itself. On those two chains the match shows that the operator's own validators agreed with the operator's node, not that an independent replay of consensus-v61 accepted it. A minor point: arm64 also has no Div64 intrinsic in go1.25.9, so the native arm64 path and the wasm path share the generic Div64 code. The actor value operator is acceptable: with no known codegen difference nobody can trigger a split, and if one existed the effect would be a stalled confirmation that operators resolve.
+
+Code: `src/libraries/FullMath.sol:24-73`, `src/libraries/TickMath.sol:104`, `src/libraries/UnsafeMath.sol:14`.
+
+Sources:
+
+- https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/Makefile (replay.wasm is built with GOOS=wasip1 GOARCH=wasm (lines 477-480))
+- https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/Dockerfile (go1.25.9 is pinned for the wasm build (line 73) and consensus-v61 root 0xc10cd7ec... is downloaded (line 206))
+- https://raw.githubusercontent.com/OffchainLabs/nitro/consensus-v61/Dockerfile (the consensus-v61 tag pins go1.25.9)
+- https://ethereum-rpc.publicnode.com eth_call wasmModuleRoot() on 0x4DCeB440657f21083db8aDd07665f8ddBe1DCfc0 and 0x23a19d23e89166adedbdcb432518ab01e4272d94 (both rollups pin 0xc10cd7ec6acaf1c441a3f6bd0900ad20f15855ba775a96f1939118cbc629dc97)
+- https://arb1.arbitrum.io/rpc web3_clientVersion (public endpoint is nitro v3.13.0-rc.9 built with go1.27.3)
+
+## F-120. No public client checks the storage that the closed HyperEVM validator writes, because block headers carry a zero state root and nanoreth compares its own root as zero
+
+Info severity, confirmed. Effect: both. Who can trigger it: sequencer, validator or bridge committee. Networks: HyperEVM.
+
+What differs on the network: On Ethereum every full node recomputes the state root of each block and rejects a block whose root differs. HyperEVM blocks are produced by the closed hl-node validator, and the headers it publishes have stateRoot 0x00..00. The public archive client nanoreth (the build served at rpc.purroofgroup.com reports reth/v0.1.0-f0cad31) replaces its computed state root with B256::ZERO before the comparison with the header, so the comparison always passes. hyper-evm-sync computes a private blake3 hash of its state for snapshots and compares it with nothing. Both clients do re-execute every transaction and stop on a different receipt: nanoreth checks gas used, the receipts root and the logs bloom against the header, and hyper-evm-sync asserts that its computed receipts equal the validator's receipts.
+
+How it meets the code: The PoolManager keeps pool state, positions, ERC-6909 balances and protocol fees in persistent storage (src/libraries/Pool.sol, src/libraries/Position.sol, src/ERC6909.sol, src/ProtocolFees.sol). A state root would commit to exactly those slots. Transient storage is cleared at the end of each transaction and is in no state root on any network, so the missing check has no bearing on it. A validator fault that changed a persistent storage write without changing gas, status or logs of that transaction would not stop either public client. It would show up only once a later transaction reads the slot and its receipt differs, and then the client halts instead of correcting anything. The validator's receipts are therefore checked publicly, its storage writes only indirectly. This needs a fault or a deliberate change in the validator, which only its operator controls. No mismatch was observed: 2,762 mined PoolManager transactions over the whole history agree in status and logs with nanoreth's re-execution, 485 storage slots from prestateTracer agree with nanoreth's state at the block, and 222 touched PoolManager slots read at latest agree between the official endpoint and nanoreth.
+
+What is at risk: No loss path for an ordinary account. The hazard is on evidence: clearances of HyperEVM that rest on storage, as opposed to receipts, are backed by nanoreth's own state and by the official endpoint, not by a check against the validator's commitment.
+
+What it takes: A fault or change in the closed hl-node validator that alters a storage write but not the receipt of the same transaction. Only the validator operator can cause it.
+
+What can be done: The deployer can run nanoreth or hyper-evm-sync and keep it at head, since a later receipt mismatch halts it, and can compare PoolManager slots between the official endpoint and nanoreth at regular intervals with eth_getStorageAt.
+
+Second reviewer's corrections: The mechanism lists the transient storage libraries (Lock.sol, CurrencyReserves.sol, CurrencyDelta.sol, NonzeroDeltaCount.sol) among the storage that a state root check would cover. Transient storage is cleared at the end of each transaction and is never committed to any state root, so a missing state root check has no bearing on it; a validator fault in transient semantics would show in the same transaction's receipt or not at all. The relevant slots are the persistent ones in Pool, Position and the ERC-6909 and protocol fee mappings. Line numbers for the two comparisons are 565 and 627 in payload_validator.rs; 562 and 626 are the assignments. Actor operator and severity info are correct.
+
+Code: `src/PoolManager.sol:104-114`, `src/libraries/Pool.sol:146-237`, `src/ERC6909.sol:1-60`.
+
+Sources:
+
+- https://raw.githubusercontent.com/hl-archive-node/reth/14509628ed37e9a9b7110ea855a67f427c4d61fc/crates/engine/tree/src/tree/payload_validator.rs (lines 562 and 626 set state_root = B256::ZERO before comparing it with block.header().state_root() at line 627)
+- https://raw.githubusercontent.com/hl-archive-node/nanoreth/f0cad31/src/node/consensus/reth_copy.rs (validate_block_post_execution checks gas used (lines 27-34) and the receipts root and logs bloom (lines 40-51, 71-114) and nothing about state)
+- https://raw.githubusercontent.com/hl-archive-node/nanoreth/f0cad31/src/node/consensus/mod.rs (HlConsensus.validate_block_pre_execution is empty (lines 119-147) and post execution calls reth_copy (lines 156-167))
+- https://raw.githubusercontent.com/hyperliquid-dex/hyper-evm-sync/main/src/run.rs (process_block asserts system tx receipts (line 236) and all receipts (line 264) against the block's receipts; run_blocks computes blake3_hash_slow at line 298 and compares it with nothing)
+- https://rpc.hyperliquid.xyz/evm (eth_getBlockByNumber 0x31a0000 returns stateRoot 0x000...000 and receiptsRoot 0x64b2b7...; rpc.purroofgroup.com returns the same hash, zero stateRoot and same receiptsRoot)
+- https://rpc.purroofgroup.com (web3_clientVersion returns reth/v0.1.0-f0cad31/x86_64-unknown-linux-gnu)
+- https://rpc.purroofgroup.com (debug_traceTransaction and prestateTracer over 2,762 mined PoolManager transactions against receipts of https://rpc.hyperliquid.xyz/evm: 0 status or log mismatches, 258 post and 227 pre slots equal (theme-closed-producers.work/raw/hyper.json))
+- https://rpc.hyperliquid.xyz/evm (eth_getStorageAt at latest of 222 touched PoolManager slots equals nanoreth (theme-closed-producers.work/raw/hyper_slots.json))
 
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 

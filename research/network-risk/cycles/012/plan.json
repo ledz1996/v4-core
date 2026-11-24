@@ -1,0 +1,85 @@
+{
+ "cycle": 12,
+ "date": "2026-11-24",
+ "dir": "research/network-risk/cycles/012",
+ "units": [
+  {
+   "id": "established-l1",
+   "title": "Established alternative L1s",
+   "chainIds": [
+    137,
+    56,
+    43114
+   ],
+   "mode": "deepen",
+   "leadIds": [
+    "L-651",
+    "L-659",
+    "L-646",
+    "L-656"
+   ],
+   "recheckIds": [],
+   "lenses": [
+    "L1",
+    "L2",
+    "L3",
+    "L4"
+   ],
+   "angles": [
+    "Arithmetic and control flow. Read the interpreter this network runs at the release its endpoint reports, and any compiler, bytecode rewriting, caching or code analysis stage in front of it. Cover the 256 bit integer library and its pinned version, MULMOD, ADDMOD, DIV, SDIV, MOD, SMOD, SIGNEXTEND, SAR, SHL, SHR, BYTE, EXP, the comparisons, JUMP and JUMPI with the jump destination analysis, KECCAK256, MCOPY, memory expansion and CALLDATALOAD. Compare each with the Ethereum specification at the edges that OPCODES.md lists, and read the release notes and fix commits since the versions OPCODES.md records. Then rerun the scripts in research/network-risk/tools/opdiff (battery.py, targeted.py, pmdiff.py, pmdiff2.py, swaps.py, replay.py) for this unit's chain ids, write the outputs into your work directory, and add vectors for anything the reading makes suspicious. Report every result that differs from the specification, every release that changed these paths, how a wrong result would change the pool math in src/libraries (TickMath, BitMath, FullMath, SqrtPriceMath, SwapMath, TickBitmap) or the logic that depends on it, and which validators could run a different code path than the public endpoint.",
+    "Known weaknesses. Collect security advisories, audit reports, bug bounty write-ups, incident post-mortems and open issues for this network's execution client, precompiles and system contracts from the last two years, including behaviour the network calls by design. For each, decide whether an ordinary account could use it against funds in the PoolManager."
+   ]
+  },
+  {
+   "id": "op-stack-eth",
+   "title": "OP Stack chains with ETH gas",
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868
+   ],
+   "mode": "deepen",
+   "leadIds": [
+    "L-661",
+    "L-660",
+    "L-640",
+    "L-642"
+   ],
+   "recheckIds": [],
+   "lenses": [
+    "L1",
+    "L2",
+    "L3",
+    "L4"
+   ],
+   "angles": [
+    "Arithmetic and control flow. Read the interpreter this network runs at the release its endpoint reports, and any compiler, bytecode rewriting, caching or code analysis stage in front of it. Cover the 256 bit integer library and its pinned version, MULMOD, ADDMOD, DIV, SDIV, MOD, SMOD, SIGNEXTEND, SAR, SHL, SHR, BYTE, EXP, the comparisons, JUMP and JUMPI with the jump destination analysis, KECCAK256, MCOPY, memory expansion and CALLDATALOAD. Compare each with the Ethereum specification at the edges that OPCODES.md lists, and read the release notes and fix commits since the versions OPCODES.md records. Then rerun the scripts in research/network-risk/tools/opdiff (battery.py, targeted.py, pmdiff.py, pmdiff2.py, swaps.py, replay.py) for this unit's chain ids, write the outputs into your work directory, and add vectors for anything the reading makes suspicious. Report every result that differs from the specification, every release that changed these paths, how a wrong result would change the pool math in src/libraries (TickMath, BitMath, FullMath, SqrtPriceMath, SwapMath, TickBitmap) or the logic that depends on it, and which validators could run a different code path than the public endpoint.",
+    "Known weaknesses. Collect security advisories, audit reports, bug bounty write-ups, incident post-mortems and open issues for this network's execution client, precompiles and system contracts from the last two years, including behaviour the network calls by design. For each, decide whether an ordinary account could use it against funds in the PoolManager."
+   ]
+  }
+ ],
+ "code": [
+  {
+   "id": "theme-code-cache-consistency",
+   "task": "The build of this checkout is in research/network-risk/build/PoolManager.json (runtime 24,009 bytes), research/network-risk/tools/opdiff/pyevm.py is a reference EVM in Python, and research/network-risk/OPCODES.md holds what is already tested and read, with sections on what cycles 10 and 11 added and a list of what is not covered. Leads L-645, L-646, L-647 and L-651. The cycle 11 critic read Polygon's bor v2.11.1 and found that Call resolves the callee's code and its code hash in separate state reads (core/vm/evm.go around lines 363-370 and 721-748: resolveCode calls GetCode(addr) and, for an EIP-7702 delegation, GetCode(target); resolveCodeHash calls GetCode(addr) again and then GetCodeHash(target)), and that the JUMPDEST bitmap computed from the code is stored in a map keyed by that hash which BlockSTM workers and the prefetcher share for the block (core/vm/jumpdests.go, core/blockchain.go around lines 1268-1287, core/vm/contract.go validJumpdest and isCode). The worry: an ordinary account redelegates its EOA with type 4 transactions inside one block, a speculative worker reads the code of delegate Y and the code hash of the PoolManager from two state versions, and Y's bitmap is stored under the PoolManager's code hash. Every JUMP in the PoolManager would then be judged against the wrong bitmap on that node for the rest of the block (all PoolManager calls revert, or a node computes another state than the producer). Part one, bor: fetch the v2.11.1 source from raw.githubusercontent.com/0xPolygon/bor/v2.11.1/<path> and settle this from code, line by line. Which reads does one Call make, from which StateDB object, and under BlockSTM V2 (core/blockstm, core/parallel_state_processor.go, the MVHashMap read path in core/state/statedb.go) can two reads of the same account inside one incarnation return different versions, or does the first read fix the version (read set and validation)? When an incarnation fails validation and is re-executed, is a bitmap it stored removed, overwritten or left in place? Is the cache key the hash of the code that was analysed (computed from the bytes) or a hash read from state separately? Does the prefetcher or the witness/stateless path write the same cache from a different state view? Does the serial path that RPC nodes and non-producing validators run use the same shared map? Then state exactly what an attacker would need: transaction types, ordering inside a block, whether the attacker needs to be the block producer, and whether the result is a revert of PoolManager calls (freeze), a wrong jump taken (worse), or a consensus split. Remember that validJumpdest first checks that the byte at the destination is 0x5b in the real code, so a wrong bitmap can only turn a valid JUMPDEST invalid or turn a 0x5b byte inside PUSH data valid; for the second case list from research/network-risk/build/PoolManager.json (runtime) whether the PoolManager has any 0x5b byte inside push data that a jump could reach, and say what follows. Also read the fix history: search the bor repository issues, pull requests and release notes for the jumpdest cache and any race report. Part two, the v2.11.1-private builds: every Polygon endpoint reports a build named v2.11.1-private with commits cb3d19c5f690 or f2a2d63e69f6. Find which source they come from (bor releases page, Polygon forum and docs, docker image labels) and whether core/vm of that source differs from the tag. Part three, transfer: answer the same question for BNB Smart Chain v1.8.2 (bnb-chain/bsc, including its parallel or prefetch execution and any code or jumpdest cache shared across transactions), reth-bsc v0.1.4, avalanchego 1.15.3 with libevm, Nitro (Arbitrum One, Robinhood Chain, Elysium), and for the revm based clients the bytecode analysis cache (revm Bytecode::new_analyzed, the jump table stored with the account's code, any cache keyed by code hash in reth, op-reth, Tempo, Arc, mega-evm). Part four, Monad v0.16.5 (category-labs/monad): the varcode cache maps a code hash to interpreter-analysed code and to compiled native code. For an EIP-7702 delegated account and for an account created and called inside one block under optimistic parallel execution, are the code hash and the code that reach the cache read from one consistent state, so that analysis or native code for one bytecode can never be stored or found under the PoolManager's code hash? A mismatch there would run other machine code in place of the PoolManager. No transactions and no proof of concept: source reading plus read-only RPC only. If the bor question comes out as reachable by an ordinary account, write it as a finding with actor unprivileged and the exact conditions; if it needs the block producer, actor operator."
+  },
+  {
+   "id": "theme-bytecode-coverage",
+   "task": "The build of this checkout is in research/network-risk/build/PoolManager.json (runtime 24,009 bytes), research/network-risk/tools/opdiff/pyevm.py is a reference EVM in Python, and research/network-risk/OPCODES.md holds what is already tested and read, with sections on what cycles 10 and 11 added and a list of what is not covered. Lead L-655. OPCODES.md records that 4.4 percent of the built runtime is executed by no script and that 129 conditional jumps were only ever taken one way and 3 never reached (research/network-risk/tools/opdiff/coverage.py lists them; rerun it to get the current list, and read tools/opdiff/pmdiff.py to pmdiff5.py, bytecode.py and trace.py for how scripts are built, run in pyevm.py and sent as eth_call with state override to the 21 endpoints in state/networks.json). These instructions have no evidence from any network. Part one: map every unexecuted range and every one-sided or never-taken JUMPI to the source construct it comes from (use the source map or the instruction context; research/network-risk/tools/build/compile.js shows how the build was made and solc-js 0.8.26 is at /tmp/claude-0/-home-user-v4-core/0b315df9-4a6b-5032-a881-24bad3c79fc5/scratchpad/solcjs/node_modules/solc if it still exists; do not install anything else). For each, say whether the condition decides a payout, a credit, a balance, a fee or a revert, and which input would take the other side. Part two: write a new script set (pmdiff6.py in your work directory, reusing the helpers) that takes the missing side of as many of these jumps as can be reached by an ordinary caller or by state override (for example CustomRevert's wrapper for a failed call with return data longer than one word, hook call paths with each permission bit and return-delta flags, mulDivRoundingUp and getNextSqrtPrice at outputs near 2^160, tick bitmap word boundaries, int128 and uint128 SafeCast failures, protocol fee collection, ERC-6909 allowance and operator branches, donate, clear, settleFor, mint and burn with odd ids, extsload and exttload of ranges, initialize at the price bounds). Run it in pyevm.py first, then on all 21 endpoints, and compare every record with the reference. Report the new coverage numbers, every jump still one-sided with the reason, and every record on any network that differs from the reference. A jump that decides a credit and can only ever go one way in the reference itself is a candidate for the planted weakness: read the source around it (src/) with care and say what you see. Do not compare this repository with any other copy of the code."
+  },
+  {
+   "id": "theme-mined-liquidity-2",
+   "task": "The build of this checkout is in research/network-risk/build/PoolManager.json (runtime 24,009 bytes), research/network-risk/tools/opdiff/pyevm.py is a reference EVM in Python, and research/network-risk/OPCODES.md holds what is already tested and read, with sections on what cycles 10 and 11 added and a list of what is not covered. Leads L-656, L-657 and L-658. Cycle 11 reran 1,493 mined liquidity removals and fee collections on Monad, MegaETH, Tempo, Arc and HyperEVM against the source and all paid the exact amounts (cycles/011/theme-mined-liquidity.work holds analyze2.py, sensitivity.py and the raw results; cycles/011/theme-monad-settlement-path.work holds netcheck.py and settlecheck.py). Part one: run analyze2.py on mined removals and fee collections of Polygon (137, BlockSTM block producers and an unpublished v2.11.1-private build), BNB Smart Chain (56, two clients), Robinhood Chain (4663) and Elysium (99901, unpublished Nitro builds), and if time allows Avalanche (43114), with endpoints and PoolManager addresses from state/networks.json. Part two: the cases set aside in cycle 11 on Monad (143), MegaETH (4326) and Arc (5042): removals and fee collections in transactions that also swap or touch other pools. Rerun fee growth and crossed ticks through the step loop of tools/opdiff/replay.py inside the transaction and compare the payout. Also add the tick bitmap words written by flipTick to the storage comparison, which analyze2.py verify() leaves out. Part three, Monad: extend netcheck.py and settlecheck.py to older blocks holding burn, settleFor, clear and hooked unlocks (filter ERC-6909 Transfer logs to the zero address and Initialize logs with a nonzero hook), and reconcile per block the traced native flows of every PoolManager transaction with the PoolManager balance difference that block production wrote, for the 21 native legs cycle 11 could not attribute. Report every payout that differs from the source by even one unit, in either direction, with the transaction hash."
+  },
+  {
+   "id": "theme-proof-builds",
+   "task": "The build of this checkout is in research/network-risk/build/PoolManager.json (runtime 24,009 bytes), research/network-risk/tools/opdiff/pyevm.py is a reference EVM in Python, and research/network-risk/OPCODES.md holds what is already tested and read, with sections on what cycles 10 and 11 added and a list of what is not covered. Leads L-649, L-663 and L-648. The state that users can withdraw against is on some networks computed by a different build than the node that answers RPC. Part one, OP Stack (OP Mainnet 10, Base 8453, Unichain 130, Ink 57073, Soneium 1868, Zora 7777777, World Chain 480): read on Ethereum with eth_call which dispute game implementations the DisputeGameFactory of each chain uses today (gameImpls for the game types in use), their absolutePrestate and VM address, and match the prestate to a published release (op-program on Cannon MIPS64, kona-client on Cannon or Asterisc). For that release list the EVM it embeds (op-geth version and its holiman/uint256 version, or revm-interpreter, ruint and alloy-primitives versions and whether keccak-cache is linked), and read the paths the PoolManager math uses on that target: 64 bit multiplication and division without native 128 bit support, the portable code paths of ruint and uint256 (bits.Mul64, bits.Div64 lowering on MIPS64 and RISC-V), and KECCAK256. Say whether any opcode result could differ from the x86 node for the edges OPCODES.md lists. Part two, Arbitrum family (42161, 4663, 99901): transcribe the Go WebAssembly backend's lowering of bits.Mul64, bits.Div64 and bits.Add64 as used by holiman/uint256 v1.3.2 in the consensus-v61 replay (cmd/compile/internal/wasm and the generic fallback in math/bits), and run the targeted MULMOD, MUL, DIV, SDIV and shift vectors of tools/opdiff/targeted.py and v4math.py through the transcription in Python. Part three, Monad (143): find which release mainnet block producers run today (validator documentation, release notes, status pages), then compute from the v0.16.5 source (compiler/ir/x86.hpp and the size estimator, vm.cpp around lines 157-162) whether the 24,009 byte PoolManager runtime in build/PoolManager.json is compiled at all or falls back to the interpreter because of the native size bound, and whether v0.16.6 and v0.16.7 change that or the compiled shift path. Everything by source reading, read-only RPC and Python transcription; build nothing and install nothing."
+  }
+ ],
+ "focus": "opcodes",
+ "model": "opus"
+}
