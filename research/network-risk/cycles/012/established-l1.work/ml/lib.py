@@ -7,10 +7,10 @@ T6909 = '0x' + keccak(b'Transfer(address,address,address,uint256,uint256)').hex(
 NETS = {n['chainId']: n for n in json.load(open('/home/user/v4-core/research/network-risk/state/networks.json'))['networks']}
 LOG_URLS = {137: ['https://polygon-bor-rpc.publicnode.com', 'https://rpc-mainnet.matic.quiknode.pro'],
             56: ['https://bsc-rpc.publicnode.com'],
-            43114: ['https://avalanche-c-chain-rpc.publicnode.com', 'https://api.avax.network/ext/bc/C/rpc']}
+            43114: ['https://api.avax.network/ext/bc/C/rpc']}
 # endpoints that honour the block tag for state reads
-STATE_URLS = {137: ['https://polygon-bor-rpc.publicnode.com'], 56: ['https://bsc-rpc.publicnode.com'],
-              43114: ['https://avalanche-c-chain-rpc.publicnode.com']}
+STATE_URLS = {137: ['https://rpc-mainnet.matic.quiknode.pro'], 56: ['https://bsc-rpc.publicnode.com'],
+              43114: ['https://api.avax.network/ext/bc/C/rpc']}
 _lock = threading.Lock(); _rr = {}
 
 def rpc(cid, method, params, urls=None, timeout=90, tries=10):

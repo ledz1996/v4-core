@@ -13,7 +13,7 @@ No difference was found. Four independent checks on the networks agree, and each
 
 One thing came out of the reading that deserves a place in the deployment checklist. The big integer library behind reth based nodes shipped a release on 20 October 2026 that returned wrong `MULMOD` results in one edge case. It was withdrawn three days later. No network on the list runs it or ran it, and the vectors built to hit it pass everywhere. Ethereum's reth nodes and Tempo run the first fixed release, whose arithmetic paths are one month old, and Tempo has no second client to disagree with it.
 
-5. This checkout builds to a PoolManager of 24,009 bytes whose creation code hash equals the one recorded in `snapshots/PoolManagerTest.json`. Run in a reference interpreter written for this review, the bytecode gives the same answer as every one of the 21 networks on 1,287 scripts that execute 95.6 percent of its instructions, apart from scripts a node could not afford. Its step trace equals Tempo's at each of 2.9 million steps, and its swap and liquidity amounts equal the source's formulas on 4,000 random pools.
+5. This checkout builds to a PoolManager of 24,009 bytes whose creation code hash equals the one recorded in `snapshots/PoolManagerTest.json`. Run in a reference interpreter written for this review, the bytecode gives the same answer as every one of the 21 networks on 1,287 scripts that execute 95.6 percent of its instructions, apart from scripts a node could not afford. Its step trace equals the traces of Tempo, Ink and the HyperEVM archive client at each of 15.9 million steps, and its swap and liquidity amounts equal the source's formulas on 4,000 random pools.
 
 ## What the source asks of the EVM
 
@@ -161,7 +161,18 @@ The 512 bit branch deserves a note. `SqrtPriceMath.getAmount1Delta` goes through
 
 Coverage. The five sets together execute 9,959 of the 10,418 instructions, 95.6 percent. Of 387 conditional jumps, 255 were taken both ways, 129 one way and 3 never. One real opcode is present and never ran: `SELFBALANCE`, in the native branch of `Currency.balanceOfSelf`, which sits behind a currency check its callers have already made and looks unreachable. The other opcodes that a linear disassembly shows and that never ran (`LOG1`, `ADDMOD`, `EXP`, `INVALID`) are the bytes of the compiler's version trailer at the end of the code. The largest ranges still not executed are the error wrapper for a failed call with long return data, a hook call path, and `mulDivRoundingUp` on an output amount above 2^160, which would need a pool holding more than 2^160 units of a token.
 
-Step traces. Tempo's endpoint is the only one of the 21 that serves `debug_traceCall`. For 92 scripts the trace it returns was compared with the reference interpreter's at every step: call depth, program counter, opcode and the top four stack words, leaving aside words produced by `GAS`. All 2,925,870 steps agree. Twenty heavy scripts were skipped and eight requests failed at the endpoint. Tempo is the network with the newest interpreter and no second client, so this is the strongest single statement the review has about it.
+Step traces. Three endpoints serve `debug_traceCall` with a state override: Tempo's, Ink's (`rpc-qnd.inkonchain.com`, an op-reth build without a version) and the HyperEVM archive client nanoreth (`rpc.purroofgroup.com`). For each script the trace the node returns was compared with the reference interpreter's at every step: call depth, program counter, opcode and the top four stack words, leaving aside words produced by `GAS`. No step differs.
+
+| Endpoint | Scripts compared | Steps equal | Not compared |
+|---|---|---|---|
+| Tempo, sets 1 and 2 | 92 | 2,925,870 | 20 heavy scripts skipped, 8 requests failed at the endpoint |
+| Tempo, set 3 | 77 | 1,328,483 | 2 skipped, 1 answer too large |
+| Ink, sets 1 and 2 | 100 | 4,880,989 | 20 skipped |
+| Ink, set 3 | 78 | 1,703,314 | 2 skipped |
+| HyperEVM archive client, sets 1 and 2 | 97 | 3,753,607 | 20 skipped, 3 answers too large |
+| HyperEVM archive client, set 3 | 77 | 1,328,483 | 2 skipped, 1 answer too large |
+
+That is 15.9 million steps. Set 3 holds the hooks that return deltas, dynamic fees, protocol fees and owner calls. Tempo has the newest interpreter and no second client, so this is the strongest single statement the review has about it. On HyperEVM the trace comes from the archive client, which is stock revm; the closed validator is not reachable this way.
 
 The build against the source. `buildcheck.py` creates 4,000 random pools in the reference interpreter running the built bytecode, with 7,949 liquidity changes and 15,979 swaps, and compares every returned amount and the price, tick and liquidity in storage after every swap with the transcription of the source and a step loop written from `Pool.swap`. There is no mismatch, and the 180 cases the source says must revert do revert. For these paths the compiler's output computes what the source says. This is also the first evidence on the Yul optimizer fault that the Solidity bug list reports for 0.8.26: whatever it affects, it is not the swap or liquidity arithmetic of this build.
 
@@ -206,6 +217,8 @@ Cycle 10 took the three questions cycle 9 left open and reran the checks on elev
 After the cycle, the one deployment with different bytes was run as well. Unichain's PoolManager is a genesis predeploy of 24,050 bytes whose trailer differs. With `PM_FROM=130` the script tools load its bytecode in place of Ethereum's. All 250 and 300 scripts of the first two sets give the same records as the Ethereum bytecode, on the Ethereum node and on the Unichain node, and 400 scripts of the third set equal the reference interpreter on both nodes, the first 300 with the same records as this build (`opcodes/unichain-predeploy.json`).
 
 One more differential was added on the state side. `statekeys.py` writes one storage slot and then reads 762 other slot indexes that differ from it in a single bit, in the top byte, in the low byte or by truncation, for eight base slots, three of them slots the PoolManager really uses. It does the same with transient storage. Of 256,158 reads on the 21 networks, the only ones that returned the written value are on Avalanche, for the index that differs in bit 248 alone. That is the known rule of the C-Chain (F-040), and it shows the check can see a fold. No network folds transient slots, and no other network folds storage slots (`opcodes/statekeys.json`).
+
+The Avalanche rule cannot reach the PoolManager's own storage. Its fixed slots are 0 to 6, and every other slot it writes is a `keccak256` output or one plus an offset below 7, so two slots collide only if two hashes agree in 255 bits, which costs about 2^127 hash evaluations. No function writes to a slot index the caller supplies; `extsload` only reads. The rule matters for contracts whose author picks slot constants by hand, so `avaxslots.py` scanned the bytecode of the ten official v4 contracts on Avalanche and of all 300 hooks that an `Initialize` event names. None holds two 32 byte constants that differ only in bit 248 (`opcodes/avalanche-slot-constants.json`). The scan sees constants only; a slot computed at run time is outside it.
 
 The rules around calls were checked the same way. `callsem.py` runs 50 small tests in one simulated call: a reverted call undoes its transient and persistent writes, a static call cannot write even through a nested plain call, return data has the size the callee gave and a copy past its end fails, a delegate call writes to the caller's slots, and a call with value moves exactly that many wei or fails and moves none, also when the callee reverts. All 21 networks give the specified word on all 50 (`opcodes/callsem.json`). The reference interpreter gives the same 50 words.
 
@@ -298,6 +311,18 @@ python3 research/network-risk/tools/opdiff/bytecode.py research/network-risk/opc
 
 ```bash
 python3 research/network-risk/tools/opdiff/trace.py research/network-risk/opcodes/trace-tempo.json 60
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/trace.py research/network-risk/opcodes/trace-ink.json 60 https://rpc-qnd.inkonchain.com
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/trace.py research/network-risk/opcodes/trace3-hyperevm-nanoreth.json 80 https://rpc.purroofgroup.com 3
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/avaxslots.py research/network-risk/opcodes/avalanche-slot-constants.json research/network-risk/cycles/005/theme-shared-hooks.work/raw/init_43114.json.gz
 ```
 
 ```bash

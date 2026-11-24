@@ -1750,7 +1750,7 @@ How it meets the code: 1. The rule is in the client: partitionStateKeysHook.Tran
 
 What is at risk: No funds of pools without a hook are reachable. Liquidity in pools whose hook or token was reviewed on Ethereum semantics can be exposed to a storage alias that exists only on Avalanche. The size of the loss is whatever the aliased slot controls in that hook.
 
-What it takes: The attacker must be the author of a hook or token that victims choose to use, and must place two constants that differ only in bit 248. No such contract was searched for on chain in this cycle. Honest contracts that use EIP-1967 or ERC-7201 slots are affected only if two of their constants differ in exactly that bit, which was not checked for deployed periphery.
+What it takes: The attacker must be the author of a hook or token that victims choose to use, and must place two constants that differ only in bit 248. A scan on 2026-11-24 (tools/opdiff/avaxslots.py, opcodes/avalanche-slot-constants.json) read the bytecode of the ten official v4 contracts on Avalanche and of all 300 hooks named by an Initialize event up to block 101,267,314 (296 with code). None holds two 32 byte constants that differ only in bit 248. Two hooks use the OpenZeppelin reentrancy guard slot 0x9b77...5f00, whose bit 248 is set, so on Avalanche the guard lives at 0x9a77...5f00; nothing else in those hooks uses that slot, so the guard works as written. The scan sees constants only, so a slot computed at run time is outside it.
 
 What can be done: Reviewers of hooks and tokens for Avalanche should compare every constant storage slot after clearing bit 248 and should run fork tests against a C-Chain node. Interfaces can warn when a hook uses assembly sstore with constant slots. Core needs no change.
 

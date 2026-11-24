@@ -16,7 +16,7 @@ EP = [
 ]
 sel = os.environ.get('EP_FILTER')
 if sel:
-    EP = [e for e in EP if sel in e[1]]
+    EP = [e for e in EP if any(x in e[1] for x in sel.split(','))]
 ex = os.environ.get('EP_EXCLUDE')
 if ex:
     EP = [e for e in EP if ex not in e[1]]
