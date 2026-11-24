@@ -1,0 +1,229 @@
+{
+ "unit": "hyperevm",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 999,
+   "lens": "L1",
+   "summary": "The official node and the archive client still give the specified result for every opcode vector and PoolManager script, now including 2,736 new vectors whose shift amount, BYTE index or SIGNEXTEND size has nonzero high limbs. The public replay clients and the hl-visor binary are byte for byte what cycle 10 read, and no ruint or revm release since then touches an arithmetic, jump or memory result. The validator binary hl-node is still not public.",
+   "deltas": [
+    {
+     "delta": "New vector set highlimb.py (2,736 vectors): SHL, SHR, SAR, BYTE and SIGNEXTEND with first operands such as 2^64, 2^64+1, 2^64+5, 2^128+3, 2^192+8, 2^255+1 and 2^256-1, whose low 64 bit limb is small or zero while a higher limb is set, plus DIV, SDIV, MOD, SMOD, EXP, ADDMOD and MULMOD over 12 edge words including 2^255, 2^255+1, 2^128-1 and 2^64. An interpreter that reads only the low limb of the shift or index would give a nonzero result where the specification gives 0 or the sign word. Official node: 2,736 of 2,736 equal to the Python reference, 0 errors after retries for HTTP 429. Archive client: 2,736 of 2,736 equal.",
+     "source": "https://rpc.hyperliquid.xyz/evm eth_call with state override, head 0x31bd134 (52,154,676) on 2026-11-24; output research/network-risk/cycles/014/hyperevm.work/out/highlimb-official.json and highlimb-nanoreth.json",
+     "relevance": "none"
+    },
+    {
+     "delta": "hl-visor at binaries.hyperliquid.xyz/Mainnet/hl-visor is still 8,305,392 bytes and embeds commit c6b742f0 of 2026-09-09, so no validator release has replaced the supervisor since cycle 10. Its strings show that it fetches hl-node through a signed indexed upload path (string download_signed_indexed_upload); the plain path /Mainnet/hl-node answers 403.",
+     "source": "https://binaries.hyperliquid.xyz/Mainnet/hl-visor (downloaded 2026-11-24, sha256 prefix 89338207c793d80a); https://binaries.hyperliquid.xyz/Mainnet/hl-node (HTTP 403)",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 999,
+   "lens": "L2",
+   "summary": "Nothing new about transaction boundaries or transient storage. A new census of 3,000 recent blocks finds 1,030 unsigned system transactions and none that names the PoolManager, whose account nonce is still 1.",
+   "deltas": [
+    {
+     "delta": "Blocks 52,152,491 to 52,155,490 on the archive client: 11,080 transactions, 1,030 with gas price 0. Senders: CoreDepositWallet 435, AQAv2 treasury address 195, 0x2000...0000 195, token system addresses 0x20...0157 45, 0x20...012b 28, 0x20...034d 23, 0x20...007c 14, 0x2222...2222 13. No transaction of either kind names the PoolManager as sender, target or in its input. PoolManager nonce 0x1.",
+     "source": "https://rpc.purroofgroup.com eth_getBlockByNumber and eth_getTransactionCount on 2026-11-24; script research/network-risk/cycles/014/hyperevm.work/systx_census.py, output research/network-risk/cycles/014/hyperevm.work/out/systx_census.json",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 999,
+   "lens": "L3",
+   "summary": "Nothing new for gas, the native currency or token contracts. The docs still state Cancun without blobs, 18 decimal HYPE, a 3,000,000 gas fast block and a 30,000,000 gas slow block.",
+   "deltas": []
+  },
+  {
+   "chainId": 999,
+   "lens": "L4",
+   "summary": "Nothing new about precompiles or system contracts. HyperCore spot metadata lists 520 tokens and none is linked to the PoolManager address.",
+   "deltas": [
+    {
+     "delta": "spotMeta returns 520 tokens; no evmContract address equals the PoolManager. USDC (index 0) is linked to 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24. tokenDetails for USDC carries no treasury or AQAv2 field, so the record that names the AQAv2 treasury address is not exposed by the info endpoint either.",
+     "source": "https://api.hyperliquid.xyz/info POST spotMeta and tokenDetails tokenId 0x6d1e7cde53ba9467b783cb7c530ce054, 2026-11-24; saved research/network-risk/cycles/014/hyperevm.work/raw/spotMeta.json",
+     "relevance": "low"
+    }
+   ]
+  }
+ ],
+ "findings": [
+  {
+   "ref": "F-020",
+   "title": "HyperCore sends unsigned transfers in the name of addresses that never signed, including a contract, and the record that names such an address is outside the deployer's documented action",
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A2",
+    "A8"
+   ],
+   "effect": "freeze",
+   "actor": "operator",
+   "severity": "medium",
+   "difference": "HyperCore places unsigned system transactions with gas price 0 at the top of HyperEVM blocks and states their sender itself. Under AQAv2 it sends token transfers in the name of the token's linked contract and of a treasury address. On Ethereum a balance leaves an address only through a transaction that address signed or a call made by its own code.",
+   "mechanism": "1. Unchanged from cycle 7: if HyperCore recorded the PoolManager as the address to rebalance from, the node would send transfer calls on that token with the PoolManager as msg.sender. The token would move the balance while pool state, ERC-6909 balances and protocol fee counters keep recording the tokens as owed, because the PoolManager reads a balance only between sync and settle (src/PoolManager.sol:279-288 and 349-365). The last takes in that token would then revert inside the transfer (src/types/Currency.sol:55-87). 2. New in this cycle. The census of 3,000 recent blocks finds 1,030 system transactions, 435 sent in the name of the CoreDepositWallet contract and 195 in the name of the treasury address 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00, and none names the PoolManager; its nonce is still 1. HyperCore spot metadata links no token to the PoolManager and exposes no field that names an AQAv2 treasury, so the record behind step 1 still cannot be read. 3. An ordinary account cannot create that record: the documentation ties AQAv2 activation to two deployers that each stake 500,000 HYPE and to a validator vote, and the link of a spot token to a contract needs the contract's CREATE deployer or a finalizer stored in slot 0 or in the slot keccak256(\"HyperCore deployer\"), which for the PoolManager only the owner contract could arrange (cleared in cycle 4).",
+   "impact": "All pools and ERC-6909 claims in a token for which HyperCore named the PoolManager as the rebalancing address. Nothing is exposed today: no system transaction has named the PoolManager and its nonce is 1.",
+   "preconditions": "The validator set, or whatever privileged record names an AQAv2 treasury, must name the PoolManager. An ordinary account cannot.",
+   "mitigations": "Watch the PoolManager's account nonce, which rises with the first transaction sent in its name, and the from field of system transactions. Ask the Hyperliquid team whether the node refuses an address with code as AQAv2 treasury.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-365",
+    "src/types/Currency.sol:55-87"
+   ],
+   "sources": [
+    {
+     "url": "https://rpc.purroofgroup.com eth_getBlockByNumber 52,152,491 to 52,155,490 and eth_getTransactionCount, 2026-11-24",
+     "supports": "1,030 system transactions, none naming the PoolManager; PoolManager nonce 1"
+    },
+    {
+     "url": "https://api.hyperliquid.xyz/info",
+     "supports": "spotMeta links no token to the PoolManager; tokenDetails for USDC has no treasury field"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md",
+     "supports": "Treasury deployer designates the treasury address, both deployers stake 500k HYPE, activation by validator vote (read in cycle 7)"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers.md",
+     "supports": "Link finalization by the CREATE deployer or a finalizer stored in slot 0 or keccak256(\"HyperCore deployer\"); system transactions call transfer as the system address (fetched 2026-11-24)"
+    }
+   ],
+   "evidence": "inferred"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "check": "Rerun of battery.py and targeted.py for chain 999 on the official node at head 52,154,676.",
+   "result": "99,985 of 99,985 and 85,544 of 85,544 vectors equal the specification, no errors, the same counts as cycle 10. TickMath (src/libraries/TickMath.sol:61-63, 80-111), BitMath (src/libraries/BitMath.sol:16-45), FullMath (src/libraries/FullMath.sol:24, 48, 112), TickBitmap (src/libraries/TickBitmap.sol:20-26, 54-73), LiquidityMath (src/libraries/LiquidityMath.sol:12-13) and SqrtPriceMath (src/libraries/SqrtPriceMath.sol:219, 252) therefore get specified results for SIGNEXTEND, SAR, SHL, SHR, BYTE, SDIV, SMOD, MULMOD and KECCAK256 on this endpoint.",
+   "source": "https://rpc.hyperliquid.xyz/evm eth_call; research/network-risk/cycles/014/hyperevm.work/out/battery.json, research/network-risk/cycles/014/hyperevm.work/out/targeted.json"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "check": "Rerun of pmdiff.py (250 scripts) and pmdiff2.py (300 scripts) for chain 999.",
+   "result": "250 of 250 and 299 of 300 identical to Ethereum. The one differing script is again number 189, the swap that walks the tick range and needs more than the gas the endpoint grants, as explained in cycle 10.",
+   "source": "https://rpc.hyperliquid.xyz/evm; research/network-risk/cycles/014/hyperevm.work/out/pmdiff.json, research/network-risk/cycles/014/hyperevm.work/out/pmdiff2.json"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "check": "New vectors: shift amount, BYTE index and SIGNEXTEND size with nonzero high limbs and a small low limb (2^64+k, 2^128+3, 2^192+8, 2^255+1, 2^256-1), and DIV, SDIV, MOD, SMOD, EXP, ADDMOD, MULMOD over edge words, 2,736 vectors on both HyperEVM endpoints.",
+   "result": "All equal to the Python reference on the official node and on the archive client. The libraries pass such operands only through compiler built shift and mask code, and the battery shows the interpreter treats the whole word, so a truncated shift count cannot change a tick, a bitmap position or a sign extension in src/libraries.",
+   "source": "https://rpc.hyperliquid.xyz/evm and https://rpc.purroofgroup.com eth_call with state override; research/network-risk/cycles/014/hyperevm.work/highlimb.py; research/network-risk/cycles/014/hyperevm.work/out/highlimb-official.json"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "check": "Did the public replay clients or the ruint and revm-interpreter changelogs change since cycle 10?",
+   "result": "No. hyper-evm-sync Cargo.lock (revm 19.2.0, ruint 1.15.0) and nanoreth Cargo.lock and Cargo.toml (revm 29.0.1 fork, ruint 1.16.0) are byte for byte the files of cycle 10. The ruint CHANGELOG and the revm interpreter CHANGELOG are unchanged, and crates.io lists 1.21.1 (2026-10-23) as the newest ruint with 1.21.0 yanked.",
+   "source": "https://raw.githubusercontent.com/hyperliquid-dex/hyper-evm-sync/main/Cargo.lock; https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/Cargo.lock; https://raw.githubusercontent.com/alloy-rs/ruint/main/CHANGELOG.md; https://raw.githubusercontent.com/bluealloy/revm/main/crates/interpreter/CHANGELOG.md; https://crates.io/api/v1/crates/ruint/versions"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "check": "Has the validator software changed since cycle 10, as far as a public binary shows?",
+   "result": "No. hl-visor is the same 8,305,392 byte build of commit c6b742f0 dated 2026-09-09. Validators all run the hl-node that this supervisor downloads and verifies by signature, so they do not choose different interpreter builds; a CPU dependent path inside hl-node cannot be ruled out because the binary is not public.",
+   "source": "https://binaries.hyperliquid.xyz/Mainnet/hl-visor; https://raw.githubusercontent.com/hyperliquid-dex/node/main/README.md"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "check": "Does the official documentation still describe HyperEVM as Cancun without blobs, so that no later opcode set (EIP-7702, new precompiles in the 0x0a to 0x11 range) applies?",
+   "result": "Yes. The HyperEVM page, fetched 2026-11-24, says the HyperEVM uses the Cancun hardfork without blobs. Code at a hook address therefore still cannot be delegated (A7).",
+   "source": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm.md"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "check": "Mined PoolManager activity since the window of cycle 10 (block 52,118,033 to head).",
+   "result": "Four ModifyLiquidity logs and no Swap log, so there is nothing new for the swap math check. The whole earlier history was checked in cycles 10 and 13.",
+   "source": "https://rpc.purroofgroup.com eth_getLogs address 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F from 0x31b4211"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "check": "Do recent system transactions name the PoolManager as sender, target or argument?",
+   "result": "No. 1,030 unsigned system transactions in 3,000 blocks, none naming the PoolManager, and its account nonce is 1, so no transaction has been sent in its name since deployment.",
+   "source": "https://rpc.purroofgroup.com eth_getBlockByNumber; research/network-risk/cycles/014/hyperevm.work/out/systx_census.json"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L4",
+   "check": "Is any HyperCore spot token linked to the PoolManager address?",
+   "result": "No. Of 520 tokens in spotMeta none has the PoolManager as evmContract. A link would also need the PoolManager's deployer or its owner (cleared in cycle 4).",
+   "source": "https://api.hyperliquid.xyz/info spotMeta; research/network-risk/cycles/014/hyperevm.work/raw/spotMeta.json"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L4",
+   "check": "Known weaknesses: search for HyperEVM advisories and incidents up to November 2026.",
+   "result": "The results name wallet compromises (Hypurr NFTs, September 2025), an operator permission fault in Hyperdrive and a lending rounding issue in a fork of Aave. All are application or key faults outside the PoolManager, and none involves a precompile or system contract acting for it. No client advisory was found.",
+   "source": "https://finance.yahoo.com/news/zachxbt-flags-400k-exploit-hypurr-093215277.html; https://www.cryptopolitan.com/pt/hyperdrive-pauses-markets-after-exploit/; https://cointelegraph.com/news/hyperliquid-hyperevm-bug-bounty-launch-layer1"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "question": "What path does hl-visor use for its signed indexed download of hl-node, and does the binary served there carry crate paths with ruint and revm versions?",
+   "why": "This would settle L-618 and show whether the validator links a ruint release with the mul_mod rewrite; the plain path answers 403 and the index format is not documented.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-618",
+   "outcome": "inconclusive",
+   "answer": "hl-visor is unchanged (8,305,392 bytes, commit c6b742f0 of 2026-09-09) and fetches hl-node through a signed indexed upload path whose layout is not public; /Mainnet/hl-node answers 403. The versions under the validator are still unknown. The official node gave the specified result for all 185,529 earlier vectors and the 2,736 new high limb vectors of this cycle, including the mul_mod shapes of ruint issue 681 in targeted.py."
+  },
+  {
+   "leadId": "L-669",
+   "outcome": "inconclusive",
+   "answer": "Not reachable by reading: the HyperEVM validator is closed. On Cancun without EIP-7702, code at an address changes only by creation, so a cache keyed by code hash would need a hash that disagrees with the code; the official node answered the PoolManager scripts and all vectors as specified, which bounds but does not exclude this."
+  },
+  {
+   "leadId": "L-690",
+   "outcome": "cleared",
+   "answer": "Hook hazard, pool-creator level: a failing read precompile reverts only pools whose hook the victims chose; out of scope for this cycle's focus."
+  },
+  {
+   "leadId": "L-712",
+   "outcome": "inconclusive",
+   "answer": "The info endpoint exposes no record that names the AQAv2 treasury; spotMeta and tokenDetails have no such field and link no token to the PoolManager. A new census of 3,000 blocks shows 1,030 system transactions, none naming the PoolManager, whose nonce is still 1. Whether a deployer could name an arbitrary EVM address stays unknown because the node is closed; the documented action authorizeAqav2Role carries no address. F-020 stays at operator level."
+  }
+ ]
+}
