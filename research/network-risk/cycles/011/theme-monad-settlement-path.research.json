@@ -1,0 +1,136 @@
+{
+ "unit": "theme-monad-settlement-path",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Which of the settlement opcodes Monad v0.16.5 compiles inline and which it hands to a runtime function that the interpreter also calls, and how the compiled code passes operands and takes the result of such a call.",
+   "result": "Inline in compiled code: CALLER and ADDRESS (read_context_address), CALLVALUE (read_context_word), RETURNDATASIZE, CALLDATASIZE and MSIZE (read_context_uint32_to_word), CALLDATALOAD (Emitter::calldataload with the assembly helper monad_vm_runtime_load_bounded_le_raw) and SIGNEXTEND. Handed to a runtime function: KECCAK256 (runtime::sha3), CALLDATACOPY, RETURNDATACOPY, MCOPY, TLOAD, TSTORE, CALL, STATICCALL and SELFBALANCE (emitter.hpp 388-485, 525-552). The interpreter's instruction table calls the same runtime functions for these (instruction_table.hpp 821-833, 942-954, 1053-1065, 1306-1318, 1360-1390), so the eth_call tests of earlier cycles (the KECCAK256, MCOPY and copy vectors of the battery and the 50 call semantics tests of callsem.py) ran the code that block execution runs for them. The only compiled-specific part is the call glue. RuntimeImpl::pass stores every operand that is in a register into its stack slot, call_impl passes each operand as a pointer to that slot or to a rodata copy of a literal, in pop order, which is the order of the C++ parameters for every function above, and the result is written to a fresh stack slot at the new top (emitter.cpp 443-501). That slot can be the slot of the deepest input, which is the same aliasing the interpreter uses (call_runtime.hpp: the result pointer is the deepest stack argument). Each of these functions reads all its inputs before it writes the result: sha3 reads size and offset first (keccak.hpp 28-45), tload copies the key first (storage.hpp 35-45), and call and staticcall take the operands by reference into call_impl and write the result after it returns (call.cpp 198-221, 272-293). CALLVALUE uses the 32 byte big-endian env.value through movbe per limb or vpermq plus vpshufb, both a full byte reversal.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.cpp lines 443-590, 2238-2281, 3043-3082, 3385-3394, 3816-3892; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.hpp lines 130-205, 388-565; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/interpreter/call_runtime.hpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/interpreter/instruction_table.hpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/runtime/keccak.hpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/runtime/storage.hpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/runtime/call.cpp; copies in research/network-risk/cycles/011/theme-monad-settlement-path.work/src"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Monad v0.16.5 inline CALLDATALOAD at every offset location the emitter distinguishes (literal up to 2^31-1, literal from 2^31 to 2^32-1 through rodata, literal of 2^32 or more, general register live and not live in each of the three register sets, AVX register, stack slot), with is_bounded_by_bits<32>, the 32 byte load or the bounded load helper for fewer than 32 remaining bytes, and the byte swap.",
+   "result": "No mismatch with the specification in 411,200 cases: every calldata length from 0 to 300 with every offset from 0 to length plus 40 and nine large offsets at each location, and 50,000 random cases with lengths up to 5,000 and offsets whose upper limbs are set. Every branch of monad_vm_runtime_load_bounded_le_raw ran (sizes 1, 2, 3 to 4, 5 to 8, 9 to 16, 17 to 31 and zero or negative), and no case read a byte outside the calldata buffer. The 17 to 24 byte case depends on shrd and shrx masking a count of 64 to 120 to six bits; the transcription models that masking and the result is right. Seven of ten planted faults were caught (between 280 and 31,960 failing cases each); the three not caught are equivalent for calldata below 2^31 bytes (a 16 bit size read, a 31 bit offset mask and the rodata threshold). The PoolManager runs CALLDATALOAD at 44 sites, 40 with a literal offset; in the 584 scripts compared below the compiled transcription executed it 84,050 times in the PoolManager.",
+   "source": "research/network-risk/cycles/011/theme-monad-settlement-path.work/settlejit.py, run_units.py, units.json, mutate.py, mutate.json; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.cpp lines 636-644, 3155-3258 and is_bounded_by_bits; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/runtime/transmute.S lines 22-118"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Monad v0.16.5 inline CALLER, CALLVALUE and RETURNDATASIZE, which decide who is credited (src/PoolManager.sol:301, 306, 369), how much native currency a settle credits (src/PoolManager.sol:354) and whether a token transfer counts as successful (src/types/Currency.sol:68).",
+   "result": "No mismatch. CALLER: 50,000 addresses including all limb edges give the 160 bit value, with the top limb zero and the 32 bit movbe clearing the upper half of its register. CALLVALUE: 100,000 values through both the general register and the AVX destination. RETURNDATASIZE: every size from 0 to 4,096 and 5,000 random sizes below 2^24. RETURNDATASIZE reads the low 32 bits of a 64 bit field (static_assert at emitter.cpp 3072-3074); this is exact for return data below 2^32 bytes, which a transaction cannot produce under Monad's memory limit. When a comparison is held in the CPU flags, the three readers write zero with mov instead of xor, so the flags that Currency.transfer's gt(returndatasize(), 31) and eq(mload(0), 1) feed into are kept.",
+   "source": "research/network-risk/cycles/011/theme-monad-settlement-path.work/settlejit.py, run_units.py, units.json; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.cpp lines 2269-2330, 3043-3077, 3816-3892; src/types/Currency.sol:64-74"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Monad v0.16.5 SIGNEXTEND with a non-literal index: destructive_mov_stack_elem_to_bounded_rax at its three index locations (general register live and not live, AVX, stack slot with and without a free register) and the three value paths signextend_avx_reg_by_bounded_rax, signextend_general_reg_by_bounded_rax and signextend_stack_offset_or_literal_by_bounded_rax.",
+   "result": "This shape does not occur in the built runtime. All 114 SIGNEXTEND instructions get their index from a PUSH in the same basic block, so the compiler takes the literal path that cycle 9 transcribed (settle_sites.py over build/PoolManager.json, using the block and literal rules of cycle 10's sites.py). The non-literal paths were transcribed anyway and give the specified result in 896,400 cases: indexes 0 to 39, large indexes and indexes whose upper limbs are set, with values that have each sign bit set and clear. The index is clamped to 31, and an index of 31 or more returns the value unchanged on all three paths. All six planted faults were caught (60 to 1,278 failing cases each).",
+   "source": "research/network-risk/cycles/011/theme-monad-settlement-path.work/settle_sites.py, sites.json, settlejit.py, run_sx.py, sx.json, mutate_sx.json; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.cpp lines 2515-2540, 4587-4835 and destructive_mov_stack_elem_to_bounded_rax"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "How compiled CALL and STATICCALL return into the caller on Monad v0.16.5: the return data buffer, the caller's memory and the transient storage journal when the callee reverts, and whether a revert inside compiled code undoes TSTORE through the same journal as the interpreter.",
+   "result": "Both paths run runtime::call_impl. It clears the return data before the call, stores the callee's output as the new return data after host->call, copies min(retSize, output size) into the caller's memory whatever the status, and pushes 1 only for EVMC_SUCCESS (call.cpp 58-196). The journal sits outside the VM: execute_call_message runs pre_call, which pushes a State version, then VM::execute on either path, then post_call, which accepts the version on success and rejects it otherwise (execute_message.cpp 110-174, 305-350). Transient storage lives in the versioned account state (state.cpp 126-180, 318-330, 406-410), so a revert in compiled code is undone exactly as in the interpreter. VM::execute_raw picks interpreted or native code inside that bracket (vm.cpp 142-190), and both end in rt_ctx.copy_to_evmc_result (vm.cpp 232-256). This repeats the cycle 4 and cycle 8 readings, which were taken from the main branch, on the v0.16.5 tag.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/runtime/call.cpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/execution/ethereum/execute_message.cpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/execution/ethereum/state3/state.cpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/vm.cpp"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "The built PoolManager run in the reference interpreter with Monad's inline settlement opcodes (CALLER, CALLVALUE, CALLDATALOAD, CALLDATASIZE, RETURNDATASIZE) replaced by the x86 transcriptions, against the plain reference interpreter, on the token, settle and payout scripts of pmdiff2 and the completing unlocks, settleFor and ERC-6909 scripts of pmdiff3.",
+   "result": "Identical return data, storage, transient storage and balances for all 584 scripts that fit the 4 million step limit (285 of 300 pmdiff2 scripts and 299 of 300 pmdiff3 scripts; the other 16 are the long tick-walking swaps). The scripts make 26,221 PoolManager calls. Inside the settlement functions (Currency.transfer, balanceOfSelf, CurrencyDelta, CurrencyReserves, unlock, CustomRevert) the transcribed RETURNDATASIZE ran 2,818 times and CALLER 584 times. Across all contracts of the scripts, CALLDATALOAD with a non-literal offset took the register, AVX and stack paths 84,578 times. The bytecode is the build of this checkout (codeSha256 in compiled_run.json).",
+   "source": "research/network-risk/cycles/011/theme-monad-settlement-path.work/compiled_run.py, compiled_run.json, compiled_run.log; research/network-risk/build/PoolManager.json; research/network-risk/tools/opdiff/pyevm.py"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "check": "Lead L-623, first half: does debug_traceTransaction with callTracer on Monad execute the transaction again, or return the frames that block execution recorded?",
+   "result": "It returns recorded frames. In monad-rpc, debug_traceTransaction replays only for prestateTracer (requires_replay matches Tracer::PreStateTracer only); for callTracer it calls monad_debug_traceTransaction, which reads the RLP call frames stored for the transaction (get_transaction_call_frame) and decodes them. Block execution writes those frames to the database through CommitBuilder::add_call_frames. The executor behind eth_call and debug_traceCall builds its VM as InterpreterOnly. So a recorded trace shows what the block, with the PoolManager compiled once hot, computed, and debug_traceCall shows what the interpreter computes. The monad-rpc reading is from the master branch of monad-bft; which commit rpc.monad.xyz runs was not confirmed (web3_clientVersion returns Monad/unknown).",
+   "source": "https://raw.githubusercontent.com/category-labs/monad-bft/master/monad-rpc/src/handlers/mod.rs lines 381-398; https://raw.githubusercontent.com/category-labs/monad-bft/master/monad-rpc/src/handlers/debug.rs lines 557-591, 639-720; https://raw.githubusercontent.com/category-labs/monad-bft/master/monad-rpc/src/handlers/debug_replay.rs lines 51-54; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/execution/ethereum/db/commit_builder.cpp lines 234-260; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/rpc/monad_executor.cpp lines 1297-1300"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "check": "Recorded block execution against interpreter replay for the first user transaction of a block (index 1; index 0 of every Monad block is the staking system call to 0x...1000) in 2,400 mined PoolManager transactions of blocks 124,987,459 to 125,011,397. Each was replayed with debug_traceCall at the parent block with its sender, target, input, value, gas and access list.",
+   "result": "No difference that the PoolManager produced. The 2,400 trees hold 287,515 frames and 28,811 PoolManager frames: 5,369 unlock, 5,690 swap, 4,778 sync, 5,468 settle, 5,926 take, 1 mint. 1,078 transactions replay with an identical event sequence (every call, input, value, output, error and log in execution order), covering 6,017 PoolManager frames. In the other 1,322 the first differing event never belongs to the PoolManager. It is the staking precompile's answer (846), a bot contract that logs the block number (286), or a contract whose behaviour depends on the block (190). Pairing PoolManager frames by position and input gives 22,930 pairs, and 22,893 have identical outputs, errors, logs and outgoing calls. The other 37 come after an earlier divergence elsewhere in the same transaction: a token's balanceOf returned another balance, so settle returned another amount. 285 transactions hold a reverted frame that had entered unlock, followed by an unlock that completed. In 282 of them every PoolManager pair is identical. The first comparison without access lists gave false differences: the replay ran out of gas where the block had warm slots. Passing the access list removed every PoolManager-owned divergence.",
+   "source": "rpc https://rpc.monad.xyz eth_getLogs, eth_getTransactionByBlockNumberAndIndex, eth_getTransactionByHash, eth_getTransactionReceipt, debug_traceTransaction (callTracer, withLog) and debug_traceCall (callTracer, withLog) on 2026-11-24; research/network-risk/cycles/011/theme-monad-settlement-path.work/scan.py, scan.json, frames_monad.py, frames.json, pmframes.py, pmframes.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "check": "The settlement calls as block execution ran them in 12,000 mined PoolManager transactions (blocks 124,991,690 to 125,011,402), checked from the recorded frames alone against src/PoolManager.sol:279-297, 300-308, 349-364 and src/types/Currency.sol:40-96, with the synced currency and reserves rolled back over reverted frames as transient storage is.",
+   "result": "No mismatch. 17,640 token syncs each made one balanceOf(PoolManager) staticcall to the named currency, and 1,331 native syncs made none. 17,640 token settle and settleFor calls each made one balanceOf staticcall to the synced currency, sent no value and returned exactly the balance minus the synced reserves. 2,846 native settle and settleFor calls returned exactly msg.value and made no call. Of 18,208 token takes and 3,558 native takes, all 21,765 that succeeded made one call: transfer(to, amount) to the token with no value, or a call to the recipient with value amount and empty input. Each token transfer returned nothing or a 32 byte 1. This exercises the compiled TLOAD and TSTORE of CurrencyReserves (src/libraries/CurrencyReserves.sol:15-37), CALLVALUE at src/PoolManager.sol:354, RETURNDATASIZE in balanceOfSelf and transfer, and STATICCALL and CALL, as far as block execution ran the PoolManager compiled (see the last lead).",
+   "source": "rpc https://rpc.monad.xyz debug_traceTransaction (callTracer) on 2026-11-24; research/network-risk/cycles/011/theme-monad-settlement-path.work/settlecheck.py, settlecheck.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "check": "Do the credits and debits that block execution recorded inside each completed unlock net to zero per account and currency, as unlock requires (src/PoolManager.sol:112, 368-379)? Summed over swap, modifyLiquidity, donate, settle, settleFor, take, mint, burn and clear frames, outside reverted frames, in 12,000 mined transactions.",
+   "result": "Yes for all 13,635 completed unlocks checked, which hold 48,268 accounted operations. 11 unlocks on pools with a hook were left out, because a hook can move deltas to its own account. A planted error of one unit in each settle credit made 191 of 192 unlocks fail the check, so the check sees an over-credit. A compiled fault in CurrencyDelta.applyDelta (src/libraries/CurrencyDelta.sol:28-41), the KECCAK256 of its slot or NonzeroDeltaCount (src/libraries/NonzeroDeltaCount.sol:12-33) that credited a payer without payment would leave a nonzero sum in an unlock that completed. None does.",
+   "source": "rpc https://rpc.monad.xyz debug_traceTransaction (callTracer) on 2026-11-24; research/network-risk/cycles/011/theme-monad-settlement-path.work/netcheck.py, netcheck.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    4217,
+    5042
+   ],
+   "lens": "L1",
+   "check": "Across the other networks: does block execution run the settlement opcodes on a code path that a simulated call does not reach?",
+   "result": "No for these 18. Their blocks and their eth_call run the same interpreter: go-ethereum and its forks (BNB Smart Chain, Polygon, Avalanche, the three Nitro chains), revm on the OP Stack and Arc, and evm2 on Ethereum's reth nodes and Tempo, whose published binaries have no compiler. The opcode battery, the call semantics tests and the script sets therefore test the block path there. MegaETH (4326) runs a closed compiling executor; cycle 10 compared 7,627 receipts, including 1,333 with a reverted unlock frame (F-118). HyperEVM's validator (999) is closed and stays an open gap. Monad (143) is covered by the entries above.",
+   "source": "research/network-risk/OPCODES.md:107-118, 197-204, 212-219"
+  }
+ ],
+ "leads": [],
+ "leadResults": [
+  {
+   "leadId": "L-623",
+   "outcome": "cleared",
+   "answer": "debug_traceTransaction with callTracer returns the call frames that block execution recorded and committed (monad-rpc debug.rs monad_debug_traceTransaction; replay only for prestateTracer), and debug_traceCall runs the InterpreterOnly executor. The task's fallback compares receipts with eth_call at the parent block for transactions at index 0, but on Monad index 0 is always the staking system call. The comparison was therefore run on the first user transaction, at index 1, replaying with debug_traceCall at the parent block with the access list. 2,400 transactions were compared: 1,984 with sync, 2,372 with settle, 2,400 with take, 1 with mint and 285 with a reverted frame that had entered unlock followed by a completed unlock. They hold 287,515 frames. No first divergence belongs to the PoolManager, and 22,893 of 22,930 paired PoolManager frames are identical. The other 37 follow an earlier divergence from a token's balance or the staking precompile. On the recorded frames alone, 12,000 transactions were checked against the source's settlement rules with no mismatch, and all 13,635 completed unlocks without hooks net to zero."
+  },
+  {
+   "leadId": "L-624",
+   "outcome": "cleared",
+   "answer": "At v0.16.5, RETURNDATASIZE, CALLVALUE, CALLER, CALLDATALOAD and SIGNEXTEND are compiled inline. Their transcriptions match the specification at every operand location: 411,200 CALLDATALOAD cases, 896,400 SIGNEXTEND cases with a variable index, and 159,098 cases for the context readers. Planted faults are caught. The built runtime has no SIGNEXTEND with a variable index. KECCAK256, TLOAD, TSTORE, CALLDATACOPY, RETURNDATACOPY with its bounds check, MCOPY, CALL and STATICCALL call the same C++ runtime functions as the interpreter, and the compiled call glue passes operands in parameter order with interpreter-compatible result aliasing. The built PoolManager with the inline transcriptions in place gives the same results as the reference interpreter on 584 scripts, including Currency.transfer, balanceOfSelf, CurrencyDelta, CurrencyReserves and _settle."
+  }
+ ]
+}

@@ -1,0 +1,144 @@
+{
+ "unit": "theme-closed-producers",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "No public client checks the storage that the closed HyperEVM validator writes, because block headers carry a zero state root and nanoreth compares its own root as zero",
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "both",
+   "actor": "operator",
+   "severity": "info",
+   "difference": "On Ethereum every full node recomputes the state root of each block and rejects a block whose root differs. HyperEVM blocks are produced by the closed hl-node validator, and the headers it publishes have stateRoot 0x00..00. The public archive client nanoreth (the build served at rpc.purroofgroup.com reports reth/v0.1.0-f0cad31) replaces its computed state root with B256::ZERO before the comparison with the header, so the comparison always passes. hyper-evm-sync computes a private blake3 hash of its state for snapshots and compares it with nothing. Both clients do re-execute every transaction and stop on a different receipt: nanoreth checks gas used, the receipts root and the logs bloom against the header, and hyper-evm-sync asserts that its computed receipts equal the validator's receipts.",
+   "mechanism": "The PoolManager keeps pool state, positions, ERC-6909 balances and protocol fees in persistent storage (src/libraries/Pool.sol, src/libraries/Position.sol, src/ERC6909.sol, src/ProtocolFees.sol). A state root would commit to exactly those slots. Transient storage is cleared at the end of each transaction and is in no state root on any network, so the missing check has no bearing on it. A validator fault that changed a persistent storage write without changing gas, status or logs of that transaction would not stop either public client. It would show up only once a later transaction reads the slot and its receipt differs, and then the client halts instead of correcting anything. The validator's receipts are therefore checked publicly, its storage writes only indirectly. This needs a fault or a deliberate change in the validator, which only its operator controls. No mismatch was observed: 2,762 mined PoolManager transactions over the whole history agree in status and logs with nanoreth's re-execution, 485 storage slots from prestateTracer agree with nanoreth's state at the block, and 222 touched PoolManager slots read at latest agree between the official endpoint and nanoreth.",
+   "impact": "No loss path for an ordinary account. The hazard is on evidence: clearances of HyperEVM that rest on storage, as opposed to receipts, are backed by nanoreth's own state and by the official endpoint, not by a check against the validator's commitment.",
+   "preconditions": "A fault or change in the closed hl-node validator that alters a storage write but not the receipt of the same transaction. Only the validator operator can cause it.",
+   "mitigations": "The deployer can run nanoreth or hyper-evm-sync and keep it at head, since a later receipt mismatch halts it, and can compare PoolManager slots between the official endpoint and nanoreth at regular intervals with eth_getStorageAt.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114",
+    "src/libraries/Pool.sol:146-237",
+    "src/ERC6909.sol:1-60"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/reth/14509628ed37e9a9b7110ea855a67f427c4d61fc/crates/engine/tree/src/tree/payload_validator.rs",
+     "supports": "lines 562 and 626 set state_root = B256::ZERO before comparing it with block.header().state_root() at line 627"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/f0cad31/src/node/consensus/reth_copy.rs",
+     "supports": "validate_block_post_execution checks gas used (lines 27-34) and the receipts root and logs bloom (lines 40-51, 71-114) and nothing about state"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/f0cad31/src/node/consensus/mod.rs",
+     "supports": "HlConsensus.validate_block_pre_execution is empty (lines 119-147) and post execution calls reth_copy (lines 156-167)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hyperliquid-dex/hyper-evm-sync/main/src/run.rs",
+     "supports": "process_block asserts system tx receipts (line 236) and all receipts (line 264) against the block's receipts; run_blocks computes blake3_hash_slow at line 298 and compares it with nothing"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm",
+     "supports": "eth_getBlockByNumber 0x31a0000 returns stateRoot 0x000...000 and receiptsRoot 0x64b2b7...; rpc.purroofgroup.com returns the same hash, zero stateRoot and same receiptsRoot"
+    },
+    {
+     "url": "https://rpc.purroofgroup.com",
+     "supports": "web3_clientVersion returns reth/v0.1.0-f0cad31/x86_64-unknown-linux-gnu"
+    },
+    {
+     "url": "https://rpc.purroofgroup.com",
+     "supports": "debug_traceTransaction and prestateTracer over 2,762 mined PoolManager transactions against receipts of https://rpc.hyperliquid.xyz/evm: 0 status or log mismatches, 258 post and 227 pre slots equal (theme-closed-producers.work/raw/hyper.json)"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm",
+     "supports": "eth_getStorageAt at latest of 222 touched PoolManager slots equals nanoreth (theme-closed-producers.work/raw/hyper_slots.json)"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "Part one, lead L-626: every mined PoolManager transaction in blocks 2,900,000 to 30,862,219 and 32,724,220 to 32,731,000 (the windows cycle 10 did not trace), read with debug_traceTransaction (callTracer withLog) on the public replica, which re-executes with the stock interpreter, against the receipt that the sequencer's closed executor wrote. For liquidity removals, fee collections and payments inside a reverted frame, prestateTracer diffMode against eth_getStorageAt at the block (post values when the transaction is the last PoolManager transaction of its block, pre values at block-1 when it is the first).",
+   "result": "43,342 transactions traced, 0 errors, 0 status mismatches, 0 log mismatches. 8,580 had a PoolManager frame that was undone and in 8,481 a later unlock completed, so the producer rolled back the unlock flag (src/libraries/Lock.sol:10-27, src/PoolManager.sol:104-114). 87 transactions ran take inside a reverted frame, 2 ran settle, 1 ran sync and 2 ran modifyLiquidity, and each was followed by work that completed with the receipt equal to re-execution, so the producer also rolled back the outgoing transfer and the negative delta of take (src/PoolManager.sol:291-297) and the credit of settle (src/PoolManager.sol:349-365). 151 transactions removed liquidity and 454 collected fees (ModifyLiquidity with negative or zero delta). 681 transactions were compared on storage: 2,042 post slots and 1,819 pre slots, 0 mismatches. The output kept details of the first 600 interesting transactions only; the counts cover all 43,342. With cycle 10 the receipts of 50,969 PoolManager transactions now equal re-execution.",
+   "source": "research/network-risk/cycles/011/theme-closed-producers.work/raw/mega.json (frames2.py mega.json); https://mainnet.megaeth.com/rpc"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "Part one: is the public MegaETH stateless validator run by any party that publishes its results or mismatches?",
+   "result": "No public publisher was found. The documentation describes the validator, a fatal stop on any header commitment mismatch, and an optional --report-validation-endpoint that sends mega_setValidatedBlocks callbacks to an operator-chosen endpoint, but names no public operator or feed. L2BEAT lists state validation as fraud proofs with fewer than five external challengers. The validator was not run in this unit (no software built), so the producer's storage writes are covered by the replica's re-execution and eth_getStorageAt only, as above.",
+   "source": "https://docs.megaeth.com/node-operation/stateless-validation.md (lines 146, 249); https://l2beat.com/layer2s/projects/megaeth"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "check": "Part two, lead L-627: do nanoreth and hyper-evm-sync compare state root and receipts root with what hl-node produced, and do they stop on a mismatch?",
+   "result": "Receipts yes, state no. nanoreth (commit f0cad31, the build at rpc.purroofgroup.com) checks gas used, receipts root and logs bloom after execution and returns an InsertBlockError on a mismatch, which leaves the block invalid and the node unable to advance. Its reth fork replaces the computed state root with zero before comparing it with the header, whose stateRoot is zero. hyper-evm-sync asserts receipts (success, cumulative gas, logs) and panics on a mismatch; its blake3 state hash is not compared. Both inject the results of HyperCore read precompiles from the block files. Both clients also carry the same 18 hard-coded state patches for improper self destructs in blocks 1,467,569 to 1,531,366, which shows that the validator once wrote state that stock revm would not; all are before the PoolManager's first log after block 45,998,366, and the PoolManager bytecode has no SELFDESTRUCT. Recorded as an operator level information finding.",
+   "source": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/f0cad31/src/node/consensus/reth_copy.rs; https://raw.githubusercontent.com/hl-archive-node/reth/14509628ed37e9a9b7110ea855a67f427c4d61fc/crates/engine/tree/src/tree/payload_validator.rs; https://raw.githubusercontent.com/hyperliquid-dex/hyper-evm-sync/main/src/run.rs; https://raw.githubusercontent.com/hl-archive-node/nanoreth/f0cad31/src/node/evm/patch.rs"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "check": "Part two, leads L-627 and L-547: whole PoolManager history (blocks 45,998,000 to 52,124,000), receipt from the official validator endpoint against nanoreth's debug_traceTransaction, and storage for removals, fee collections and undone payments.",
+   "result": "2,762 transactions traced, 0 status or log mismatches. Three had a reverted frame that entered unlock followed by a completed unlock (0xb4d698a0... in block 49,336,714, 0x37a3f8b7... in block 50,968,220, 0x2d705617... in block 51,016,868). One, 0xb4d698a0..., ran sync, settle and take inside the reverted frame and the later unlock completed with a receipt equal to re-execution, so the validator rolled back the synced currency, the settle credit and the take transfer. 40 removals and 34 fee collections. 64 transactions compared on storage, 258 post and 227 pre slots, 0 mismatches, and 222 touched slots equal at latest on both endpoints.",
+   "source": "research/network-risk/cycles/011/theme-closed-producers.work/raw/hyper.json, raw/hyper_slots.json (official https://rpc.hyperliquid.xyz/evm, nanoreth https://rpc.purroofgroup.com)"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "check": "Part three, lead L-629: the newest 4,000 PoolManager transactions in blocks 97,841,208 to 97,881,198, receipts from a bor v2.11.1 node (polygon-bor-rpc.publicnode.com reports bor/f2a2d63e69f6/v2.11.1-private) against serial re-execution by debug_traceTransaction on polygon.drpc.org, with storage for removals, fee collections and undone payments.",
+   "result": "4,000 traced, 0 errors, 0 status or log mismatches. 3,878 called sync, settle or settleFor. 19 had an undone PoolManager frame and in 17 a later unlock completed; 10 ran sync, settle and take inside the reverted frame (9 of them followed by a completed unlock). 48 removals and 38 fee collections. 89 transactions compared on storage (5 prestate calls failed), 426 post and 418 pre slots, 0 mismatches. Which block producers ran BlockSTM for a given block cannot be read from the chain, so this covers whatever the producers ran.",
+   "source": "research/network-risk/cycles/011/theme-closed-producers.work/raw/polygon.json"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "check": "Part three: in bor v2.11.1, are transient storage and the access list per transaction under BlockSTM, and does a re-executed incarnation start clean?",
+   "result": "Yes. Each incarnation builds its state from a fresh copy of the clean state (core/parallel_state_processor.go:127-138, setupEVM, cleanStateDB.Copy()). ApplyMessage reaches StateTransition, which calls Prepare (core/state_transition.go:561); Prepare creates a new access list (core/state/statedb.go:3023-3026) and a new transient storage map (statedb.go:3050-3051). Transient writes are journaled (statedb.go:1370-1376) and reverted with the frame (core/state/journal.go:419-421). Transient storage is not part of the multi-version write set: MVWriteList omits reverted keys (statedb.go:295-305) and ApplyMVWriteSet copies the incarnation's current value of each persistent path (statedb.go:693-702), so a storage write undone by a reverted frame is settled at its restored value.",
+   "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/parallel_state_processor.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/state/statedb.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/state_transition.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/state/journal.go"
+  }
+ ],
+ "leads": [],
+ "leadResults": [
+  {
+   "leadId": "L-626",
+   "outcome": "inconclusive",
+   "answer": "Receipts and storage were compared, the validator was not run. 43,342 more MegaETH PoolManager transactions equal re-execution in status and logs, including 87 with take, 2 with settle and 1 with sync inside a reverted frame, 151 removals and 454 fee collections; 3,861 storage slots of 681 transactions equal prestateTracer. No public party publishing validator results was found."
+  },
+  {
+   "leadId": "L-627",
+   "outcome": "cleared",
+   "answer": "nanoreth checks gas used, receipts root and logs bloom and stops on a mismatch; it does not check state, because headers carry a zero state root and its reth fork compares a zeroed root. hyper-evm-sync asserts receipts and panics on a mismatch, and checks no state. All 2,762 mined PoolManager transactions match, three with a reverted unlock frame followed by a completed unlock, one of them with sync, settle and take in the reverted frame. Recorded as an operator level information finding."
+  },
+  {
+   "leadId": "L-629",
+   "outcome": "cleared",
+   "answer": "4,000 Polygon PoolManager transactions equal serial re-execution in status, logs and 844 storage slots, including 17 with a reverted unlock frame followed by a completed unlock and 10 with sync, settle and take in a reverted frame. bor v2.11.1 resets transient storage and the access list per transaction and per incarnation."
+  },
+  {
+   "leadId": "L-547",
+   "outcome": "inconclusive",
+   "answer": "Answered yes for HyperEVM (3 transactions) and MegaETH (8,481 in this cycle, 1,333 in cycle 10), each with the later unlock completed and the receipt equal to re-execution. Robinhood Chain, Elysium and OP Mainnet were outside this unit."
+  }
+ ]
+}

@@ -1,0 +1,22 @@
+{
+  "unit": "op-stack-custom-gas",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "RUSTSEC-2026-0220 on X Layer, which pins ruint 1.18.0: can a SHL, SHR, SAR or BYTE amount of 2^32 or more, or a non limb aligned overflow flag, give a wrong result to TickBitmap, BitMath or the BalanceDelta and Slot0 unpacking.",
+      "agrees": true,
+      "note": "The xlayer-reth v0.0.7.3-rc.1 Cargo.lock pins ruint 1.18.0 and revm-interpreter 37.0.3, as stated. In the crates.io revm-interpreter 37.0.3 package, instructions/bitwise.rs lines 107-158 convert the amount with as_usize_saturated and call the ruint shift only when it is below 256 (SAR returns U256::MAX or zero by the sign bit otherwise), and BYTE calls byte() only for an index below 32. The advisory text says shifted values were correct and only overflow flags and the wrapping shift above 2^32 were wrong; the interpreter never uses the flag and never passes an amount of 256 or more. ruint 1.18.0 arithmetic_shr (bits.rs line 467) builds the sign fill from wrapping_shr and wrapping_shl with amounts at most 256. The 3,045 vector shift32 output shows 0 mismatches in three rounds on both chains."
+    },
+    {
+      "check": "The alloy-primitives keccak cache in front of KECCAK256 on the two clients, for the 58 byte position key (src/libraries/Position.sol:60), the 64 byte delta and mapping slots (src/libraries/CurrencyDelta.sol:14) and the 160 byte pool id (src/types/PoolId.sol:14).",
+      "agrees": true,
+      "note": "The X Layer lockfile lists alloy-primitives 1.6.0 and fixed-cache 0.1.10. In alloy-primitives 1.6.0, keccak256 goes through the cache only under keccak-cache-global (src/utils/mod.rs lines 147-152). keccak_cache.rs sets MAX_INPUT_LEN to 128 - 32 - 1 - 8 = 87, bypasses empty and longer inputs (so the 160 byte pool id at src/types/PoolId.sol:14 is never cached), and stores the length and all bytes in the key, whose equality compares the full slice. In fixed-cache 0.1.10 (src/lib.rs lines 316-345 and 389-445), a lookup takes the bucket lock with a compare_exchange on the expected tag, compares the full key under the lock and returns the stored value only on equality; the tag mask is the complement of the 17 bit index mask, so it never sets the lock bit. A hash collision therefore gives a miss, never a wrong hash, so the 58 byte position key, the 64 byte delta and bitmap slots (src/libraries/CurrencyDelta.sol:14, src/libraries/TickBitmap.sol:70) get the specified hash."
+    },
+    {
+      "check": "Can an ordinary account use the X Layer gasless rule against PoolManager users.",
+      "agrees": true,
+      "note": "I ran eth_getCode on 0x19787404b0c70021b4752028f7e3a92313885B27 at rpc.xlayer.tech (1,059 bytes) and nine eth_call requests to getGaslessAllowance(address,bytes) (selector 0xbad12ebe) for the PoolManager and both Universal Routers with unlock, execute and empty calldata at latest; every call returned (false, 0). src/ contains no tx.gasprice, block.basefee or block.coinbase read outside src/test (grep), so a gasless transaction executes the same PoolManager logic. The rule only waives fees for transactions whose target and calldata the whitelist owner allowed."
+    }
+  ],
+  "leads": []
+}

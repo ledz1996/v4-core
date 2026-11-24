@@ -1,0 +1,22 @@
+{
+  "unit": "theme-monad-settlement-path",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "How compiled CALL and STATICCALL return into the caller on Monad v0.16.5: the return data buffer, the caller's memory and the transient storage journal when the callee reverts, and whether a revert inside compiled code undoes TSTORE through the same journal as the interpreter.",
+      "agrees": true,
+      "note": "Fetched category/vm/runtime/call.cpp at tag v0.16.5. call_impl clears the return data first, sets it from host->call's output, copies min(ret_size, output_size) into memory whatever the status, and returns 1 only for EVMC_SUCCESS (lines 58-196). Fetched execute_message.cpp at v0.16.5: pre_call runs state.push() before VM::execute, and post_call runs pop_accept only on EVMC_SUCCESS and otherwise reject_frame, which calls pop_reject (lines 108-174, 305-350). Fetched vm.cpp at v0.16.5: execute_raw chooses native or interpreted code inside that bracket, falls back to the interpreter when the native entrypoint is null, and every path ends in rt_ctx.copy_to_evmc_result (lines 142-256). So a revert in compiled code is rolled back by the same State versioning as in the interpreter, and the PoolManager's unlock check (src/PoolManager.sol:112) and _settle (src/PoolManager.sol:349-364) see the same transient state on both paths. One link stays unconfirmed: which Monad release mainnet validators run. web3_clientVersion on https://rpc.monad.xyz returned Monad/unknown on 2026-11-24."
+    },
+    {
+      "check": "Lead L-623, first half: does debug_traceTransaction with callTracer on Monad execute the transaction again, or return the frames that block execution recorded?",
+      "agrees": true,
+      "note": "Fetched monad-rpc/src/handlers/mod.rs and debug_replay.rs from the master branch of monad-bft. debug_traceTransaction replays only when requires_replay() is true (mod.rs 389), and requires_replay matches Tracer::PreStateTracer only (debug_replay.rs 52-53, 67-68). Otherwise it calls monad_debug_traceTransaction, which serves stored frames (mod.rs 395). This supports using callTracer traces as the record of block execution. The commit that rpc.monad.xyz runs is not confirmed, as the cleared item itself says."
+    },
+    {
+      "check": "Do the credits and debits that block execution recorded inside each completed unlock net to zero per account and currency, as unlock requires (src/PoolManager.sol:112, 368-379)? Summed over swap, modifyLiquidity, donate, settle, settleFor, take, mint, burn and clear frames, outside reverted frames, in 12,000 mined transactions.",
+      "agrees": true,
+      "note": "Read netcheck.py and netcheck.json in the work directory. The script drops frames that errored or sit under an errored frame, skips pools whose key names a hook, credits settle and settleFor with the returned paid amount to the sender or recipient, and debits take by its input amount. netcheck.json reports 12,000 transactions, 0 errors, 13,646 completed unlocks, 13,635 checked, 13,635 net zero, 0 not zero and 48,268 operations, which matches the claim (11 hooked unlocks skipped). The method is sound against an over-credit in settle: unlock completes only when NonzeroDeltaCount is zero (src/PoolManager.sol:112), so an internal credit larger than the returned paid would have to be spent by a take with a larger input, and that would leave a nonzero sum. On-chain eth_getCode of 0x188d586ddcf52439676ca21a244753fa19f9ea8e at https://rpc.monad.xyz returned 24,009 bytes, matching the size the leads use. The check is a sample of recent blocks and does not reach burn or hooked delta paths, which the unit records as an open lead."
+    }
+  ],
+  "leads": []
+}

@@ -1,0 +1,22 @@
+{
+  "unit": "theme-keccak-cache",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Reread of the fixed-cache 0.1.10 get and insert paths that every cache user in this list runs: key equality, lock protocol, epochs, and what a reader sees while a writer is inserting.",
+      "agrees": true,
+      "note": "Read fixed-cache-0.1.10/src/lib.rs from https://static.crates.io/crates/fixed-cache/fixed-cache-0.1.10.crate. get_inner returns a value only after try_lock(Some(tag)) succeeds (an exact Relaxed compare of the state with the tag, then a compare_exchange to tag | LOCKED_BIT with Acquire) and key.equivalent(ck) holds. insert_inner takes the lock with expected None, which fails on a locked bucket, writes key and value together and releases with a Release store of the new tag. calc masks the low index bits off the tag, so LOCKED_BIT (bit 0) is never part of a tag. Cache::new allocates with alloc_zeroed, so a fresh bucket has tag 0 and a Key of length 0. A nonempty input whose 64 bit hash has all tag bits zero would lock that fresh bucket, compare against the empty slice and miss. In alloy-primitives 1.7.3 keccak_cache.rs, MAX_INPUT_LEN is 128 - 32 - 1 - 8 = 87 (lines 16-17), compute bypasses the cache for empty and longer inputs (lines 45-47), EPOCHS is false (line 27), the stored key copies input.len() bytes with that length (lines 50-56) and Key::get returns a slice of exactly len bytes (lines 148-152), so equality compares length and every byte. The stored value is imp(input) for that same input. I found no path that returns a hash for another input. My own eth_call batch against the Ethereum (publicnode, reth) and Base endpoints, with a 64 byte CurrencyDelta-shaped input (src/libraries/CurrencyDelta.sol:12-14), its 63 and 65 byte neighbours, repeats, and random 87 and 88 byte inputs, matched the Python keccak in every case (7 of 7 on each)."
+    },
+    {
+      "check": "Bor v2.11.1, which the Polygon publicnode endpoint reports, adds its own cache of 64 byte KECCAK256 results. Can it return a hash for another input.",
+      "agrees": true,
+      "note": "Read https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/vm/instructions.go. opKeccak256 takes the cache path only when len(data) == 64 and evm.Config.Keccak256Cache is set, copies all 64 bytes into a [64]byte key, returns the cached hash on a hit and otherwise hashes the data and stores the result under the same key. bounded_cache.go wraps a sync.Map keyed by the full array, writes with LoadOrStore so an existing entry is never replaced, and stops storing past the cap. keccak_cache.go sets the type to BoundedCache[[64]byte, common.Hash] with cap 65536. The value stored is the array evm.hasherBuf copied by value, so later writes to the buffer do not change the entry. Speculative BlockSTM runs can only add correct pairs. The 64 byte inputs of src/ (CurrencyDelta._computeSlot at src/libraries/CurrencyDelta.sol:12-14) therefore get their true hash. I did not reread blockchain.go for the per-block lifetime, which does not change the correctness of any entry."
+    },
+    {
+      "check": "Does the KECCAK256 opcode go through the cache in each interpreter these nodes run, and does the hashing of storage keys for the state trie go through it as well.",
+      "agrees": true,
+      "note": "Read revm-interpreter-43.0.2/src/instructions/system.rs lines 18-40 from https://static.crates.io/crates/revm-interpreter/revm-interpreter-43.0.2.crate: length 0 gives KECCAK_EMPTY, otherwise resize_memory then primitives::keccak256 over memory.slice_len(from, len), which is offset..offset+len (shared_memory.rs line 300-301). revm-primitives-43.0.0/src/lib.rs re-exports alloy_primitives::keccak256, and alloy-primitives 1.7.3 utils/mod.rs lines 151-156 route it through keccak_cache::compute when keccak-cache-global is set. So the opcode result the PoolManager uses for delta slots, mapping slots and position keys (src/libraries/Position.sol:55-60, 58 bytes, inside the 87 byte cache limit) passes through the cache, and the cache returns correct hashes per the first spot check. I did not reread evm2 or the reth trie files."
+    }
+  ],
+  "leads": []
+}

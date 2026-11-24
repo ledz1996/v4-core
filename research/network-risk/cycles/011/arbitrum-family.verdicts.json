@@ -1,0 +1,65 @@
+{
+ "unit": "arbitrum-family",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "The v3.12.4 Dockerfile line 73 downloads go1.25.9 and line 206 runs download-machine.sh consensus-v61 0xc10cd7ec6acaf1c441a3f6bd0900ad20f15855ba775a96f1939118cbc629dc97. The consensus-v61 Dockerfile line 71 also downloads go1.25.9, and the consensus-v61 go.mod pins holiman/uint256 v1.3.2. The v3.12.4 Makefile builds replay.wasm with GOOS=wasip1 GOARCH=wasm go build ./cmd/replay/... (lines 476-480). I ran eth_call wasmModuleRoot() (selector 0x8ee1a126) on 0x4DCeB440657f21083db8aDd07665f8ddBe1DCfc0 and 0x23a19d23e89166adedbdcb432518ab01e4272d94 at ethereum-rpc.publicnode.com and on 0x508C173dFe5F737B3493195Bf785d71fA76fD217 at rpc.hyperliquid.xyz/evm; all three return 0xc10cd7ec...dc97. web3_clientVersion returns nitro/v3.13.0-rc.9+b72783f linux-arm64 go1.27.3 on arb1.arbitrum.io, the same release on linux-amd64 go1.27.3 on Robinhood Chain, and nitro/vlocal+unknown-unknown linux-amd64 go1.25.12 on Elysium. In go1.25.9 src/cmd/compile/internal/ssagen/intrinsics.go lines 1222-1252, math/bits Mul64, Add64 and Sub64 are intrinsified only for AMD64, ARM64, PPC64, S390X, MIPS64, RISCV64 and Loong64, and Div64 only for AMD64, so the wasm build uses the generic Go code for all of them. I reproduced one assertion end to end: eth_getLogs for AssertionConfirmed (topic 0xfc42829b...) on the Arbitrum One rollup at Ethereum block 26,485,045 gives blockHash 0x254f7829...c9ce and sendRoot 0x44e5cf6a...c7dc, and eth_getBlockByHash on arb1.arbitrum.io returns L2 block 525,199,572 with the same sendRoot. The same check on HyperEVM block 52,119,310 against the Elysium node returns L2 block 9,884,174 with sendRoot 0x5ebd6805...0730, as stated.",
+   "codeCheck": "src/libraries/FullMath.sol:24 and 48 use mulmod, lines 35, 62, 67 and 73 use div; src/libraries/TickMath.sol:104 uses div(not(0), price) under sgt(tick, 0); src/libraries/UnsafeMath.sol:14 uses div and mod. These are the instructions whose results would differ if the wasm and native uint256 builds disagreed. No line in src/ reads anything that distinguishes the replay from the native node, so the code computes the same thing on both unless the client differs, which the finding says and no test shows.",
+   "corrections": "The statement that the assertion comparison covers every PoolManager transaction as an independent check holds only for Arbitrum One, whose rollup returns validatorWhitelistDisabled() = 1. The Robinhood Chain rollup returns validatorWhitelistDisabled() = 0 with two whitelisted validators (0xa0a1d8cd6f867a583a39232a477ff231afd8ec4c, 0x992d8d50548fcccaf11147a9a692c496011c8aa0), and the Elysium rollup returns 0 with one whitelisted validator 0x8e87f7c65750c25c6708de33823124cf457676b2, an EOA that sent the confirming transaction 0x249e9127...4269 itself. On those two chains the match shows that the operator's own validators agreed with the operator's node, not that an independent replay of consensus-v61 accepted it. A minor point: arm64 also has no Div64 intrinsic in go1.25.9, so the native arm64 path and the wasm path share the generic Div64 code. The actor value operator is acceptable: with no known codegen difference nobody can trigger a split, and if one existed the effect would be a stalled confirmation that operators resolve.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/Dockerfile",
+     "supports": "go1.25.9 at line 73 and consensus-v61 root 0xc10cd7ec... at line 206"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/consensus-v61/Dockerfile",
+     "supports": "go1.25.9 at line 71"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/consensus-v61/go.mod",
+     "supports": "holiman/uint256 v1.3.2 and go 1.25"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/Makefile",
+     "supports": "replay.wasm built with GOOS=wasip1 GOARCH=wasm"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/golang/go/go1.25.9/src/cmd/compile/internal/ssagen/intrinsics.go",
+     "supports": "no wasm intrinsic for math/bits Mul64, Add64, Sub64, Div64 (lines 1222-1252)"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call wasmModuleRoot() and validatorWhitelistDisabled()/getValidators() on both Ethereum rollups, eth_getLogs AssertionConfirmed at block 26,485,045, queried 2026-11-24"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm",
+     "supports": "Elysium rollup wasmModuleRoot, whitelist with single validator 0x8e87f7c6...76b2 that sent the confirming transaction, queried 2026-11-24"
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc",
+     "supports": "web3_clientVersion and eth_getBlockByHash for L2 block 525,199,572"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Does Elysium's unnamed local build compute the state that the official replay accepts?",
+   "agrees": false,
+   "note": "The block hash match is real (I reproduced the assertion at HyperEVM block 52,119,310 against L2 block 9,884,174), but it does not show that the official replay accepted the state. getValidators() on rollup 0x508C173dFe5F737B3493195Bf785d71fA76fD217 returns one address, 0x8e87f7c65750c25c6708de33823124cf457676b2, validatorWhitelistDisabled() returns 0, and that EOA sent the confirming transaction. With a whitelist of one, no other party can post a rival assertion or challenge, so the confirmed hash is whatever that validator's node computed, which may be the same unnamed build. The question of whether vlocal+unknown go1.25.12 computes the specified results therefore rests only on the direct opcode battery and PoolManager scripts run against the endpoint, not on any independent replay. Robinhood Chain is in the same position with two whitelisted validators."
+  },
+  {
+   "check": "Does the state that Arbitrum One confirms on Ethereum, computed by the consensus-v61 WebAssembly replay, equal the state of the native go1.27.3 public node over a recent range with PoolManager activity?",
+   "agrees": true,
+   "note": "I reproduced the last assertion of the range (Ethereum block 26,485,045, L2 block 525,199,572, same block hash and sendRoot) and the rollup pins 0xc10cd7ec...dc97. validatorWhitelistDisabled() returns 1, so anyone running the official machine could have challenged a wrong assertion during the window. The match covers the inputs mined in the range only, as the research lead says."
+  },
+  {
+   "check": "Is the consensus path exposed to Go issue 81863, the dead store miscompile of go1.26.0 to go1.26.10 and go1.27.0 to go1.27.3?",
+   "agrees": true,
+   "note": "Both the v3.12.4 Dockerfile (line 73) and the consensus-v61 Dockerfile (line 71) download go1.25.9, and the consensus-v61 go.mod says go 1.25, so the WAVM machine is built outside the affected ranges as stated. I could not fetch the issue itself (github.com and go.dev/issue/81863 returned 403 to this session), so the affected version ranges rest on cycle 9's reading. The native nodes on Arbitrum One and Robinhood Chain report go1.27.3, inside the affected range, which F-117 records."
+  }
+ ],
+ "leads": []
+}
