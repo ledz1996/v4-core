@@ -3004,47 +3004,27 @@
     "A9"
    ],
    "effect": "degrade",
-   "difference": "MegaETH skips every candidate transaction of a block once the block has reached 1,000 new state entries, executes transactions as they arrive and commits to their order every 10 ms. Ethereum has no per block cap on new state and orders by fee.",
-   "mechanism": "1. Unchanged from cycle 4 and confirmed there: pre_execution_check rejects every candidate once the block's state growth counter has reached 1,000, the transaction that reaches the limit is included, and one transaction may create 1,000 entries for 22,559,525 gas, about 0.0000226 ETH. 2. New: the order inside a block is the order of mini-blocks. In a capture of 21,400 consecutive mini-blocks, 213 EVM blocks hold 99 or 100 mini-blocks each at a median spacing of 10.06 ms, and each mini-block header is signed by the sequencer, so a transaction cannot be placed ahead of one that was already streamed. Inside a mini-block the order does not follow the fee either: 44 of 324 neighbouring pairs from different senders have the later one paying more. A user cannot buy a place ahead of a filling transaction. 3. Still not confirmed: what the pool does with transactions that were skipped. The executor comment says a rejected transaction is typically put back in the pool, the specification says it may be reconsidered in a later block, and neither states its place. The public gateway accepts a subscription to pending transactions and delivers none, so arrival times cannot be compared with inclusion order from public data, and no block with a full state budget was found to observe. If skipped transactions stay ahead of later arrivals, N filling transactions queued from several accounts close N consecutive one second blocks for everything that arrived after them, at about 0.0000226 ETH per second, 1.95 ETH per day. The documentation allows 500 pending transactions per account. 4. Correction to step 6 of the cycle 4 text: the L1 route does not offer 20,000,000 gas to one transaction. The portal rejects a deposit above 1,000,000 gas, and resourceConfig allows 20,000,000 gas of deposits per L1 block in total. A removal through the PositionManager uses 183,000 to 314,000 gas and fits. The deposits of one L1 block still cannot fill the state budget before the last of them runs: a deposit from an empty sender counts as one entry even when it fails for lack of intrinsic gas, the portal's minimum gas limit is 21,000, and 20,000,000 divided by 21,000 is 952. 5. The L1 route is closed for a position whose fee growth slots sit in a SALT bucket that someone has grown, as the first finding of this file describes. For such a position the delay cannot be bypassed.",
-   "impact": "No funds are lost. Every user of the chain, liquidity providers included, waits as long as the sender keeps a queue and pays for it. A user can leave through an L1 deposit of at most 1,000,000 gas, which costs L1 gas and lands within minutes, unless the position was prepared as in the first finding.",
-   "preconditions": "The sender funds several accounts and pays about 0.0000226 ETH per second of delay. The pool keeps skipped transactions ahead of later arrivals, which is the unconfirmed link. The sequencer does not filter the sender.",
-   "mitigations": "Integrators who must exit under load can send the exit as an L1 deposit with a gas limit of at most 1,000,000. Providers can keep their fee growth slots nonzero as described in the first finding. The operator can filter or reorder pool entries with large state growth.",
+   "difference": "MegaETH skips every candidate transaction of a block once the block has reached 1,000 new state entries, and orders by arrival inside 10 ms mini-blocks. Ethereum has no per block cap on new state and orders by fee.",
+   "mechanism": "Unchanged from cycle 4 and 7: one transaction that creates 1,000 new state entries costs about 22.6 million gas, about 0.0000226 ETH at the floor base fee, and after it BlockLimiter::pre_execution_check skips every later candidate of that block, a modifyLiquidity or take included. What this cycle adds is that the deciding link is still open at the newest release: the block executor of v1.7.4 returns a rejected transaction to its caller with the comment that it is typically put back in the pool, the specification says only that it may be reconsidered in a later block, and the code that orders the pool is the closed sequencer. If skipped transactions keep their place ahead of later arrivals, N filling transactions sent from several accounts close N consecutive one second blocks for every transaction that arrived after them. If they go to the back of the pool, the delay is one block per filling transaction that arrives before the victim's.",
+   "impact": "No funds move. Liquidity removals, swaps and claims are delayed for as long as the sender pays, at about 1.95 ETH per day for one filling transaction per block.",
+   "preconditions": "The base fee stays near its floor, the sequencer keeps skipped transactions ahead of later arrivals (not confirmed), and the sequencer does not filter the sender.",
+   "mitigations": "Exits under load can go through an L1 deposit of at most 1,000,000 gas. The operator can price state growth in minimum-size buckets, raise the block limit above the transaction limit, or filter pool entries with large state growth.",
    "coreRefs": [
     "src/PoolManager.sol:145-184",
     "src/PoolManager.sol:291-297"
    ],
    "sources": [
     {
-     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/block/limit.rs",
-     "supports": "pre_execution_check rejects every candidate once block_state_growth_used has reached the limit (lines 880 to 890), and the file is byte identical on the main branch"
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/block/executor.rs",
+     "supports": "lines 586-596: a rejected transaction returns Err before touching executor state and the caller decides what to do with it, typically put it back in the pool; byte identical to v1.7.3"
     },
     {
-     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/block/executor.rs",
-     "supports": "commit_tx_result repeats the check at commit time, and its comment says a rejected transaction is typically dropped from the block and put back in the pool"
-    },
-    {
-     "url": "wss://mainnet.megaeth.com/ws eth_subscribe newPendingTransactions and miniBlocks, 214 seconds from EVM block 32,658,901 on 2026-11-23",
-     "supports": "21,400 consecutive mini-blocks, 99 or 100 per EVM block, fee order absent inside and across mini-blocks, no pending transaction notification"
-    },
-    {
-     "url": "https://docs.megaeth.com/mini-block.md",
-     "supports": "The sequencer executes transactions continuously, seals a mini-block about every 10 ms and signs every mini-block header"
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/block/limit.rs",
+     "supports": "byte identical to v1.7.3, so the skip rule recorded in cycle 4 is unchanged"
     },
     {
      "url": "https://docs.megaeth.com/spec/megaevm/resource-limits.md",
-     "supports": "The first transaction that reaches a block level limit is included, later candidates are skipped and may be reconsidered in a later block"
-    },
-    {
-     "url": "rpc https://ethereum-rpc.publicnode.com eth_call depositTransaction, resourceConfig, minimumGasLimit, version, eth_getStorageAt and eth_getCode at blocks 26,479,458 to 26,479,461",
-     "supports": "Deposit gas limit capped at 1,000,000 per transaction, 20,000,000 per L1 block, minimum gas limit 21,000"
-    },
-    {
-     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/evm/execution.rs",
-     "supports": "A deposit from an empty sender records one new state entry before the final intrinsic gas test (lines 883 to 941)"
-    },
-    {
-     "url": "https://docs.megaeth.com/developer-docs/faq.md",
-     "supports": "500 pending transactions per account and no way to check the contents of the pool"
+     "supports": "lines 108-131: the transaction that reaches a block limit is included, later candidates are skipped and may be reconsidered in a later block, with no ordering rule"
     }
    ],
    "evidence": "inferred",
@@ -3053,46 +3033,38 @@
    "proposedSeverity": "low",
    "status": "plausible",
    "verification": {
-    "cycle": 7,
-    "factCheck": "Confirmed by my own reading. block/limit.rs at tag v1.7.3 lines 880 to 890 return StateGrowthLimit for every candidate once block_state_growth_used has reached the block limit, and constants.rs lines 206 and 211 set the transaction and block limits to 1,000. The resource limits page says the first transaction that reaches a block level limit is included, later candidates are skipped, and a skipped transaction may be reconsidered in a later block. block/executor.rs line 593 carries the comment that a rejected transaction is typically dropped from the block and put back in the pool. Ordering. In the 60 blocks 32,662,355 to 32,662,414 the header field miniBlockCount is 100 in 51 blocks and 99 in 9. After removing deposits and the transactions of 0xa887dcb9d5f39ef79272801d05abdf707cfbbd1d, 194 of 845 neighbouring pairs from different senders have the later one paying the higher priority fee, and 55 of the 60 blocks hold such a pair. Blocks are not sorted by fee. The mini-block page says the sequencer executes continuously, seals a mini-block about every 10 ms and signs every header. I did not repeat the WebSocket capture, so the order inside one mini-block and the silence of the pending subscription rest on the researcher's capture. L1 route. The portal accepts 1,000,000 gas and rejects 1,000,001 (my eth_call at L1 block 26,479,791). resourceConfig on SystemConfig 0x1ed92e1bc9a2735216540eddd0191144681cb77e has maxResourceLimit 20,000,000, and minimumGasLimit(0) is 21,000, so at most 952 deposits fit in one L1 block. evm/execution.rs lines 883 to 918 record one state growth entry for a deposit whose sender account is empty, before the gas test at lines 921 to 941. I did not trace whether the block counter keeps that entry when the deposit then fails. The FAQ gives 500 pending transactions per account and says the pool cannot be inspected. Unconfirmed link, unchanged since cycle 4: what the sequencer's pool does with a skipped transaction and with later arrivals. No source states it, the payload builder is closed, and no block with a full state budget was observed. The delay by the length of a queue is an inference.",
-    "codeCheck": "Every exit is a transaction that reaches unlock and then modifyLiquidity, take or burn (src/PoolManager.sol:104-114, 144-184, 291-297, 332-336). No function pays out without a transaction on the chain, and nothing in src/ reads a block field, so a delay changes no accounting and no position. The finding needs nothing else from the code. Step 5 depends on the first finding of the file, whose code path I read: Position.update writes both fee growth slots on every update (src/libraries/Position.sol:99-101).",
-    "corrections": "The actor value unprivileged is right for the confirmed part: any account can send one transaction that closes the rest of its one second block, as F-042 records. The queue that the title describes stays unconfirmed, and the title now states the condition. Severity low stands; medium would fit if the pool keeps skipped transactions ahead of later arrivals. 1. Step 4 uses the portal minimum of 21,000 gas. That figure is for a deposit without calldata. The portal charges 440 gas per calldata byte on top (minimumGasLimit(100) is 65,000), which does not change the bound of 952. 2. Step 5 combines this finding with the first one. For a position whose slot was prepared, the delay lasts as long as the sender pays about 1.95 ETH per day and the ordering link holds, against the roughly 17,000 dollars that the first finding gives for the whole PoolManager. That is a paid delay and I do not count it as a confirmed freeze. 3. The mini-block facts in step 2 are confirmed at block level only by my sample; the pair count inside mini-blocks is the researcher's.",
+    "cycle": 13,
+    "factCheck": "Fetched mega-evm v1.7.4 and v1.7.3 crates/mega-evm/src/block/limit.rs and block/executor.rs; both pairs are byte identical (cmp). limit.rs lines 880-890: pre_execution_check returns Err for every candidate once block_state_growth_used is at or above block_state_growth_limit, whatever that candidate would grow. limit.rs lines 387-399 set block_state_growth_limit to rex::BLOCK_STATE_GROWTH_LIMIT for Rex through Rex6, and constants.rs at v1.7.4 lines 206 and 211 put both the transaction and the block state growth limit at 1000, so one transaction can fill the block budget. limit.rs lines 819-845 exempt deposits only from the DA size checks, so deposits face the state growth check too; they sit at the start of a block, before any filler. executor.rs lines 585-596 say a rejected transaction leaves executor state untouched and the caller decides what to do, typically put it back in the pool. docs.megaeth.com/spec/megaevm/resource-limits.md lines 108-131 say later candidates are skipped and may be reconsidered in a later block, and give no rule for their place in the queue. resource-accounting.md lines 161-187 count state growth per new account and per new storage slot. constants.rs rex lines: SSTORE_SET_STORAGE_GAS_BASE 20,000 times (bucket_capacity / MIN_BUCKET_SIZE - 1), which is zero in a minimum-size bucket, so the cost of about 22.6 million gas for 1,000 new slots is consistent. On-chain, eth_getBlockByNumber latest on https://mainnet.megaeth.com/rpc on 2026-11-24 returned block 32,752,085 with baseFeePerGas 0xf4240 (1,000,000 wei) and gasLimit 10,000,000,000. web3_clientVersion returned mega-reth/v2.2.3-72527bc. 22.6 million gas at 1,000,000 wei is 0.0000226 ETH, and one per second for a day is 1.95 ETH, as stated. The link that decides whether N fillers delay later arrivals by N blocks is how the closed sequencer requeues skipped transactions. No public source states it, so it is still unconfirmed.",
+    "codeCheck": "The PoolManager code takes no part in the mechanism. src/PoolManager.sol:103-113 (unlock), 143-180 (modifyLiquidity) and 290-296 (take) have no time or block dependence. A delayed transaction runs later with the same checks: NonzeroDeltaCount at line 111, the toInt128 cast at line 293. No balance or delta can be moved by the delay. The effect is liveness only, and it reaches every contract on the chain, not this PoolManager in particular.",
+    "corrections": "The coreRefs mark where victims' calls enter. They are not code that computes anything differently; the hazard sits entirely in the sequencer's admission rule. The unconfirmed queue rule matters only for the amplified version, where N fillers close N blocks. The base effect is confirmed by source: one filler per block closes the rest of that block to every later candidate.",
     "sources": [
      {
-      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/block/limit.rs",
-      "supports": "pre_execution_check rejects every candidate once the block state growth counter has reached the limit (lines 880 to 890)"
+      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/block/limit.rs",
+      "supports": "lines 387-399 pick the Rex block state growth limit; lines 880-890 skip every candidate once it is reached; lines 819-845 exempt deposits only from DA checks"
      },
      {
-      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/block/executor.rs",
-      "supports": "Comment at line 593: a rejected transaction is typically dropped from the block and put back in the pool"
+      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/constants.rs",
+      "supports": "TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT are both 1000 for Rex; the SSTORE set storage gas scales with bucket capacity and is zero at minimum size"
      },
      {
-      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/evm/execution.rs",
-      "supports": "A deposit from an empty sender records one state growth entry before the final gas test (lines 883 to 941)"
+      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/block/executor.rs",
+      "supports": "lines 585-596: the caller decides what happens to a rejected transaction, typically it goes back in the pool; byte identical to v1.7.3"
      },
      {
       "url": "https://docs.megaeth.com/spec/megaevm/resource-limits.md",
-      "supports": "First transaction to reach a block level limit is included, later candidates are skipped and may be reconsidered in a later block"
+      "supports": "lines 108-131: skipped transactions may be reconsidered in a later block, with no ordering rule"
      },
      {
-      "url": "https://docs.megaeth.com/mini-block.md",
-      "supports": "Continuous execution, a mini-block about every 10 ms, signed headers"
+      "url": "https://docs.megaeth.com/spec/megaevm/resource-accounting.md",
+      "supports": "lines 161-187: state growth counts new accounts and new storage slots"
      },
      {
-      "url": "https://docs.megaeth.com/developer-docs/faq.md",
-      "supports": "500 pending transactions per account and no way to inspect the pool"
-     },
-     {
-      "url": "rpc https://mainnet.megaeth.com/rpc eth_getBlockByNumber with transactions for blocks 32,662,355 to 32,662,414 on 2026-11-23",
-      "supports": "miniBlockCount 99 or 100, 194 of 845 neighbouring pairs with the higher priority fee second, base fee 1,000,000 wei"
-     },
-     {
-      "url": "rpc https://ethereum-rpc.publicnode.com eth_call depositTransaction, version, systemConfig, resourceConfig, minimumGasLimit and eth_getStorageAt at block 26,479,791 on 2026-11-23",
-      "supports": "Deposit gas capped at 1,000,000, 20,000,000 per L1 block, minimumGasLimit 21,000 plus 440 per calldata byte"
+      "url": "https://mainnet.megaeth.com/rpc",
+      "supports": "eth_getBlockByNumber latest 2026-11-24: block 32,752,085, baseFeePerGas 1,000,000 wei, gasLimit 10,000,000,000; web3_clientVersion mega-reth/v2.2.3-72527bc"
      }
     ]
    },
-   "lastVerifiedCycle": 7,
+   "lastVerifiedCycle": 13,
    "extends": "F-042",
    "id": "F-062",
    "firstCycle": 4,
@@ -3105,6 +3077,12 @@
     },
     {
      "cycle": 7,
+     "unit": "high-throughput",
+     "status": "plausible",
+     "severity": "low"
+    },
+    {
+     "cycle": 13,
      "unit": "high-throughput",
      "status": "plausible",
      "severity": "low"
@@ -5550,6 +5528,186 @@
     {
      "cycle": 7,
      "unit": "core-code-audit-walk-a",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
+   "title": "Arc wraps every value-carrying CALL in a frame hook that fails transfers to address(0), to blocklisted accounts and to accounts destroyed earlier in the transaction, which changes the success flag of a native take",
+   "chainIds": [
+    5042
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A3",
+    "A10"
+   ],
+   "effect": "degrade",
+   "difference": "Ethereum executes CALL with value to any address and only fails it for insufficient balance or depth. arc-node v0.8.6 intercepts frame initialisation (ArcEvm::frame_init, crates/evm/src/evm.rs lines 669-711) and, for every CALL or CREATE that carries a nonzero value, runs before_frame_init (lines 607-629) and check_blocklist_and_create_log (lines 516-605). That function returns a revert with an Error(string) payload when the sender or the recipient is address(0) (\"Zero address not allowed\"), when either is set in the NativeCoinControl blocklist (\"Blocked address\"), or when the recipient was selfdestructed earlier in the transaction. On success it adds an EIP-7708 Transfer log. The blocklist reads are journal SLOADs that are not charged (meter_sloads = false at line 525), so a rejected frame returns all of its gas. The only replaced instruction handler is SELFDESTRUCT (insert_arc_selfdestruct_instruction, lines 114-134). Calls to 0x1800000000000000000000000000000000000003 (CallFrom) are diverted to a subcall precompile that admits only two callers (lines 1805-1820) and charges 100 gas to anyone else (lines 137-151).",
+   "mechanism": "1. take(address(0), to, amount) with amount > 0 makes the PoolManager run call(gas(), to, amount, 0, 0, 0, 0) at src/types/Currency.sol:48. 2. On Arc the frame hook sees a value transfer from the PoolManager to `to`. With to = address(0) it returns Revert with 100 bytes of Error(string). eth_call from the PoolManager address measured success 0 and the reason string on Arc, and success 1 on the 13 other networks tested, Ethereum included (raw/zero-recipient.json). With amount = 0 the hook is skipped and the call succeeds as on Ethereum. 3. The PoolManager sees success = false and reverts through CustomRevert.bubbleUpAndRevertWith with NativeTransferFailed (src/types/Currency.sol:51-52), which also undoes the debit booked at src/PoolManager.sol:294. 4. The recipient is the `to` argument that the caller of take passes (src/PoolManager.sol:291-297). In a swap or removal on an honest pool the PoolManager makes outbound calls only to the pool's two currencies and its hook, which are fixed by the PoolKey that the pool id hashes (src/PoolManager.sol:132, 151), to the unlock caller (src/PoolManager.sol:110) and to the take recipient. None of these is chosen by a third party, so an attacker cannot place address(0), a selfdestructed account or a blocklisted account into a victim's take. Blocklisting is done by the USDC issuer (F-108).",
+   "impact": "No funds of other users are affected. A caller that asks for a native payout to address(0) gets a revert on Arc where Ethereum would burn the value, so the caller keeps its credit. A router that encodes address(0) as a burn sink would revert on Arc. The selfdestructed-target rule can only be met by a contract that the caller itself destroyed in its own transaction.",
+   "preconditions": "The caller of take chooses the recipient. No role is needed, and no third party can impose the recipient on someone else's transaction.",
+   "mitigations": "None needed in core. Integrators on Arc should not use address(0) as a native burn recipient.",
+   "coreRefs": [
+    "src/types/Currency.sol:44-52",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:110",
+    "src/PoolManager.sol:132",
+    "src/libraries/Hooks.sol:134"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/evm/src/evm.rs",
+     "supports": "lines 114-134 replace only SELFDESTRUCT; lines 516-605 reject value transfers involving address(0), blocklisted accounts or selfdestructed targets and add an EIP-7708 log; line 525 leaves the blocklist SLOADs unmetered; lines 669-711 route frame initialisation through the hook and the subcall registry; lines 1805-1820 register CallFrom at Zero7 with two allowed callers"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/evm/src/opcode.rs",
+     "supports": "SELFDESTRUCT variants for the three hardfork levels are the only instruction functions in the file (lines 64-200)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/precompiles/src/helpers.rs",
+     "supports": "line 57 ERR_ZERO_ADDRESS text, line 82 a 200 gas penalty for early reverts, lines 540-555 check_staticcall spends all gas"
+    },
+    {
+     "url": "eth_call https://rpc.mainnet.arc.io from 0x...0f0f0f to the Arc PoolManager 0x8366a39CC670B4001A1121B8F6A443A643e40951 with driver code override: CALL value 1 to address(0)",
+     "supports": "success 0, 34,329 gas, 100 byte Error(string) with a 24 character reason; value 0 succeeds; the same call succeeds on Ethereum, Tempo, MegaETH, Monad, HyperEVM, Arbitrum One, Base, OP Mainnet, BNB Smart Chain, Polygon, Avalanche, Celo and X Layer (research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/zero-recipient.json)"
+    },
+    {
+     "url": "src/types/Currency.sol:48",
+     "supports": "native payout forwards gas() and value to the caller-supplied recipient"
+    },
+    {
+     "url": "src/PoolManager.sol:291-297",
+     "supports": "take pays the recipient named by its caller after debiting the caller"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 13,
+    "factCheck": "Fetched arc-node v0.8.6 crates/evm/src/evm.rs (9,571 lines). Lines 114-134 replace only SELFDESTRUCT, in three hardfork variants. Lines 516-605 (check_blocklist_and_create_log) return a revert for a value transfer when from or to is address(0) (ERR_ZERO_ADDRESS, no hardfork gate), when either is blocklisted, or when the target is selfdestructed in the current transaction; line 525 sets meter_sloads = false, and metered_revert (lines 290-302) then spends 0 gas, so a rejected frame returns all of its gas. Lines 607-629 run the check only for nonzero amounts, and extract_call_transfer_params (lines 267-278) yields a transfer only for CallScheme::Call. Lines 669-711 route frame_init through the subcall registry and checked_frame_init. Lines 1805-1820 register CallFrom under Zero7 with two allowed callers, and init_subcall_revert (lines 137-151) charges 100 gas. On-chain eth_call I ran with the PoolManager code at 0x8366a39CC670B4001A1121B8F6A443A643e40951 overridden by a driver that does CALL(gas, to, 1 wei) and returns the success flag and returndatasize: on https://rpc.mainnet.arc.io to = address(0) gave success 0 and returndatasize 0x64 (100 bytes); to = 0x...dEaD gave success 1. On https://ethereum-rpc.publicnode.com at 0x000000000004444c5dc75cB358380D2e3dE08A90 both gave success 1 with no return data. The chain fact holds.",
+    "codeCheck": "src/types/Currency.sol:44-52: native transfer runs call(gas(), to, amount, 0, 0, 0, 0) and on failure reverts through CustomRevert.bubbleUpAndRevertWith with NativeTransferFailed, which undoes the debit booked by _accountDelta at src/PoolManager.sol:294. take (src/PoolManager.sol:291-297) pays the `to` its own caller supplies. The only other outbound calls in src are the ERC20 transfer at src/types/Currency.sol:73 and the hook call at src/libraries/Hooks.sol:134, both with value 0, so the Arc frame hook never fires for them. The selfdestructed-target rule is per transaction, so a third party cannot impose it on a victim's recipient, and the blocklist is written only by the USDC issuer. No guard was missed and no path to other users' funds exists: the revert only protects the caller's own credit.",
+    "corrections": "",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/evm/src/evm.rs",
+      "supports": "lines 114-134, 137-151, 267-302, 516-629, 669-711, 1805-1820 as described in factCheck"
+     },
+     {
+      "url": "eth_call https://rpc.mainnet.arc.io to 0x8366a39CC670B4001A1121B8F6A443A643e40951 with code override 0x6000600060006000600173<to>5af160005260403d6020526000f3, balance 1 ether, gas 1,000,000",
+      "supports": "to = address(0): success 0, returndatasize 100; to = 0x...dEaD: success 1"
+     },
+     {
+      "url": "eth_call https://ethereum-rpc.publicnode.com to 0x000000000004444c5dc75cB358380D2e3dE08A90 with the same override",
+      "supports": "success 1 for both address(0) and 0x...dEaD"
+     },
+     {
+      "url": "src/types/Currency.sol:44-52",
+      "supports": "native payout to caller-chosen recipient, revert on failure"
+     },
+     {
+      "url": "src/PoolManager.sol:291-297",
+      "supports": "take debits the caller then pays its chosen recipient"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 13,
+   "extends": "F-108",
+   "id": "F-125",
+   "firstCycle": 13,
+   "history": [
+    {
+     "cycle": 13,
+     "unit": "theme-callee-gas-and-overrides",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
+   "title": "On Base any account with a valid SP1 proof can challenge a TEE-only proposal or nullify a verifier for all games, and the range program computes the opcodes the PoolManager uses as the node does",
+   "chainIds": [
+    8453
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10",
+    "A14"
+   ],
+   "effect": "freeze",
+   "difference": "Base settles withdrawals on game type 621, AggregateVerifier 0.3.0 at 0xc08b8ffa...5a70, with PROOF_THRESHOLD 1, TEE_IMAGE_HASH 0x73181275...5cbd, ZK_RANGE_HASH 0x3d3713d3...5fdb and ZK_AGGREGATE_HASH 0x00d5a430...d45a (eth_call on Ethereum at block 26,487,041). L2BEAT ties both program hashes to base/base commit 6efa7566. The range program at that commit pins revm 42.0.1, revm-interpreter 42.0.0, ruint 1.18.0 and alloy-primitives 1.6.1 and is built for the SP1 riscv64im zkVM target, while the node and TEE workspace at the same commit pins ruint 1.19.0. The Base proof specification lets challengers call challenge() with a ZK proof for one intermediate root, and lets nullify() with contradicting proof material delete an accepted proof and disable that verifier for every later game. TEE proofs need an allowlisted proposer; the specification names no allowlist for ZK proofs or challenges.",
+   "mechanism": "If the SP1 range program computed an opcode differently from the node, an ordinary account could post a transaction that hits the input, build an SP1 proof of the program's root for that range, and call challenge() on the honest TEE-backed game or nullify() on its TEE proof. Nullification disables the TEE verifier for all games until Base reconfigures it, which delays every withdrawal, including bridged pool funds. With a proof threshold of 1 a ZK-only proposal of the program's root would also resolve alone. The check: the revm-interpreter 42.0.0 handlers (identical to 43.0.1 for every arithmetic, comparison and shift opcode) over ruint 1.18.0 were compiled with rustc 1.97.0 for riscv64 with the M extension and run in an RV64IM emulator written from the RISC-V specification. All 85,544 targeted and 96,876 battery vectors, EXP included, give the specified word, and 3,794 mulDiv and bit scan cases and 2,283 ticks match; planted faults in MULHU and in the shift mask are caught. No call into compiler-builtins appears in the arithmetic.",
+   "impact": "No divergence found, so no loss or freeze path. The finding records that on Base a divergence of the zkVM build would be usable by an unprivileged account, unlike Celo and X Layer where challengers are allowlisted.",
+   "preconditions": "A divergence between the SP1 range program and the Base node for some EVM input. None was found for the arithmetic, comparison and shift opcodes. The SP1 circuits themselves, the RISC-V toolchain Succinct ships and keccak 0.2.0 on the zkVM were not tested.",
+   "mitigations": "Keep the range program and the node on one revm and ruint version, and rerun the vector set through each new range program build before its hash is set.",
+   "coreRefs": [
+    "src/libraries/FullMath.sol:24-48",
+    "src/libraries/BitMath.sol:16-22",
+    "src/libraries/TickMath.sol:63-111",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "https://docs.base.org/specifications/base-protocol/proofs/proof-contracts.md",
+     "supports": "challenge() and nullify() semantics, global verifier nullification, TEE proposer allowlist, permissionless resolve()."
+    },
+    {
+     "url": "https://l2beat.com/scaling/projects/base",
+     "supports": "Program hashes map to base/base commit 6efa75662b57c578d897fea2449035636f6ad9ad; any party with a valid ZK proof can challenge (fetched with Exa via ethbeat.org mirror)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base/6efa75662b57c578d897fea2449035636f6ad9ad/crates/proof/zk/programs/succinct/Cargo.lock",
+     "supports": "Range program pins revm 42.0.1, revm-interpreter 42.0.0, ruint 1.18.0, alloy-primitives 1.6.1 with sha3 0.11.0."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base/6efa75662b57c578d897fea2449035636f6ad9ad/crates/proof/zk/programs/succinct/Cargo.toml",
+     "supports": "SP1 6.10.0, sp1-patches for tiny-keccak, sha2, sha3 0.10.8 and curves, riscv64im-succinct-zkvm-elf toolchain."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call at block 26,487,041: DGF 0x43edb88c gameImpls(621) = 0xc08b8ffa, PROOF_THRESHOLD 1, TEE and ZK verifiers not nullified, ASR 0x909f6cf4 respectedGameType 621 (research/network-risk/cycles/013/theme-proof-builds-2.work/base/aggverifier.json, celo/dgf.json, celo/access.json)."
+    },
+    {
+     "url": "file:research/network-risk/cycles/013/theme-proof-builds-2.work/base/base-rv64-vectors.json",
+     "supports": "0 mismatches on the RV64IM build; planted faults caught."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 13,
+    "factCheck": "eth_call on Ethereum (publicnode, latest): DisputeGameFactory 0x43edb88c gameImpls(621) = 0xc08b8ffaf04abb1d7013b74a0e57eccbd7fa5a70; AnchorStateRegistry 0x909f6cf4 respectedGameType() = 0x26d = 621; on 0xc08b8ffa PROOF_THRESHOLD() = 1, version() = 0.3.0, ZK_RANGE_HASH() = 0x3d3713d3...5fdb, TEE_IMAGE_HASH() = 0x73181275...5cbd, all as stated. The Base proof-contracts specification (fetched, HTTP 200) says challengers call challenge() or nullify() with proof material for an intermediate root (line 110), that verifier nullification is a global stop after which verification through that verifier reverts (lines 440-441), and names an allowlist only for TEE proposers in TEEProverRegistry (lines 510, 521); I found no allowlist for ZK challenges. The range program Cargo.lock at base/base 6efa7566 pins revm 42.0.1, revm-interpreter 42.0.0, ruint 1.18.0, alloy-primitives 1.6.1 (which depends on sha3, resolved to 0.11.0 with keccak 0.2.0), and lists the sp1-patches sha3 0.10.8 as patch.unused. The L2BEAT mapping of program hashes to commit 6efa7566 was not refetched by me.",
+    "codeCheck": "src/libraries/FullMath.sol:24-48 depends on MUL, MULMOD, SUB, LT and DIV; src/libraries/BitMath.sol:16-22 on SHR, LT, SHL, OR and BYTE; src/PoolManager.sol:291-297 (take) on the int128 cast and the transfer. A divergent result in the proof build would change pool state roots, which is the dependence the finding states. No divergence was found, so no code path leads to loss.",
+    "corrections": "The test ran a rustc 1.97 rebuild of the crates on an RV64IM emulator, not the published SP1 ELF under Succinct's toolchain and circuits; the finding says so in its preconditions. The actor unprivileged describes who could use a divergence if one existed; with none found the record is info.",
+    "sources": [
+     {
+      "url": "https://ethereum-rpc.publicnode.com",
+      "supports": "gameImpls(621), respectedGameType 621, PROOF_THRESHOLD 1, version 0.3.0, ZK_RANGE_HASH and TEE_IMAGE_HASH read by eth_call."
+     },
+     {
+      "url": "https://docs.base.org/specifications/base-protocol/proofs/proof-contracts.md",
+      "supports": "challenge() and nullify() semantics, global verifier nullification, TEE proposer allowlist only."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/base/base/6efa75662b57c578d897fea2449035636f6ad9ad/crates/proof/zk/programs/succinct/Cargo.lock",
+      "supports": "revm 42.0.1, revm-interpreter 42.0.0, ruint 1.18.0, alloy-primitives 1.6.1, sha3 0.11.0, keccak 0.2.0, sp1 sha3 0.10.8 patch unused."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 13,
+   "id": "F-127",
+   "firstCycle": 13,
+   "history": [
+    {
+     "cycle": 13,
+     "unit": "theme-proof-builds-2",
      "status": "confirmed",
      "severity": "info"
     }
@@ -12407,6 +12565,213 @@
     {
      "cycle": 12,
      "unit": "theme-proof-builds",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
+   "title": "Arc nodes from v0.8.0 to v0.8.4 could read stale storage of an account without code that a block deleted and created again, which cannot reach PoolManager storage",
+   "chainIds": [
+    5042
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A7",
+    "A10"
+   ],
+   "effect": "degrade",
+   "difference": "Arc v0.8.0 to v0.8.4 build on reth v2.2.0, whose execution cache handled an account without code that a block destroyed and created again by removing the account entry and keeping its cached storage words. A later block on that node read the old words. v0.8.5 moved to circlefin/arc-reth v2.2.0-arc.2 with the upstream fix (reth pull request 28148). The v0.8.4 release fixed a separate state root computation fault of the same base.",
+   "mechanism": "1. The cache code runs after each block. For an account marked destroyed it checks whether the account had code at the start of the block. With code it clears the whole cache, which is safe. Without code it removed only the account entry and continued, so storage words cached for that address before the block stayed in the cache. 2. Any account can reach the second branch. The v0.8.5 release note names the trigger: a block deletes an empty account under EIP-161 and a later transaction of the same block creates it again and writes storage. A contract destroyed in its own creation transaction and created again in the same block is marked destroyed in the same way. On a node with the fault, a later read of such a word returns the value from before the block, and that node computes a different result from nodes with the fix. 3. The PoolManager has had code since deployment, so a block that touched it in this way would take the first branch and clear the cache. Its slots are keyed by its own address (src/PoolManager.sol:279-288, 349-364 and the transient libraries such as src/libraries/CurrencyDelta.sol:21-39 index slots under the PoolManager address), so no stale word of another address is read as PoolManager state. 4. Tokens and hooks of pools that do not use attacker-made contracts also have code at the start of any such block. The only contracts whose reads could go stale are contracts created in that pattern, which are attacker-made by construction, and such a contract can return any value to the PoolManager anyway (src/libraries/Hooks.sol:131-160, src/types/Currency.sol:40-95).",
+   "impact": "No PoolManager funds move. On a lagging node, a block that uses the pattern makes that node disagree with the rest, which is a liveness and consistency matter for that node's operator and its RPC users. The official endpoint reports v0.8.6-rc1 and publicnode v0.8.5, both with the fix.",
+   "preconditions": "A validator or RPC node running arc-node v0.8.0 to v0.8.4. Which releases the validators run is not public.",
+   "mitigations": "Before deployment, confirm with Circle that every validator runs v0.8.5 or later. Integrations that read PoolManager state through RPC should use an endpoint whose arc_getVersion reports v0.8.5 or later.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364",
+    "src/libraries/CurrencyDelta.sol:21-39"
+   ],
+   "sources": [
+    {
+     "url": "https://patch-diff.githubusercontent.com/raw/paradigmxyz/reth/pull/28148.patch",
+     "supports": "the fix: a destroyed account without original code that has current info is no longer just removed from the cache"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.2.0/crates/engine/execution-cache/src/cached_state.rs",
+     "supports": "reth v2.2.0 removes the account and continues for a destroyed account without code (lines 861-882)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-reth/508cbdf7d6ba49b4ce735d678863897067fa381a/crates/engine/execution-cache/src/cached_state.rs",
+     "supports": "arc-reth 508cbdf, pinned by v0.8.5 and v0.8.6, carries the fixed code"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/CHANGELOG.md",
+     "supports": "v0.8.4 and v0.8.5 release notes naming both faults"
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "arc_getVersion returned v0.8.6-rc1 commit 37812c61 on 24 November 2026; arc-rpc.publicnode.com returned v0.8.5"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 13,
+    "factCheck": "reth v2.2.0 cached_state.rs lines 857-882, fetched this session, check was_destroyed(), clear the whole cache when original_info had code, and otherwise call account_cache.remove(addr) and continue, so the post-block storage of a re-created account is never inserted and any word cached before the block survives. The reth pull request 28148 patch, fetched this session, replaces that unconditional remove with a remove only when account.info is None, and its test shows a prewarmed zero word replaced by the written value 7. circlefin/arc-reth at 508cbdf7 has the fixed branch at lines 881-884. The arc-node v0.8.6 CHANGELOG names the v0.8.5 execution cache fix (arc-reth v2.2.0-arc.2 plus PR 28148) and the v0.8.4 state root fix (PR 28264). The v0.8.0 lock pins reth-evm from paradigmxyz/reth tag v2.2.0 (88505c7) and the v0.8.6 lock pins circlefin/arc-reth tag v2.2.0-arc.2 (508cbdf), both with revm 38.0.0, revm-interpreter 35.0.1 and ruint 1.20.0. arc_getVersion queried this session: rpc.mainnet.arc.io returned v0.8.6-rc1 commit 37812c61, arc-rpc.publicnode.com returned v0.8.5 commit 602eed3b with web3_clientVersion reth/v2.2.0-508cbdf, both with chainId 0x13b2.",
+    "codeCheck": "PoolManager balance reads in sync and _settle (src/PoolManager.sol:279-288, 349-364) go through currency.balanceOfSelf, which reads the token's own storage under the token address, and the delta slots in src/libraries/CurrencyDelta.sol:21-39 are transient slots under the PoolManager address. The PoolManager and the tokens of a pool without attacker-made contracts have code at the start of any block, so a destruction of any of them would take the had_code branch and clear the whole cache. The only addresses that reach the stale branch are codeless at block start and created in that block, which an ordinary victim pool does not use. No line of src/ computes a different result from this fault for a victim pool.",
+    "corrections": "The Arc v0.8.5 release note describes the trigger as an account that a block deletes under EIP-161 and then recreates in the same block; mechanism step 2 describes only the SELFDESTRUCT-in-creation route and its first step (funding the fresh address) would keep the account non-empty for EIP-161. Both routes mark the account destroyed in the bundle, so the conclusion is unchanged. The actor value operator is right: harm needs a node operator who runs v0.8.0 to v0.8.4, and the harm is that node's divergence, with no PoolManager funds at stake.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.2.0/crates/engine/execution-cache/src/cached_state.rs",
+      "supports": "lines 857-882: codeless destroyed account is removed from the account cache and skipped, cached storage stays"
+     },
+     {
+      "url": "https://patch-diff.githubusercontent.com/raw/paradigmxyz/reth/pull/28148.patch",
+      "supports": "fix keeps post-block storage and info of a re-created account"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/circlefin/arc-reth/508cbdf7d6ba49b4ce735d678863897067fa381a/crates/engine/execution-cache/src/cached_state.rs",
+      "supports": "fixed branch at lines 881-884"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/CHANGELOG.md",
+      "supports": "v0.8.5 execution cache fix (EIP-161 deletion and re-creation) and v0.8.4 state root fix"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/Cargo.lock",
+      "supports": "reth-evm from circlefin/arc-reth v2.2.0-arc.2 508cbdf, revm 38.0.0, revm-interpreter 35.0.1, ruint 1.20.0"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.0/Cargo.lock",
+      "supports": "reth-evm from paradigmxyz/reth v2.2.0 88505c7"
+     },
+     {
+      "url": "https://rpc.mainnet.arc.io",
+      "supports": "arc_getVersion returned v0.8.6-rc1 37812c61 on 24 November 2026"
+     },
+     {
+      "url": "https://arc-rpc.publicnode.com",
+      "supports": "arc_getVersion returned v0.8.5 602eed3b, web3_clientVersion reth/v2.2.0-508cbdf"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 13,
+   "id": "F-124",
+   "firstCycle": 13,
+   "history": [
+    {
+     "cycle": 13,
+     "unit": "stablecoin-l1",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
+   "title": "The LLVM MIPS shift lowering that kona-client 1.9.0 was compiled with miscompiles 128 bit shifts by 64 to 127 under some constant folds, and a scan of the respected prestate finds no bad shape on any fall-through path",
+   "chainIds": [
+    10,
+    130,
+    57073
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10",
+    "A14"
+   ],
+   "effect": "degrade",
+   "difference": "OP Mainnet, Unichain and Ink settle withdrawals on kona-client 1.9.0 compiled by Rust nightly-2026-08-22 for the big-endian mips64 target with cpu mips64 (no R6). LLVM issue 235261 (opened 2026-10-24, label miscompilation) shows that MipsTargetLowering::lowerShiftLeftParts and lowerShiftRightParts use (shamt AND 64) as an ISD::SELECT condition although MIPS booleans are 0 or 1, so a DAG fold such as select(c, 0, 1) into xor(c, 1) returns 65 instead of 0 for 128 bit shifts on MIPS64. The fix, commit 0212d77 of 2026-11-14, is on LLVM main only: the MipsISelLowering.cpp of llvmorg-21.1.8, llvmorg-22.1.0, llvmorg-22.1.8, llvmorg-23.1.0 and the release/22.x and release/23.x branches all still use the bare AND, so every Rust toolchain of 2026 including the kona one carries the fault. ruint 1.20.0 implements U256 wrapping_shl and wrapping_shr on two u128 halves with unbounded_shl and unbounded_shr (bits.rs:463-520 and 604-641 of the crate), so every EVM SHL, SHR and SAR and the masks of SIGNEXTEND go through exactly this lowering. On x86 and arm64 nodes the lowering is not used.",
+   "mechanism": "A shift amount in [64, 127] sets the AND result to 64. Where LLVM folded the select into arithmetic, the MIPS build would return a different word from the node for those amounts. In this bytecode BitMath.mostSignificantBit shifts by the running result r, which reaches 64 to 127 for every input of 64 bits or more, TickBitmap flips a bit with shl(and(tick, 0xff), 1), and the TickMath logarithm shifts by f and by 127 and 128. A changed word there changes the tick, the price or the bitmap slot that a swap writes, so the proof program would compute a different post-state root from the one the op-reth nodes report. The games of type 9 are permissionless, so an ordinary account could post one swap that hits the input and then win the dispute with the program's root against the honest root, delaying withdrawals, or defend a root in which its own withdrawal is larger. Three checks say this does not happen with the present build. First, the revm-interpreter 43.0.1 handlers over ruint 1.20.0 were compiled with rustc 1.97.0 (LLVM 22.1.6, which also lacks the fix) for kona's own mips64-unknown-none target spec, with -mno-check-zero-division and opt-level 3, and run instruction by instruction in an emulator of Cannon's MIPS64Instructions.sol semantics: all 85,544 targeted and 96,876 battery vectors, EXP included, give the specified word, and 3,794 mulDiv and bit scan cases and 2,283 ticks of the price functions match. Second, a planted fault that makes MOVN test bit 0 only, which is the effect the bad fold has, is caught by 624 of 4,278 sampled targeted vectors. Third, the 4,928,204 byte text segment of the respected prestate 0x03e5a548...37c9 itself, rebuilt from the published state file, holds 66 instructions of the form andi rX, rY, 0x40; every later read of rX before it is redefined is the condition of a MOVN or MOVZ (124), a comparison with zero in a branch (10), or one srl by 6 that turns it into 0 or 1. None feeds xori, ori, addu or a store, which is the shape of the miscompile.",
+   "impact": "None with the respected prestate as built. A future prestate built with a toolchain older than LLVM commit 0212d77 can contain the shape, and would then let an unprivileged account make the proof disagree with the nodes on the price, tick and bitmap arithmetic of every pool on these three chains. The scan follows straight-line code for at most 47 instructions after each site and does not follow branch targets, so a bad shape on a taken branch is not excluded.",
+   "preconditions": "Governance adopts a new absolute prestate whose code folds the shift-parts select into arithmetic. The present prestate does not.",
+   "mitigations": "Build future kona prestates with a toolchain that contains LLVM commit 0212d77, or rerun scan_prestate.py of the work directory on each new prestate before it is adopted, and rerun the vector set through the MIPS build.",
+   "coreRefs": [
+    "src/libraries/BitMath.sol:16-22",
+    "src/libraries/TickBitmap.sol:73",
+    "src/libraries/TickMath.sol:142-151",
+    "src/libraries/TickBitmap.sol:38"
+   ],
+   "sources": [
+    {
+     "url": "https://github.com/llvm/llvm-project/issues/235261",
+     "supports": "The miscompile: (and shamt, 32 or 64) used as a select condition, folded into xor c,1, affects 128 bit shifts on mips64; fetched with Exa."
+    },
+    {
+     "url": "https://lists.llvm.org/pipermail/llvm-commits/Week-of-Mon-20261109/2098972.html",
+     "supports": "Fix 0212d77, PR 241685, committed 2026-11-14, adds setcc ne in both lowerings."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-22.1.8/llvm/lib/Target/Mips/MipsISelLowering.cpp",
+     "supports": "Release code still uses the bare AND as the select condition; same for llvmorg-21.1.8, 22.1.0, 23.1.0, release/22.x and release/23.x (grep for the fix comment returns 0)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/rust/justfile",
+     "supports": "kona-client ELFs are built with RUSTFLAGS -mno-check-zero-division, -Zbuild-std=core,alloc, the nightly of mise.toml and the mips64-unknown-none.json target spec."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/mise.toml",
+     "supports": "The nightly toolchain is nightly-2026-08-22."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/rust/kona/docker/cannon/mips64-unknown-none.json",
+     "supports": "Target cpu mips64, big endian, soft float, n64."
+    },
+    {
+     "url": "https://storage.googleapis.com/oplabs-network-data/proofs/kona/cannon/0x03e5a54835d39c1d83b198314473e1f111c3539c04f65c3e8a9b8ccebe3737c9.bin.gz",
+     "supports": "The respected prestate state file (sha256 bf144319...3f73); its text segment was scanned by research/network-risk/cycles/013/theme-proof-builds-2.work/kona/scan_prestate.py."
+    },
+    {
+     "url": "https://static.crates.io/crates/ruint/ruint-1.20.0.crate",
+     "supports": "ruint 1.20.0 source, checksum f5e99bff... equal to the kona-client 1.9.0 lock; shifts on u128 halves in bits.rs."
+    },
+    {
+     "url": "file:research/network-risk/cycles/013/theme-proof-builds-2.work/kona/kona-mips64-vectors.json",
+     "supports": "0 mismatches on 85,544 targeted and 96,876 battery vectors on the MIPS64 build; planted faults movn_bit0, dsllv5 and dmultu_hi caught."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "governance",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 13,
+    "factCheck": "The llvm-commits archive page for 0212d77 (fetched) states that lowerShiftLeftParts and lowerShiftRightParts used (and Shamt, VT.bits) as the ISD::SELECT condition, that MIPS uses ZeroOrOneBooleanContent so a fold such as select(c, 0, 1) into xor c, 1 miscompiles, that the value is 64 for i128 on MIPS64, and that it fixes issue 235261; it is dated 2026-11-14. The issue page itself returned HTTP 403 to curl, so the issue text was read only through the commit log. MipsISelLowering.cpp at llvmorg-22.1.8 (lines 2684-2688), llvmorg-23.1.0 and release/23.x (lines 2712-2715) still build Cond as a bare ISD::AND; main no longer has that line. kona-client/v1.9.0 mise.toml pins nightly-2026-08-22, which predates the fix, and the cannon target spec is mips64, big endian, +soft-float,+mips64. ruint 1.20.0 bits.rs wrapping_shl on the u256 path computes lo.unbounded_shl and hi.unbounded_shl on u128 halves, so EVM shifts go through the i128 shift-parts lowering. On Ethereum (publicnode, block about 26,487,194) DisputeGameFactory 0xe5965ab5 gameImpls(9) returns 0x19af533c and gameArgs(9) begins with prestate 0x03e5a54835d39c1d83b198314473e1f111c3539c04f65c3e8a9b8ccebe3737c9, so the scanned prestate is the one in use for OP Mainnet type 9. I reran scan_prestate.py on the work directory's text.bin (sha256 of the .bin.gz begins bf144319, as stated): 66 andi rX,rY,0x40 sites, 124 MOVN/MOVZ condition uses, 10 branch zero tests, one srl by 6 (0x10982 at 0x629c4, rd=rt=1, sa=6), and one extra entry the finding did not list: a SPECIAL2 fn 0x24 word 0x70ce7024 at 0x3de7d0, which decodes to dclz r14, r6; it writes r14 and does not read it, so it is a false positive of the scanner and not an arithmetic use. No xori, ori, addu or store reads the masked value. The run log shows 0 mismatches on 85,544 targeted and 96,876 battery vectors and 624, 895 and 1,797 targeted mismatches for the three planted faults.",
+    "codeCheck": "src/libraries/BitMath.sol:16-22 shifts x right by the running r, which reaches 64 to 192 for wide inputs; src/libraries/TickBitmap.sol:38 uses sar and signextend and :73 uses shl(and(tick, 0xff), 1); src/libraries/TickMath.sol:142-151 shifts by 127, 128 and f. A wrong SHL or SHR word would change the bitmap slot, tick or price that a swap writes in the proof program, so the dependence the finding describes is real. Nothing in src/ guards against an interpreter that computes a shift wrongly, and nothing needs to on the node itself.",
+    "corrections": "The scanner follows straight-line code for at most 47 instructions and does not follow branch or jump targets, so the prestate check covers uses on the fall-through path only; a use reached through a taken branch would be missed. The use list in the finding omits one scanner entry (dclz at text offset 0x3de7d0), which is a false positive. The value 65 in place of 0 is an extrapolation to MIPS64 of the MIPS32 example in the commit log (0x2100000001 instead of 1). The actor governance is right: adopting a new absolute prestate is a governance act, and with the present prestate there is nothing to exploit.",
+    "sources": [
+     {
+      "url": "https://lists.llvm.org/pipermail/llvm-commits/Week-of-Mon-20261109/2098972.html",
+      "supports": "Commit 0212d77 of 2026-11-14 describes the select condition fault in lowerShift*Parts and fixes issue 235261."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-22.1.8/llvm/lib/Target/Mips/MipsISelLowering.cpp",
+      "supports": "Lines 2684-2688 use the bare AND as the select condition; same in llvmorg-23.1.0 and release/23.x at 2712-2715, absent on main."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/mise.toml",
+      "supports": "nightly-2026-08-22."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/rust/kona/docker/cannon/mips64-unknown-none.json",
+      "supports": "cpu mips64, big endian, n64, +soft-float,+mips64."
+     },
+     {
+      "url": "https://ethereum-rpc.publicnode.com",
+      "supports": "eth_call on DGF 0xe5965ab5962edc7477c8520243a95517cd252fa9: gameImpls(9) = 0x19af533c..., gameArgs(9) begins with prestate 0x03e5a548...37c9."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 13,
+   "id": "F-126",
+   "firstCycle": 13,
+   "history": [
+    {
+     "cycle": 13,
+     "unit": "theme-proof-builds-2",
      "status": "confirmed",
      "severity": "info"
     }

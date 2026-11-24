@@ -1,0 +1,38 @@
+{
+ "unit": "theme-callee-gas-and-overrides",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "Fetched arc-node v0.8.6 crates/evm/src/evm.rs (9,571 lines). Lines 114-134 replace only SELFDESTRUCT, in three hardfork variants. Lines 516-605 (check_blocklist_and_create_log) return a revert for a value transfer when from or to is address(0) (ERR_ZERO_ADDRESS, no hardfork gate), when either is blocklisted, or when the target is selfdestructed in the current transaction; line 525 sets meter_sloads = false, and metered_revert (lines 290-302) then spends 0 gas, so a rejected frame returns all of its gas. Lines 607-629 run the check only for nonzero amounts, and extract_call_transfer_params (lines 267-278) yields a transfer only for CallScheme::Call. Lines 669-711 route frame_init through the subcall registry and checked_frame_init. Lines 1805-1820 register CallFrom under Zero7 with two allowed callers, and init_subcall_revert (lines 137-151) charges 100 gas. On-chain eth_call I ran with the PoolManager code at 0x8366a39CC670B4001A1121B8F6A443A643e40951 overridden by a driver that does CALL(gas, to, 1 wei) and returns the success flag and returndatasize: on https://rpc.mainnet.arc.io to = address(0) gave success 0 and returndatasize 0x64 (100 bytes); to = 0x...dEaD gave success 1. On https://ethereum-rpc.publicnode.com at 0x000000000004444c5dc75cB358380D2e3dE08A90 both gave success 1 with no return data. The chain fact holds.",
+   "codeCheck": "src/types/Currency.sol:44-52: native transfer runs call(gas(), to, amount, 0, 0, 0, 0) and on failure reverts through CustomRevert.bubbleUpAndRevertWith with NativeTransferFailed, which undoes the debit booked by _accountDelta at src/PoolManager.sol:294. take (src/PoolManager.sol:291-297) pays the `to` its own caller supplies. The only other outbound calls in src are the ERC20 transfer at src/types/Currency.sol:73 and the hook call at src/libraries/Hooks.sol:134, both with value 0, so the Arc frame hook never fires for them. The selfdestructed-target rule is per transaction, so a third party cannot impose it on a victim's recipient, and the blocklist is written only by the USDC issuer. No guard was missed and no path to other users' funds exists: the revert only protects the caller's own credit.",
+   "corrections": "",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/evm/src/evm.rs", "supports": "lines 114-134, 137-151, 267-302, 516-629, 669-711, 1805-1820 as described in factCheck"},
+    {"url": "eth_call https://rpc.mainnet.arc.io to 0x8366a39CC670B4001A1121B8F6A443A643e40951 with code override 0x6000600060006000600173<to>5af160005260403d6020526000f3, balance 1 ether, gas 1,000,000", "supports": "to = address(0): success 0, returndatasize 100; to = 0x...dEaD: success 1"},
+    {"url": "eth_call https://ethereum-rpc.publicnode.com to 0x000000000004444c5dc75cB358380D2e3dE08A90 with the same override", "supports": "success 1 for both address(0) and 0x...dEaD"},
+    {"url": "src/types/Currency.sol:44-52", "supports": "native payout to caller-chosen recipient, revert on failure"},
+    {"url": "src/PoolManager.sol:291-297", "supports": "take debits the caller then pays its chosen recipient"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Callee gas on all 21 networks: an ordinary account cannot place a gas-burning precompile, predeploy or system contract as the take recipient, hook or currency of a victim's transaction on an honest pool (lead L-684).",
+   "agrees": true,
+   "note": "The only outbound CALLs in src are src/types/Currency.sol:48 (recipient chosen by the take caller), src/types/Currency.sol:73 (the pool currency), src/libraries/Hooks.sol:134 (key.hooks, hashed into the pool id) and the unlock callback to msg.sender at src/PoolManager.sol:110; the staticcall of sync at src/types/Currency.sol:94 targets a currency the caller of sync picks. None is steered by storage a third party writes. The hook-bit arithmetic holds against src/libraries/Hooks.sol:29-47: every address 0x0800 to 0x0813 has bit 11 (BEFORE_ADD_LIQUIDITY) set, 0x1000 has bit 12 (AFTER_INITIALIZE), and callHook at src/libraries/Hooks.sol:131-157 also requires the returned selector to match, which no such precompile returns. A victim choosing such a pool chose it knowingly; it holds no deposits."
+  },
+  {
+   "check": "Arc arc-node v0.8.6: the complete set of instruction, gas and call hooks it adds to revm.",
+   "agrees": true,
+   "note": "Re-read evm.rs at v0.8.6: insert_arc_selfdestruct_instruction (lines 114-134) is the only instruction insertion I found, the frame hook is gated on nonzero value and CallScheme::Call (lines 267-278, 607-629), and the subcall registry holds only CallFrom under Zero7 (lines 1805-1820). eth_getCode on https://rpc.mainnet.arc.io returned 0xef for 0x1800000000000000000000000000000000000005 and ..09, as stated. I did not re-read precompile_provider.rs or helpers.rs; the release running on the RPC node is not named by web3_clientVersion, so the reading assumes v0.8.6 matches mainnet."
+  },
+  {
+   "check": "MegaETH mega-evm main branch: replaced handlers change only gas, with 98/100 call forwarding.",
+   "agrees": true,
+   "note": "Fetched crates/mega-evm/src/evm/instructions.rs on main (3,568 lines). Lines 63, 74 and 113 document the 98/100 rule, lines 137-153 and 290-307 show CALL, STATICCALL, DELEGATECALL and CALLCODE wrapped by forward_gas_ext and, from Rex4, volatile_data_ext. A 2 percent withholding leaves the PoolManager more gas after a callee returns than 1/64 does, so its revert wrapping in Currency.sol and Hooks.sol cannot run short because of it. The line ranges cited in the cleared item (1064-1180) were not matched to the same text in the current file, and the deployed sequencer release is unconfirmed, which the unit already lists as a lead."
+  }
+ ],
+ "leads": []
+}

@@ -1,0 +1,266 @@
+{
+ "unit": "theme-proof-builds-2",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "The LLVM MIPS shift lowering that kona-client 1.9.0 was compiled with miscompiles 128 bit shifts by 64 to 127 under some constant folds, and a scan of the respected prestate finds no bad shape on any fall-through path",
+   "chainIds": [
+    10,
+    130,
+    57073
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10",
+    "A14"
+   ],
+   "effect": "degrade",
+   "actor": "governance",
+   "severity": "info",
+   "difference": "OP Mainnet, Unichain and Ink settle withdrawals on kona-client 1.9.0 compiled by Rust nightly-2026-08-22 for the big-endian mips64 target with cpu mips64 (no R6). LLVM issue 235261 (opened 2026-10-24, label miscompilation) shows that MipsTargetLowering::lowerShiftLeftParts and lowerShiftRightParts use (shamt AND 64) as an ISD::SELECT condition although MIPS booleans are 0 or 1, so a DAG fold such as select(c, 0, 1) into xor(c, 1) returns 65 instead of 0 for 128 bit shifts on MIPS64. The fix, commit 0212d77 of 2026-11-14, is on LLVM main only: the MipsISelLowering.cpp of llvmorg-21.1.8, llvmorg-22.1.0, llvmorg-22.1.8, llvmorg-23.1.0 and the release/22.x and release/23.x branches all still use the bare AND, so every Rust toolchain of 2026 including the kona one carries the fault. ruint 1.20.0 implements U256 wrapping_shl and wrapping_shr on two u128 halves with unbounded_shl and unbounded_shr (bits.rs:463-520 and 604-641 of the crate), so every EVM SHL, SHR and SAR and the masks of SIGNEXTEND go through exactly this lowering. On x86 and arm64 nodes the lowering is not used.",
+   "mechanism": "A shift amount in [64, 127] sets the AND result to 64. Where LLVM folded the select into arithmetic, the MIPS build would return a different word from the node for those amounts. In this bytecode BitMath.mostSignificantBit shifts by the running result r, which reaches 64 to 127 for every input of 64 bits or more, TickBitmap flips a bit with shl(and(tick, 0xff), 1), and the TickMath logarithm shifts by f and by 127 and 128. A changed word there changes the tick, the price or the bitmap slot that a swap writes, so the proof program would compute a different post-state root from the one the op-reth nodes report. The games of type 9 are permissionless, so an ordinary account could post one swap that hits the input and then win the dispute with the program's root against the honest root, delaying withdrawals, or defend a root in which its own withdrawal is larger. Three checks say this does not happen with the present build. First, the revm-interpreter 43.0.1 handlers over ruint 1.20.0 were compiled with rustc 1.97.0 (LLVM 22.1.6, which also lacks the fix) for kona's own mips64-unknown-none target spec, with -mno-check-zero-division and opt-level 3, and run instruction by instruction in an emulator of Cannon's MIPS64Instructions.sol semantics: all 85,544 targeted and 96,876 battery vectors, EXP included, give the specified word, and 3,794 mulDiv and bit scan cases and 2,283 ticks of the price functions match. Second, a planted fault that makes MOVN test bit 0 only, which is the effect the bad fold has, is caught by 624 of 4,278 sampled targeted vectors. Third, the 4,928,204 byte text segment of the respected prestate 0x03e5a548...37c9 itself, rebuilt from the published state file, holds 66 instructions of the form andi rX, rY, 0x40; every later read of rX before it is redefined is the condition of a MOVN or MOVZ (124), a comparison with zero in a branch (10), or one srl by 6 that turns it into 0 or 1. None feeds xori, ori, addu or a store, which is the shape of the miscompile.",
+   "impact": "None with the respected prestate as built. A future prestate built with a toolchain older than LLVM commit 0212d77 can contain the shape, and would then let an unprivileged account make the proof disagree with the nodes on the price, tick and bitmap arithmetic of every pool on these three chains. The scan follows straight-line code for at most 47 instructions after each site and does not follow branch targets, so a bad shape on a taken branch is not excluded.",
+   "preconditions": "Governance adopts a new absolute prestate whose code folds the shift-parts select into arithmetic. The present prestate does not.",
+   "mitigations": "Build future kona prestates with a toolchain that contains LLVM commit 0212d77, or rerun scan_prestate.py of the work directory on each new prestate before it is adopted, and rerun the vector set through the MIPS build.",
+   "coreRefs": [
+    "src/libraries/BitMath.sol:16-22",
+    "src/libraries/TickBitmap.sol:73",
+    "src/libraries/TickMath.sol:142-151",
+    "src/libraries/TickBitmap.sol:38"
+   ],
+   "sources": [
+    {
+     "url": "https://github.com/llvm/llvm-project/issues/235261",
+     "supports": "The miscompile: (and shamt, 32 or 64) used as a select condition, folded into xor c,1, affects 128 bit shifts on mips64; fetched with Exa."
+    },
+    {
+     "url": "https://lists.llvm.org/pipermail/llvm-commits/Week-of-Mon-20261109/2098972.html",
+     "supports": "Fix 0212d77, PR 241685, committed 2026-11-14, adds setcc ne in both lowerings."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-22.1.8/llvm/lib/Target/Mips/MipsISelLowering.cpp",
+     "supports": "Release code still uses the bare AND as the select condition; same for llvmorg-21.1.8, 22.1.0, 23.1.0, release/22.x and release/23.x (grep for the fix comment returns 0)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/rust/justfile",
+     "supports": "kona-client ELFs are built with RUSTFLAGS -mno-check-zero-division, -Zbuild-std=core,alloc, the nightly of mise.toml and the mips64-unknown-none.json target spec."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/mise.toml",
+     "supports": "The nightly toolchain is nightly-2026-08-22."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/rust/kona/docker/cannon/mips64-unknown-none.json",
+     "supports": "Target cpu mips64, big endian, soft float, n64."
+    },
+    {
+     "url": "https://storage.googleapis.com/oplabs-network-data/proofs/kona/cannon/0x03e5a54835d39c1d83b198314473e1f111c3539c04f65c3e8a9b8ccebe3737c9.bin.gz",
+     "supports": "The respected prestate state file (sha256 bf144319...3f73); its text segment was scanned by research/network-risk/cycles/013/theme-proof-builds-2.work/kona/scan_prestate.py."
+    },
+    {
+     "url": "https://static.crates.io/crates/ruint/ruint-1.20.0.crate",
+     "supports": "ruint 1.20.0 source, checksum f5e99bff... equal to the kona-client 1.9.0 lock; shifts on u128 halves in bits.rs."
+    },
+    {
+     "url": "file:research/network-risk/cycles/013/theme-proof-builds-2.work/kona/kona-mips64-vectors.json",
+     "supports": "0 mismatches on 85,544 targeted and 96,876 battery vectors on the MIPS64 build; planted faults movn_bit0, dsllv5 and dmultu_hi caught."
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "On Base any account with a valid SP1 proof can challenge a TEE-only proposal or nullify a verifier for all games, and the range program computes the opcodes the PoolManager uses as the node does",
+   "chainIds": [
+    8453
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10",
+    "A14"
+   ],
+   "effect": "freeze",
+   "actor": "unprivileged",
+   "severity": "info",
+   "difference": "Base settles withdrawals on game type 621, AggregateVerifier 0.3.0 at 0xc08b8ffa...5a70, with PROOF_THRESHOLD 1, TEE_IMAGE_HASH 0x73181275...5cbd, ZK_RANGE_HASH 0x3d3713d3...5fdb and ZK_AGGREGATE_HASH 0x00d5a430...d45a (eth_call on Ethereum at block 26,487,041). L2BEAT ties both program hashes to base/base commit 6efa7566. The range program at that commit pins revm 42.0.1, revm-interpreter 42.0.0, ruint 1.18.0 and alloy-primitives 1.6.1 and is built for the SP1 riscv64im zkVM target, while the node and TEE workspace at the same commit pins ruint 1.19.0. The Base proof specification lets challengers call challenge() with a ZK proof for one intermediate root, and lets nullify() with contradicting proof material delete an accepted proof and disable that verifier for every later game. TEE proofs need an allowlisted proposer; the specification names no allowlist for ZK proofs or challenges.",
+   "mechanism": "If the SP1 range program computed an opcode differently from the node, an ordinary account could post a transaction that hits the input, build an SP1 proof of the program's root for that range, and call challenge() on the honest TEE-backed game or nullify() on its TEE proof. Nullification disables the TEE verifier for all games until Base reconfigures it, which delays every withdrawal, including bridged pool funds. With a proof threshold of 1 a ZK-only proposal of the program's root would also resolve alone. The check: the revm-interpreter 42.0.0 handlers (identical to 43.0.1 for every arithmetic, comparison and shift opcode) over ruint 1.18.0 were compiled with rustc 1.97.0 for riscv64 with the M extension and run in an RV64IM emulator written from the RISC-V specification. All 85,544 targeted and 96,876 battery vectors, EXP included, give the specified word, and 3,794 mulDiv and bit scan cases and 2,283 ticks match; planted faults in MULHU and in the shift mask are caught. No call into compiler-builtins appears in the arithmetic.",
+   "impact": "No divergence found, so no loss or freeze path. The finding records that on Base a divergence of the zkVM build would be usable by an unprivileged account, unlike Celo and X Layer where challengers are allowlisted.",
+   "preconditions": "A divergence between the SP1 range program and the Base node for some EVM input. None was found for the arithmetic, comparison and shift opcodes. The SP1 circuits themselves, the RISC-V toolchain Succinct ships and keccak 0.2.0 on the zkVM were not tested.",
+   "mitigations": "Keep the range program and the node on one revm and ruint version, and rerun the vector set through each new range program build before its hash is set.",
+   "coreRefs": [
+    "src/libraries/FullMath.sol:24-48",
+    "src/libraries/BitMath.sol:16-22",
+    "src/libraries/TickMath.sol:63-111",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "https://docs.base.org/specifications/base-protocol/proofs/proof-contracts.md",
+     "supports": "challenge() and nullify() semantics, global verifier nullification, TEE proposer allowlist, permissionless resolve()."
+    },
+    {
+     "url": "https://l2beat.com/scaling/projects/base",
+     "supports": "Program hashes map to base/base commit 6efa75662b57c578d897fea2449035636f6ad9ad; any party with a valid ZK proof can challenge (fetched with Exa via ethbeat.org mirror)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base/6efa75662b57c578d897fea2449035636f6ad9ad/crates/proof/zk/programs/succinct/Cargo.lock",
+     "supports": "Range program pins revm 42.0.1, revm-interpreter 42.0.0, ruint 1.18.0, alloy-primitives 1.6.1 with sha3 0.11.0."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base/6efa75662b57c578d897fea2449035636f6ad9ad/crates/proof/zk/programs/succinct/Cargo.toml",
+     "supports": "SP1 6.10.0, sp1-patches for tiny-keccak, sha2, sha3 0.10.8 and curves, riscv64im-succinct-zkvm-elf toolchain."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_call at block 26,487,041: DGF 0x43edb88c gameImpls(621) = 0xc08b8ffa, PROOF_THRESHOLD 1, TEE and ZK verifiers not nullified, ASR 0x909f6cf4 respectedGameType 621 (research/network-risk/cycles/013/theme-proof-builds-2.work/base/aggverifier.json, celo/dgf.json, celo/access.json)."
+    },
+    {
+     "url": "file:research/network-risk/cycles/013/theme-proof-builds-2.work/base/base-rv64-vectors.json",
+     "supports": "0 mismatches on the RV64IM build; planted faults caught."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    10,
+    130,
+    57073
+   ],
+   "lens": "L1",
+   "check": "Lead L-682: which routines ruint 1.20.0 uses on the kona mips64 target for 64 by 64 to 128 bit products and 128 by 64 divisions, and whether the opcode vectors pass through them.",
+   "result": "ruint 1.20.0 divides with MG10 reciprocals (reciprocal_mg10 by table and 64 bit products, div_2x1_mg10, div_3x2_mg10, Knuth div_nxm), so no u128 division and no compiler-builtins call (__udivti3, __umodti3, __multi3) occurs: the linked object of the handlers references none, products are DMULTU and DMULT with MFHI and MFLO, and the only divisions are three DDIVU for one-limb operands. The big-endian path of pu128::get (lib.rs:107-118) joins limbs in the right order. Compiled with rustc 1.97.0 for kona's target spec and run in a Cannon-semantics emulator, all 85,544 targeted and 96,876 battery vectors and the pool math checks match; planted faults (MOVN on bit 0, 5 bit DSLLV mask, a DMULTU high word error) give 624, 895 and 1,797 mismatches on 4,278 sampled targeted vectors.",
+   "source": "research/network-risk/cycles/013/theme-proof-builds-2.work/kona/kona-mips64-vectors.json ; research/network-risk/cycles/013/theme-proof-builds-2.work/kona/kona-mips64-v4math.json ; research/network-risk/cycles/013/theme-proof-builds-2.work/kona/mips64emu.py ; https://static.crates.io/crates/ruint/ruint-1.20.0.crate ; https://static.crates.io/crates/revm-interpreter/revm-interpreter-43.0.1.crate"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L1",
+   "check": "Lead L-683 for Celo: respected game type, implementation, program and who may prove or challenge.",
+   "result": "eth_call on Ethereum at block 26,487,021: OptimismPortal 0xc5c5D157 version 5.1.1 and AnchorStateRegistry 0x8fe58d21 both return respectedGameType 42. DisputeGameFactory 0xFbAC1621 gameImpls(42) = 0x1736c101, an OP Succinct fault dispute game version 2.1.0 with aggregationVkey 0x006e44fd...4850, rangeVkeyCommitment 0x543e17e8...1746, SP1 verifier 0x3b604117 and access manager 0x2c4e8f33. proposers(0) and challengers(0) are false, so proposing and challenging are allowlisted; FALLBACK_TIMEOUT is 1,209,600 s, after which proposals open. An ordinary account cannot turn a divergence of the SP1 program into a challenge of an honest root; it could at most propose after 14 days of proposer silence. Which op-succinct release and integer library the range vkey belongs to was not determined.",
+   "source": "research/network-risk/cycles/013/theme-proof-builds-2.work/celo/dgf.json ; research/network-risk/cycles/013/theme-proof-builds-2.work/celo/access.json ; https://raw.githubusercontent.com/ethereum-optimism/superchain-registry/main/superchain/configs/mainnet/celo.toml"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L1",
+   "check": "Lead L-683 for X Layer: respected game type, implementation, program and who may prove or challenge.",
+   "result": "The factory 0x9D4c8FAE (the state update target L2BEAT lists) creates games of types 1961 and 42. Its newer AnchorStateRegistry 0xaa45411f (version 3.8.0) returns respectedGameType 1961; gameImpls(1961) = 0x43f4cd26, OP Succinct fault dispute game 2.0.0 with aggregationVkey 0x00be73c0...5902, rangeVkeyCommitment 0x584fd7b9...129c, challenge window 3,600 s, prove window 604,800 s, access manager 0xb0998d01. proposers(0) and challengers(0) are false and FALLBACK_TIMEOUT is 31,536,000,000 s, so proposer and challenger are allowlisted for practical purposes, as L2BEAT states (one proposer, one challenger). A divergence of the program cannot be used by an ordinary account. The release behind the vkeys was not determined.",
+   "source": "research/network-risk/cycles/013/theme-proof-builds-2.work/celo/dgf.json ; research/network-risk/cycles/013/theme-proof-builds-2.work/celo/access.json ; https://l2beat.com/scaling/projects/xlayer"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "Lead L-677: which go-ethereum commit nitro v3.13.0-rc.9+b72783f runs, and whether its jump destination cache and opcode handlers differ from 0e44603.",
+   "result": "Not readable. raw.githubusercontent.com returns 404 for OffchainLabs/nitro at b72783f and for v3.13 branch and tag names, and nitro v3.12.4 carries .private-submodules.conf, which rewrites the go-ethereum and wasmer submodules to their private variants when the repository is built privately, so the rc.9 build most likely uses a private go-ethereum. The newest public pin is v3.12.4 at go-ethereum 0e44603 (GitHub tree page), the commit cycles 9 to 12 read; the fork's public master (461e517) is older and differs only by value-versus-pointer operands in the arithmetic handlers. In 0e44603 the jump destination cache is keyed by the hash from StateDB.GetCodeHash of the resolved address and is filled at SetCallCode (evm.go:348-551, contract.go:93-110), so entries describe the bytes of that hash and a reorg or redelegation changes the hash, not the entry. The opcode answers of the rc.9 endpoints were tested by earlier cycles and match.",
+   "source": "research/network-risk/cycles/013/theme-proof-builds-2.work/nitro/0e44603_core_vm_evm.go ; research/network-risk/cycles/013/theme-proof-builds-2.work/nitro/v3124_private-submodulesconf ; https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/.private-submodules.conf ; https://github.com/OffchainLabs/nitro/tree/v3.12.4"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L1",
+   "check": "KECCAK256 and keccak caching in the Base range program on the zkVM.",
+   "result": "In the range program lock alloy-primitives 1.6.1 depends on sha3 0.11.0 and keccak 0.2.0 from the registry, and no crate depends on tiny-keccak or fixed-cache; the sp1-patches entries target tiny-keccak 2.0.2 and sha3 0.10.8, so they do not apply to the hash behind KECCAK256. The opcode therefore runs portable Rust code in the zkVM and no keccak cache is linked. This costs cycles and does not change results; keccak 0.2.0 on RISC-V was not run here.",
+   "source": "https://raw.githubusercontent.com/base/base/6efa75662b57c578d897fea2449035636f6ad9ad/crates/proof/zk/programs/succinct/Cargo.lock ; research/network-risk/cycles/013/theme-proof-builds-2.work/base/crates_proof_zk_programs_succinct_Cargo.toml"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "For each of the 21 networks: could an opcode the PoolManager runs give another result in the build that settles state than on the node, and could an ordinary account use it.",
+   "result": "No on all 21 as far as tested. Ethereum, Polygon, BNB Smart Chain, Avalanche, Monad, MegaETH, Tempo, Arc and HyperEVM settle on the client that produces blocks (no separate proof build; covered by OPCODES.md checks 1 to 4). OP Mainnet, Unichain, Ink: kona-client 1.9.0 on MIPS64, permissionless games, no divergence in the compiled handlers or the prestate scan (this unit). World Chain: op-program 1.9.0 on MIPS64, permissioned, no divergence (cycle 12). Zora and Soneium: no proof program, operator only (cycle 12). Base: SP1 range program on RV64IM, permissionless challenges, no divergence (this unit). Celo and X Layer: OP Succinct with allowlisted challengers, program arithmetic not identified, unknown but not usable by an ordinary account. Arbitrum One, Robinhood Chain, Elysium: wasm replay settled in cycle 12; the go-ethereum of the rc.9 nodes is private and unknown, endpoint answers match.",
+   "source": "research/network-risk/cycles/013/theme-proof-builds-2.work ; OPCODES.md ; cycles/012/theme-proof-builds.research.json"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    8453,
+    42220,
+    196
+   ],
+   "lens": "L1",
+   "question": "Run the targeted and battery vectors through the SP1 executor itself on the published range ELFs of Base (6efa7566) and of the op-succinct releases behind Celo's and X Layer's range vkeys, instead of a rustc 1.97 rebuild, and read whether Succinct's 64 bit toolchain (succinct-1.96.0-64bit-v2) carries the LLVM RISC-V lowering of 2026.",
+   "why": "This unit ran a rebuild of the same crates with a public rustc; the zkVM toolchain is Succinct's fork and on Base an unprivileged account can challenge or nullify with a proof.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    10,
+    130,
+    57073
+   ],
+   "lens": "L1",
+   "question": "Execute the respected kona prestate (0x03e5a548...37c9) in the Cannon MIPS64 emulator on a block that runs the opcode vectors, closing L-673 fully.",
+   "why": "This unit compiled the same crates with rustc 1.97 and scanned the real text segment for the LLVM 235261 shape; it did not run the real ELF.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "question": "Ask Offchain Labs or wait for a public tag: which go-ethereum commit is in nitro v3.13.0-rc.9+b72783f, and do its core/vm files equal 0e44603 in the jump destination cache and opcode handlers?",
+   "why": "The build is private (.private-submodules.conf), so only its endpoint answers are tested.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-682",
+   "outcome": "cleared",
+   "answer": "ruint 1.20.0 needs no compiler-builtins routine on mips64: products are DMULTU or DMULT, divisions use MG10 reciprocals and DDIVU only for one-limb operands, and i128 shifts are lowered inline. The handlers compiled for kona's target spec and run under Cannon semantics match all 85,544 targeted and 96,876 battery vectors and the pool math; planted faults are caught."
+  },
+  {
+   "leadId": "L-673",
+   "outcome": "inconclusive",
+   "answer": "The respected prestate was downloaded and its text segment scanned: the 66 sites of the LLVM 235261 shape all feed MOVN, MOVZ, branch zero tests or a normalising srl. The vectors ran through a rustc 1.97 rebuild of the same crates, not through the real ELF in Cannon."
+  },
+  {
+   "leadId": "L-680",
+   "outcome": "cleared",
+   "answer": "Game type 621 implementation 0xc08b8ffa (AggregateVerifier 0.3.0, threshold 1) carries hashes that L2BEAT maps to base/base 6efa7566; the range program pins revm 42.0.1, revm-interpreter 42.0.0, ruint 1.18.0, alloy-primitives 1.6.1 with unpatched sha3 0.11 and no keccak cache. Any holder of a valid SP1 proof can challenge or nullify. The rebuilt RV64IM handlers match all vectors and the pool math, so no divergence is known that an ordinary account could prove."
+  },
+  {
+   "leadId": "L-683",
+   "outcome": "cleared",
+   "answer": "Celo respects type 42 (OP Succinct 2.1.0) and X Layer type 1961 (OP Succinct 2.0.0); both access managers allowlist proposers and challengers (fallback 14 days on Celo, 1,000 years on X Layer). The release behind the vkeys was not identified, but a divergence would need the allowlisted challenger."
+  },
+  {
+   "leadId": "L-677",
+   "outcome": "inconclusive",
+   "answer": "b72783f is not public and nitro builds privately against go-ethereum-private per .private-submodules.conf; the newest public pin is 0e44603 (v3.12.4), whose cache is keyed by the code hash of the resolved address."
+  }
+ ]
+}

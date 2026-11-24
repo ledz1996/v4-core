@@ -35,6 +35,8 @@ EXTN = '0x' + keccak(b'extsload(bytes32[])')[:4].hex()
 POOLS_SLOT = 6  # src/libraries/StateLibrary.sol:11, PoolManager._pools
 SPACINGS = [1, 10, 60, 200, 2, 5, 20, 50, 100, 4, 8, 15, 25, 30, 40, 80, 90, 120, 150, 250, 300, 500, 1000, 2000, 3, 6, 12, 16, 32, 64, 128, 887]
 Q128 = 1 << 128
+PKSEL = '0x' + keccak(b'poolKeys(bytes25)')[:4].hex()
+def cid_of(pm): return next((c for c, n in NETS.items() if n['poolManager'].lower() == pm.lower()), None)
 
 
 def word(d, i): return int(d[2 + 64 * i:2 + 64 * (i + 1)], 16)
@@ -223,8 +225,25 @@ def collect(r, pm, want, max_calls=400, hi=None, budget=float(os.environ.get('BU
     return logs, lo_seen, head
 
 
-def find_keys(r, pm, pids, head, cache):
-    """Initialize events by pool id (topic 1) over the whole history; chunked when the endpoint limits ranges."""
+def find_keys(r, pm, pids, head, cache, cid=None):
+    """Pool keys. First source: PositionManager.poolKeys(bytes25), a public mapping of the periphery contract, checked by
+    hashing the key back to the pool id (src/types/PoolId.sol:11-14). Second source: Initialize events by pool id (topic 1)
+    over the history from the PoolManager's deployment block, chunked when the endpoint limits ranges."""
+    need = [p for p in pids if p not in cache]
+    posm = NETS[cid]['contracts'].get('PositionManager') if cid else None
+    def pk(pid):
+        try:
+            rr = r('eth_call', [{'to': posm, 'data': PKSEL + pid[2:52] + '00' * 7}, 'latest'], tries=3)
+        except Exception:  # noqa
+            return None
+        if len(rr) >= 2 + 64 * 5 and '0x' + keccak(bytes.fromhex(rr[2:2 + 64 * 5])).hex() == pid:
+            return {'c0': '0x' + rr[26:66], 'c1': '0x' + rr[90:130], 'fee': word(rr, 2), 'spacing': s(word(rr, 3)),
+                    'hooks': '0x' + rr[2 + 64 * 4 + 24:2 + 64 * 5], 'source': 'PositionManager.poolKeys'}
+        return None
+    if posm and need:
+        with cf.ThreadPoolExecutor(8) as ex:
+            for pid, k in zip(need, ex.map(pk, need)):
+                if k: cache[pid] = k
     need = [p for p in pids if p not in cache]
     if not need: return cache
     start = 0
@@ -254,7 +273,7 @@ def find_keys(r, pm, pids, head, cache):
         for x in got or []:
             d = x['data']
             cache[x['topics'][1]] = {'c0': '0x' + x['topics'][2][26:], 'c1': '0x' + x['topics'][3][26:], 'fee': word(d, 0),
-                                     'spacing': s(word(d, 1)), 'hooks': '0x%040x' % word(d, 2), 'block': int(x['blockNumber'], 16)}
+                                     'spacing': s(word(d, 1)), 'hooks': '0x%040x' % word(d, 2), 'block': int(x['blockNumber'], 16), 'source': 'Initialize event'}
     return cache
 
 
@@ -348,7 +367,21 @@ def main():
     # keys for the pools whose swaps need the full loop
     kp = os.path.join(a.raw, f'keys-{cid}.json')
     keys = json.load(open(kp)) if os.path.exists(kp) else {}
-    keys = find_keys(rl, pm, sorted({ev['pool'] for ev, *_ in pending}), L['head'], keys)
+    keys = find_keys(rl, pm, sorted({ev['pool'] for ev, *_ in pending}), L['head'], keys, cid)
+    # third source: the swap transaction's own calldata, searched for 160 bytes that hash to the pool id
+    for pid in sorted({ev['pool'] for ev, *_ in pending if ev['pool'] not in keys}):
+        for ev in [e for e, *_ in pending if e['pool'] == pid][:3]:
+            try:
+                tx = rl('eth_getTransactionByHash', [ev['tx']], tries=3); data = bytes.fromhex(tx['input'][2:])
+            except Exception:  # noqa
+                continue
+            hit = None
+            for off in range(0, max(0, len(data) - 159)):
+                if '0x' + keccak(data[off:off + 160]).hex() == pid: hit = data[off:off + 160]; break
+            if hit:
+                w = [int.from_bytes(hit[32 * i:32 * i + 32], 'big') for i in range(5)]
+                keys[pid] = {'c0': '0x%040x' % w[0], 'c1': '0x%040x' % w[1], 'fee': w[2], 'spacing': s(w[3]), 'hooks': '0x%040x' % w[4], 'source': 'swap calldata'}
+                break
     json.dump(keys, open(kp, 'w'))
     # fee check for static-fee pools with a known key, for every swap
     res['keysFound'] = sum(1 for ev, *_ in pending if ev['pool'] in keys)
@@ -383,6 +416,17 @@ def main():
     for (ev, pre, pfd, stp), r in zip(pending, outs):
         if r.get('ok'):
             res['fullLoop'] += 1; res['maxSteps'] = max(res['maxSteps'], r['steps'])
+            key = keys.get(ev['pool']); md = res.setdefault('loopModes', {}); md[r['mode']] = md.get(r['mode'], 0) + 1
+            kk = res.setdefault('loopKey', {'known': 0, 'spacingInferred': 0}); kk['known' if r['keyKnown'] else 'spacingInferred'] += 1
+            hk = int(key['hooks'], 16) if key else None
+            if key:
+                hs = res.setdefault('loopHooks', {'none': 0, 'hookNoDelta': 0, 'hookReturnsDelta': 0})
+                hs['none' if hk == 0 else ('hookReturnsDelta' if hk & 0xc else 'hookNoDelta')] += 1
+            if r['mode'] == 'zeroAmount':
+                z = res.setdefault('zeroAmount', {'beforeSwapReturnsDelta': 0, 'otherHook': 0, 'noHook': 0, 'keyUnknown': 0, 'samples': []})
+                zk = 'keyUnknown' if hk is None else ('noHook' if hk == 0 else ('beforeSwapReturnsDelta' if hk & 0x8 else 'otherHook'))
+                z[zk] += 1
+                if zk != 'beforeSwapReturnsDelta' and len(z['samples']) < 10: z['samples'].append({'tx': ev['tx'], 'pool': ev['pool'], 'hooks': key and key['hooks']})
             if r['steps'] > 1: res['crossings'] += 1
             if len(res['fullLoopSamples']) < 15: res['fullLoopSamples'].append({'tx': ev['tx'], 'steps': r['steps'], 'mode': r['mode'], 'spacing': r['spacing'], 'keyKnown': r['keyKnown']})
             if len(per_block[(ev['pool'], ev['block'])]) == 1: fg_jobs.append((ev, r))

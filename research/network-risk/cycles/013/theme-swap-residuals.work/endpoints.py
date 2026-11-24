@@ -2,7 +2,7 @@
 Lists come from earlier cycles' tools (tools/opdiff/swaps.py, replay.py, cycles/012/theme-mined-liquidity-2.work/lib.py)."""
 import json
 NETS = {n['chainId']: n for n in json.load(open('/home/user/v4-core/research/network-risk/state/networks.json'))['networks']}
-LOG = {8453: ['https://base.gateway.tenderly.co', 'https://base-rpc.publicnode.com'], 56: ['https://bsc-rpc.publicnode.com', 'https://rpc-bsc.48.club'],
+LOG = {8453: ['https://base.gateway.tenderly.co', 'https://base-rpc.publicnode.com'], 56: ['https://bsc.rpc.sentio.xyz'],
        999: ['https://rpc.hyperlend.finance', 'https://rpc.hypurrscan.io', 'https://rpc.hyperliquid.xyz/evm'],
        143: ['https://rpc3.monad.xyz', 'https://rpc1.monad.xyz', 'https://rpc-mainnet.monadinfra.com', 'https://rpc.monad.xyz'],
        137: ['https://polygon-bor-rpc.publicnode.com', 'https://polygon.gateway.tenderly.co'],

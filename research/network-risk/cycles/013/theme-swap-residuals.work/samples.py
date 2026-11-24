@@ -41,10 +41,10 @@ def main():
         k = json.load(open(kp)) if os.path.exists(kp) else {}
         head = int(rl[c]('eth_blockNumber', []), 16)
         try:
-            keys[c] = R.find_keys(rl[c], NETS[c]['poolManager'], sorted({x['pool'] for x in smps if x['chainId'] == c}), head, k)
+            keys[c] = R.find_keys(rl[c], NETS[c]['poolManager'], sorted({x['pool'] for x in smps if x['chainId'] == c}), head, k, c)
         except Exception as e:  # noqa
             print(c, 'keys failed', e); keys[c] = k
-        json.dump(keys[c], open(kp, 'w'))
+        json.dump(keys[c], open(kp.replace('keys-', 'keys-samples-'), 'w'))
 
     def work(x):
         c = x['chainId']; pm = NETS[c]['poolManager']

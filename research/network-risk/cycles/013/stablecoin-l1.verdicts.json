@@ -1,0 +1,41 @@
+{
+  "unit": "stablecoin-l1",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "reth v2.2.0 cached_state.rs lines 857-882, fetched this session, check was_destroyed(), clear the whole cache when original_info had code, and otherwise call account_cache.remove(addr) and continue, so the post-block storage of a re-created account is never inserted and any word cached before the block survives. The reth pull request 28148 patch, fetched this session, replaces that unconditional remove with a remove only when account.info is None, and its test shows a prewarmed zero word replaced by the written value 7. circlefin/arc-reth at 508cbdf7 has the fixed branch at lines 881-884. The arc-node v0.8.6 CHANGELOG names the v0.8.5 execution cache fix (arc-reth v2.2.0-arc.2 plus PR 28148) and the v0.8.4 state root fix (PR 28264). The v0.8.0 lock pins reth-evm from paradigmxyz/reth tag v2.2.0 (88505c7) and the v0.8.6 lock pins circlefin/arc-reth tag v2.2.0-arc.2 (508cbdf), both with revm 38.0.0, revm-interpreter 35.0.1 and ruint 1.20.0. arc_getVersion queried this session: rpc.mainnet.arc.io returned v0.8.6-rc1 commit 37812c61, arc-rpc.publicnode.com returned v0.8.5 commit 602eed3b with web3_clientVersion reth/v2.2.0-508cbdf, both with chainId 0x13b2.",
+      "codeCheck": "PoolManager balance reads in sync and _settle (src/PoolManager.sol:279-288, 349-364) go through currency.balanceOfSelf, which reads the token's own storage under the token address, and the delta slots in src/libraries/CurrencyDelta.sol:21-39 are transient slots under the PoolManager address. The PoolManager and the tokens of a pool without attacker-made contracts have code at the start of any block, so a destruction of any of them would take the had_code branch and clear the whole cache. The only addresses that reach the stale branch are codeless at block start and created in that block, which an ordinary victim pool does not use. No line of src/ computes a different result from this fault for a victim pool.",
+      "corrections": "The Arc v0.8.5 release note describes the trigger as an account that a block deletes under EIP-161 and then recreates in the same block; mechanism step 2 describes only the SELFDESTRUCT-in-creation route and its first step (funding the fresh address) would keep the account non-empty for EIP-161. Both routes mark the account destroyed in the bundle, so the conclusion is unchanged. The actor value operator is right: harm needs a node operator who runs v0.8.0 to v0.8.4, and the harm is that node's divergence, with no PoolManager funds at stake.",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.2.0/crates/engine/execution-cache/src/cached_state.rs", "supports": "lines 857-882: codeless destroyed account is removed from the account cache and skipped, cached storage stays"},
+        {"url": "https://patch-diff.githubusercontent.com/raw/paradigmxyz/reth/pull/28148.patch", "supports": "fix keeps post-block storage and info of a re-created account"},
+        {"url": "https://raw.githubusercontent.com/circlefin/arc-reth/508cbdf7d6ba49b4ce735d678863897067fa381a/crates/engine/execution-cache/src/cached_state.rs", "supports": "fixed branch at lines 881-884"},
+        {"url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/CHANGELOG.md", "supports": "v0.8.5 execution cache fix (EIP-161 deletion and re-creation) and v0.8.4 state root fix"},
+        {"url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/Cargo.lock", "supports": "reth-evm from circlefin/arc-reth v2.2.0-arc.2 508cbdf, revm 38.0.0, revm-interpreter 35.0.1, ruint 1.20.0"},
+        {"url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.0/Cargo.lock", "supports": "reth-evm from paradigmxyz/reth v2.2.0 88505c7"},
+        {"url": "https://rpc.mainnet.arc.io", "supports": "arc_getVersion returned v0.8.6-rc1 37812c61 on 24 November 2026"},
+        {"url": "https://arc-rpc.publicnode.com", "supports": "arc_getVersion returned v0.8.5 602eed3b, web3_clientVersion reth/v2.2.0-508cbdf"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Tempo's own instruction table: which opcodes Tempo replaces and whether the PoolManager bytecode reaches any of them.",
+      "agrees": true,
+      "note": "tempo v1.19.0 crates/evm/src/handler/config.rs tempo_opcode_config sets only 0x4f, SSTORE and 0xef. instructions.rs sstore stores the value through host().sstore under message().destination and then calls sstore_storage_credits from T7; the credit balance and mode are keyed by the writing account (storage_credits/mod.rs slot(account) and set_mode(msg_sender)), so another account cannot change the PoolManager's credit state, and the only non-gas failure is a credit slot above u64, which the u64 bookkeeping does not write. configurable_account halts with OpcodeNotFound unless T14 is active and the running code is CONFIGURABLE_ACCOUNT_CODE. I did not rerun the bytecode disassembly."
+    },
+    {
+      "check": "Arc releases v0.8.1 to v0.8.6 against the v0.8.0 reading: pinned interpreter and integer library, instruction table, frame hooks for value calls.",
+      "agrees": true,
+      "note": "arc-node v0.8.6 evm.rs has insert_instruction only in insert_arc_selfdestruct_instruction (lines 114-133), which replaces SELFDESTRUCT per Zero7 and Zero8; the forked inspect_instructions runs only on the inspector path (lines 1395-1410). Both locks pin revm 38.0.0, revm-interpreter 35.0.1 and ruint 1.20.0. The ruint update the changelog lists sits in the v0.8.0 section, so v0.8.0 to v0.8.6 share one integer library."
+    },
+    {
+      "check": "Whether the stale execution cache fault of reth v2.2.0 (Arc v0.8.0 to v0.8.4) can make a node read a wrong word of PoolManager storage or of a token or hook in a pool without attacker-made contracts.",
+      "agrees": true,
+      "note": "reth v2.2.0 cached_state.rs lines 863-879 clear the whole cache when the destroyed account had code at block start, so contracts with code never keep stale words; only addresses codeless at block start reach the faulty branch."
+    }
+  ],
+  "leads": []
+}

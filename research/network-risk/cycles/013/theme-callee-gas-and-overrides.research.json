@@ -1,0 +1,250 @@
+{
+ "unit": "theme-callee-gas-and-overrides",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Arc wraps every value-carrying CALL in a frame hook that fails transfers to address(0), to blocklisted accounts and to accounts destroyed earlier in the transaction, which changes the success flag of a native take",
+   "chainIds": [
+    5042
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A3",
+    "A10"
+   ],
+   "effect": "degrade",
+   "actor": "unprivileged",
+   "severity": "info",
+   "difference": "Ethereum executes CALL with value to any address and only fails it for insufficient balance or depth. arc-node v0.8.6 intercepts frame initialisation (ArcEvm::frame_init, crates/evm/src/evm.rs lines 669-711) and, for every CALL or CREATE that carries a nonzero value, runs before_frame_init (lines 607-629) and check_blocklist_and_create_log (lines 516-605). That function returns a revert with an Error(string) payload when the sender or the recipient is address(0) (\"Zero address not allowed\"), when either is set in the NativeCoinControl blocklist (\"Blocked address\"), or when the recipient was selfdestructed earlier in the transaction. On success it adds an EIP-7708 Transfer log. The blocklist reads are journal SLOADs that are not charged (meter_sloads = false at line 525), so a rejected frame returns all of its gas. The only replaced instruction handler is SELFDESTRUCT (insert_arc_selfdestruct_instruction, lines 114-134). Calls to 0x1800000000000000000000000000000000000003 (CallFrom) are diverted to a subcall precompile that admits only two callers (lines 1805-1820) and charges 100 gas to anyone else (lines 137-151).",
+   "mechanism": "1. take(address(0), to, amount) with amount > 0 makes the PoolManager run call(gas(), to, amount, 0, 0, 0, 0) at src/types/Currency.sol:48. 2. On Arc the frame hook sees a value transfer from the PoolManager to `to`. With to = address(0) it returns Revert with 100 bytes of Error(string). eth_call from the PoolManager address measured success 0 and the reason string on Arc, and success 1 on the 13 other networks tested, Ethereum included (raw/zero-recipient.json). With amount = 0 the hook is skipped and the call succeeds as on Ethereum. 3. The PoolManager sees success = false and reverts through CustomRevert.bubbleUpAndRevertWith with NativeTransferFailed (src/types/Currency.sol:51-52), which also undoes the debit booked at src/PoolManager.sol:294. 4. The recipient is the `to` argument that the caller of take passes (src/PoolManager.sol:291-297). In a swap or removal on an honest pool the PoolManager makes outbound calls only to the pool's two currencies and its hook, which are fixed by the PoolKey that the pool id hashes (src/PoolManager.sol:132, 151), to the unlock caller (src/PoolManager.sol:110) and to the take recipient. None of these is chosen by a third party, so an attacker cannot place address(0), a selfdestructed account or a blocklisted account into a victim's take. Blocklisting is done by the USDC issuer (F-108).",
+   "impact": "No funds of other users are affected. A caller that asks for a native payout to address(0) gets a revert on Arc where Ethereum would burn the value, so the caller keeps its credit. A router that encodes address(0) as a burn sink would revert on Arc. The selfdestructed-target rule can only be met by a contract that the caller itself destroyed in its own transaction.",
+   "preconditions": "The caller of take chooses the recipient. No role is needed, and no third party can impose the recipient on someone else's transaction.",
+   "mitigations": "None needed in core. Integrators on Arc should not use address(0) as a native burn recipient.",
+   "coreRefs": [
+    "src/types/Currency.sol:44-52",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:110",
+    "src/PoolManager.sol:132",
+    "src/libraries/Hooks.sol:134"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/evm/src/evm.rs",
+     "supports": "lines 114-134 replace only SELFDESTRUCT; lines 516-605 reject value transfers involving address(0), blocklisted accounts or selfdestructed targets and add an EIP-7708 log; line 525 leaves the blocklist SLOADs unmetered; lines 669-711 route frame initialisation through the hook and the subcall registry; lines 1805-1820 register CallFrom at Zero7 with two allowed callers"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/evm/src/opcode.rs",
+     "supports": "SELFDESTRUCT variants for the three hardfork levels are the only instruction functions in the file (lines 64-200)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/precompiles/src/helpers.rs",
+     "supports": "line 57 ERR_ZERO_ADDRESS text, line 82 a 200 gas penalty for early reverts, lines 540-555 check_staticcall spends all gas"
+    },
+    {
+     "url": "eth_call https://rpc.mainnet.arc.io from 0x...0f0f0f to the Arc PoolManager 0x8366a39CC670B4001A1121B8F6A443A643e40951 with driver code override: CALL value 1 to address(0)",
+     "supports": "success 0, 34,329 gas, 100 byte Error(string) with a 24 character reason; value 0 succeeds; the same call succeeds on Ethereum, Tempo, MegaETH, Monad, HyperEVM, Arbitrum One, Base, OP Mainnet, BNB Smart Chain, Polygon, Avalanche, Celo and X Layer (research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/zero-recipient.json)"
+    },
+    {
+     "url": "src/types/Currency.sol:48",
+     "supports": "native payout forwards gas() and value to the caller-supplied recipient"
+    },
+    {
+     "url": "src/PoolManager.sol:291-297",
+     "supports": "take pays the recipient named by its caller after debiting the caller"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L1",
+   "check": "Arc arc-node v0.8.6, the complete set of instruction, gas and call hooks it adds to revm 38.0.0 (lead L-681). The endpoint answers web3_clientVersion with arc/v1, which names no release.",
+   "result": "Instruction table: only SELFDESTRUCT is replaced (evm.rs lines 114-134, three variants by hardfork); the PoolManager bytecode has no SELFDESTRUCT. Frame hook: every CALL or CREATE with nonzero value passes check_blocklist_and_create_log (evm.rs lines 516-605), recorded as the finding of this unit; the PoolManager reaches it only at the native payout of src/types/Currency.sol:48, and the success flag differs from Ethereum only for a recipient that is address(0), blocklisted or destroyed earlier in the same transaction. A rejected frame returns all of its gas, so the PoolManager has more gas left than after a stock failure. Subcall registry: calls to 0x1800..03 are diverted to CallFrom with an allow list (evm.rs lines 669-711 and 1805-1820), and a caller outside the list gets a 100 gas revert (lines 137-151). Precompile set: the stock Osaka set plus four stateful precompiles at 0x1800..00 (NativeCoinAuthority), 0x1800..01 (NativeCoinControl), 0x1800..02 (SystemAccounting) and 0x1800..04 (PQ) (precompile_provider.rs lines 46-71, pq-precompile lib.rs line 26). Their state-changing selectors run check_staticcall first, which spends all gas (helpers.rs 540-555), but the only staticcall the PoolManager makes is balanceOf(address) at src/types/Currency.sol:94, which none of them implements, so it takes the 200 gas invalid-selector revert. Measured from the PoolManager address: 0x1800..00 to ..04 revert with 100 bytes for 323 to 2,829 gas on all five call shapes; 0x1800..05 to ..09 hold the one byte code 0xef and consume all forwarded gas, which is ordinary EVM semantics for an undefined opcode. KECCAK256, MCOPY, RETURNDATACOPY, TLOAD, TSTORE, SSTORE, LOG and the arithmetic are the stock revm handlers, as cycle 12 and the stablecoin-l1 unit of this cycle found for v0.8.0 to v0.8.6.",
+   "source": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/evm/src/evm.rs lines 114-185, 516-629, 669-711, 1805-1820; https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/evm/src/opcode.rs; https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/precompiles/src/precompile_provider.rs lines 46-71; https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/precompiles/src/helpers.rs lines 82, 540-555; https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/precompiles/src/native_coin_authority.rs lines 102-125; https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/pq-precompile/src/lib.rs line 26; eth_getCode of 0x1800..01, ..04, ..05, ..09 on https://rpc.mainnet.arc.io returned 0xef; research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/cg_<chainId>.json and research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/calleegas.json (calleegas.py, eth_call with a driver placed by state override at the PoolManager address, 1,000,000 gas forwarded)"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "MegaETH mega-evm (main branch; state/cleared.json records Rex6 active on mainnet since 25 August 2026): the handlers it replaces and whether any changes a value, a success flag, return data or gas left for the PoolManager's operands.",
+   "result": "From MINI_REX on, all 256 table entries are rebuilt (instructions.rs lines 859-916 and following). Arithmetic, comparison, shift, KECCAK256, CALLDATA*, RETURNDATA*, MCOPY, TLOAD and TSTORE are the revm handler inside compute_gas_ext, which only records compute gas. SSTORE and LOG gain storage gas and data-size limits (storage_gas_ext, additional_limit_ext). CALL, STATICCALL, DELEGATECALL and CALLCODE go through forward_gas_ext, which caps the gas given to the callee at 98/100 of what remains instead of 63/64 (lines 1064-1180), and from Rex4 through volatile_data_ext, which reverts a call to the block beneficiary only when the calling frame has disabled volatile access and caps later compute gas after an oracle or beneficiary access (lines 40-140, 405-445). SELFBALANCE gains the same beneficiary guard. Measured with a callee that returns GAS: a hook or token called from the PoolManager address gets 97.87 percent of the parent's gas on MegaETH against 98.31 percent on 19 other networks (raw/fwdgas.json). The PoolManager keeps more gas after each callee returns, so its own revert wrapping cannot run short; a callee gets about 0.44 percent less, which changes gas only. The PoolManager never touches the beneficiary and never disables volatile access, so the guard cannot fire on its own calls, and an attacker cannot set that flag in a victim's frame (F-018 records the hook author case).",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/evm/instructions.rs lines 40-140, 284-480, 859-916, 1064-1180, 1283-1340; research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/fwdgas.json (fwdgas.py)"
+  },
+  {
+   "chainIds": [
+    10,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    8453,
+    42220,
+    196
+   ],
+   "lens": "L1",
+   "check": "OP Stack clients: op-revm, Base, celo-reth, World Chain and X Layer instruction tables.",
+   "result": "op-revm builds EthInstructions::new_mainnet_with_spec (op-revm evm.rs line 38) and changes only transaction-level handler steps (fees, deposits, refunds, handler.rs). celo-revm wraps OpEvm with the same stock table (celo-revm evm.rs line 59) and adds precompiles, of which 0xfd (CELO transfer) consumes all forwarded gas for every call shape from the PoolManager. Base was read in cycle 10 as the stock table. World Chain and X Layer source for this cycle was not found at the paths tried (two 404 answers), so for them the evidence is behavioural: the 63/64 forwarding ratio equals Ethereum's to the gas unit, every common precompile answers as on Ethereum, and the earlier battery and script sets match. X Layer's L2ToL1MessagePasser rejects value from the PoolManager, which OP Mainnet's accepts; that is a predeploy difference already in F-047 territory.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.9.0-rc.1/rust/op-revm/src/evm.rs line 38; https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.9.0-rc.1/rust/op-revm/src/handler.rs; https://raw.githubusercontent.com/celo-org/celo-kona/main/crates/celo-revm/src/evm.rs line 59; research/network-risk/OPCODES.md lines 128-133 and 217; research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/fwdgas.json; research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/cg_<chainId>.json and research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/calleegas.json (calleegas.py, eth_call with a driver placed by state override at the PoolManager address, 1,000,000 gas forwarded)"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "Nitro's go-ethereum fork at 0e44603: which opcode handlers and call paths it changes.",
+   "result": "GASPRICE, BLOCKHASH and NUMBER read through ProcessingHook (instructions.go lines 408-470), SELFDESTRUCT burns a self-directed balance and refuses Stylus programs (lines 939-1002), and the CALL family records the target for compliance filtering through TouchAddress (lines 739, 785, 826, 863), which F-001 covers at operator level. EVM.Call keeps the stock balance check, value transfer and empty-code shortcut and sends precompile addresses to RunPrecompiledContract with an AdvancedPrecompileCall (evm.go lines 262-345). The PoolManager uses none of GASPRICE, BLOCKHASH, NUMBER or SELFDESTRUCT. Measured: the Arb precompiles 0x64 to 0x73, 0xc8 (NodeInterface, served by eth_call only), 0xff and 0xa4b05 consume all forwarded gas for every shape the PoolManager can send, and the 63/64 ratio equals Ethereum's (Arbitrum One differs by 915 gas in the parent's starting gas only).",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/instructions.go lines 408-470, 739-863, 925-1002; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/evm.go lines 262-345; research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/cg_<chainId>.json and research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/calleegas.json (calleegas.py, eth_call with a driver placed by state override at the PoolManager address, 1,000,000 gas forwarded)"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Tempo v1.19.0 instruction overrides and precompiles as callees of the PoolManager.",
+   "result": "The instruction overrides (0x4f, SSTORE, 0xef) were read by the stablecoin-l1 unit of this cycle and none changes a value the PoolManager reads. Precompile set at v1.19.0: fee manager 0xfeec, TIP-403 registry 0x403c, TIP-20 factory 0x20fc, stablecoin DEX 0xdec0, nonce 0x4e4f4e4345, validator configs 0xcccccccc..00 and ..01, account keychain 0xaaaaaaaa, address registry 0xfdc0, signature verifier 0x51653, receive policy guard 0xb10c, storage credits 0x1060, committee 0xc077e (contracts precompiles mod.rs lines 45-86). From the PoolManager address all of them revert with 36 bytes or less for 129 to 3,109 gas, none consumes the forwarded gas. A native value call to a fresh account costs about 259,000 gas and a pathUSD transfer to a fresh recipient about 274,000, which is Tempo's state gas for new accounts and slots and depends only on the recipient the caller picked. Forwarding is 63/64.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.0/crates/contracts/src/precompiles/mod.rs lines 45-86; research/network-risk/cycles/013/stablecoin-l1.research.json cleared item on tempo_opcode_config; research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/cg_<chainId>.json and research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/calleegas.json (calleegas.py, eth_call with a driver placed by state override at the PoolManager address, 1,000,000 gas forwarded)"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Monad v0.16.x as a callee host: forwarding rule, system addresses that burn forwarded gas.",
+   "result": "Forwarding is 63/64; the child got 1,938,110 gas where the 63/64 rule with Monad's cold account access of 10,100 gas gives 1,938,118 less the 2 gas GAS opcode. The staking precompile 0x1000 and the address 0x1001 consume all forwarded gas on every shape from the PoolManager; 0x1002 and 0x1003 behave as empty accounts. Precompiles 0x01 and 0x08 cost more than on Ethereum (6,129 and 225,129 gas measured for empty input), which changes gas only. The interpreter and compiler tables were read in cycles 9 to 11 with no change of result.",
+   "source": "research/network-risk/OPCODES.md lines 111, 186, 202, 213, 234; research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/fwdgas.json; research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/cg_<chainId>.json and research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/calleegas.json (calleegas.py, eth_call with a driver placed by state override at the PoolManager address, 1,000,000 gas forwarded)"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "check": "HyperEVM read precompiles 0x0800 to 0x0813, CoreWriter 0x3333..33 and the system addresses as callees of the PoolManager.",
+   "result": "0x0800 to 0x0808 and 0x080a to 0x0813 consume all forwarded gas for every shape the PoolManager can send; 0x0809 (L1 block number) answers every shape with 32 bytes, as F-021 records. CoreWriter 0x3333..33 reverts for about 2,700 gas, 0x2222..22 accepts value, 0x5555..55 (WHYPE) behaves as a token. Precompile 0x08 costs 450,129 gas for empty input against 45,129 on Ethereum, a repricing recorded as F-045. The BLS precompiles 0x0b to 0x11 do not exist and answer as empty accounts where Ethereum consumes all gas. Forwarding is 63/64. The validator is closed source, so these answers come from the official RPC node only.",
+   "source": "eth_call via https://rpc.hyperliquid.xyz/evm, research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/cg_<chainId>.json and research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/calleegas.json (calleegas.py, eth_call with a driver placed by state override at the PoolManager address, 1,000,000 gas forwarded); research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/fwdgas.json"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114
+   ],
+   "lens": "L1",
+   "check": "bor, BSC geth and avalanchego as callee hosts: system contracts and precompile set.",
+   "result": "The system contracts 0x1000 to 0x1008, 0x2000 to 0x2006, 0x3000 and 0x1010 on Polygon and BNB Smart Chain revert with ordinary gas use for every shape from the PoolManager; none consumes the forwarded gas. On Avalanche 0x0200..05 holds the one byte code 0x01 and consumes all forwarded gas through a stack underflow, ordinary EVM semantics; 0x0100..00 to ..02 revert for about 123 gas. Polygon lacks 0x0a and the BLS precompiles, HyperEVM and Avalanche lack 0x0b to 0x11, so calls there succeed cheaply where Ethereum consumes all gas, the opposite of a griefing gain. The interpreter readings of cycles 9 and 12 found no handler change for these clients beyond storage gas on bor and the slot fold on Avalanche (F-040). Forwarding is 63/64 on all three.",
+   "source": "research/network-risk/OPCODES.md lines 112-114; research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/fwdgas.json; eth_getCode of 0x0200000000000000000000000000000000000005 on https://api.avax.network/ext/bc/C/rpc returned 0x01; research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/cg_<chainId>.json and research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/calleegas.json (calleegas.py, eth_call with a driver placed by state override at the PoolManager address, 1,000,000 gas forwarded)"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "check": "Ethereum baseline for callee gas.",
+   "result": "From the PoolManager address the precompiles 0x05 to 0x11 consume all forwarded gas for malformed input on Ethereum as well; that is how the EVM treats a failing precompile. A take to such an address, or a pool whose hook is such an address, therefore fails the same way on Ethereum, and the special addresses found on other networks add nothing an attacker could not already do on Ethereum in its own transaction.",
+   "source": "research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/cg_<chainId>.json and research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/calleegas.json (calleegas.py, eth_call with a driver placed by state override at the PoolManager address, 1,000,000 gas forwarded)"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Callee gas: can an ordinary account make a precompile, predeploy or system contract that burns forwarded gas the recipient of a take or native payout, the hook or a currency inside a transaction that a victim sends through a normal router on an honest pool (lead L-684).",
+   "result": "No on all 21 networks, on the text of the code. The PoolManager makes outbound calls at four places only: the native payout and the token transfer of src/types/Currency.sol:48 and :73, whose target is the currency of the take and whose recipient is the `to` argument chosen by the caller of take (src/PoolManager.sol:291-297); the balanceOf staticcall of sync at src/types/Currency.sol:94, whose currency the caller chooses (src/PoolManager.sol:279-288); the hook call of src/libraries/Hooks.sol:134, whose target is key.hooks, part of the PoolKey that the pool id hashes (src/PoolManager.sol:132, 151); and the unlock callback to msg.sender (src/PoolManager.sol:110). In a victim's swap or removal on an honest pool, the currencies and the hook are fixed by the pool and the recipient and the callback target are fixed by the victim's router and calldata. No storage that a third party can write steers any of these targets. A gas-burning address can therefore appear only in a transaction the attacker builds, where it costs the attacker gas and reverts the attacker's own unlock. Where a hook address is a special address, the low 14 bits decide which callbacks run: HyperEVM 0x0800 to 0x0813 all set BEFORE_ADD_LIQUIDITY (Hooks.sol:32), so no deposit can enter such a pool; Monad 0x1000 sets AFTER_INITIALIZE (Hooks.sol:30), so the pool cannot be created; Arc 0x1800..00 has no flag bits and is never called. Gas forwarding is 63/64 everywhere except MegaETH (98/100), so after a callee burns its gas the PoolManager keeps at least 1/64 to revert. A victim's swap or removal therefore cannot be made to fail or to cost far more on any of the 21 networks through callee gas.",
+   "source": "src/types/Currency.sol:48, src/types/Currency.sol:73, src/types/Currency.sol:94, src/PoolManager.sol:110, src/PoolManager.sol:132, src/PoolManager.sol:151, src/PoolManager.sol:279-297, src/libraries/Hooks.sol:30-47, src/libraries/Hooks.sol:109-124, src/libraries/Hooks.sol:134; research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/cg_<chainId>.json and research/network-risk/cycles/013/theme-callee-gas-and-overrides.work/raw/calleegas.json (calleegas.py, eth_call with a driver placed by state override at the PoolManager address, 1,000,000 gas forwarded)"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Whether any client override found in this unit changes what the PoolManager computes, as opposed to gas.",
+   "result": "No. The handlers replaced on Arc (SELFDESTRUCT, value-call frame hook, CallFrom intercept), MegaETH (gas wrappers, 98/100 forwarding, volatile guards), Tempo (0x4f, SSTORE, 0xef) and Nitro (GASPRICE, BLOCKHASH, NUMBER, SELFDESTRUCT, filter touches) leave every arithmetic, hashing, memory, return data and transient storage result unchanged. The PoolManager's five GAS reads only feed call gas, so a different amount of gas left cannot steer its logic. The one value-visible change is Arc's success flag for value calls to three recipient classes, recorded as the finding.",
+   "source": "research/network-risk/OPCODES.md lines 146, 118; https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/evm/src/evm.rs; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/evm/instructions.rs; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/instructions.go"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "question": "Which hooks deployed on HyperEVM call the read precompiles 0x0800 to 0x0813, and can a third party make one of those reads fail inside a victim's swap, given that a failed read consumes all forwarded gas?",
+   "why": "Hook hazard recorded in one line as instructed. An oracle hook whose read fails would revert every swap of its pool; it needs a hook the victims chose.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "question": "Which mega-evm release and spec does the MegaETH sequencer run today, and does its forward_gas_ext and volatile_data_ext layering equal the main branch read here?",
+   "why": "The node is closed, the reading is of the public main branch, and the 98/100 rule was confirmed only through eth_call on the replica.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-681",
+   "outcome": "finding",
+   "answer": "Arc v0.8.6 replaces one instruction handler (SELFDESTRUCT), wraps every value-carrying CALL and CREATE in a frame hook that rejects address(0), blocklisted accounts and selfdestructed targets and adds an EIP-7708 log, diverts calls to 0x1800..03 to an allow-listed subcall precompile, and adds four stateful precompiles. The PoolManager reaches only the frame hook, at the native payout of src/types/Currency.sol:48, and the success flag differs from Ethereum only for recipients the caller of take picks. Recorded as an information finding; no path to other users' funds."
+  },
+  {
+   "leadId": "L-684",
+   "outcome": "cleared",
+   "answer": "Gas-burning special addresses exist on Monad (0x1000, 0x1001), HyperEVM (0x0800 to 0x0813 except 0x0809), Arbitrum One, Robinhood Chain and Elysium (0x64 to 0x73, 0xff, 0xa4b05), Celo (0xfd), Arc (0x1800..05 to ..09) and Avalanche (0x0200..05), as do the failing precompiles 0x05 to 0x11 on Ethereum. Tempo has none. None can be placed into a victim's transaction on an honest pool, because the PoolManager's callees there are the pool's currencies and hook, the victim's router and the victim's recipient."
+  },
+  {
+   "leadId": "L-669",
+   "outcome": "inconclusive",
+   "answer": "Not reachable by reading: the MegaETH sequencer executor and the HyperEVM validator are closed. This unit read only the public mega-evm main branch instruction layering and found no code cache keyed apart from content in it."
+  }
+ ]
+}
