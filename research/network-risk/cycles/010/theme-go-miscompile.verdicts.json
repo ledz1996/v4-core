@@ -1,0 +1,42 @@
+{
+ "unit": "theme-go-miscompile",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "The Go fix commit 00ba484 on go.googlesource.com is titled 'cmd/compile: teach deadstore about CondSelect', says CondSelect could not reach deadstore before CL 685676 and CL 715044, and says 'Fixes #81863'. deadstore.go at go1.27.3 line 333 keeps autos that reach OpPhi only; at go1.27.4 lines 332-333 the condition adds OpCondSelect with a comment naming issue 81863. compile.go at go1.25.12 lists 'dead auto elim' at line 477 before 'branchelim' at line 480, while go1.26.10 (479, 481) and go1.27.3 (480, 482) run branchelim first, so go1.25.12 is outside the faulty pass order. branchelim.go at go1.27.3 lines 28-41 and 72-83 collects every value used in a load address and refuses to turn it into a CondSelect, which supports the claim that pointers only loaded from keep their Phi. go.dev/doc/devel/release lists go1.26.10 and go1.27.3 on 2026-10-19 and go1.26.11 and go1.27.4 on 2026-11-10. My own web3_clientVersion calls on 2026-11-24 returned nitro/v3.13.0-rc.9 linux-arm64 go1.27.3 for Arbitrum One and Robinhood Chain, bor v2.11.1-private linux-amd64 go1.26.10 from publicnode, Geth/v1.8.2 linux-amd64 go1.26.10 from bsc-dataseed1 and avalanchego 1.15.3 go=1.26.10. uint256 v1.3.2 AddMod (lines 215-266) selects x between the caller's pointer and &tmpX and y between the caller's pointer and &tmpY, and reads through them only, as the finding says. The Go issue page on github.com did not load through the proxy, so the issue text itself was not read; the fix commit and the tagged sources carry the same facts.",
+   "codeCheck": "The cited sites use the opcodes said: TickBitmap.sol:20-27 uses signextend, sdiv and smod for compress; Pool.sol:576-578 uses sdiv and smod in tickSpacingToMaxLiquidityPerTick; FullMath.sol:24 uses mulmod with not(0); SqrtPriceMath.sol:252 uses mulmod for round up. grep finds no addmod in src/. Since every vector against those opcodes matched on the affected builds and no node function with the shape was found, no line of src/ computes a different value. The finding claims no attacker path, and I found none.",
+   "corrections": "",
+   "sources": [
+    {"url": "https://go.googlesource.com/go/+/00ba484%5E%21/", "supports": "Fix commit 'cmd/compile: teach deadstore about CondSelect', Fixes #81863, adds OpCondSelect to the keep rule."},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/deadstore.go?format=TEXT", "supports": "Line 333 keeps autos reaching OpPhi only."},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.27.4/src/cmd/compile/internal/ssa/deadstore.go?format=TEXT", "supports": "Lines 332-333 add OpCondSelect, citing issue 81863."},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.25.12/src/cmd/compile/internal/ssa/compile.go?format=TEXT", "supports": "dead auto elim at line 477 runs before branchelim at line 480."},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.26.10/src/cmd/compile/internal/ssa/compile.go?format=TEXT", "supports": "branchelim at line 479 runs before dead auto elim at line 481."},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/branchelim.go?format=TEXT", "supports": "Lines 28-41 and 72-83: no CondSelect for values that feed a load address."},
+    {"url": "https://go.dev/doc/devel/release", "supports": "go1.27.3 and go1.26.10 released 2026-10-19; go1.27.4 and go1.26.11 released 2026-11-10."},
+    {"url": "https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go", "supports": "AddMod lines 215-266 select pointers between caller operands and tmpX and tmpY and only load through them."},
+    {"url": "on-chain query: web3_clientVersion to arb1.arbitrum.io/rpc, rpc.mainnet.chain.robinhood.com, polygon-bor-rpc.publicnode.com, bsc-dataseed1.bnbchain.org, api.avax.network/ext/bc/C/rpc on 2026-11-24", "supports": "nitro v3.13.0-rc.9 linux-arm64 go1.27.3 (both nitro chains), bor v2.11.1-private go1.26.10, Geth/v1.8.2 go1.26.10, avalanchego 1.15.3 go=1.26.10."}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "bsc v1.8.2 and bor v2.11.1 core/vm and core/state for the shape.",
+   "agrees": true,
+   "note": "bor interpreter.go lines 123-126 pick interrupt between evm.interrupt and new(atomic.Bool). evm.interrupt is a field load, not a local address, and the flag is later read atomically, which puts it in branchelim's load address set (branchelim.go 35-36), so no CondSelect forms there."
+  },
+  {
+   "check": "libevm d398bc4dbe41 core/vm and core/state and uint256 v1.2.4 for the shape.",
+   "agrees": true,
+   "note": "libevm instructions.go 173-181 opAddmod branches on z.IsZero and calls z.Clear or z.AddMod(&x, &y, z); z is the stack pointer on both arms, and &x and &y are fixed locals passed to a call, so no pointer is selected between two locals."
+  },
+  {
+   "check": "Does any other network's endpoint report a Go toolchain.",
+   "agrees": true,
+   "note": "My own web3_clientVersion calls returned arc/v1, tempo/v1.19.0 x86_64-unknown-linux-gnu, hyperliquid evm Mainnet and Monad/unknown. None reports a Go toolchain. The strings arc/v1 and hyperliquid evm do not name an implementation language, so the claim that these are not Go programs rests on the absence of a go version suffix and was not confirmed from a primary source for those two."
+  }
+ ],
+ "leads": []
+}

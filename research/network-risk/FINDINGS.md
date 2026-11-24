@@ -1,6 +1,6 @@
 # All findings
 
-116 findings on record after cycle 9, in-scope ones first.
+118 findings on record after cycle 10, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -2980,6 +2980,64 @@ Sources:
 - https://raw.githubusercontent.com/celo-org/op-geth/c7ed55b8/params/config.go (the fork's ChainConfig has Jovian and Interop fields and no Karst field)
 - https://docs.optimism.io/op-stack/protocol/hardforks/karst (op-geth does not support Karst)
 - https://forno.celo.org web3_clientVersion batched with eth_call and eth_getBlockByNumber, 2026-11-24 (both backends answer on the public endpoint and agree today (research/network-risk/cycles/009/op-stack-custom-gas.work/out/forno-heads.json))
+
+## F-117. Five go-ethereum family nodes run a Go toolchain with a published silent dead store miscompile, and no function on the opcode or state path has the triggering shape
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Arbitrum One, Robinhood Chain, Polygon, BNB Smart Chain, Avalanche.
+
+What differs on the network: Go issue 81863: from Go 1.26.0 through go1.26.10 and from Go 1.27.0 through go1.27.3, the dead auto elimination pass attributes a CondSelect of two local addresses to its first operand only, so a store through a pointer that a branch chose between two non-escaping locals is deleted when the first local is never read, even if the other one is. It applies on every architecture whose compiler emits CondSelect (amd64, arm64, ppc64le, loong64, wasm). The fix is go1.26.11 and go1.27.4, released 2026-11-10. Today Arbitrum One answers as nitro v3.13.0-rc.9 linux-arm64 go1.27.3, Robinhood Chain as the same release on linux-arm64 and linux-amd64 with go1.27.3, Polygon (publicnode) as five bor v2.11.1-private builds with go1.26.10, BNB Smart Chain as Geth/v1.8.2 linux-amd64 go1.26.10, and Avalanche as avalanchego 1.15.3 go=1.26.10. Elysium reports go1.25.12 and the Celo op-geth backend go1.24.13, which predate the faulty pass order.
+
+How it meets the code: The miscompile needs four things in one function after inlining: two stack allocated locals whose address is taken, a pointer that a side effect free if or if-else picks between their addresses, a store, zeroing or copy through that pointer and no load through it (branchelim refuses a CondSelect whose result feeds a load address), and a later direct read of the second local. A scan of holiman/uint256 v1.3.2 and v1.2.4 (all of uint256.go, mod.go, div.go, conversion.go, decimal.go) and of core/vm instructions.go, interpreter.go, stack.go, memory.go, evm.go, eips.go and core/state journal.go, transient_storage.go, statedb.go, state_object.go, access_list.go of the nitro fork 0e44603, bsc v1.8.2, bor v2.11.1 and libevm d398bc4dbe41 found no such function. The only branch selected pointers are: uint256 AddMod (x = &tmpX, y = &tmpY, v1.3.2 lines 240-245), where one operand is the caller's pointer, the pointers are only loaded from, and branchelim therefore keeps the Phi; SMod and SDiv, where the branch calls Neg and so is not side effect free and the pointer is only passed to Mod or Div; DivMod (m = new(Int).Set(m)) with a side effect in the branch; bor's interrupt flag in Run, loaded atomically and passed to runSwitch; the jump table choice in evm.go, which takes addresses of globals; and journal mutation state, which is heap memory. Sqrt in v1.2.4 swaps two pointers in a loop, which branchelim does not touch, and no opcode calls Sqrt. A dropped store in these functions would change the ADDMOD, SDIV or SMOD result, so those operands were run: 6,000 ADDMOD vectors with a modulus of at least 2^192 and each operand above, equal to or below the modulus, 6,112 SDIV and SMOD vectors over all sign pairs, plus the 99,985 battery and 85,544 targeted vectors. On each of the five networks every request was a JSON-RPC batch of web3_clientVersion and eth_call. There was no mismatch on any build. The PoolManager reaches SDIV and SMOD in TickBitmap.compress and Pool.tickSpacingToMaxLiquidityPerTick and MULMOD in FullMath and SqrtPriceMath; ADDMOD appears only in the compiler's metadata trailer.
+
+What is at risk: No path by which an ordinary account takes or freezes funds was found. If an unread function of the node held the shape, a node built with an affected toolchain would compute another state than one built with a fixed toolchain, which is a consensus fault of the operators and not something an attacker can aim at a pool through the PoolManager.
+
+What it takes: Block producers would have to run an affected build and some function on the state transition path outside the files read would have to contain the shape. Neither is shown. The sequencer and validator builds are not published.
+
+What can be done: Ask the Arbitrum, Robinhood Chain, Polygon, BNB Smart Chain and Avalanche operators to rebuild with go1.26.11 or go1.27.4 or later. Rerun paired.py after their next release.
+
+Code: `src/libraries/TickBitmap.sol:20-27`, `src/libraries/Pool.sol:576-578`, `src/libraries/FullMath.sol:24`, `src/libraries/SqrtPriceMath.sol:252`.
+
+Sources:
+
+- https://github.com/golang/go/issues/81863 (Issue 81863: the reproducer with p chosen between &x and &y and a store through p that is lost; bisected to CL 685676 of July 2025; called a silent wrong answer miscompile; backports to 1.26 and 1.27 requested.)
+- https://go.googlesource.com/go/+/00ba484%5E%21/ (Fix commit 00ba484, 'teach deadstore about CondSelect': adds OpCondSelect to the keep rule in deadstore.go and the test fixedbugs/issue81863.go.)
+- https://github.com/golang/go/issues/81865 (1.26 backport merged to release-branch.go1.26 as c7bed29 on 2026-10-27.)
+- https://github.com/golang/go/issues/81866 (1.27 backport merged to release-branch.go1.27 as 8b28706 on 2026-10-27.)
+- https://go.dev/doc/devel/release (go1.26.10 and go1.27.3 released 2026-10-19 with crypto/x509 fixes only; go1.26.11 and go1.27.4 released 2026-11-10 with compiler fixes.)
+- https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/deadstore.go?format=TEXT (go1.27.3 deadstore.go line 333 keeps autos that reach Phi but not CondSelect; the go1.27.4 file has OpCondSelect, and go1.26.10 line 320 lacks it while go1.26.11 has it.)
+- https://go.googlesource.com/go/+/refs/tags/go1.25.12/src/cmd/compile/internal/ssa/compile.go?format=TEXT (In go1.25.12 branchelim runs after dead auto elim (lines 477-480), so no CondSelect exists when that pass runs; in go1.26.10 and go1.27.3 branchelim runs before it (compile.go 479-481 and 480-482).)
+- https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/config.go?format=TEXT (haveCondSelect is set for amd64, arm64, ppc64le, loong64 and wasm, so both builds the nodes report are affected.)
+- https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/branchelim.go?format=TEXT (branchelim does not make a CondSelect whose value feeds a load address and requires trivial if or if-else blocks.)
+- https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go (uint256 v1.3.2 AddMod lines 215-266, udivrem 520-581, MulMod 720-750, SDiv 789-809, SMod 668-683, Lsh, Rsh, SRsh, ExtendSign 1042-1290: no store through a pointer selected between two locals.)
+- https://raw.githubusercontent.com/holiman/uint256/v1.2.4/uint256.go (uint256 v1.2.4 AddMod 198-249, SMod 636-651, Sqrt 1306-1340: same result.)
+- on-chain query: web3_clientVersion batched with each eth_call, 2026-11-24, research/network-risk/cycles/010/theme-go-miscompile.work/paired.json and research/network-risk/cycles/010/theme-go-miscompile.work/clientversions.json (Builds that answered: Arbitrum One linux-arm64 go1.27.3 (397 chunks); Robinhood Chain linux-arm64 and linux-amd64 go1.27.3 (393 chunks by both, 4 by one); Polygon five bor v2.11.1-private go1.26.10 builds; BSC Geth/v1.8.2 go1.26.10; Avalanche avalanchego 1.15.3 go=1.26.10. 197,641 vectors per network, 0 mismatches, 0 errors.)
+
+## F-118. MegaETH blocks are executed by a closed JIT executor that no public RPC node re-executes, so eth_call evidence speaks for a different EVM than the one that writes PoolManager state
+
+Info severity, confirmed. Effect: both. Who can trigger it: sequencer, validator or bridge committee. Networks: MegaETH.
+
+What differs on the network: On Ethereum every node re-executes every block with an interpreter whose source is public. On MegaETH the sequencer runs a parallel, JIT-compiled executor whose source is not published. The default RPC nodes are replicas that apply the sequencer's results without re-execution. Only stateless validators, full nodes and provers re-execute, and the public stateless validator does so with the stock revm 40.0.3 interpreter, mega-evm v1.7.3 and ruint 1.17.2.
+
+How it meets the code: 1. The stateless-validator README says the validator uses a single-threaded executor based on the vanilla revm interpreter, and that, together with the K-semantics executor and the JIT-compiled executor on sequencer nodes, this makes three MegaETH client implementations. 2. The architecture page says replica nodes receive blocks and execution results from the sequencer and apply them without re-execution, and that this is the default RPC mode. eth_call and debug_traceTransaction on such a node therefore run that node's local EVM on state that the sequencer wrote. 3. The only public compiler from megaeth-labs is the evmone-compiler prototype. Its PUSHnJUMPI tests the whole 256 bit condition through intx's explicit operator bool and falls through when the word is zero (evmone_aot_compiler.hpp lines 84-96, intx v0.10.1 line 997). It checks gas only before jumps, but a frame that ends out of gas is undone as a whole, so the late check changes gas use and not state. Nothing ties this prototype to the production build. 4. If the production executor computed MULMOD, a shift, a comparison or a jump differently from the specification, every pool's swap and liquidity amounts in src/libraries (FullMath, SqrtPriceMath, TickMath, TickBitmap) would differ in blocks only. A replica would store the wrong result. A stateless validator would see a state root mismatch. 5. This cycle found no such divergence. 2,885 mined swaps that crossed initialized ticks or took several steps reproduce to the unit. 53,811 mined swaps satisfy the tick relation. For 7,627 mined PoolManager transactions, the receipts the sequencer wrote equal the replica's re-execution in status and in every surviving log.
+
+What is at risk: None found. The record exists so that deployers know where the assurance comes from. A fault in the closed executor would hit every pool, an ordinary transaction could trigger it, and the only checks are the stateless validators and the fault proof path.
+
+What it takes: A fault in the closed production executor or in a future release of it. No fault is known.
+
+What can be done: Run the public stateless validator against MegaETH blocks that contain PoolManager transactions, and rerun tools/opdiff/swaps.py, replay.py and this unit's frames.py after each mega-reth release.
+
+Second reviewer's corrections: The compiler file is lib/compiler/aot_compiler.hpp, and the PUSHnJUMPI macro sits at lines 87-96 of it. The finding names evmone_aot_compiler.hpp lines 84-96.
+
+Code: `src/libraries/FullMath.sol:1-117`, `src/libraries/Pool.sol:279-463`, `src/PoolManager.sol:104-114`.
+
+Sources:
+
+- https://raw.githubusercontent.com/megaeth-labs/stateless-validator/main/README.md (Lines 21 and 25-26: the validator uses the vanilla revm interpreter, and sequencer nodes run a hyper-optimized, parallel, JIT-compiled executor.)
+- https://docs.megaeth.com/architecture.md (Replica nodes apply sequencer results without re-execution and are the default RPC mode. Full nodes and provers re-execute.)
+- https://raw.githubusercontent.com/megaeth-labs/stateless-validator/main/Cargo.lock (The validator pins mega-evm v1.7.3 (commit 59b8e391), revm 40.0.3, revm-interpreter 37.0.3 and ruint 1.17.2 from crates.io.)
+- https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/master/lib/compiler/aot_compiler.hpp (The PUSHnJUMPI macro pops the full word and tests it. The gas check sits before jumps (GAS_CHECK_LOC 1).)
+- https://raw.githubusercontent.com/chfast/intx/v0.10.1/include/intx/intx.hpp (Line 997: uint<N>::operator bool compares the whole value with zero.)
+- rpc https://mainnet.megaeth.com/rpc web3_clientVersion on 2026-11-24 (The endpoint reports mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2.)
 
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 

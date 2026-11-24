@@ -1,0 +1,145 @@
+{
+ "unit": "theme-megaeth-executor",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "MegaETH blocks are executed by a closed JIT executor that no public RPC node re-executes, so eth_call evidence speaks for a different EVM than the one that writes PoolManager state",
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "both",
+   "actor": "operator",
+   "severity": "info",
+   "difference": "On Ethereum every node re-executes every block with an interpreter whose source is public. On MegaETH the sequencer runs a parallel, JIT-compiled executor whose source is not published. The default RPC nodes are replicas that apply the sequencer's results without re-execution. Only stateless validators, full nodes and provers re-execute, and the public stateless validator does so with the stock revm 40.0.3 interpreter, mega-evm v1.7.3 and ruint 1.17.2.",
+   "mechanism": "1. The stateless-validator README says the validator uses a single-threaded executor based on the vanilla revm interpreter, and that, together with the K-semantics executor and the JIT-compiled executor on sequencer nodes, this makes three MegaETH client implementations. 2. The architecture page says replica nodes receive blocks and execution results from the sequencer and apply them without re-execution, and that this is the default RPC mode. eth_call and debug_traceTransaction on such a node therefore run that node's local EVM on state that the sequencer wrote. 3. The only public compiler from megaeth-labs is the evmone-compiler prototype. Its PUSHnJUMPI tests the whole 256 bit condition through intx's explicit operator bool and falls through when the word is zero (evmone_aot_compiler.hpp lines 84-96, intx v0.10.1 line 997). It checks gas only before jumps, but a frame that ends out of gas is undone as a whole, so the late check changes gas use and not state. Nothing ties this prototype to the production build. 4. If the production executor computed MULMOD, a shift, a comparison or a jump differently from the specification, every pool's swap and liquidity amounts in src/libraries (FullMath, SqrtPriceMath, TickMath, TickBitmap) would differ in blocks only. A replica would store the wrong result. A stateless validator would see a state root mismatch. 5. This cycle found no such divergence. 2,885 mined swaps that crossed initialized ticks or took several steps reproduce to the unit. 53,811 mined swaps satisfy the tick relation. For 7,627 mined PoolManager transactions, the receipts the sequencer wrote equal the replica's re-execution in status and in every surviving log.",
+   "impact": "None found. The record exists so that deployers know where the assurance comes from. A fault in the closed executor would hit every pool, an ordinary transaction could trigger it, and the only checks are the stateless validators and the fault proof path.",
+   "preconditions": "A fault in the closed production executor or in a future release of it. No fault is known.",
+   "mitigations": "Run the public stateless validator against MegaETH blocks that contain PoolManager transactions, and rerun tools/opdiff/swaps.py, replay.py and this unit's frames.py after each mega-reth release.",
+   "coreRefs": [
+    "src/libraries/FullMath.sol:1-117",
+    "src/libraries/Pool.sol:279-463",
+    "src/PoolManager.sol:104-114"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/stateless-validator/main/README.md",
+     "supports": "Lines 21 and 25-26: the validator uses the vanilla revm interpreter, and sequencer nodes run a hyper-optimized, parallel, JIT-compiled executor."
+    },
+    {
+     "url": "https://docs.megaeth.com/architecture.md",
+     "supports": "Replica nodes apply sequencer results without re-execution and are the default RPC mode. Full nodes and provers re-execute."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/stateless-validator/main/Cargo.lock",
+     "supports": "The validator pins mega-evm v1.7.3 (commit 59b8e391), revm 40.0.3, revm-interpreter 37.0.3 and ruint 1.17.2 from crates.io."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/master/lib/compiler/aot_compiler.hpp",
+     "supports": "The PUSHnJUMPI macro pops the full word and tests it. The gas check sits before jumps (GAS_CHECK_LOC 1)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/chfast/intx/v0.10.1/include/intx/intx.hpp",
+     "supports": "Line 997: uint<N>::operator bool compares the whole value with zero."
+    },
+    {
+     "url": "rpc https://mainnet.megaeth.com/rpc web3_clientVersion on 2026-11-24",
+     "supports": "The endpoint reports mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "Part two (a): full replay of every mined MegaETH swap that crossed an initialized tick (the pool's liquidity changed between consecutive swaps with no ModifyLiquidity between) or that did not fit one step of SwapMath. The window is blocks 2,912,161 to 32,724,160, with tick spacing read from the Initialize events of all 143 pools.",
+   "result": "All 2,885 reproduce. The block producer's results match the source's Pool.swap, TickBitmap.nextInitializedTickWithinOneWord, crossTick, SwapMath and SqrtPriceMath to the unit in end price, end tick, end liquidity and both amounts. That covers 1,640 swaps that crossed liquidity, up to 116 steps, and 1,245 multi-step swaps at one liquidity, up to 175 steps, 49 of them in hooked pools. The first pass left three swaps unmatched, because they ran out of liquidity to the top of the price range and their specified amount is larger than what they used. With a larger exact input or exact output and the end price as limit, all three reproduce in 61 steps at their block.",
+   "source": "research/network-risk/cycles/010/theme-megaeth-executor.work/crossed.py, research/network-risk/cycles/010/theme-megaeth-executor.work/raw/crossed.json, research/network-risk/cycles/010/theme-megaeth-executor.work/raw/edge3.json; rpc https://mainnet.megaeth.com/rpc eth_getLogs and extsload at the swap blocks, 2026-11-24"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "Part two (b): mined swaps at negative ticks and near the ends of the tick range against getTickAtSqrtPrice and getSqrtPriceAtTick (src/libraries/TickMath.sol), which use signed multiplication, SAR, SIGNEXTEND and the bit scans.",
+   "result": "53,811 Swap events in blocks 2,912,161 to 32,724,160 all satisfy the tick relation. 24,345 of them are at negative ticks. The lowest tick is -887,272 (MIN_TICK) and the highest is 887,271 (MAX_TICK - 1, at price MAX_SQRT_PRICE - 1). Six events lie beyond |tick| 400,000. The seven replay jobs that start or end beyond |tick| 400,000 reproduce, including the three that walk from tick -28,981 to 887,271 and three that come back.",
+   "source": "research/network-risk/cycles/010/theme-megaeth-executor.work/raw/crossed.json (ticks), rpc https://mainnet.megaeth.com/rpc eth_getLogs 2026-11-24"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "Part two (c), lead L-607: did the block producer roll back the transient unlock flag, the transient deltas and the pool storage of a PoolManager frame that reverted, in mined transactions where a later frame of the same transaction completed an unlock? The test compares, for each transaction, the receipt that the sequencer wrote with the status and surviving logs of debug_traceTransaction (callTracer, withLog) on the replica, which re-executes on the same pre-state.",
+   "result": "Yes. 7,627 transactions emitted PoolManager Swap or ModifyLiquidity logs between blocks 30,862,220 and 32,724,219. In 1,347 of them a frame that entered PoolManager.unlock reverted. In 1,333 of those the reverted frame contained a swap, the quoter pattern, and a later unlock in the same transaction completed. The receipt status and every surviving log equal the re-execution in all 7,627, with no trace errors. Had the producer kept the unlock flag (src/libraries/Lock.sol), the later unlock would revert with AlreadyUnlocked (src/PoolManager.sol:105). Had it kept the deltas (src/libraries/NonzeroDeltaCount.sol), the later unlock would fail with CurrencyNotSettled (src/PoolManager.sol:112). Had it kept the reverted swap's slot0, the later Swap event would carry other prices. The window has no settle, take or sync inside a reverted frame.",
+   "source": "research/network-risk/cycles/010/theme-megaeth-executor.work/frames.py, research/network-risk/cycles/010/theme-megaeth-executor.work/raw/frames.json; rpc https://mainnet.megaeth.com/rpc debug_traceTransaction and eth_getTransactionReceipt 2026-11-24"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "Part three: whether a MegaETH per-frame budget (compute gas, data size, KV updates, state growth at 98/100 of the parent's remainder) or the detention cap after a volatile read can be breached in a child of the PoolManager's frame and caught there, so that the PoolManager continues with a failed subcall and returns another result than on Ethereum.",
+   "result": "No. The resource limits spec says a child that exceeds its budget reverts with MegaLimitExceeded and the parent may continue. Every call the PoolManager makes treats failure as fatal: hooks (src/libraries/Hooks.sol:134-137), native and ERC-20 transfers (src/types/Currency.sol:48-52, 73-86), balanceOf, a high-level call that reverts on failure (src/types/Currency.sol:94, src/PoolManager.sol:285, 359), and unlockCallback (src/PoolManager.sol:110). The PoolManager reads gas() only to forward it. A breach below the PoolManager therefore reverts the PoolManager frame as a whole. A breach in the PoolManager's own frame reverts it as a whole for its caller. A transaction-level breach halts the transaction. The outcome is either the Ethereum result or a full revert, never a partial result. A token or hook that catches its own failed subcall is a token or hook matter and is not swept here.",
+   "source": "https://docs.megaeth.com/spec/megaevm/resource-limits.md (Per-Call-Frame Runtime Budgets); src/libraries/Hooks.sol:134-137; src/types/Currency.sol:44-95"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "check": "Lead L-610: which per-frame budget a swap that crosses many initialized ticks reaches first, and whether a liquidity removal can reach one.",
+   "result": "State growth binds first. Each crossing writes feeGrowthOutside0 and feeGrowthOutside1 of one tick (src/libraries/Pool.sol:602-612). A write counts as state growth only when the slot was zero at transaction start (resource accounting, Storage Slot Growth Rules). Outside values are zero only for ticks initialized above the current tick (Pool.sol:533-538), so an upward swap through freshly planted ticks adds up to 2 per tick. The PoolManager frame at depth 1 gets 980 of the 1,000 per-transaction limit, so it reverts with MegaLimitExceeded after about 490 such ticks, at roughly 24 million compute gas from 2 cold loads, 2 fresh SSTOREs and a bitmap load per tick, inferred from standard gas costs and not measured. Ticks with nonzero outside values cost about 14,000 compute gas per crossing. 200 million compute gas then allows about 14,000 crossings, 28,000 KV updates and 1.1 MB of data size, far below the shares of 490,000 KV updates and 12.8 MB. The swapper can stop at a price limit and continue in a later transaction (Pool.sol:344), and each planted tick adds growth only on its first upward crossing. A removal touches two ticks and one position (Pool.sol:146-238). Cycle 1 recorded the same bound qualitatively. The result is a delay without loss, and an eth_call measurement through a router was not run.",
+   "source": "https://docs.megaeth.com/spec/megaevm/resource-accounting.md; https://docs.megaeth.com/spec/megaevm/resource-limits.md; src/libraries/Pool.sol:520-545, 602-612"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "Part four, lead L-601: is Rex6 active on MegaETH mainnet, and what does it change for the instruction set the PoolManager uses?",
+   "result": "Active. The network upgrades overview gives Rex6 mainnet activation at timestamp 1787626800 (25 Aug 2026 03:00 UTC). mega-evm v1.7.3 scheduled it (#371), and the latest block read, 32,724,090, has timestamp 1795521101. Rex6 changes no opcode result. It sets one order for storage-gas and compute-gas charging (only CREATE2 changes), returns forwarded gas to the parent when a CALL or CREATE halts on the compute limit, adds a 32 byte data-size base per log, extends beneficiary detection to SELFDESTRUCT and EIP-7702 delegates, and corrects CREATE, EIP-7702, KeylessDeploy, fee-reward and system-transaction accounting. The PoolManager uses none of CREATE2, SELFDESTRUCT or KeylessDeploy. Its logs add 32 bytes each against a 13.1 MB limit. The forwarded-gas change affects gas_used only. The earlier 550-script pmdiff runs on MegaETH were made on 2026-11-24, after activation.",
+   "source": "https://docs.megaeth.com/spec/network-upgrades/overview.md; https://docs.megaeth.com/spec/network-upgrades/rex6.md; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/CHANGELOG.md; rpc https://mainnet.megaeth.com/rpc eth_getBlockByNumber latest 2026-11-24"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "ruint advisory RUSTSEC-2026-0220, which affects every release before 1.20.0. mega-evm main pins ruint 1.19.0 and the stateless validator pins 1.17.2. In those releases wrapping_shl and wrapping_shr on 256 bit values truncate the shift amount modulo 2^32, and the overflowing and checked shift flags give false negatives.",
+   "result": "Not reachable from the PoolManager's bytecode. revm v112 (interpreter 37.0.3) calls ruint's shift only when shift < 256 and returns zero or the sign fill otherwise, for SHL, SHR and SAR. BYTE calls byte() only for index < 32 (bitwise.rs lines 107-158). The advisory says the shifted values were correct and only the flag was wrong, apart from the truncation above 2^32, which the guard excludes. The battery of OPCODES.md had already passed shift amounts at and above 256 on MegaETH.",
+   "source": "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/ruint/RUSTSEC-2026-0220.md; https://github.com/alloy-rs/ruint/pull/603; https://raw.githubusercontent.com/bluealloy/revm/v112/crates/interpreter/src/instructions/bitwise.rs; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/Cargo.lock"
+  }
+ ],
+ "leads": [],
+ "leadResults": [
+  {
+   "leadId": "L-606",
+   "outcome": "inconclusive",
+   "answer": "The sequencer runs a closed JIT-compiled executor (stateless-validator README lines 25-26). RPC replicas apply its results without re-execution, and the stateless validator re-executes with the vanilla revm interpreter. The production compiler's source is not public, so its PUSHnJUMPI, JUMPDEST map and MULMOD could not be read. The public evmone-compiler prototype tests the whole condition word and uses intx v0.10.1. Mined results agree with the source: 2,885 crossed and multi-step swaps replay exactly, 53,811 pass the tick relation, and 7,627 receipts equal re-execution."
+  },
+  {
+   "leadId": "L-607",
+   "outcome": "cleared",
+   "answer": "1,333 mined transactions had a reverted unlock frame containing a swap, followed by a completed unlock. In all 7,627 traced transactions the receipts equal re-execution in status and logs, which shows the producer rolled back the unlock flag, deltas and storage of the reverted frames. No settle or take inside a reverted frame occurred in the window."
+  },
+  {
+   "leadId": "L-610",
+   "outcome": "cleared",
+   "answer": "State growth binds first: about 490 upward crossings of freshly planted ticks at depth 1. KV updates and data size stay far below their shares within the 200 million compute gas limit. The breach reverts the frame as a whole, and the swap can continue in a later transaction. This is a delay without loss and was not measured by eth_call."
+  },
+  {
+   "leadId": "L-601",
+   "outcome": "cleared",
+   "answer": "Rex6 has been active on mainnet since timestamp 1787626800 (25 Aug 2026), per the network upgrades overview. It changes metering order, accounting and halt gas return, and no opcode result."
+  }
+ ]
+}

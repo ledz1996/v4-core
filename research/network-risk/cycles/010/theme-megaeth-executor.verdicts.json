@@ -1,0 +1,39 @@
+{
+ "unit": "theme-megaeth-executor",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "Fetched the stateless-validator README on 2026-11-24. Line 21 says the validator uses a single-threaded executor based on the vanilla Revm interpreter, and line 26 says the JIT-compiled executor on sequencer nodes makes three distinct client implementations. docs.megaeth.com/architecture.md lines 63-64 say replica nodes apply sequencer results without re-execution and are the default mode, and full nodes re-execute; line 83 says provers re-execute. The validator Cargo.lock pins mega-evm 1.7.3 at commit 59b8e391, revm 40.0.3, revm-interpreter 37.0.3 and ruint 1.17.2. The evmone-compiler aot_compiler.hpp defines GAS_CHECK_LOC 1 at line 29 and PUSHnJUMPI at lines 87-96 as if (stack.pop()), which uses intx's explicit operator bool; intx v0.10.1 line 997 defines it as *this != uint{}. web3_clientVersion on https://mainnet.megaeth.com/rpc returned mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2. No primary source contradicts the claim. The production JIT source is not public, so nothing can be said about its arithmetic. The finding claims no fault and does not depend on one.",
+   "codeCheck": "src/PoolManager.sol:104-114 is unlock with the AlreadyUnlocked check, the callback and the NonzeroDeltaCount check. src/libraries/FullMath.sol has 117 lines, so the cited range covers the whole file. A divergent opcode in the block producer would change every pool's results, as the finding says. No path in src/ depends on the producer differing from the replica beyond that general dependence.",
+   "corrections": "The compiler file is lib/compiler/aot_compiler.hpp, and the PUSHnJUMPI macro sits at lines 87-96 of it. The finding names evmone_aot_compiler.hpp lines 84-96.",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/megaeth-labs/stateless-validator/main/README.md", "supports": "Lines 21 and 25-26: vanilla Revm validator, JIT executor on sequencer nodes."},
+    {"url": "https://docs.megaeth.com/architecture.md", "supports": "Lines 63-64 and 83: replicas do not re-execute, full nodes and provers do."},
+    {"url": "https://raw.githubusercontent.com/megaeth-labs/stateless-validator/main/Cargo.lock", "supports": "mega-evm 1.7.3, revm 40.0.3, revm-interpreter 37.0.3, ruint 1.17.2."},
+    {"url": "https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/master/lib/compiler/aot_compiler.hpp", "supports": "GAS_CHECK_LOC 1 at line 29, PUSHnJUMPI at lines 87-96."},
+    {"url": "https://raw.githubusercontent.com/chfast/intx/v0.10.1/include/intx/intx.hpp", "supports": "Line 997: explicit operator bool compares the whole value with zero."},
+    {"url": "rpc https://mainnet.megaeth.com/rpc web3_clientVersion 2026-11-24", "supports": "mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2."}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Part two (c), lead L-607: did the block producer roll back the transient unlock flag, deltas and pool storage of a reverted PoolManager frame when a later frame of the same transaction completed an unlock?",
+   "agrees": true,
+   "note": "The test is sound. A kept unlock flag would make the later unlock revert at src/PoolManager.sol:105, and kept deltas would make it revert at src/PoolManager.sol:112, so a receipt with success and the same logs as the replica's re-execution on the same pre-state rules both out for the observed transactions. The item correctly limits itself to swaps inside reverted frames; settle, take and sync inside reverted frames were not observed and remain the lead the unit filed."
+  },
+  {
+   "check": "Part three: whether a MegaETH per-frame budget breach in a child of the PoolManager can be caught so the PoolManager continues with a failed subcall.",
+   "agrees": true,
+   "note": "The resource-limits spec line 136 says a child that exceeds its budget reverts with MegaLimitExceeded and the parent may continue, and FRAME_LIMIT_NUMERATOR is 98 (line 172). Every PoolManager subcall treats failure as fatal: Hooks.sol:134-137 reverts on !success, Currency.sol:51-52 and 80-85 revert on failed native and ERC-20 transfers, and balanceOf is a high-level call that bubbles a revert. A breach therefore yields the Ethereum result or a whole revert."
+  },
+  {
+   "check": "ruint advisory RUSTSEC-2026-0220 and the SHL, SHR, SAR and BYTE paths of revm.",
+   "agrees": true,
+   "note": "The advisory says shifted values were correct and only flags were wrong, apart from wrapping shifts truncating amounts at or above 2^32. revm tag v112 is revm-interpreter 37.0.3 (its Cargo.toml), the version the validator pins, and bitwise.rs calls the ruint shift only for shift < 256 and byte() only for index < 32, returning zero or the sign fill otherwise. The truncation case cannot be reached from EVM bytecode on that interpreter. This says nothing about the closed JIT executor, which the finding already records."
+  }
+ ],
+ "leads": []
+}

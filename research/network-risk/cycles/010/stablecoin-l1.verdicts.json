@@ -1,0 +1,22 @@
+{
+  "unit": "stablecoin-l1",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Can the process-wide keccak cache in front of KECCAK256 on Tempo and Arc return a hash for the wrong input, which would move a pool id, position key, mapping slot or transient delta slot (src/libraries/Position.sol, src/types/PoolId.sol, src/libraries/CurrencyDelta.sol).",
+      "agrees": true,
+      "note": "The Tempo half holds. bin/tempo/Cargo.toml at 697ea97 lists keccak-cache-global among the default features. Cargo.lock at 697ea97 pins alloy-primitives 1.7.3 and fixed-cache 0.1.10. In keccak_cache.rs of 1.7.3, MAX_INPUT_LEN is 128 - 32 - 1 - 8 = 87. Empty inputs and longer inputs skip the cache. Key equality compares the slice of length len, so length and every byte must match. In fixed-cache 0.1.10, get_or_try_insert_with_ref calls get_inner, which takes the bucket lock with an Acquire compare-exchange on the exact tag and returns the value only if key.equivalent holds. Otherwise it computes the hash for this input and stores (input, hash) under the lock. A zeroed bucket holds a key of length 0, so a nonempty input whose tag bits are zero still misses. Arc is different from how the item reads. arc-node main pins alloy-primitives 1.5.7 and fixed-cache 0.1.8 (Cargo.lock), with keccak-cache-global enabled in the workspace Cargo.toml, so the cited 1.7.3 and 0.1.10 sources do not describe Arc. I read the 1.5.7 and 0.1.8 crates. They have the same Key layout, the same slice equality and the same locked exact-tag get_inner and try_lock_ret, so the conclusion holds for Arc as well. My own probe ran 91 KECCAK256 vectors per round, two rounds, through a state-override contract on both endpoints: 64 one-bit flips of a 64-byte input plus the base input, and zero and near-zero inputs of lengths 1, 20, 31, 32, 33, 63, 64, 65, 86, 87, 88, 96 and 160. All 182 results equal a local Keccak on Tempo and on Arc."
+    },
+    {
+      "check": "Does any ruint fix between 1.20.0, which Arc runs, and 1.21.1 correct a result an EVM instruction uses.",
+      "agrees": true,
+      "note": "The CHANGELOG.md the item cites (recmo/uint main) has no 1.21.1 heading. It lists the mul_mod fix (#681, 'top limbs equal the modulus') under Unreleased, so that source alone does not show the fix shipped in 1.21.1. I settled this from the crates themselves. In ruint-1.21.1, src/algorithms/div/knuth.rs changes the skip test from <= to < on DW::join(divisor[n - 1], divisor[n - 2]) and adds 'Equality is not sufficient' to the doc comment. ruint-1.21.0 has <=. ruint-1.20.0 has no such skip and computes mul_mod as addmul followed by div_inlined (src/modular.rs:94-108). In 1.20.0, div_3x2_ref appears only at its definition, in a re-export in div/mod.rs and in a test (small.rs:251, 358, 373). The crates.io versions API lists 1.21.0 (20 October 2026) as yanked and 1.21.1 (23 October 2026) as the newest version. Tempo's Cargo.lock at 697ea97 pins ruint 1.21.1, and its endpoint reports tempo/v1.19.0-697ea97/x86_64-unknown-linux-gnu. arc-node main pins ruint 1.20.0. The arc/v1 endpoint label names no commit, so the Arc pin rests on main, as the item and lead L-614 already say."
+    },
+    {
+      "check": "Does reuse of pooled interpreter frames in evm2 leak memory or return data from an earlier frame into a later one, which would change what the PoolManager reads with MLOAD, RETURNDATACOPY or the call input it borrows.",
+      "agrees": true,
+      "note": "Tempo's Cargo.lock pins evm2 at git DaniPopes/evm2 rev 66687c18. The cited alloy-rs/evm2 URL serves a byte-identical runtime.rs (37,008 bytes, cmp equal). Interpreter::init (runtime.rs:135-151) sets stack_len to 0 and calls memory.clear(). It sets output to 0..0, lends_memory to false and return_data to Bytes::new(). It takes input from the new message. Memory::clear is Vec::clear (memory.rs:76-78), and growth goes through data.resize(new_size, 0) (memory.rs:81-83), so a reused buffer is zero-filled when it grows. A call input borrowed from the caller's memory relies on the suspended caller not running while the callee runs. That holds because the caller frame does not execute until the call returns. My probe used state overrides on both endpoints. A caller filled 0x200 bytes of its memory with 0xff and called the same callee twice. The callee returned RETURNDATASIZE, MSIZE and two untouched words. The second call returned 0, 32, 0, 0 on Tempo and on Arc, so no earlier frame's memory or return data was visible."
+    }
+  ],
+  "leads": []
+}

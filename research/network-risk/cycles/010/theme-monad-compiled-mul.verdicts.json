@@ -1,0 +1,22 @@
+{
+ "unit": "theme-monad-compiled-mul",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Two MULMOD sites with a literal power of two modulus take the inline path mul_mod2: pc 22378 with 2^128 (FullMath.sol:48 via Position.sol:94 and 96, PUSH17 at pc 22359) and pc 22639 with 2^96 (FullMath.sol:48 via SqrtPriceMath.sol:250, PUSH13 at pc 22624); pc 23094 follows a JUMPDEST and goes to the runtime call.",
+   "agrees": true,
+   "note": "I ran eth_getCode for 0x188d586ddcf52439676ca21a244753fa19f9ea8e on https://rpc.monad.xyz and got 24,009 bytes. In my own disassembly pc 22359 is PUSH17 0x0100..00 (2^128) after a JUMPI at 22358, then SWAP2 at 22377 and MULMOD at 22378. pc 22624 is PUSH13 0x01 followed by 24 zero digits (2^96) after a JUMPI at 22623, then SWAP2 and MULMOD at 22639. pc 23092 is JUMPDEST and pc 23094 is MULMOD. In both inline sites the SWAP2 leaves the literal third on the stack, which is the modulus slot that modop_optimized reads (emitter.cpp v0.16.5 lines 7597-7601). The Solidity lines match: FullMath.sol:48 is the mulmod(a, b, denominator), Position.sol:94-96 divides by Q128 and SqrtPriceMath.sol:250 by Q96."
+  },
+  {
+   "check": "mul_mod2 for exp 96 and 128 (emitter.cpp 7991-8084) through mul_with_bit_size, MulEmitter and mul_with_bit_size_by_rax gives mulmod(a, b, 2^exp) in 1,000,000 transcribed cases per modulus.",
+   "agrees": true,
+   "note": "I read emitter.cpp at v0.16.5. modop_optimized handles m of 0 and 1 by pushing 0, which is what the EVM gives, and rewrites only when popcount(m) is 1. Taking the product mod 2^exp is correct because the low exp bits of a*b mod 2^256 are the low exp bits of the exact product. For exp 96 and 128, last_ix is 1, which is at or below inline_threshold 1, so the variable operand path calls mul_with_bit_size, as the item says. mul_with_bit_size masks the top limb when bit_size & 31 is nonzero and zeroes limbs dst_word_count to 3 with xor. For 96, Has32Bit is true (96 & 63 is 32), so the top limb is built with 32 bit operations, and these clear its upper half. That accounts for the missing explicit mask. run-summary.json records 1,000,000 cases each for mulmod96 and mulmod128 with 0 failures. I did not rerun the transcription or audit muljit.py line by line against the assembler output, so the instruction-level equivalence rests on the unit's harness, which mutate.json shows detects injected faults."
+  },
+  {
+   "check": "No release after v0.16.5 is on Monad mainnet, and the multiplication functions are unchanged in v0.16.6 and v0.16.7.",
+   "agrees": true,
+   "note": "https://docs.monad.xyz/developer-essentials/changelog/releases.md lists v0.16.5 on mainnet from 2026-10-22, v0.16.7 on testnet from 2026-11-19 with mainnet N/A, and v0.16.6 with tags only. I did not diff the v0.16.6 and v0.16.7 emitter myself. This only matters for a future upgrade, which the unit's low priority lead covers. The item on the other 20 networks repeats OPCODES.md lines 111-117 (BNB Smart Chain fused instructions removed in v1.8.0; MegaETH and HyperEVM nodes closed) and adds no new claim."
+  }
+ ],
+ "leads": []
+}

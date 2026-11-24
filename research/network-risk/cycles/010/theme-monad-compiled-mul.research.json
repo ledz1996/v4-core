@@ -1,0 +1,155 @@
+{
+ "unit": "theme-monad-compiled-mul",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Every MUL, MULMOD, ADDMOD and EXP of the 24,009 byte runtime, with the operands Monad v0.16.5's compiler sees as literals. The compiler tracks literals per basic block: a block that is a jump destination starts with no known values, and only a JUMPI whose fall-through block is not a jump destination keeps them. sites.py models that rule and the constant folding of pure opcodes.",
+   "result": "There are 13 MULMOD and 85 MUL in the code. Two MULMOD have a literal power of two modulus in their block and so take the inline path mul_mod2: pc 22378 with 2^128 (src/libraries/FullMath.sol:48 in the copy of mulDiv called from src/libraries/Position.sol:94 and 96, PUSH17 at pc 22359) and pc 22639 with 2^96 (FullMath.sol:48 in the copy called from src/libraries/SqrtPriceMath.sol:250, PUSH13 at pc 22624). The other eleven MULMOD go to the runtime call, which uses the 256 bit library shared with the interpreter: eight have no literal modulus or the modulus not(0) or 1000000 (pcs 22316, 22445, 22513, 22585, 22892, 22921, 23094, 23678), and three have the literal factor 2^96 with a modulus that is not(0) or unknown (pcs 20958, 22721, 22763). Twenty-five MUL have a literal operand: the first-step select of TickMath.sol:80 (pc 16780, literal 0x1fffcb933bd6fad37aa2d162d1a594001), the 19 multipliers of TickMath.sol:81-99 (pcs 17055 to 17557), the multiply by 255738958999603826347141 of TickMath.sol:225 (pc 18495), 3 times the denominator of FullMath.sol:82 (pcs 22777 and 22935), the BitMath.sol:34-47 constant (pc 21359) and the folded inverse of 15625 for the 1000000 denominator copy of FullMath.sol:99 (pc 22529). The first 23 have a zero 64 bit limb and are inlined through mul_with_bit_size; the last two have no zero limb and go to monad_vm_runtime_mul. The other 60 MUL multiply two values and go to monad_vm_runtime_mul. The EXP and ADDMOD bytes at pcs 24005 and 24008 are the metadata trailer. The deployed Monad PoolManager has the same bytes as the build except the 20 byte immutable at 13618-13637, so the pcs hold on chain.",
+   "source": "research/network-risk/cycles/010/theme-monad-compiled-mul.work/sites.json; research/network-risk/cycles/010/theme-monad-compiled-mul.work/chain.json (eth_getCode on https://rpc.monad.xyz); https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/virtual_stack.cpp lines 281-311; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.cpp lines 1016-1028 and 3407-3427"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "MULMOD by 2^128 at pc 22378 and by 2^96 at pc 22639 as Monad v0.16.5 compiles them: modop_optimized (emitter.cpp 7590-7684) rewrites a power of two modulus into mul_mod2 (7991-8084), which for exp 96 and 128 (last_ix 1, inline_threshold 1) calls mul_with_bit_size(exp, a, b) with b in a general register or a stack slot (6720-6981), which runs MulEmitter (6465-6716) and mul_with_bit_size_by_rax (6381-6463). Transcribed instruction by instruction into Python (64 bit limbs, carry flag, 32 bit writes that clear the upper half, imul with a sign extended 32 bit immediate, mulx that leaves flags alone, rdx saved through a spare register, through rbx or on the machine stack) and run against Python integers.",
+   "result": "No mismatch in 1,000,000 cases for each modulus. The operands were random, all limbs set, 2^256-1, low one or two limbs zero, one below 2^128 and the other above, powers of two, negative values and limb patterns of 0, 1, 2^31, 2^32, 2^63 and 2^64-1. The left operand started in a general register, a stack slot or a vector register, the right in a register or a stack slot, 15 percent with both in the same slot, with random choices of which of the three register sets hold other live values. Every rdx branch of mul_with_bit_size ran (dst holds rdx, swapped with tmp, through a spare register or rbx; left holds rdx; rdx live on the stack, pushed or moved). For 96 bits no mask is applied (96 & 31 is 0), and the top limb is right because every operation on it is a 32 bit one; a mutation that keeps the upper half on 32 bit writes fails all 4,000 of 4,000 cases, and mutations that drop the high half of mulx fail more than half, so the harness sees such faults. The remainder these sites return equals mulmod(a, b, 2^exp) for every input tried, so the reconstructed quotient of the two mulDiv copies is the specified one.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.cpp lines 6262-6981 and 7590-8084; research/network-risk/cycles/010/theme-monad-compiled-mul.work/muljit.py; research/network-risk/cycles/010/theme-monad-compiled-mul.work/run.py; research/network-risk/cycles/010/theme-monad-compiled-mul.work/run-summary.json; research/network-risk/cycles/010/theme-monad-compiled-mul.work/coverage.json; research/network-risk/cycles/010/theme-monad-compiled-mul.work/mutate.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "MUL with one literal operand as mul_optimized (emitter.cpp 6983-7043) compiles it: power of two or negated power of two literals to a shift, literals with a zero limb to mul_with_bit_size(256), other literals to the runtime call. Run for the 24 literals the PoolManager multiplies by (the 19 TickMath multipliers, the first-step select whose third limb is 1 and so takes the copy shortcut of mul_sequence, 255738958999603826347141 times a signed log_2, 3, and the two full width constants), and for random literals.",
+   "result": "No mismatch in 1,000,000 cases over the 24 site literals (916,672 inline, 83,328 runtime) and 1,000,000 cases with random literals (724,402 inline, 128,504 runtime, 116,601 shift). The multiplicands included negative two's complement values, which is what getTickAtSqrtPrice feeds the multiply by 255738958999603826347141 for prices below 1. The 32 bit immediate form is used only for limbs inside the signed 32 bit range (is_uint64_bounded<int32_t>, emitter.cpp 243-258 with the default in emitter.hpp); a mutation that allows the unsigned range fails 2,741 of 4,000 random literal cases.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.cpp lines 243-258, 6262-6379, 6983-7043; research/network-risk/cycles/010/theme-monad-compiled-mul.work/run-summary.json; research/network-risk/cycles/010/theme-monad-compiled-mul.work/mutate.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "monad_vm_runtime_mul and monad_vm_runtime_mul_192 of runtime/math.S, which every compiled MUL of two variables uses (a*b of FullMath.sol:21, prod1*twos of FullMath.sol:75, the six inverse steps of FullMath.sol:86-91, result = prod0*inv of FullMath.sol:99, r*r of TickMath.sol:142-221), transcribed instruction by instruction, with the result pointer equal to either operand and with both operand pointers equal.",
+   "result": "No mismatch in 1,000,000 cases for each of the two routines, and r12 and r13 are restored. The routines read every limb they need from an operand before they write the first result limb that can share its address, which is the overlap rule intrinsics.hpp states. math.S is identical at v0.16.5, v0.16.6 and v0.16.7.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/runtime/math.S; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/runtime/math/intrinsics.hpp; research/network-risk/cycles/010/theme-monad-compiled-mul.work/run-summary.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "FullMath.mulDiv and mulDivRoundingUp (src/libraries/FullMath.sol:14-116) composed from the compiled pieces as this bytecode uses them: a*b, prod1*twos and the inverse products through the transcribed monad_vm_runtime_mul, 3 times the denominator through the transcribed mul_with_bit_size, the MULMOD by a power of two through the transcribed mul_mod2, and the other MULMOD through Python. Denominators 2^128, 2^96, 1000000, values below 1000000 and random values.",
+   "result": "No mismatch in 1,000,000 cases, 371,253 of them through the 512 bit branch. Every intermediate compiled product was also checked on its own.",
+   "source": "src/libraries/FullMath.sol:14-116; research/network-risk/cycles/010/theme-monad-compiled-mul.work/run.py (muldiv_compiled); research/network-risk/cycles/010/theme-monad-compiled-mul.work/run-summary.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Every tick of the range through the compiled multiplication paths: getSqrtPriceAtTick (src/libraries/TickMath.sol:59-114) and getTickAtSqrtPrice of its result (TickMath.sol:123-236), with each MUL replaced by the transcription of the path it compiles to, a fresh random register picture for each product, and mul(r, r) through monad_vm_runtime_mul with both pointers equal.",
+   "result": "All 1774545 ticks from -887272 to 887272 except 887272 give back their own tick (0 mismatches); 887272 maps to MAX_SQRT_PRICE, which getTickAtSqrtPrice rejects by design (TickMath.sol:123-130), and none of the 62895279 compiled products (38051663 inline literal multiplies through mul_with_bit_size, the rest variable products through monad_vm_runtime_mul; 0 full width literal multiplies, since TickMath has none) differs from Python integers (0 failures). This covers the high bits 0x20000, 0x40000 and 0x80000 of the absolute tick, which mined swaps reach rarely or never.",
+   "source": "research/network-risk/cycles/010/theme-monad-compiled-mul.work/wholetick.py; research/network-risk/cycles/010/theme-monad-compiled-mul.work/wholetick-summary.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Correction to the cycle 9 note on mined coverage of the compiled MULMOD by 2^96. The 183 Monad swaps of opcodes/monad-rounding.json carry the rounding bit of SqrtPriceMath.sol:252, which is the MULMOD at pc 23094.",
+   "result": "That MULMOD follows the JUMPDEST at pc 23092 where mulDiv returns, so its modulus arrives from another block and the compiler does not know it as a literal. It compiles to the runtime call with the shared 256 bit library, not to mul_mod2. The mined swaps therefore test the shared library, which earlier cycles also tested through simulated calls, and say nothing about pc 22378 or 22639. The answer for those two sites rests on the transcription above.",
+   "source": "research/network-risk/cycles/010/theme-monad-compiled-mul.work/sites.json (pc 23094 operands unknown); https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/virtual_stack.cpp lines 281-311"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Which mined Monad results exercise each compiled path, from 1,580 Swap events of 31 pools in blocks 124,993,964 to 124,996,219 read with eth_getLogs.",
+   "result": "The TickMath literal multiplies and the multiply by 255738958999603826347141 run on every swap, and bits 0x1 to 0x40000 of the absolute tick all appear in the emitted ticks (0x20000 in 844 swaps, 0x40000 in 463), while 0x80000 appears in none. The general mulDiv 512 bit branch, with the multiply by 3 at pc 22935 and the runtime inverse products, is reachable in these pools: 751 consecutive pairs have (liquidity << 96) times the price at or above 2^256. pc 22639 needs liquidity times the price step at or above 2^256; the largest liquidity seen has 74 bits and the largest product 159 bits, so no mined swap in the window ran it. pc 22378 runs only in Position.update when the fee growth difference times the liquidity reaches 2^256, and ModifyLiquidity events do not carry amounts, so no mined result shows it. The way to confirm either site from blocks without sending a transaction is to find a mined swap or liquidity change whose inputs cross that bound and compare the token amounts of its Swap event or of the token Transfer events with the formulas; none was found in the window.",
+   "source": "research/network-risk/cycles/010/theme-monad-compiled-mul.work/chain.json (eth_getLogs and eth_getCode on https://rpc.monad.xyz); src/libraries/Position.sol:94-96; src/libraries/SqrtPriceMath.sol:234-254"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Whether an ordinary account can steer a victim pool into the two inline MULMOD sites, which would matter if they were wrong.",
+   "result": "It can for pc 22639: liquidity per tick may reach about 2^107 at tick spacing 1, so an account can add liquidity above 2^96 in a range near the top price, paying little token0, and a later swap into that range computes getAmount1Delta through the 512 bit branch. pc 22378 needs fee growth times liquidity at or above 2^256, which a donation to a pool with little liquidity can produce. Both sites compute the specified remainder in the transcription, so steering execution there gains nothing.",
+   "source": "src/libraries/Pool.sol:465-480; src/libraries/Pool.sol:565-582; src/libraries/SqrtPriceMath.sol:234-254; src/libraries/Position.sol:94-96; research/network-risk/cycles/010/theme-monad-compiled-mul.work/run-summary.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "EXP code generation (exp_optimized, emitter.cpp 8221-8363), including a power of two base with a variable exponent, where the exponent is multiplied by log2 of the base with a shift or an imul and replaced by the raw exponent on overflow.",
+   "result": "The PoolManager has no EXP instruction in its code; the 0x0a byte at pc 24008 is in the metadata trailer, so this path cannot change any PoolManager result. The variable exponent path was still transcribed and gave 2^(k n) mod 2^256 for 1,000,000 cases with k from 2 to 255.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.cpp lines 8221-8363; research/network-risk/cycles/010/theme-monad-compiled-mul.work/run-summary.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Releases after v0.16.5 and changes to the multiplication code generation. The release notes list v0.16.5 on mainnet from 2026-10-22, v0.16.6 with tags only, and v0.16.7 on testnet from 2026-11-19 and not on mainnet.",
+   "result": "The 27 functions transcribed here (mulx through mul_mod2, mul_optimized, modop_optimized, exp_optimized and its gas helpers, is_uint64_bounded) are byte identical at v0.16.5, v0.16.6 and v0.16.7, emitter.cpp is identical between v0.16.6 and v0.16.7, and math.S is identical in all three. v0.16.6 changes negate, which mul_optimized uses only for a negated power of two literal, and the PoolManager has none. No release note names a change to multiplication.",
+   "source": "https://docs.monad.xyz/developer-essentials/changelog/releases.md; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.cpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.6/category/vm/compiler/ir/x86/emitter.cpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/compiler/ir/x86/emitter.cpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/runtime/math.S"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    4217,
+    5042
+   ],
+   "lens": "L1",
+   "check": "The same question for the other 20 networks: does any of them run a compiled or rewritten multiplication path in block production that simulated calls do not reach.",
+   "result": "No client read in earlier cycles for these networks compiles EVM code to native code in block production; BNB Smart Chain's fused instruction feature was removed in v1.8.0. MUL and MULMOD there run the interpreter that the 185,529 vectors and the PoolManager scripts of OPCODES.md exercised. The block producers of MegaETH and HyperEVM are closed and remain in the open list of OPCODES.md; this unit adds nothing for them.",
+   "source": "research/network-risk/OPCODES.md (table of client readings and the open list)"
+  }
+ ],
+ "leads": [],
+ "leadResults": [
+  {
+   "leadId": "L-603",
+   "outcome": "cleared",
+   "answer": "mul_mod2 for exp 96 and 128 and its calls into mul_with_bit_size, MulEmitter and mul_with_bit_size_by_rax were transcribed at the instruction level and give mulmod(a, b, 2^exp) on 1,000,000 cases each, with both operand locations, the same slot for both operands, all limbs set and low limbs zero, and every rdx preservation branch. The bound in the lead is not needed because the remainder is exact."
+  },
+  {
+   "leadId": "L-608",
+   "outcome": "cleared",
+   "answer": "Same work as L-603. pc 22378 (FullMath.sol:48 via Position.sol:94 and 96) and pc 22639 (FullMath.sol:48 via SqrtPriceMath.sol:250) were confirmed on the build and on the deployed Monad bytecode, and their compiled code matches the specification on every case tried. No mined result reaches either site, and the 183 rounding swaps of cycle 9 used the runtime MULMOD at pc 23094 instead."
+  },
+  {
+   "leadId": "L-609",
+   "outcome": "cleared",
+   "answer": "mul_optimized with its MulEmitter cases matches the specification for the 19 TickMath multipliers, the first-step select, the signed multiply by 255738958999603826347141 and mul(r, r), on 1,000,000 targeted cases and on every one of the 1,774,545 ticks of the range. In 1,580 recent Monad swaps the bits 0x20000 and 0x40000 of the absolute tick appear 844 and 463 times and 0x80000 never. The ticks of live positions were not listed and the 17,434 swaps of cycle 9 were not re-read; the whole range run makes both unnecessary for this question."
+  },
+  {
+   "leadId": "L-599",
+   "outcome": "inconclusive",
+   "answer": "The MUL and EXP parts are answered: both match the specification in transcription (see cleared entries), and v0.16.6 and v0.16.7 leave them unchanged. The SIGNEXTEND paths with a variable index and the runtime helpers for KECCAK256 and memory copies were not read in this unit, and v0.16.6 is not on mainnet, so the rerun of swaps.py after the upgrade cannot be done yet."
+  }
+ ]
+}
