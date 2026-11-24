@@ -4,29 +4,31 @@ every step the depth, the program counter and the opcode must agree, and the top
 four stack words must agree except where a word comes from the GAS opcode, which the
 reference does not model.
 
-Usage: python3 trace.py <out.json> [nScripts per set] [rpc url] [sets, for example 3 or 123]
+Usage: python3 trace.py <out.json> [nScripts per set] [rpc url] [sets, for example 3 or 123 or 6]
 Set 3 is the pmdiff3 set: hooks that return deltas, dynamic fees, protocol fees and owner calls.
+Set 6 is the pmdiff6 set: the sides of conditional jumps that the earlier sets never took.
 Ink's rpc-qnd endpoint and the HyperEVM archive client at rpc.purroofgroup.com serve traces as well.
 """
 import sys, json, random, time
 from evm import rpc
-import pmdiff as P, pmdiff2 as Q, pmdiff3 as R3
+import pmdiff as P, pmdiff2 as Q, pmdiff3 as R3, pmdiff6 as R6
 from pyevm import World, NAMES
 from bytecode import worlds
 
 GASV = 10 ** 9
 
 
-def compare(url, ov, data, mk, max_steps):
+def compare(url, ov, data, mk, max_steps, drv=None):
+    drv = drv or P.DRV
     w = mk(); w.trace = []; w.trace_stack = 4; w.max_steps = max_steps
     try:
-        w.call(0, int(P.DRV, 16), 0, data, False, 0)
+        w.call(0, int(drv, 16), 0, data, False, 0)
     except TimeoutError:
         return {'skipped': 'heavy'}
     r = None
     for k in range(5):
         try:
-            r = rpc(url, 'debug_traceCall', [{'to': P.DRV, 'data': '0x' + data.hex(), 'gas': hex(25_000_000)}, 'latest',
+            r = rpc(url, 'debug_traceCall', [{'to': drv, 'data': '0x' + data.hex(), 'gas': hex(25_000_000)}, 'latest',
                                              {'stateOverrides': ov, 'disableStorage': True, 'enableMemory': False}], timeout=300); break
         except Exception as e:  # noqa
             err = str(e)[:100]; time.sleep(3 * (k + 1))
@@ -57,9 +59,13 @@ if __name__ == '__main__':
     if '3' in sets:
         rnd = random.Random(3_2026_11_24); s3 = [R3.build(rnd, i, code) for i in range(n)]
         todo.append(('pmdiff3', s3, R3.overrides(code), lambda: R3.world(code)))
+    if '6' in sets:
+        s6 = [(d, nm) for nm, d in R6.scripts()]
+        todo.append(('pmdiff6', s6, R6.overrides(code), lambda: R6.world(code)))
+    D6 = '0x' + R6.DRV.to_bytes(20, 'big').hex()
     for name, scripts, ov, mk in todo:
         for i in range(min(n, len(scripts))):
-            r = compare(url, ov, scripts[i][0], mk, 400_000); r.update(set=name, script=i); res.append(r)
+            r = compare(url, ov, scripts[i][0], mk, 400_000, D6 if name == 'pmdiff6' else None); r.update(set=name, script=i); res.append(r)
             tot['scripts'] += 1
             if 'skipped' in r: tot['skipped'] += 1
             elif 'error' in r: tot['errors'] += 1
