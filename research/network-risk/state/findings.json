@@ -4740,6 +4740,97 @@
    ]
   },
   {
+   "title": "A run of dust positions bounds how far one swap can move the price inside the gas cap, and the Quoter now measures the cost per crossing on all three chains",
+   "chainIds": [
+    56,
+    137,
+    43114
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A9"
+   ],
+   "effect": "degrade",
+   "difference": "BNB Smart Chain caps a transaction at 16,777,216 gas and Polygon at 33,554,432 gas. The C-Chain has no transaction cap below its block limit of 80,000,000 gas. Measured through the deployed Quoter on 2026-11-24, one initialized tick crossing in Pool.swap costs about 17,000 gas on BNB Smart Chain, about 27,700 on Polygon and 27,000 to 33,000 on the C-Chain, and one step over an empty bitmap word about 5,600, 9,200 and 4,900 to 6,400 gas.",
+   "mechanism": "1. Pool.swap runs one loop step per initialized tick and per bitmap word it reaches (src/libraries/Pool.sol:344-437). A step that ends on an initialized tick calls crossTick, which reads the liquidity word and rewrites both fee growth words of the tick (src/libraries/Pool.sol:602-611). A step over an empty word reads one bitmap slot (src/libraries/TickBitmap.sol:85-121). 2. This cycle replayed the loop step by step against live storage read through extsload and called quoteExactInputSingle on the deployed Quoter at the same block, for about 60 exact input amounts per pool and direction. Every quote whose state the endpoint served returned the replay's output to the unit, so the counts of crossings and empty steps per quote are exact. 3. Pool 0x628ea54a6450645d2bb7b2911c8c6f3d7f3944c2f4703c259a1b85bf5569870b (fee 2, tick spacing 1, no hook) at block 135446931: 58 Quoter calls whose output equalled the step by step replay of Pool.swap to the unit, up to 22 initialized crossings and 246 other steps in one quote. The least squares fit gives 17,020 gas per initialized crossing and 5,577 gas per step that ends on an uninitialized word boundary, with a fixed part of 41,981 gas. At 16,777,216 gas (the BNB Smart Chain transaction cap) that is about 983 crossings or about 3,000 empty words in one transaction. 4. Pool 0xa37d3e6da98dfeb7dc8103a6614f586916a6e04d41ea0a929bc19a029de1a399 (fee 8, tick spacing 1, no hook) at block 97873763: 50 Quoter calls whose output equalled the step by step replay of Pool.swap to the unit, up to 14 initialized crossings and 493 other steps in one quote. The least squares fit gives 27,683 gas per initialized crossing and 9,174 gas per step that ends on an uninitialized word boundary, with a fixed part of 54,400 gas. At 33,554,432 gas (the Polygon transaction cap) that is about 1,210 crossings or about 3,651 empty words in one transaction. 5. Pool 0x6874d3d2b99e6b75ed2fae390907e1d921d4b06b7f48fc6d3fe9c547507e369c (fee 500, tick spacing 10, no hook) at block 101248950: 118 Quoter calls whose output equalled the step by step replay of Pool.swap to the unit, up to 155 initialized crossings and 249 other steps in one quote. The least squares fit gives 27,063 gas per initialized crossing and 6,366 gas per step that ends on an uninitialized word boundary, with a constant term of -31,275 gas, so the linear fit is only approximate for small quotes. At 80,000,000 gas (the C-Chain block gas limit, which is the only bound) that is about 2,956 crossings or about 12,566 empty words in one transaction. 6. Cycle 8 computed 16,500 gas per crossing for BNB Smart Chain and Avalanche and 25,000 for Polygon. The measurement confirms BNB Smart Chain and Polygon and shows that the C-Chain costs more than its Ethereum price assumption, so the bound there is about 2,400 to 2,950 crossings per block, not 4,800. 7. As before, any account can add one unit of liquidity on consecutive ticks of a pool with tick spacing 1 to lengthen the walk, a swapper can still cross the range in several transactions with sqrtPriceLimitX96, and liquidity removal touches two ticks without a loop (src/libraries/Pool.sol:146-236).",
+   "impact": "No funds are taken and no withdrawal is blocked. Swaps that must cross more initialized ticks than the cap allows need several transactions, and single call integrations across that range revert. The largest single quote measured this cycle used 1,788,771 gas on BNB Smart Chain, 4,964,889 on Polygon and 5,737,630 on Avalanche.",
+   "preconditions": "A pool with small tick spacing and a price move that must cross the range. The attacker pays gas and a few base units of both currencies per tick.",
+   "mitigations": "Routers and liquidators should bound each swap with sqrtPriceLimitX96 and continue in another transaction. Interfaces can count initialized ticks on a route through extsload. On Avalanche the per crossing figure of this cycle should replace the computed one in any gas budget.",
+   "coreRefs": [
+    "src/libraries/Pool.sol:344-437",
+    "src/libraries/Pool.sol:602-611",
+    "src/libraries/TickBitmap.sol:85-121",
+    "src/libraries/Pool.sol:146-236"
+   ],
+   "sources": [
+    {
+     "url": "rpc https://bsc-dataseed1.bnbchain.org eth_call Quoter 0x95C086d7fE28AdD842ee220fef225a777474d781, 2026-11-24; research/network-risk/cycles/009/established-l1.work/raw/l565_56.json",
+     "supports": "BNB Smart Chain gas per crossing and per empty word"
+    },
+    {
+     "url": "rpc https://polygon-bor-rpc.publicnode.com eth_call Quoter 0x31AB0Dea31FC0ad5A54F03cD59C896eCD067447B, 2026-11-24; research/network-risk/cycles/009/established-l1.work/raw/l565_137.json",
+     "supports": "Polygon gas per crossing and per empty word"
+    },
+    {
+     "url": "rpc https://avalanche-c-chain-rpc.publicnode.com eth_call Quoter 0xf27e532878B622d6b916F524E8711880107D4eF0, 2026-11-24; research/network-risk/cycles/009/established-l1.work/raw/l565_43114.json",
+     "supports": "Avalanche gas per crossing and per empty word"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/params/protocol_params.go",
+     "supports": "Polygon MaxTxGas 1 << 25"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/protocol_params.go",
+     "supports": "BNB Smart Chain MaxTxGas 1 << 24 (read in cycle 8)"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 9,
+    "factCheck": "bor v2.11.1 params/protocol_params.go line 32 sets MaxTxGas = 1 << 25 (33,554,432) and bsc v1.8.2 params/protocol_params.go line 31 sets MaxTxGas = 1 << 24 (16,777,216), both fetched this session. avalanchego v1.15.3 (proxy.golang.org zip) has no MaxTxGas or EIP-7825 cap in its Go source, and saexec/execution.go passes a GasPool of MaxUint64 per block, which supports the claim that the C-Chain has no cap below its block limit; the coreth graft module was not searched, so that part rests on avalanchego and libevm (v1.13.15 base) alone. I refit the least squares model on the raw files l565_56.json, l565_137.json and l565_43114.json and got the same coefficients: 41,981 + 17,020 per crossing + 5,577 per empty step on BNB Smart Chain, 54,400 + 27,683 + 9,174 on Polygon, and -31,275 + 27,063 + 6,366 (second pool 22,531 + 33,283 + 4,868) on Avalanche, with maximum quote gas 1,788,771, 4,964,889 and 5,737,630. I also called quoteExactInputSingle on the BNB Smart Chain Quoter 0x95C086d7fE28AdD842ee220fef225a777474d781 for the USDT/USDC pool (fee 2, spacing 1, no hook) at block 135,449,452: 1e18 in gave gasEstimate 42,723, 1e23 gave 1,899,479, 1e24 gave 3,000,735 and 3e24 gave 3,488,164, so quote gas grows with the walk in the magnitude the finding gives. EIP-7825 (Final, fetched from the EIPs repository) sets the same 16,777,216 cap on Ethereum, so on BNB Smart Chain the cap equals Ethereum's.",
+    "codeCheck": "src/libraries/Pool.sol:344 loops until amountSpecifiedRemaining is zero or the price limit is reached, and each iteration calls TickBitmap.nextInitializedTickWithinOneWord (src/libraries/TickBitmap.sol:85-121), which searches one 256 bit word and returns an uninitialized boundary when the word is empty. Pool.sol:415-428 calls crossTick only when the step reached an initialized tick, and crossTick (Pool.sol:602-611) rewrites feeGrowthOutside0X128 and feeGrowthOutside1X128 and reads liquidityNet. modifyLiquidity (Pool.sol:145-236) updates two ticks with no loop, so removal of liquidity and take of claims do not depend on the walk length. The swap caller sets sqrtPriceLimitX96 (Pool.sol:332-337 checks it), so a long walk can be split. No path in the loop moves funds of other users; the hazard is gas only.",
+    "corrections": "The difference is not specific to BNB Smart Chain for the cap: Ethereum enforces the same 16,777,216 cap under EIP-7825, and BNB Smart Chain charges about the Ethereum price per crossing, so on that chain the bound equals Ethereum's. Polygon has a higher cap and a higher cost per crossing; Avalanche has no lower cap. The hazard is generic to the swap loop rather than a network difference.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/params/protocol_params.go",
+      "supports": "MaxTxGas = 1 << 25 at line 32"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/protocol_params.go",
+      "supports": "MaxTxGas = 1 << 24 at line 31"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7825.md",
+      "supports": "Ethereum caps a transaction at 16,777,216 gas, status Final"
+     },
+     {
+      "url": "https://proxy.golang.org/github.com/ava-labs/avalanchego/@v/v1.15.3.zip",
+      "supports": "no transaction gas cap constant in avalanchego; saexec uses a MaxUint64 gas pool"
+     },
+     {
+      "url": "rpc https://bsc-dataseed1.bnbchain.org eth_call Quoter 0x95C086d7fE28AdD842ee220fef225a777474d781 quoteExactInputSingle at block 135449452, 2026-11-24",
+      "supports": "gasEstimate 42,723 for 1e18 and 3,488,164 for 3e24 in the fee 2 spacing 1 pool"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 9,
+   "extends": "F-111",
+   "id": "F-115",
+   "firstCycle": 9,
+   "history": [
+    {
+     "cycle": 9,
+     "unit": "established-l1",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
    "title": "Source disagrees with two interface comments and two test conditions, and none of the four changes who can move funds",
    "chainIds": [
     1,
@@ -11206,6 +11297,88 @@
     {
      "cycle": 8,
      "unit": "ethereum-reference",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
+   "title": "Celo's public endpoint routes a minority of requests to an op-geth build that Celo no longer supports and that has no Karst rules",
+   "chainIds": [
+    42220
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "difference": "forno.celo.org load balances celo-reth and Geth/v0.1.0-untagged-c7ed55b8-20260817/linux-amd64/go1.24.13. Celo ended op-geth support on mainnet on 22 July 2026, and the op-geth fork's chain configuration has no Karst field. Today both backends are on the canonical chain and give identical results.",
+   "mechanism": "Wallets, routers and quoters that simulate a PoolManager call through forno get an answer from whichever backend serves the request. Today the two backends agree on every opcode vector and every PoolManager script tried this cycle and on block hash and state root. After Celo activates Karst, the Geth backend cannot apply the new rules and stops following the canonical chain, or applies the old rules to new blocks. A share of eth_call and eth_estimateGas requests (14 of 60 in one sample) would then run against stale state or old rules, so a quote, a minimum output computed from it, or a gas estimate for a long swap could be wrong. The PoolManager itself executes in blocks built by celo-reth and is not affected.",
+   "impact": "No loss of pool funds. Users who set slippage bounds from a stale quote may get a worse fill or a revert, and an estimate from the wrong rules can make a removal fail for lack of gas and need a retry.",
+   "preconditions": "Celo activates Karst, which has no date, while the forno operator still serves the op-geth backend.",
+   "mitigations": "The forno operator removes the op-geth backend before Karst. Integrators simulate against a celo-reth endpoint and check web3_clientVersion. Slippage bounds remain the user's protection.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114",
+    "src/libraries/Pool.sol:279-464"
+   ],
+   "sources": [
+    {
+     "url": "https://docs.celo.org/infra-partners/notices/op-geth-deprecation",
+     "supports": "op-geth support on Celo mainnet ended on 22 July 2026 and a node still running it can follow the wrong chain"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/op-geth/c7ed55b8/params/config.go",
+     "supports": "the fork's ChainConfig has Jovian and Interop fields and no Karst field"
+    },
+    {
+     "url": "https://docs.optimism.io/op-stack/protocol/hardforks/karst",
+     "supports": "op-geth does not support Karst"
+    },
+    {
+     "url": "https://forno.celo.org web3_clientVersion batched with eth_call and eth_getBlockByNumber, 2026-11-24",
+     "supports": "both backends answer on the public endpoint and agree today (research/network-risk/cycles/009/op-stack-custom-gas.work/out/forno-heads.json)"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 9,
+    "factCheck": "forno.celo.org was queried this session with 30 batches of web3_clientVersion and eth_getBlockByNumber(0x4fbe100). 4 were answered by Geth/v0.1.0-untagged-c7ed55b8 and 26 by reth/v2.2.0-74cc8bb, and all 30 gave block hash 0xe1b687fa2479136081aa02103190790ecc9e9e2688ba9362c7ed155546e44da8 and state root 0xa6dd928b4034f009... So the endpoint serves both clients today and they agree. The Celo notice (fetched; https://docs.celo.org/infra-partners/notices/op-geth-deprecation now redirects to https://docs.celo.org/operate/notices/op-geth-deprecation) says op-geth support ended on Celo Sepolia on June 24, 2026 and on mainnet on July 22, 2026, and that a node still running op-geth can follow the wrong chain. The Optimism Karst page (fetched) says op-geth and op-program do not support Karst. Karst was the superchain default on mainnet on 8 July 2026. params/config.go at celo-org/op-geth c7ed55b8 (fetched) has JovianTime and InteropTime fields (lines 551 and 553) and no Karst field. The Celo upgrades sidebar lists Isthmus, Ice Cream, Jello and Jovian and no Karst. The Jello page (fetched) says Jello has no execution layer changes, so Jovian is still the latest Celo execution fork that the Geth backend has to follow. The finding is right that Karst has no Celo date.",
+    "codeCheck": "src/PoolManager.sol:103-113 (unlock, ending in the NonzeroDeltaCount check at line 111) and src/libraries/Pool.sol:279-464 (swap, ending in the toInt128 casts at lines 457-460) run in blocks built by celo-reth. Nothing in src/ reads which RPC backend served a simulation. A stale or wrong eth_call result only changes what an integrator chooses to send. The user's own slippage bound then decides the outcome on chain. I found no path where pool funds move differently because of the backend.",
+    "corrections": "The cited Celo notice URL now redirects to https://docs.celo.org/operate/notices/op-geth-deprecation. The hazard is conditional on a future Celo fork that op-geth cannot follow, and on the forno operator still serving the Geth backend then. The 14 of 60 ratio is a sample. This session saw 4 of 30.",
+    "sources": [
+     {
+      "url": "https://docs.celo.org/operate/notices/op-geth-deprecation",
+      "supports": "op-geth support on Celo mainnet ended July 22, 2026, and a node still running op-geth can follow the wrong chain"
+     },
+     {
+      "url": "https://docs.optimism.io/op-stack/protocol/hardforks/karst",
+      "supports": "op-geth and op-program do not support Karst. Superchain mainnet activation was 8 July 2026"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/celo-org/op-geth/c7ed55b8/params/config.go",
+      "supports": "ChainConfig has JovianTime and InteropTime fields and no Karst field"
+     },
+     {
+      "url": "https://docs.celo.org/operate/specification/upgrades/jello",
+      "supports": "Jello has no execution layer changes. Jovian is the latest Celo execution fork"
+     },
+     {
+      "url": "https://forno.celo.org",
+      "supports": "30 batched web3_clientVersion plus eth_getBlockByNumber(0x4fbe100) on 2026-11-24: 4 Geth c7ed55b8 and 26 reth v2.2.0. Both gave the same block hash and state root"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 9,
+   "id": "F-116",
+   "firstCycle": 9,
+   "history": [
+    {
+     "cycle": 9,
+     "unit": "op-stack-custom-gas",
      "status": "confirmed",
      "severity": "low"
     }

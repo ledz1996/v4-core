@@ -1,0 +1,38 @@
+{
+  "unit": "op-stack-custom-gas",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "low",
+      "factCheck": "forno.celo.org was queried this session with 30 batches of web3_clientVersion and eth_getBlockByNumber(0x4fbe100). 4 were answered by Geth/v0.1.0-untagged-c7ed55b8 and 26 by reth/v2.2.0-74cc8bb, and all 30 gave block hash 0xe1b687fa2479136081aa02103190790ecc9e9e2688ba9362c7ed155546e44da8 and state root 0xa6dd928b4034f009... So the endpoint serves both clients today and they agree. The Celo notice (fetched; https://docs.celo.org/infra-partners/notices/op-geth-deprecation now redirects to https://docs.celo.org/operate/notices/op-geth-deprecation) says op-geth support ended on Celo Sepolia on June 24, 2026 and on mainnet on July 22, 2026, and that a node still running op-geth can follow the wrong chain. The Optimism Karst page (fetched) says op-geth and op-program do not support Karst. Karst was the superchain default on mainnet on 8 July 2026. params/config.go at celo-org/op-geth c7ed55b8 (fetched) has JovianTime and InteropTime fields (lines 551 and 553) and no Karst field. The Celo upgrades sidebar lists Isthmus, Ice Cream, Jello and Jovian and no Karst. The Jello page (fetched) says Jello has no execution layer changes, so Jovian is still the latest Celo execution fork that the Geth backend has to follow. The finding is right that Karst has no Celo date.",
+      "codeCheck": "src/PoolManager.sol:103-113 (unlock, ending in the NonzeroDeltaCount check at line 111) and src/libraries/Pool.sol:279-464 (swap, ending in the toInt128 casts at lines 457-460) run in blocks built by celo-reth. Nothing in src/ reads which RPC backend served a simulation. A stale or wrong eth_call result only changes what an integrator chooses to send. The user's own slippage bound then decides the outcome on chain. I found no path where pool funds move differently because of the backend.",
+      "corrections": "The cited Celo notice URL now redirects to https://docs.celo.org/operate/notices/op-geth-deprecation. The hazard is conditional on a future Celo fork that op-geth cannot follow, and on the forno operator still serving the Geth backend then. The 14 of 60 ratio is a sample. This session saw 4 of 30.",
+      "sources": [
+        {"url": "https://docs.celo.org/operate/notices/op-geth-deprecation", "supports": "op-geth support on Celo mainnet ended July 22, 2026, and a node still running op-geth can follow the wrong chain"},
+        {"url": "https://docs.optimism.io/op-stack/protocol/hardforks/karst", "supports": "op-geth and op-program do not support Karst. Superchain mainnet activation was 8 July 2026"},
+        {"url": "https://raw.githubusercontent.com/celo-org/op-geth/c7ed55b8/params/config.go", "supports": "ChainConfig has JovianTime and InteropTime fields and no Karst field"},
+        {"url": "https://docs.celo.org/operate/specification/upgrades/jello", "supports": "Jello has no execution layer changes. Jovian is the latest Celo execution fork"},
+        {"url": "https://forno.celo.org", "supports": "30 batched web3_clientVersion plus eth_getBlockByNumber(0x4fbe100) on 2026-11-24: 4 Geth c7ed55b8 and 26 reth v2.2.0. Both gave the same block hash and state root"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Extra vectors suggested by the reading of holiman/uint256 v1.3.2 and ruint, including the EXP even base shortcut.",
+      "agrees": true,
+      "note": "I fetched uint256.go at v1.3.2. Exp (lines 1201-1212) clears the result when the base is even and exponent.BitLen() > 8. An exponent of 9 or more bits is at least 256, and an even base to that power is a multiple of 2^256, so zero is correct. For shorter exponents the first loop (lines 1214-1220) covers all set bits, and line 1221 returns early for an even base. An independent probe this session ran 3,864 edge vectors on forno.celo.org for each backend and on rpc.xlayer.tech. The vectors covered EXP, SAR, SHR, SHL, SDIV, SMOD, SIGNEXTEND, BYTE, SLT, SGT, DIV and MOD at 0, 1, shift edges, 2^64, 2^128-1, 2^192, 2^255, 2^256-1, 2^160-1 and the tick bounds +-887272, each checked against a Python reference. On forno, every chunk of 10 was answered by both reth v2.2.0-74cc8bb and Geth c7ed55b8 (387 chunks each). X Layer answered 773 chunks of 5. There were 0 mismatches on all three."
+    },
+    {
+      "check": "Lead L-579: the opcode battery and the targeted set on forno.celo.org with every chunk answered by both client families.",
+      "agrees": true,
+      "note": "celo-battery-dual.json records 99985 of 99985 vectors run, mismatchCount 0, no errors, and a dual block. My own queries confirm that forno answers batches from both reth v2.2.0-74cc8bb and Geth c7ed55b8, and that one batch is answered by one backend, so tagging each chunk with web3_clientVersion in the same batch is a sound way to attribute answers. The battery measures eth_call on the RPC backends. Blocks are built by celo-reth, which is the reth family already covered."
+    },
+    {
+      "check": "Rerun of battery, targeted, pmdiff and pmdiff2 (build of this checkout) on rpc.xlayer.tech at reth/v2.3.0-f60420a xlayer/v0.0.7, with each answer tagged by web3_clientVersion.",
+      "agrees": true,
+      "note": "xlayer-build-pmdiff.json records 250 of 250 scripts identical to the stored Ethereum reference, with 0 errors and 0 reference errors. rpc.xlayer.tech refused a batch of 11 calls with 'too many RPC calls in batch request' and accepted batches of 6. The stored runs show no errors, so their chunking stayed under that limit. My independent edge probe of 3,864 vectors gave 0 mismatches on X Layer, all answered by reth. The residual gap is the sequencer's builder path, which the researcher already raised as a low lead."
+    }
+  ],
+  "leads": []
+}

@@ -1,0 +1,22 @@
+{
+  "unit": "core-code-bytecode-map",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Whether the ruint 1.21.0 mul_mod fault described in OPCODES.md:120-136, which needs a modulus of four 64 bit limbs and a quotient of the product by the modulus within 2^129 of 2^256, can be reached by any MULMOD of this bytecode, for any input, on a node that runs that release.",
+      "agrees": true,
+      "note": "The library facts hold and the clearance is stronger than stated. crates.io (https://crates.io/api/v1/crates/ruint/versions, fetched this session) lists 1.21.0 of 2026-10-20 as yanked and 1.21.1 of 2026-10-23 as current. Diffing src/algorithms/div/knuth.rs at tags v1.21.0 and v1.21.1 on raw.githubusercontent.com/recmo/uint shows the only code change is the skip test in rem_nxm_spare_limb going from <= to < on the two top normalized limbs, and the main branch CHANGELOG.md names it as #681, a wrong mul_mod result when the product's top limbs equal the modulus's. src/modular.rs at v1.21.1 shows mul_mod reaches rem_nxm_spare_limb only when the modulus is not 2^256-1 and both operands and the modulus have a nonzero top limb; the 2^256-1 modulus takes a separate end-around carry path that is correct as read. In this code the 2^256-1 MULMOD (FullMath.sol:24) therefore never enters the faulty routine, and the two MULMODs with a possibly four limb modulus (FullMath.sol:48 and 112 via SqrtPriceMath.sol:47 and 71) take sqrtPX96 below 2^160 as one operand, so its top limb is zero and the fast path is skipped. The other moduli (2^128, 2^96, 10^6, 10^6 minus fee, uint128 liquidity, uint160 prices) have a zero top limb. I also rechecked the product bounds of the callers at SqrtPriceMath.sol:97, 105, 208-209, 250, Position.sol:94-96 and SwapMath.sol:65, 74, 104; none can give a quotient near 2^256."
+    },
+    {
+      "check": "SELFBALANCE at Currency.sol:92 inside balanceOfSelf.",
+      "agrees": true,
+      "note": "balanceOfSelf (src/types/Currency.sol:90-96) is called only from sync (src/PoolManager.sol:285), which sits in the else branch of currency.isAddressZero() at PoolManager.sol:281, and from _settle (PoolManager.sol:359), which sits in the else branch of the same test at PoolManager.sol:353 on the synced currency from transient storage. The native branch of _settle uses msg.value only (PoolManager.sol:354). grep finds no other caller in src/. The PoolManager never reads its own native balance, so the instruction cannot change settlement on any network. The caveat is that this rests on reading the source; I did not re-disassemble the bytecode."
+    },
+    {
+      "check": "Part one: unexecuted runs that are said to always end in a revert, namely amounts above type(uint160).max at SqrtPriceMath.sol:95-109 and the 512 bit branch of the fee mulDiv, which give results above 2^127 that Pool.sol:192, 455 and 459 reject.",
+      "agrees": true,
+      "note": "This needed checking because an untested branch that does not revert would be a place where a network difference could steer the math unseen. The price function itself does not always revert. For example amount 2^161 with liquidity near 2^128 gives a quotient near 2^129 that fits uint160 at SqrtPriceMath.sol:100. The transaction still reverts. getNextSqrtPriceFromInput and getNextSqrtPriceFromOutput are reached only in the branches of SwapMath.sol:75-83 and 94-99, where the whole remaining specified amount is used in that step. The specified side of swapDelta, amountSpecified - amountSpecifiedRemaining at Pool.sol:455 or 459, is then at least 2^160 in absolute value, and toInt128 reverts. The fee mulDiv at Position.sol:94-96 enters its 512 bit branch only when the product is at least 2^256, so the result with denominator 2^128 is at least 2^128, and toInt128 rejects it at Pool.sol:192. The SwapMath fee mulDivs need amountIn of at least about 2^236, and the same int128 casts then reject the swap. A wrong MULMOD in these branches therefore cannot reach a committed state. The scope remark of the high-throughput verifier holds here as well: the reference interpreter clears the bytecode and not Monad's compiled x86 for MULMOD with a literal 2^96 or 2^128 modulus. The int128 bound above is what keeps that site harmless, and the lead raised in high-throughput.verdicts.json already covers it."
+    }
+  ],
+  "leads": []
+}

@@ -125,7 +125,7 @@ def run(cid):
     ch = R.Chain(url, pm)
     out = {'chainId': cid, 'block': block, 'rpc': url, 'pools': []}
     for pid, n in pools(cid, block):
-        if len(out['pools']) >= 3: break
+        if len(out['pools']) >= int(os.environ.get('NPOOLS', 2)): break
         try:
             key = pool_key(cid, pid, block)
         except Exception as e:  # noqa
@@ -138,7 +138,7 @@ def run(cid):
         if liq == 0: continue
         rows = []
         for zfo in (True, False):
-            for e in range(0, 60):
+            for e in range(0, int(os.environ.get('NAMOUNTS', 60))):
                 amount = int(10 ** (3 + e * 0.35))
                 if amount >= 1 << 127: break
                 try:
@@ -157,6 +157,7 @@ def run(cid):
                              'tick': tick, 'liquidity': str(liq), 'lpFee': lp, 'protocolFee': proto, 'rows': rows, 'matched': len(good),
                              'fit': None if coef is None else {'base': round(coef[0]), 'perCrossing': round(coef[1]), 'perEmptyStep': round(coef[2])},
                              'maxCross': max([r['cross'] for r in good] or [0]), 'maxEmpty': max([r['empty'] for r in good] or [0])})
+        json.dump(out, open(os.environ.get('PARTIAL', '/dev/null'), 'w'), indent=1)
         print(cid, pid[:12], 'sp', key[3], 'matched', len(good), '/', len(rows), out['pools'][-1]['fit'], 'maxCross', out['pools'][-1]['maxCross'], 'maxEmpty', out['pools'][-1]['maxEmpty'], flush=True)
     return out
 

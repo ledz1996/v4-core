@@ -1,0 +1,30 @@
+{
+  "unit": "high-throughput",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Which Monad compiled instructions leave the inline code and call the shared library (lead L-575)",
+      "agrees": false,
+      "note": "The dispatch part holds. In emitter.cpp v0.16.5 (fetched this session from raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.cpp) udiv, sdiv, umod, smod, addmod and mulmod call runtime::udiv and the others at lines 3336-3382 unless div_optimized, mod_optimized, addmod_opt or mulmod_opt handle them, runtime/math.hpp defines those functions with zero for a zero divisor, and the interpreter table (instruction_table.hpp lines 468-560) calls the same runtime functions. The sentence that the built PoolManager has no MULMOD with a literal power of two modulus is wrong. Rerunning the logic of bbscan.py on build/PoolManager.json with the operand values printed gives MULMOD at pc 22378 with modulus 0x100000000000000000000000000000000 (2^128) and MULMOD at pc 22639 with modulus 0x1000000000000000000000000 (2^96), each the second MULMOD of an inlined FullMath.mulDiv, after require(denominator > prod1) and the prod1 == 0 jump. These are remainder := mulmod(a, b, denominator) at src/libraries/FullMath.sol:48 with denominator FixedPoint128.Q128 from src/libraries/Position.sol:94 and 96, and with FixedPoint96.Q96 from src/libraries/SqrtPriceMath.sol:240 and 250. modop_optimized (emitter.cpp lines 7594-7683) sends a literal modulus with popcount 1 to mul_mod2 (lines 7990-8085), which for exp 96 and 128 has last_ix at most 1 and therefore emits inline code through mul_with_bit_size and MulEmitter (lines 6381-6931), the multiplication code generation that OPCODES.md lists as not read. The claim that the battery tests the code blocks use therefore fails for these two sites: eth_call on Monad runs the interpreter (OPCODES.md line 111), and mined swaps do not enter the prod1 != 0 branch, which needs fees owed of at least 2^128 or an amount1 of at least 2^160. As read, mul_with_bit_size zeroes the words above the result (the xor loop after MulEmitter.emit) and builds the top word of a 96 bit product with 32 bit operations, so the remainder stays below 2^exp even if the multiply were wrong. With a power of two denominator FullMath.mulDiv then reduces to a shift, so a wrong but bounded remainder moves the result by at most about one unit on a value of at least 2^128, which toInt128 at src/libraries/Pool.sol:192 and the int128 casts of the swap and liquidity deltas reject. That bound rests on my reading, not a transcription."
+    },
+    {
+      "check": "Which v0.16.5 path handles a literal shifted by a variable amount before v0.16.6",
+      "agrees": true,
+      "note": "emitter.cpp v0.16.5 lines 5112-5160, read this session: shift_by_non_literal returns the literal for value 0 and for all ones under SAR, and otherwise calls mov_literal_to_avx_reg and shift_avx_reg_by_non_literal, the same path an AVX resident value takes. Mainnet still runs v0.16.5: https://docs.monad.xyz/networks.json fetched this session gives mainnet monad_version 0.16.5 (testnet 0.16.7), the current facts page https://docs.monad.xyz/ai/current-facts.md line 25 gives mainnet v0.16.5 with MONAD_TEN, and web3_clientVersion on https://rpc.monad.xyz returns Monad/unknown. The v0.16.6 routine therefore does not run on mainnet today. The facts page lists testnet at v0.16.5 while networks.json says 0.16.7; the two pages disagree for testnet only."
+    },
+    {
+      "check": "MIP-8 multi-bit slot aliasing in execution (lead L-576)",
+      "agrees": true,
+      "note": "I ran one eth_call with a state override on https://rpc.monad.xyz at block 124,982,689 (timestamp 1795516908, after the mip8 hardfork_timestamp 1788359400 in https://docs.monad.xyz/networks.json). The probe code writes 42 to slot s = 2^255 + 0xabc*128 + 127 (page offset 127) and reads s, s^1, s^0x7f, s+1, s^128 and s^2^255. The result returns 42 for s and zero for the five others. This repeats the shape of slotalias.json on a page edge. The probe runs in the interpreter; the committed state side rests on the invariants check, which I did not rerun."
+    }
+  ],
+  "leads": [
+    {
+      "chainIds": [143],
+      "lens": "L1",
+      "question": "Transcribe Monad v0.16.5 mul_mod2 with exp 96 and 128 and its call into mul_with_bit_size and MulEmitter (emitter.cpp lines 6381-6931 and 7990-8085) for two non-literal operands in each location (general register, stack offset, AVX register moved to stack), and compare mulmod(a, b, 2^96) and mulmod(a, b, 2^128) with the specification, including a and b with all 64 bit limbs set, the low limbs zero, and left and right in the same register.",
+      "why": "The built PoolManager runs MULMOD with a literal 2^128 modulus at pc 22378 (FullMath.sol:48 via Position.sol:94 and 96) and with 2^96 at pc 22639 (FullMath.sol:48 via SqrtPriceMath.sol:250). These compile to inline x86 code that no eth_call reaches on Monad and no mined swap has run, so the cleared statement that the battery covers the code blocks use is wrong for them. My reading bounds the remainder below 2^exp, which keeps any error to about one unit on results the int128 casts reject, but that bound is not transcribed.",
+      "priority": "high"
+    }
+  ]
+}

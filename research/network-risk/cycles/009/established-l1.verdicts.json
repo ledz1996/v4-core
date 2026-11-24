@@ -1,0 +1,53 @@
+{
+ "unit": "established-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "bor v2.11.1 params/protocol_params.go line 32 sets MaxTxGas = 1 << 25 (33,554,432) and bsc v1.8.2 params/protocol_params.go line 31 sets MaxTxGas = 1 << 24 (16,777,216), both fetched this session. avalanchego v1.15.3 (proxy.golang.org zip) has no MaxTxGas or EIP-7825 cap in its Go source, and saexec/execution.go passes a GasPool of MaxUint64 per block, which supports the claim that the C-Chain has no cap below its block limit; the coreth graft module was not searched, so that part rests on avalanchego and libevm (v1.13.15 base) alone. I refit the least squares model on the raw files l565_56.json, l565_137.json and l565_43114.json and got the same coefficients: 41,981 + 17,020 per crossing + 5,577 per empty step on BNB Smart Chain, 54,400 + 27,683 + 9,174 on Polygon, and -31,275 + 27,063 + 6,366 (second pool 22,531 + 33,283 + 4,868) on Avalanche, with maximum quote gas 1,788,771, 4,964,889 and 5,737,630. I also called quoteExactInputSingle on the BNB Smart Chain Quoter 0x95C086d7fE28AdD842ee220fef225a777474d781 for the USDT/USDC pool (fee 2, spacing 1, no hook) at block 135,449,452: 1e18 in gave gasEstimate 42,723, 1e23 gave 1,899,479, 1e24 gave 3,000,735 and 3e24 gave 3,488,164, so quote gas grows with the walk in the magnitude the finding gives. EIP-7825 (Final, fetched from the EIPs repository) sets the same 16,777,216 cap on Ethereum, so on BNB Smart Chain the cap equals Ethereum's.",
+   "codeCheck": "src/libraries/Pool.sol:344 loops until amountSpecifiedRemaining is zero or the price limit is reached, and each iteration calls TickBitmap.nextInitializedTickWithinOneWord (src/libraries/TickBitmap.sol:85-121), which searches one 256 bit word and returns an uninitialized boundary when the word is empty. Pool.sol:415-428 calls crossTick only when the step reached an initialized tick, and crossTick (Pool.sol:602-611) rewrites feeGrowthOutside0X128 and feeGrowthOutside1X128 and reads liquidityNet. modifyLiquidity (Pool.sol:145-236) updates two ticks with no loop, so removal of liquidity and take of claims do not depend on the walk length. The swap caller sets sqrtPriceLimitX96 (Pool.sol:332-337 checks it), so a long walk can be split. No path in the loop moves funds of other users; the hazard is gas only.",
+   "corrections": "The difference is not specific to BNB Smart Chain for the cap: Ethereum enforces the same 16,777,216 cap under EIP-7825, and BNB Smart Chain charges about the Ethereum price per crossing, so on that chain the bound equals Ethereum's. Polygon has a higher cap and a higher cost per crossing; Avalanche has no lower cap. The hazard is generic to the swap loop rather than a network difference.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/params/protocol_params.go",
+     "supports": "MaxTxGas = 1 << 25 at line 32"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/protocol_params.go",
+     "supports": "MaxTxGas = 1 << 24 at line 31"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7825.md",
+     "supports": "Ethereum caps a transaction at 16,777,216 gas, status Final"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/ava-labs/avalanchego/@v/v1.15.3.zip",
+     "supports": "no transaction gas cap constant in avalanchego; saexec uses a MaxUint64 gas pool"
+    },
+    {
+     "url": "rpc https://bsc-dataseed1.bnbchain.org eth_call Quoter 0x95C086d7fE28AdD842ee220fef225a777474d781 quoteExactInputSingle at block 135449452, 2026-11-24",
+     "supports": "gasEstimate 42,723 for 1e18 and 3,488,164 for 3e24 in the fee 2 spacing 1 pool"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Transient storage lifetime on the SAE executor that is live since Helicon.",
+   "agrees": true,
+   "note": "avalanchego v1.15.3 vms/saevm/saexec/execution.go calls core.ApplyTransaction once per transaction in the loop at lines 346 to 364. In libevm d398bc4dbe41, core/state_transition.go line 436 calls StateDB.Prepare unconditionally, and core/state/statedb.go line 1335 replaces transientStorage with a new map outside the IsBerlin block, so it runs for every transaction. The only other writer is Copy at line 774. node/node.go line 1240 registers saevm.Factory for the EVM VM ID. No lock flag, delta count or synced currency can carry into the next transaction."
+  },
+  {
+   "check": "Transient storage and system transaction detection in reth-bsc.",
+   "agrees": true,
+   "note": "revm-context 16.0.1 (the version in reth-bsc v0.1.4-hotfix Cargo.lock line 10680) clears transient_storage in both commit_tx and discard_tx (src/journal/inner.rs lines 137 to 190). reth-bsc src/evm/api/mod.rs lines 112 to 123 marks a transaction as a system transaction only when the caller equals block.beneficiary, the target is a system contract and the effective gas price is zero; the saved copy matches the file at the tag byte for byte. An ordinary account is never the beneficiary, and a system contract target is never the PoolManager."
+  },
+  {
+   "check": "What the PoolManager does when an ordinary caller names an Avalanche precompile address after Helicon (P1 and P2).",
+   "agrees": true,
+   "note": "From the PoolManager address on https://api.avax.network/ext/bc/C/rpc, a transfer call to 0x...0100 returned 0x and a balanceOf call returned 0x, while transfer to 0x0100...0001 and 0x0100...0002 reverted. src/types/Currency.sol:64-74 treats empty return data as success, so take(0x100) debits the caller with nothing moved. Crediting 0x100 needs sync and settle, which call balanceOf through IERC20Minimal (Currency.sol:94) and revert on empty return data, so the debt cannot be cancelled by a credit and the unlock delta check keeps the transaction from completing with a nonzero balance. No value moves that the caller does not owe."
+  }
+ ],
+ "leads": []
+}

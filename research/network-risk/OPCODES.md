@@ -177,9 +177,24 @@ A second round of reading covered what the first left open.
 
 Check 3 was also run over a longer window on the six networks that never had a second client: 17,434 swaps on Monad, 39,074 on MegaETH, 39,060 on Arc, 28,496 on Elysium, 12,977 on Tempo and 2,071 on HyperEVM. All 139,112 pass the tick relation, and 127,949 of the 129,093 paired ones match the single-step formulas to the unit (`opcodes/swaps-deep.json`). On Monad these swaps ran as compiled code.
 
+## What cycle 9 added
+
+Cycle 9 was the first cycle planned for this question. Six units worked on it, each followed by an independent verifier.
+
+| Unit | Result |
+|---|---|
+| Bytecode map | All 10,418 instructions are assigned to the dispatcher, the 33 external functions, 60 internal functions or data. Each of the 66 `MULMOD`, `SDIV`, `SMOD`, `SAR`, `BYTE`, `DIV` and `MOD` instructions and a sample of 103 sign extension and shift instructions was traced to its source line through the optimized intermediate code, and the internal functions were tested on 64,187 edge cases and on every tick of the range, with no mismatch. The optimizer made constant-denominator copies of `mulDiv` and fused shifts in the logarithm and bit scans; each rewrite is a valid identity. `SELFBALANCE` is dead code. The faulty `MULMOD` of ruint 1.21.0 cannot be reached by any `MULMOD` in this bytecode for any input. |
+| Compiler bugs | Eight entries of the Solidity bug list apply to 0.8.26, six of them to a build through the intermediate representation with the optimizer on. None affects this build. The one named SOL-2026-7 sits in two optimizer steps, runs from 0.8.19 to 0.8.37 and is fixed in 0.8.38. The installed compiler reproduces it on the Solidity team's example. For the PoolManager, a build with one of the steps and two of the three runs of the other removed is byte identical to the real build, and the loads that the remaining run replaces all use addresses that are never reassigned. The other five need recursive structs, storage arrays, a `require` with a named custom error or mutual recursion, and the source has none. |
+| Monad and MegaETH | The new compiled shift path of Monad v0.16.6 and the inline comparison, sign extension and byte paths of v0.16.5 give the specified results in Python transcriptions on about 2.9 million cases. The verifier found one clearance wrong: the bytecode has `MULMOD` with the constant moduli 2^96 and 2^128, and Monad compiles those through a multiplication path nobody has read. Cycle 10 transcribes it. |
+| Arbitrum One, Robinhood Chain, Elysium | 207,953 vectors and all script sets match on all three, on both the arm64 and the amd64 builds of the node. The Go toolchain that two of the nodes report has a published miscompile, which cycle 10 follows up across all the go-ethereum family clients. |
+| Celo, X Layer | Celo's public endpoint is served by two different clients. Both, and X Layer, match the specification on 188,640 vectors and on the scripts run with this build. One of the two Celo backends is a client Celo no longer supports (F-116, operator level, low). |
+| Polygon, BNB Smart Chain, Avalanche | All vectors and scripts match on six endpoints, among them a second BNB Smart Chain client and the execution path Avalanche uses today. One tick crossing costs about 17,000 gas on BNB Smart Chain, 27,700 on Polygon and 27,000 to 33,000 on Avalanche. |
+
 ## What this does not cover
 
-- The 4.4 percent of the bytecode the scripts do not execute, and the 129 conditional jumps taken only one way, described under coverage above.
+- The 4.4 percent of the bytecode the scripts do not execute, and the 129 conditional jumps taken only one way, described under coverage above. The bytecode map of cycle 9 explains each unexecuted range.
+- Monad's compiled code for `MULMOD` with a constant power-of-two modulus and for multiplication by a constant, until cycle 10 reports.
+- Which executor produces MegaETH's blocks.
 - The repository's own test suite. It needs forge, which is not installed, so whether the tests pass on this build is still open.
 - Compiled code on Monad beyond the 17,434 mined swaps, and the parts of its emitter that were not read.
 - Validators that run other hardware or other builds than the public endpoints: the vector code for jump destinations in evm2, the optional dispatch loop in bor, and any operator on the withdrawn ruint release.
