@@ -1,0 +1,212 @@
+//! Constants for the `MegaETH` EVM.
+//!
+//! It groups the constants for different EVM specs as sub-modules.
+
+/// Frozen gas limit for pre-REX5 system calls (EIP-2935 / EIP-4788 pre-block helpers
+/// and the default `SystemCallEvm` / `transact_system_call` entry points).
+///
+/// Value is intentionally independent of
+/// [`revm::handler::system_call::SYSTEM_CALL_GAS_LIMIT`], which revm 40 redefined as
+/// `30_000_000 + state-gas reservoir` (`31_566_720` under bal-devnet-7). Frozen `MegaETH`
+/// specs must keep the historical 30M budget for replay parity; do not alias or follow
+/// the upstream constant.
+pub const PRE_REX5_SYSTEM_CALL_GAS_LIMIT: u64 = 30_000_000;
+
+/// Constants for the `EQUIVALENCE` spec.
+pub mod equivalence {
+    use revm::interpreter::gas;
+
+    /// Constants inherited from `revm`.
+    pub use gas::{
+        BASE, BLOCKHASH, CALLVALUE, CALL_STIPEND, CODEDEPOSIT, COLD_ACCOUNT_ACCESS_COST,
+        COLD_SLOAD_COST, CREATE, KECCAK256WORD, LOG, LOGDATA, LOGTOPIC, NEWACCOUNT, SSTORE_RESET,
+        SSTORE_SET, STANDARD_TOKEN_COST, TOTAL_COST_FLOOR_PER_TOKEN, VERYLOW, WARM_SSTORE_RESET,
+        WARM_STORAGE_READ_COST,
+    };
+    pub use revm::primitives::STACK_LIMIT;
+}
+
+/// Constants for the `MINI_REX` spec.
+pub mod mini_rex {
+    /// The maximum contract size for the `MINI_REX` spec.
+    pub const MAX_CONTRACT_SIZE: usize = 512 * 1024;
+    /// The additional initcode size for the `MINI_REX` spec. The initcode size is limited to
+    /// `MAX_CONTRACT_SIZE + ADDITIONAL_INITCODE_SIZE`.
+    pub const ADDITIONAL_INITCODE_SIZE: usize = 24 * 1024;
+    /// The maximum initcode size for the `MINI_REX` spec.
+    pub const MAX_INITCODE_SIZE: usize = MAX_CONTRACT_SIZE + ADDITIONAL_INITCODE_SIZE;
+
+    /// The maximum compute gas allowed per transaction for the `MINI_REX` spec.
+    pub const TX_COMPUTE_GAS_LIMIT: u64 = 1_000_000_000;
+
+    /// The base storage gas cost for setting a storage slot to a non-zero value for the `MINI_REX`
+    /// spec. Actual cost is dynamically scaled by SALT bucket capacity: `SSTORE_SET_GAS ×
+    /// (bucket_capacity / MIN_BUCKET_SIZE)`.
+    pub const SSTORE_SET_STORAGE_GAS: u64 = 2_000_000;
+    /// The base storage gas cost for creating a new account for the `MINI_REX` spec.
+    /// Actual cost is dynamically scaled by SALT bucket capacity: `NEW_ACCOUNT_GAS ×
+    /// (bucket_capacity / MIN_BUCKET_SIZE)`. Applied when transaction targets new account, CALL
+    /// with transfer to empty account, or CREATE operations.
+    pub const NEW_ACCOUNT_STORAGE_GAS: u64 = 2_000_000;
+    /// Storage gas cost per byte for code deposit during contract creation in `MINI_REX` spec.
+    pub const CODEDEPOSIT_STORAGE_GAS: u64 = 10_000;
+    /// The storage gas cost for `LOGDATA` for the `MINI_REX` spec, i.e., gas cost per byte for log
+    /// data.
+    pub const LOG_DATA_STORAGE_GAS: u64 = super::equivalence::LOGDATA * 10;
+    /// The storage gas cost for `LOGTOPIC` for the `MINI_REX` spec, i.e., gas cost per topic for
+    /// log.
+    pub const LOG_TOPIC_STORAGE_GAS: u64 = super::equivalence::LOGTOPIC * 10;
+    /// The additional gas cost for `CALLDATA` for the `MINI_REX` spec, i.e., gas cost per token
+    /// (one byte) for call data. This is charged on top of the calldata cost of standard EVM.
+    pub const CALLDATA_STANDARD_TOKEN_STORAGE_GAS: u64 =
+        super::equivalence::STANDARD_TOKEN_COST * 10;
+    /// The additional gas cost for EIP-7623 floor gas cost, i.e., gas cost per token (one byte)
+    /// for call data. This is charged on top of the floor cost of standard EVM.
+    pub const CALLDATA_STANDARD_TOKEN_STORAGE_FLOOR_GAS: u64 =
+        super::equivalence::TOTAL_COST_FLOOR_PER_TOKEN * 10;
+
+    /// The maximum amount of data allowed to generate from a block for the `MINI_REX` spec.
+    pub const BLOCK_DATA_LIMIT: u64 = 12 * 1024 * 1024 + 512 * 1024; // 12.5 MB
+    /// The maximum data size allowed per transaction for the `MINI_REX` spec.
+    /// Transactions exceeding this limit halt with `OutOfGas`, preserving remaining gas.
+    pub const TX_DATA_LIMIT: u64 = BLOCK_DATA_LIMIT * 25 / 100; // 25% of the block limit
+    /// The maximum amount of key-value updates allowed to generate from a block for the `MINI_REX`
+    /// spec.
+    pub const BLOCK_KV_UPDATE_LIMIT: u64 = 500_000;
+    /// The maximum amount of key-value updates allowed to generate from a transaction for the
+    /// `MINI_REX` spec.
+    pub const TX_KV_UPDATE_LIMIT: u64 = BLOCK_KV_UPDATE_LIMIT * 25 / 100; // 25% of the block limit
+
+    /// Gas limit after block environment or beneficiary data access.
+    /// When block environment data or beneficiary account data is accessed, the compute gas
+    /// is limited to force the transaction to complete quickly and prevent `DoS` attacks.
+    ///
+    /// - **Pre-REX4**: This is an **absolute** cap on the transaction's total compute gas.
+    /// - **REX4+**: This is a **relative** cap — it limits post-access compute gas. The effective
+    ///   limit becomes `current_usage + BLOCK_ENV_ACCESS_COMPUTE_GAS` at the point of access.
+    pub const BLOCK_ENV_ACCESS_COMPUTE_GAS: u64 = 20_000_000;
+
+    /// Gas limit after oracle contract access.
+    /// When oracle contract is accessed, the compute gas is limited to force the transaction
+    /// to complete quickly and prevent `DoS` attacks.
+    ///
+    /// - **Pre-REX4**: This is an **absolute** cap on the transaction's total compute gas.
+    /// - **REX4+**: This is a **relative** cap — it limits post-access compute gas. The effective
+    ///   limit becomes `current_usage + ORACLE_ACCESS_COMPUTE_GAS` at the point of access.
+    ///
+    /// Note: If block environment was accessed first (20M compute gas limit), then oracle is
+    /// accessed, the compute gas will be further restricted to this lower limit (1M compute
+    /// gas).
+    pub const ORACLE_ACCESS_COMPUTE_GAS: u64 = 1_000_000;
+}
+
+/// Constants for the `REX2` spec.
+pub mod rex2 {
+    /// Fixed overhead gas for the keylessDeploy operation.
+    /// This covers the cost of RLP decoding, signature recovery, and state filtering.
+    pub const KEYLESS_DEPLOY_OVERHEAD_GAS: u64 = 100_000;
+}
+
+/// Constants for the `REX3` spec.
+pub mod rex3 {
+    /// Gas limit after oracle contract access for the `REX3` spec.
+    /// Increased from 1M (used in `MINI_REX` through `REX2`) to 20M, giving oracle-accessing
+    /// transactions more room for post-oracle computation.
+    pub const ORACLE_ACCESS_COMPUTE_GAS: u64 = 20_000_000;
+}
+
+/// Constants for the `REX4` spec.
+pub mod rex4 {
+    /// Numerator of the fraction of parent's remaining resource budget forwarded to a child
+    /// frame. Applies to all four resource dimensions (data size, KV updates, compute gas,
+    /// state growth).
+    /// Child budget = `parent_remaining` * NUMERATOR / DENOMINATOR.
+    pub const FRAME_LIMIT_NUMERATOR: u64 = 98;
+    /// Denominator of the per-frame resource budget forwarding fraction.
+    pub const FRAME_LIMIT_DENOMINATOR: u64 = 100;
+
+    /// Additional call stipend for storage operations in CALL/CALLCODE with value transfer.
+    ///
+    /// `MegaETH`'s 10x storage gas multiplier on LOG opcodes causes even a simple `LOG1` to cost
+    /// 4,500 gas (750 compute + 3,750 storage), exceeding the EVM's `CALL_STIPEND` of 2,300.
+    /// This breaks `transfer()` / `send()` to contracts that emit events in `receive()`.
+    ///
+    /// When an internal CALL or CALLCODE transfers value (value > 0), the callee receives this
+    /// extra gas on top of the standard `CALL_STIPEND`.
+    /// The callee's compute gas limit remains at the original level (`forwarded_gas +
+    /// CALL_STIPEND`), so the extra gas can only be consumed by storage gas operations (e.g.,
+    /// the 10x LOG topic/data costs).
+    /// On return, unused `STORAGE_CALL_STIPEND` is burned — it is never returned to the caller.
+    pub const STORAGE_CALL_STIPEND: u64 = 23_000;
+}
+
+/// Constants for the `REX5` spec.
+pub mod rex5 {
+    /// Floor for the gas limit assigned to REX5 pre-block system calls that opt
+    /// into the live block gas budget via
+    /// [`crate::MegaEvm::transact_system_call_with_gas_limit`] — currently the
+    /// `SequencerRegistry.applyPendingChanges()`, EIP-2935 history-storage, and
+    /// EIP-4788 beacon-roots pre-block calls.
+    ///
+    /// Same historical 30M value as [`super::PRE_REX5_SYSTEM_CALL_GAS_LIMIT`],
+    /// and a floor so chains whose block gas limit is smaller still receive
+    /// that budget.
+    ///
+    /// Do NOT raise this to follow upstream
+    /// [`revm::handler::system_call::SYSTEM_CALL_GAS_LIMIT`]: revm 40 redefined
+    /// it as `30_000_000 + eip8037::SSTORE_SET_BYTES *
+    /// eip8037::CPSB_GLAMSTERDAM * SYSTEM_MAX_SSTORES_PER_CALL` (`31_566_720`),
+    /// and all three factors are bal-devnet-7 parameters that drift as upstream
+    /// evolves. A frozen spec's budget cannot hang off a drifting upstream
+    /// constant.
+    pub const SYSTEM_CALL_GAS_LIMIT_FLOOR: u64 = super::PRE_REX5_SYSTEM_CALL_GAS_LIMIT;
+}
+
+/// Constants for the `REX6` spec.
+pub mod rex6 {}
+
+/// Constants for the `REX` spec.
+pub mod rex {
+    /// Additional storage gas cost added to transaction intrinsic gas for the `REX` spec.
+    /// This is charged on top of the base 21,000 intrinsic gas for all transactions.
+    pub const TX_INTRINSIC_STORAGE_GAS: u64 = 39_000;
+
+    /// The base storage gas cost for setting a storage slot to a non-zero value for the `REX` spec.
+    /// Actual cost is dynamically scaled by SALT bucket capacity: `SSTORE_SET_STORAGE_GAS_BASE ×
+    /// (bucket_capacity / MIN_BUCKET_SIZE - 1)`.
+    pub const SSTORE_SET_STORAGE_GAS_BASE: u64 = 20_000;
+
+    /// The base storage gas cost for creating a new account for the `REX` spec.
+    /// Actual cost is dynamically scaled by SALT bucket capacity: `NEW_ACCOUNT_STORAGE_GAS_BASE ×
+    /// (bucket_capacity / MIN_BUCKET_SIZE - 1)`.
+    pub const NEW_ACCOUNT_STORAGE_GAS_BASE: u64 = 25_000;
+
+    /// The base storage gas cost for creating a new contract for the `REX` spec.
+    /// Actual cost is dynamically scaled by SALT bucket capacity:
+    /// `CONTRACT_CREATION_STORAGE_GAS_BASE × (bucket_capacity / MIN_BUCKET_SIZE - 1)`.
+    pub const CONTRACT_CREATION_STORAGE_GAS_BASE: u64 = 32_000;
+
+    /// The maximum compute gas limit for a single transaction for the `REX` spec.
+    /// Transactions exceeding this limit fail on the compute-gas limit path.
+    /// The exact surface result depends on the current spec's top-level/frame-local semantics.
+    pub const TX_COMPUTE_GAS_LIMIT: u64 = 200_000_000;
+
+    /// The maximum data size limit for a single transaction for the `REX` spec.
+    /// Transactions exceeding this limit halt with `DataLimitExceeded`, preserving remaining gas.
+    pub const TX_DATA_LIMIT: u64 = 12 * 1024 * 1024 + 512 * 1024; // Same with the block data limit
+
+    /// The maximum key-value updates limit for a single transaction for the `REX` spec.
+    /// Transactions exceeding this limit halt with `KVUpdateLimitExceeded`, preserving remaining
+    /// gas.
+    pub const TX_KV_UPDATE_LIMIT: u64 = 500_000; // Same with the block kv update limit
+
+    /// The maximum state growth limit for a single transaction for the `REX` spec.
+    /// Transactions exceeding this limit halt with `StateGrowthLimitExceeded`, preserving remaining
+    /// gas.
+    pub const TX_STATE_GROWTH_LIMIT: u64 = 1000;
+
+    /// The maximum state growth limit for a block for the `REX` spec.
+    /// Blocks exceeding this limit halt with `StateGrowthLimitExceeded`, preserving remaining
+    /// gas.
+    pub const BLOCK_STATE_GROWTH_LIMIT: u64 = 1000;
+}

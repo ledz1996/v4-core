@@ -13,7 +13,7 @@ No difference was found. Four independent checks on the networks agree, and each
 
 One thing came out of the reading that deserves a place in the deployment checklist. The big integer library behind reth based nodes shipped a release on 20 October 2026 that returned wrong `MULMOD` results in one edge case. It was withdrawn three days later. No network on the list runs it or ran it, and the vectors built to hit it pass everywhere. Ethereum's reth nodes and Tempo run the first fixed release, whose arithmetic paths are one month old, and Tempo has no second client to disagree with it.
 
-5. This checkout builds to a PoolManager of 24,009 bytes whose creation code hash equals the one recorded in `snapshots/PoolManagerTest.json`. Run in a reference interpreter written for this review, the bytecode gives the same answer as every one of the 21 networks on 1,287 scripts that execute 95.6 percent of its instructions, apart from scripts a node could not afford. Its step trace equals the traces of Tempo, Ink and the HyperEVM archive client at each of 15.9 million steps, and its swap and liquidity amounts equal the source's formulas on 4,000 random pools.
+5. This checkout builds to a PoolManager of 24,009 bytes whose creation code hash equals the one recorded in `snapshots/PoolManagerTest.json`. Run in a reference interpreter written for this review, the bytecode gives the same answer as every one of the 21 networks on 1,287 scripts that execute 95.6 percent of its instructions, apart from scripts a node could not afford. Its step trace equals the traces of Tempo, Ink and the HyperEVM archive client at each of 73.2 million steps, and its swap and liquidity amounts equal the source's formulas on 4,000 random pools.
 
 ## What the source asks of the EVM
 
@@ -171,8 +171,11 @@ Step traces. Three endpoints serve `debug_traceCall` with a state override: Temp
 | Ink, set 3 | 78 | 1,703,314 | 2 skipped |
 | HyperEVM archive client, sets 1 and 2 | 97 | 3,753,607 | 20 skipped, 3 answers too large |
 | HyperEVM archive client, set 3 | 77 | 1,328,483 | 2 skipped, 1 answer too large |
+| Tempo, set 6 | 693 | 19,094,085 | 13 heavy scripts skipped |
+| Ink, set 6 | 693 | 19,094,085 | 13 skipped |
+| HyperEVM archive client, set 6 | 693 | 19,094,085 | 13 skipped |
 
-That is 15.9 million steps. Set 3 holds the hooks that return deltas, dynamic fees, protocol fees and owner calls. Tempo has the newest interpreter and no second client, so this is the strongest single statement the review has about it. On HyperEVM the trace comes from the archive client, which is stock revm; the closed validator is not reachable this way.
+That is 73.2 million steps. Set 3 holds the hooks that return deltas, dynamic fees, protocol fees and owner calls. Set 6 is the cycle 12 set that takes the sides of 83 conditional jumps no earlier script took (`clear` of an exact credit, allowances, hooks that return deltas or call the PoolManager themselves, the large-number branches of the price and fee math, malformed calldata for every function), so those branches are now checked step by step on three clients as well as by their answers on 21. Tempo has the newest interpreter and no second client, so this is the strongest single statement the review has about it. On HyperEVM the trace comes from the archive client, which is stock revm; the closed validator is not reachable this way.
 
 The build against the source. `buildcheck.py` creates 4,000 random pools in the reference interpreter running the built bytecode, with 7,949 liquidity changes and 15,979 swaps, and compares every returned amount and the price, tick and liquidity in storage after every swap with the transcription of the source and a step loop written from `Pool.swap`. There is no mismatch, and the 180 cases the source says must revert do revert. For these paths the compiler's output computes what the source says. This is also the first evidence on the Yul optimizer fault that the Solidity bug list reports for 0.8.26: whatever it affects, it is not the swap or liquidity arithmetic of this build.
 
@@ -335,6 +338,8 @@ python3 research/network-risk/tools/opdiff/trace.py research/network-risk/opcode
 
 ```bash
 python3 research/network-risk/tools/opdiff/trace.py research/network-risk/opcodes/trace3-hyperevm-nanoreth.json 80 https://rpc.purroofgroup.com 3
+# set 6 on the build of this checkout, all 706 scripts
+PM_BUILD=research/network-risk/build/PoolManager.json python3 research/network-risk/tools/opdiff/trace.py research/network-risk/opcodes/trace6-tempo.json 706 https://rpc.mainnet.tempo.xyz 6
 ```
 
 ```bash
