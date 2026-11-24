@@ -207,6 +207,8 @@ After the cycle, the one deployment with different bytes was run as well. Unicha
 
 One more differential was added on the state side. `statekeys.py` writes one storage slot and then reads 762 other slot indexes that differ from it in a single bit, in the top byte, in the low byte or by truncation, for eight base slots, three of them slots the PoolManager really uses. It does the same with transient storage. Of 256,158 reads on the 21 networks, the only ones that returned the written value are on Avalanche, for the index that differs in bit 248 alone. That is the known rule of the C-Chain (F-040), and it shows the check can see a fold. No network folds transient slots, and no other network folds storage slots (`opcodes/statekeys.json`).
 
+The rules around calls were checked the same way. `callsem.py` runs 50 small tests in one simulated call: a reverted call undoes its transient and persistent writes, a static call cannot write even through a nested plain call, return data has the size the callee gave and a copy past its end fails, a delegate call writes to the caller's slots, and a call with value moves exactly that many wei or fails and moves none, also when the callee reverts. All 21 networks give the specified word on all 50 (`opcodes/callsem.json`). The reference interpreter gives the same 50 words.
+
 ## What this does not cover
 
 Simulated calls and source reading cover the interpreter of every network. The open part is block production on the networks where blocks are made by code a simulated call does not run.
@@ -230,6 +232,10 @@ python3 research/network-risk/tools/opdiff/v4math.py
 
 ```bash
 python3 research/network-risk/tools/opdiff/statekeys.py research/network-risk/opcodes/statekeys.json
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/callsem.py research/network-risk/opcodes/callsem.json
 ```
 
 ```bash
