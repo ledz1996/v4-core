@@ -1,6 +1,6 @@
 # PoolManager network risk report
 
-State on 2026-11-23: cycles 1 to 7 are merged. The ledger holds 110 findings, 917 checks that came out safe, and 440 open leads across the 21 networks. One hundred and eighteen agents have worked on it so far, about half of them as independent verifiers.
+State on 2026-11-24: cycles 1 to 8 are merged. The ledger holds 114 findings, 958 checks that came out safe, and 464 open leads across the 21 networks. About 140 agents have worked on it so far, roughly half of them as independent verifiers.
 
 ## Opcodes and the pool math
 
@@ -11,7 +11,9 @@ On 24 November the review turned to one narrower question: does any network comp
 - 99,903 mined swaps satisfy the tick relation of `TickMath`, and 85,278 match the single-step formulas of `SwapMath` to the unit. Of 229 multi-step swaps that were replayed step by step from chain storage, 228 match to the unit and one could not be read.
 - The node source of Monad, BNB Smart Chain, Polygon, Avalanche, Tempo, MegaETH and Arc shows no opcode that departs from the specification. BNB Smart Chain carried a bytecode fusion feature with real faults until v1.7.8 and removed it in v1.8.0.
 
-The faulty library release (ruint 1.21.0) runs on none of the 21 networks. Ethereum's reth nodes and Tempo run the first fixed release, which is a month old, and Tempo has no second client. A build of this checkout was not tested, because no compiler is installed.
+- This checkout builds to a PoolManager of 24,009 bytes whose creation code hash equals the one in `snapshots/PoolManagerTest.json`. A reference interpreter written for the review reproduces the Ethereum node's answers on the built bytecode, its step trace equals Tempo's over 2.9 million steps, and on 4,000 random pools the build's swap and liquidity amounts equal the source's formulas.
+
+The faulty library release (ruint 1.21.0) runs on none of the 21 networks. Ethereum's reth nodes and Tempo run the first fixed release, which is a month old, and Tempo has no second client. As a by-product of running both, the built bytecode turned out to be the same bytes as the PoolManager deployed on Ethereum, so the on-chain measurements apply to this build directly.
 
 ## The question
 
@@ -19,11 +21,11 @@ Can an ordinary account take funds that other users hold in this repository's Po
 
 ## Answer so far
 
-No critical or high finding exists for an ordinary attacker, and the planted weakness has not been identified. Seven cycles have found no property of any of the 21 networks that lets an ordinary account reach funds in pools of ordinary tokens. Every finding that an ordinary account can trigger depends on a particular token or a particular third-party hook, and the amounts at stake today are small.
+No critical or high finding exists for an ordinary attacker, and the planted weakness has not been identified. Eight cycles have found no property of any of the 21 networks that lets an ordinary account reach funds in pools of ordinary tokens. Every finding that an ordinary account can trigger depends on a particular token or a particular third-party hook, and the amounts at stake today are small.
 
 Cycle 7 went back to the OP Stack chains, Tempo and Arc, HyperEVM, Monad and MegaETH, walked the five audit reports in `docs/security/audits` against `src/` finding by finding, and swept every priced currency for transfers that cost the sender more than the amount. The network units found nothing an ordinary account can use. The audit walk found every reported hazard closed in the source or left open by a recorded decision of the team, and two guards that the reports list as fixes and the source does not have, neither of which moves funds. The sweep raised the amount behind one earlier finding: the Arc PoolManager holds about 107,000 USD of a token that charges the sender on top.
 
-Fifty-one findings can be triggered by an ordinary account: 16 medium, 29 low and 6 that only record a mismatch between the source and its comments, tests or audit record. They fall into ten groups.
+Fifty-three findings can be triggered by an ordinary account: 16 medium, 31 low and 6 that only record a mismatch between the source and its comments, tests or audit record. They fall into ten groups.
 
 Capture of balance growth (F-041, F-066, F-067, F-091 medium; F-060, F-081, F-110 low). Any account can call `sync`, cause the PoolManager's balance of a token to rise, and call `settle` to be credited the rise. For Ampleforth on Ethereum the public rebase is guarded by `msg.sender == tx.origin`, and an EIP-7702 delegated account passes that check while running code. On Polygon the capture is in regular use: since 22 May 2026 six accounts have wrapped each sLGNS rebase in `sync` and `settle` and minted the PoolManager's share as claims, 661 mints for 20,418.69 sLGNS, about 3,300 USD. The same is done with sSAC on BNB Smart Chain, where F-066 had recorded the path as unused: a cycle 6 verifier counted 188 payout transactions for 271.92 sSAC since block 115,890,216. Smaller cases are Interest Protocol's USDI on Ethereum, Benqi rewards on qiAVAX on Avalanche, TITHE on Robinhood Chain, where a public `claimFor` call pays 10,002.56 TITHE of holder rewards to the PoolManager, and a MortgageFi vault share on Base, where the same kind of call adds 2.58 shares. In every case the amount taken is growth that no pool, position or claim was credited with, and principal does not fall. A search of 53.3 million claim mint logs on the 21 networks found mints without a matching payment only on Polygon, in three ids that were already known.
 
@@ -57,7 +59,7 @@ Limits of the design that the audits recorded and the team accepted (F-102, F-10
 
 The remaining six (F-006, F-014, F-054, F-055, F-100, F-101) record places where the source disagrees with its own comments, tests, test doubles or audit record, with no funds involved. The two new ones come from the audit walk. The Trail of Bits and Spearbit reports list a lock on `sync` and on fee collection as a fix, and the source has a check on the synced currency in their place, which skips `address(0)`. Where the native asset has an ERC-20 face, a native fee collection can therefore run between a `sync` of the face and its `settle`, and the account that holds the sync is the only one that pays. The OpenZeppelin report says `noDelegateCall` was added to all relevant external functions, and the source carries it on the four pool functions only. The reports do not say whether the guards were dropped on purpose later.
 
-The other 59 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end. Five issuer blocks are in force today and an ordinary account can neither set nor lift them.
+The other 61 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end. Five issuer blocks are in force today and an ordinary account can neither set nor lift them.
 
 - On Ethereum the issuers of yUSD, yETH and xSolvBTC have blocked the PoolManager address, and KITE and NTX are paused. About 1.67 million USD held for pools cannot leave (F-080).
 - On Celo the GoodDollar owner block-listed the PoolManager on 11 September 2026, which holds about 60,000 USD of G$ (F-056).
@@ -117,7 +119,7 @@ The cycle 7 critic put these questions at the head of the queue.
 - Contracts that call `donate` from a balance they built up earlier on a function open to anyone, where liquidity placed around the call collects the donation.
 - One table of every pooled token that an issuer can block, pause or remove at the PoolManager, with the value at stake. Four critics have asked for it and the entries are still spread over a dozen findings.
 
-Three limits apply to everything above. No compiler is installed here, so nothing was built, and four open leads wait on one build: whether the build matches the size and creation code hash recorded in `snapshots/PoolManagerTest.json`, whether the repository's own test suite passes with and without isolation, whether the probes that were run against the 21 deployed contracts give the same answers against the built bytecode, and whether a Yul optimizer bug published on 22 October 2026, which the Solidity bug list marks as affecting the pinned solc 0.8.26, touches the optimized output. Second, some node software could not be read: the HyperEVM validator is closed, the Nitro release that Arbitrum One and Robinhood Chain run is not public, and the Elysium build is unidentified. Third, the chain facts were read from the live official deployments, whose bytecode differs from this checkout, so the token and hook findings describe what the new deployment will meet and do not test a defect in this build.
+Three limits apply to everything above. First, the repository's own test suite has not been run: the PoolManager now builds here with the pinned compiler and matches its snapshot, but the tests need forge, which is not installed. Whether the Yul optimizer bug published on 22 October 2026 for solc 0.8.26 touches this build is open in general, though the swap and liquidity arithmetic of the build was checked against the source on 4,000 random pools without a mismatch. Second, some node software could not be read: the HyperEVM validator is closed, the Nitro release that Arbitrum One and Robinhood Chain run is not public, and the Elysium build is unidentified. Third, the chain facts were read from the live official deployments, whose bytecode differs from this checkout, and the build of this checkout turned out to be the same bytes, so those facts describe this build as well.
 
 ## Findings an ordinary account can trigger
 
@@ -1392,6 +1394,60 @@ Sources:
 - https://api.geckoterminal.com/api/v2/networks/base/tokens/0xe443cadb4a4fa403caee0e0546c33baff32c51f8/pools (One pool, uniswap-v4-base, mf-e-usdc-cbbtc / USDC 0.01%, id 0x620bc43c..., token price 1.0214 USD.)
 - research/network-risk/cycles/007/theme-transfer-side-effects.work/raw/hfam_8453.json:1 (The two Base hits of the full list trial: claimFor on mf-e-usdc-cbbtc and collectTo on uniusd.fun.)
 
+### F-111. A run of dust positions bounds how far one swap can move the price inside the transaction gas cap, and building it costs a fraction of one BNB or a few POL
+
+Low severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: BNB Smart Chain, Polygon, Avalanche.
+
+What differs on the network: BNB Smart Chain caps one transaction at 16,777,216 gas and Polygon at 33,554,432 gas, and Polygon charges 5460 gas for a cold storage read after PIP-88. The Avalanche C-Chain has no transaction cap below its block limit of 80,000,000 gas and charges at least half of the gas limit. Gas is cheap on all three: eth_gasPrice returned 0.05 gwei on BNB Smart Chain, 278 gwei of POL on Polygon and 7.5 gwei of AVAX on Avalanche on 2026-11-23. Ethereum has the same cap as BNB Smart Chain, and the cost of the attack in native units is what differs.
+
+How it meets the code: 1. Pool.swap runs one loop step for each initialized tick it reaches (src/libraries/Pool.sol:344-437). A step that ends on an initialized tick calls crossTick, which reads the liquidity word of the tick and reads and writes both fee growth words (src/libraries/Pool.sol:417-421 and 602-611). 2. Under Ethereum gas prices, which the BNB Smart Chain client keeps (cold read 2100, write of a non-zero slot 5000 including the cold read, fresh slot 20,000), that is three cold reads and two writes of non-zero slots, about 12,100 gas, plus the price and step arithmetic, about 16,500 gas in total. The first crossing of a tick whose fee growth words are still zero writes two fresh slots and costs about 51,000 gas. Under the Polygon prices the two figures are about 25,000 and 61,000. These figures are computed from the opcode prices in the client source and from the statements of the loop. They were not measured on chain, and the gas table of the C-Chain was not read in this cycle and is assumed equal to the Ethereum one for these opcodes. 3. One transaction can therefore cross about 1,000 already crossed ticks on BNB Smart Chain (330 on a first crossing), about 1,340 on Polygon (550) and about 4,800 on Avalanche (1,560). 4. Any account can initialize ticks. In a pool with tick spacing 1 it adds positions of one liquidity unit over consecutive ticks through modifyLiquidity (src/PoolManager.sol:145-184, src/libraries/Pool.sol:146-236). Each new tick costs the account about 70,000 gas (one position slot, one tick slot, one bitmap update) and a token amount of a few base units. 1,000 ticks cost about 70 million gas, which is 0.0035 BNB, about 19.5 POL or about 0.53 AVAX at the gas prices above. With tick spacing 1, 1,000 ticks span a price change of 10.5 percent. 5. A swap that has to move the price across more initialized ticks than the cap allows runs out of gas in every transaction. The caller can still swap in pieces, because the loop stops at sqrtPriceLimitX96 (src/libraries/Pool.sol:344 and 364) and each piece is a valid swap. A contract that needs the whole move in one call, such as a liquidation or a multi hop route with a fixed output, fails until it splits the swap. 6. The same bound applies without any attacker to a pool whose price sits far from its liquidity. An empty stretch costs one cold bitmap read and one step per word of 256 tick spacings (src/libraries/TickBitmap.sol:85-119). From MIN_TICK to tick 0 a pool with spacing 1 has 3,466 words, about 17 million gas at 5,000 gas per word, which is above the BNB Smart Chain cap. Finding F-102 records that any account can move the price of an empty pool for free. 7. Liquidity removal is not affected. Pool.modifyLiquidity updates two ticks, at most two bitmap words and one position and contains no loop (src/libraries/Pool.sol:146-236), so its gas does not depend on how many ticks exist.
+
+What is at risk: No funds are taken and no withdrawal is blocked. Swaps through the affected price range of one pool need several transactions, and integrations that swap in one call across the range revert. The cost to the attacker is a one time payment of gas. The cost to swappers repeats for each traversal. The largest Quoter simulation that cycle 5 ran on BNB Smart Chain used 11,518,424 gas, so real pools already come within a factor of 1.5 of the cap without any attack.
+
+What it takes: A pool with a small tick spacing. Spacing 1 is the worst case because 1,000 ticks cover only 10.5 percent of price. The attacker needs gas and a few base units of both currencies. The price must have to cross the range, so the attack matters in volatile pairs and has no effect while the price stays on one side.
+
+What can be done: Routers and liquidators should bound each swap with sqrtPriceLimitX96 and continue in a second transaction when the limit is reached. Pool creators who expect large price moves should choose a wider tick spacing, which raises the price range that a given number of ticks covers. Interfaces can read the tick bitmap through extsload to count initialized ticks on a route before sending a swap.
+
+This entry adds to F-064.
+
+Second reviewer's corrections: The hazard is the same on Ethereum, which has the same 2^24 cap; only the native cost of building the tick run differs, so the network difference is one of price, not of rule. The Avalanche claim that the C-Chain charges at least half of the gas limit is not supported by the lines cited and was not checked. Whether the saevm code path is the one live on C-Chain mainnet was not confirmed; the client version on the endpoint is avalanchego 1.15.3.
+
+Code: `src/libraries/Pool.sol:344-437`, `src/libraries/Pool.sol:602-611`, `src/libraries/Pool.sol:146-236`, `src/libraries/TickBitmap.sol:85-119`, `src/PoolManager.sol:145-184`.
+
+Sources:
+
+- https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/protocol_params.go (MaxTxGas is 1 << 24 (16,777,216) in the BNB Smart Chain client at tag v1.8.2, line 31, and the storage prices are the Ethereum ones: ColdSloadCostEIP2929 2100, SstoreResetGasEIP2200 5000 and SstoreSetGasEIP2200 20000, lines 67 to 72.)
+- https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/params/protocol_params.go (MaxTxGas is 1 << 25 (33,554,432) in Bor at tag v2.11.1, line 32, and the PIP-88 constants are ColdSloadCostPIP88 5460 and ColdSstoreCostPIP88 2940, lines 76 and 77.)
+- https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/vm/operations_acl.go (gasSLoadPIP88 charges 5460 for a cold slot and gasSStorePIP88 charges 5000 minus 2940 for a write to a warm non-zero slot.)
+- https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/worstcase/state.go (On the C-Chain a transaction is refused only when its gas limit exceeds what is left of the block limit, which is the gas rate times ten seconds (lines 123 to 155 and 295 to 297). No Osaka rule applies there.)
+- rpc https://bsc-dataseed1.bnbchain.org, https://polygon-bor-rpc.publicnode.com and https://api.avax.network/ext/bc/C/rpc, eth_gasPrice, eth_getBlockByNumber and eth_estimateGas on 2026-11-23; research/network-risk/cycles/008/established-l1.work/raw/fork_gas_probe.json (Block gas limits of 80,000,000, 160,000,000 and 80,000,000, gas prices of 0.05, 278 and 7.5 gwei, and the estimateGas allowance of 16777216 on BNB Smart Chain.)
+
+### F-112. The sNVB rebase on the PoolManager balance was paid out to one contract in 469 transactions on BNB Smart Chain, which the earlier log source had not shown
+
+Low severity, confirmed. Effect: siphon. Who can trigger it: any account. Networks: BNB Smart Chain.
+
+What differs on the network: No chain rule is involved. sNVB (0x6d6c16a3cbd318f3000e33cfd27662cf00f7e7c1) is the staked token of an Olympus fork. Every balance grows when the staking contract 0x6bcd1273eba684ff62614e41eff87123113112d1 runs a rebase, and finding F-066 records that any account can start the rebase once an epoch has ended. The PoolManager has held sNVB since block 49,283,730. Cycle 6 could not scan the history of this token, and the public log endpoint used then returns empty lists for old ranges.
+
+How it meets the code: 1. The caller opens an unlock and calls sync(sNVB), which stores balanceOf(PoolManager) (src/PoolManager.sol:279-288). 2. It triggers the rebase. The index rises and balanceOf(PoolManager) rises with it, with no transfer. 3. It calls settle, which credits the rise since sync to the caller (src/PoolManager.sol:358-360). 4. It calls take for the same amount, which sends the tokens out (src/PoolManager.sol:291-297), and the unlock closes with all deltas at zero (src/PoolManager.sol:112). 5. The chain shows this sequence 469 times. Each of these transactions holds a LogRebase of sNVB and a transfer of sNVB from the PoolManager, and none holds a transfer to it. 468 pay the contract 0x3c69c0620ca6bd0df44c0aa8c39602f7c3ebdf27 and one pays 0xfed56cd174406e0b2ffce9c7b1ee5113e883cdab. Twelve receipts were sampled. All twelve were sent by 0x2d68a551e7c8ecf7312ee083a16e736dce2347d5 to that contract and contain no event of the PoolManager, which fits a sequence of sync, settle and take, since none of the three emits one. 6. Archive state confirms the amounts. At block 106,450,859 the index rose from 46,185,701,171 to 46,190,184,993 and the PoolManager balance stayed at 1,407,067,071,029 base units. Without an outflow it would have been 1,407,203,672,577. The difference of 136,601,548 matches the logged transfer of 136,601,545. The same holds at blocks 108,735,661 (345,465,382 against 345,465,315) and 111,270,063 (277,199,579 against 277,199,575).
+
+What is at risk: 94.0989 sNVB left the PoolManager, between 0.127 and 0.396 sNVB per transaction. DexScreener lists no pair for the token, so no value in USD can be given, and it is likely small. The positions in sNVB pools record fixed token amounts and do not grow with a rebase (finding F-070), so the amounts paid out were backing no position. Pool reserves stay covered. The payouts stopped at block 111,270,063. The index has grown by about 0.5 percent since then, and epoch 9,503 has been due since block 135,135,655 without anyone starting it.
+
+What it takes: The PoolManager holds the rebasing token, an epoch has ended, and the rebase can be started by any account. No role is needed. The caller pays gas only.
+
+What can be done: Core cannot tell a rebase from a payment (assumption A2). Liquidity providers should pool the wrapped form of a rebasing token, whose balance does not move. Interfaces can warn when a currency reports a balance change without a transfer. The same advice stands in F-066 and F-091.
+
+This entry adds to F-091.
+
+Second reviewer's corrections: The amounts are not unpriced: the traced payout sold 136,601,545 base units of sNVB for 0.12501 BSC-USD in the same transaction through pair 0x2df8dd88da7fae1fbc995cdcd43517544b245fb3, so the total is of the order of 100 USD. Actor unprivileged stands because the token is not attacker-made and the rebase is public, but the amounts back no position (F-070), so no user balance fell; this is a token hazard outside the opcode focus of this cycle and should stay a one-line record.
+
+Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-364`, `src/PoolManager.sol:291-297`.
+
+Sources:
+
+- rpc https://bsc-mainnet.nodereal.io eth_getLogs in ranges of 50,000 blocks from block 49,283,000 to 135,335,758, 2026-11-23; research/network-risk/cycles/008/established-l1.work/raw/snvb_logs_nodereal_p0.json to p5.json and research/network-risk/cycles/008/established-l1.work/raw/snvb_result.json (1,814 transfers of sNVB out of the PoolManager, 973 in and 8,942 rebase logs with epochs 561 to 9,502 and no gap. 469 transactions hold a rebase log and an outflow, with recipients and amounts.)
+- rpc https://bsc.api.pocket.network archive eth_call of balanceOf(PoolManager) and index() at 41 blocks and around three payout blocks, 2026-11-23; research/network-risk/cycles/008/established-l1.work/raw/snvb_grid.json and research/network-risk/cycles/008/established-l1.work/raw/snvb_payout_sample.json (The PoolManager balance and the index one block before and at three payout blocks, the 40 interval comparison of state with logs, epoch() of the staking contract with number 9,503 and end block 135,135,655, and the current balance of 38,313.74 sNVB.)
+- https://api.dexscreener.com/latest/dex/tokens/0x6d6c16a3cbd318f3000e33cfd27662cf00f7e7c1 (No trading pair is listed for sNVB on 2026-11-23, so the amounts are unpriced.)
+
 ### F-006. Source disagrees with two interface comments and two test conditions, and none of the four changes who can move funds
 
 Info severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: all 21 networks.
@@ -1581,6 +1637,7 @@ These are outside the threat model and are listed for reference. Full text is in
 | F-069 | author of a hook or token the victims use | low | confirmed | Ethereum, Robinhood Chain, Arbitrum One | Tokens whose balance falls with time leave the PoolManager short of what pools record: TURING on Ethereum has lost 73 percent of its pooled balance in 263 days |
 | F-074 | author of a hook or token the victims use | low | confirmed | Ethereum, Optimism, BNB Smart Chain, Polygon, Base, Arbitrum One, Avalanche, Celo, Robinhood Chain, Elysium, X Layer | More pooled tokens gate their own transfers on the PoolManager address: AGL on eight networks, PLAYR, MOON, INFX, A3K, LFNX, FIN and four more Securitize wrappers |
 | F-103 | author of a hook or token the victims use | low | confirmed | all 21 networks | A pool id that resembles another pool's id can be mined through the hooks field of the PoolKey, and core gives a reader nothing to tell the two pools apart (Trail of Bits finding 6, unresolved) |
+| F-113 | author of a hook or token the victims use | low | confirmed | Ethereum | Ten unpriced pooled tokens on Ethereum charge the sender on top of every transfer, so each take lowers the PoolManager balance by more than the caller is debited |
 | F-002 | token issuer or admin | high | confirmed | Robinhood Chain | Robinhood Stock Tokens and USDG let the issuer block, pause, burn or upgrade the tokens held by the PoolManager |
 | F-011 | token issuer or admin | high | confirmed | Ethereum | One issuer blocklist entry on the PoolManager address freezes or wipes a stablecoin for every pool |
 | F-015 | token issuer or admin | high | confirmed | Monad | Role holders on GHO, syrupUSDC, apxUSD, shMON and mUSD can pause, burn, move or replace balances that the Monad PoolManager holds |
@@ -1598,6 +1655,7 @@ These are outside the threat model and are listed for reference. Full text is in
 | F-088 | token issuer or admin | high | confirmed | Arbitrum One | Issuer controls on USDG and Dinari USD+ cover 2.78M more in the Arbitrum One PoolManager, and the USD+ operator can lower the pooled balance by a rebase |
 | F-107 | token issuer or admin | high | confirmed | Base | The block lists that gate OUSD and AMDc transfers on Base are each administered by one externally owned account |
 | F-108 | token issuer or admin | high | confirmed | Arc | One USDC blocklist entry for the PoolManager on Arc stops native USDC in both directions, the token face and the bridged WETH token |
+| F-114 | token issuer or admin | high | confirmed | Ethereum | The yUSD, yETH and xSolvBTC blocks are list entries for the PoolManager address itself, dated 2026-01-21 and 2026-07-12, and ankrETH has been paused for every sender since 2026-11-09 |
 | F-007 | token issuer or admin | medium | confirmed | BNB Smart Chain | Scheduled Jenner fork adds protocol-native tokens whose issuer can seize, pause or block the PoolManager balance |
 | F-043 | token issuer or admin | medium | confirmed | HyperEVM | stHYPE and wstHYPE are two currency ids over one share balance, so a loss in the rebasing face is paid from the shares of pools in the other face |
 | F-068 | token issuer or admin | medium | confirmed | Ethereum, BNB Smart Chain, Monad, X Layer | xStocks tokens multiply every balance by a figure the issuer schedules, and the 8 for 1 split of SNDKx raised the PoolManager balance eightfold on Ethereum and X Layer with no transfer |
@@ -1658,6 +1716,6 @@ Code group compares the deployed bytecode after blanking the contract's own addr
 ## Where the evidence is
 
 - `FINDINGS.md`: every finding in full, including the out-of-scope ones.
-- `CLEARED.md`: the 917 checks that came out safe, with the reason for each.
+- `CLEARED.md`: the 958 checks that came out safe, with the reason for each.
 - `STATUS.md`: coverage per network and lens, open leads, cycle history.
 - `cycles/NNN/`: the raw research and verdict files of each cycle.

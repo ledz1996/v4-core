@@ -4,7 +4,7 @@ State on 2026-11-24. This part of the review asks one question: does any of the 
 
 ## Answer
 
-No difference was found. Four independent checks agree, and each covers a weakness of the others.
+No difference was found. Four independent checks on the networks agree, and each covers a weakness of the others. A fifth part, added after a compiler became available, works on the bytecode built from this checkout.
 
 1. A battery of 185,529 opcode test vectors gave the specified result on every one of the 21 networks, with no mismatch.
 2. The deployed PoolManager bytecode, placed at the same address with the same empty state on every network, answered 550 scripts of about 28,000 calls with the same bytes as on Ethereum. The scripts cover the pool math, hook callbacks, token transfers with unusual return data and revert handling. The only differences, on Polygon, Monad, Tempo, Elysium and HyperEVM, are swaps that ran out of gas.
@@ -13,7 +13,7 @@ No difference was found. Four independent checks agree, and each covers a weakne
 
 One thing came out of the reading that deserves a place in the deployment checklist. The big integer library behind reth based nodes shipped a release on 20 October 2026 that returned wrong `MULMOD` results in one edge case. It was withdrawn three days later. No network on the list runs it or ran it, and the vectors built to hit it pass everywhere. Ethereum's reth nodes and Tempo run the first fixed release, whose arithmetic paths are one month old, and Tempo has no second client to disagree with it.
 
-Nothing here tests a build of this checkout. No compiler is installed, so the checks run the source's math as a transcription and the bytecode that is deployed today.
+5. This checkout builds to a PoolManager of 24,009 bytes whose creation code hash equals the one recorded in `snapshots/PoolManagerTest.json`. Run in a reference interpreter written for this review, the bytecode gives the Ethereum node's answer on every script the node could finish, its step trace equals Tempo's at each of 2.9 million steps, and its swap and liquidity amounts equal the source's formulas on 4,000 random pools.
 
 ## What the source asks of the EVM
 
@@ -100,7 +100,7 @@ The tick relation exercises the whole of `getTickAtSqrtPrice`: the bit scan, fou
 
 The last two columns are swaps that took more than one step. A swap rounds once per step, so its amounts land a few units from the single-step values ("several steps"), or far from them when it crossed a position whose liquidity entered and left again ("crossed liquidity"). `replay.py` reruns `Pool.swap` step by step for the newest 25 and 60 of each kind per network, reading the tick bitmap and the net liquidity of every crossed tick from the PoolManager's storage at the block of the swap. Of 229 swaps sampled on Ethereum, Base, Unichain, Zora, Robinhood Chain and MegaETH, 228 reproduce price, tick, liquidity and both amounts to the unit, the longest with 201 steps. The one that does not is on Robinhood Chain, where the endpoint no longer serves the state of that block. Results are in `opcodes/swaps.json` and `opcodes/replay.json`.
 
-HyperEVM has only 14 recent swaps and Avalanche 59, so this check says little about those two.
+Avalanche has only 59 recent swaps, so this check says little about it. HyperEVM, with 14 in the first window, is covered by the longer window described below.
 
 ## Check 4: the node source
 
@@ -135,10 +135,41 @@ No release of these clients published between 20 October and today pinned 1.21.0
 
 For the pool math the fault would have been hard to reach even on an affected node. `mulDiv` calls `mulmod(a, b, denominator)` only when the product needs more than 256 bits, and the fault then needs a denominator of four limbs whose top 128 bits equal those of the high half of the product, which means a quotient within 2^129 of 2^256. The prices, amounts and fee growth values that `mulDiv` returns in a pool are far below that. It still matters for deployment, for two reasons. A node operator who built from source in those three days may be running the withdrawn release without knowing. And the fixed release is new code on a path every swap takes, on one network with a single client.
 
+## The build and the bytecode level
+
+`tools/build/compile.js`, `tools/opdiff/pyevm.py`, `bytecode.py`, `trace.py` and `buildcheck.py`.
+
+The build. `src/PoolManager.sol` was compiled with solc 0.8.26 (commit 8a97fa7a, the JavaScript build of the compiler) and the settings of `foundry.toml`: optimizer with 44,444,444 runs, via IR, Cancun, no metadata hash. The runtime bytecode has 24,009 bytes and the creation code 24,194. `snapshots/PoolManagerTest.json` records a bytecode size of 24,009 and a creation code hash, and the keccak of the built creation code equals that hash. The source in this checkout therefore builds to exactly the bytecode its own snapshot describes. The build is stored in `build/PoolManager.json`.
+
+One by-product has to be stated. The scripts print a hash of the bytecode they run. With its one immutable rewritten to the test address, the build has the same hash as the PoolManager bytecode fetched from Ethereum with its immutable rewritten the same way. No source was compared, but the two bytecodes are the same bytes, so every result in checks 2 and 3 holds for this build as it stands.
+
+What is in the bytecode. A linear disassembly gives 10,418 instructions and 112 distinct opcodes. No instruction reads the chain: there is no `TIMESTAMP`, `NUMBER`, `CHAINID`, `BASEFEE`, `GASPRICE`, `ORIGIN`, `BLOCKHASH`, `BALANCE`, `EXTCODESIZE` or `EXTCODEHASH`. What depends on the surroundings is `CALLER` (53 places), `CALLVALUE` (33), `ADDRESS` (2), `SELFBALANCE` (1), `GAS` (5, each feeding a call), four `CALL` and one `STATICCALL`. Storage and hashing are 79 `SLOAD`, 40 `SSTORE`, 20 `TLOAD`, 9 `TSTORE` and 70 `KECCAK256`. The arithmetic the table above singles out appears as 114 `SIGNEXTEND`, 67 `SLT`, 19 `SAR`, 13 `MULMOD`, 13 `SGT`, 4 `SDIV`, 3 `SMOD` and 3 `BYTE`. There are 610 jump destinations and 709 jumps with a constant target, all of which land on a valid destination. Twenty-nine bytes with the value of `JUMPDEST` sit inside push data, and push data crosses a 16, 32 or 64 byte border 609, 430 and 224 times, which is where a vectorised scan for jump destinations would go wrong if it did.
+
+A reference interpreter. `pyevm.py` is an EVM in Python written from the specification for this review, without gas and with no client code. It runs the 550 scripts of check 2 instruction by instruction, 525 million instructions in all. For 512 scripts its output equals the Ethereum node's byte for byte. In the other 38 the node stopped at its gas limit: its record is empty, shorter, or first differs at a call that failed with empty return data (`opcodes/bytecode-gas.json`). The networks were compared with the node, and the node is now compared with the specification, so the chain of evidence no longer rests on any client being right.
+
+Coverage. The scripts execute 8,004 of the 10,418 instructions, 77 percent. Of 387 conditional jumps, 148 were taken both ways, 166 one way and 73 never. Eight opcodes are present and never ran: `MCOPY`, `SELFBALANCE`, `LOG1`, `LOG2`, `ADDMOD`, `EXP`, `INVALID` and `PUSH26`. They belong to paths the scripts do not reach: a callback that returns normally, so that `unlock` copies its result out, the owner and fee controller functions with their events, the protocol fee branch of a swap, the claim transfer and approval functions, and non-empty hook data. Scripts for those paths are the next addition.
+
+Step traces. Tempo's endpoint is the only one of the 21 that serves `debug_traceCall`. For 92 scripts the trace it returns was compared with the reference interpreter's at every step: call depth, program counter, opcode and the top four stack words, leaving aside words produced by `GAS`. All 2,925,870 steps agree. Twenty heavy scripts were skipped and eight requests failed at the endpoint. Tempo is the network with the newest interpreter and no second client, so this is the strongest single statement the review has about it.
+
+The build against the source. `buildcheck.py` creates 4,000 random pools in the reference interpreter running the built bytecode, with 7,949 liquidity changes and 15,979 swaps, and compares every returned amount and the price, tick and liquidity in storage after every swap with the transcription of the source and a step loop written from `Pool.swap`. There is no mismatch, and the 180 cases the source says must revert do revert. For these paths the compiler's output computes what the source says. This is also the first evidence on the Yul optimizer fault that the Solidity bug list reports for 0.8.26: whatever it affects, it is not the swap or liquidity arithmetic of this build.
+
+A second round of reading covered what the first left open.
+
+| Subject | Result |
+|---|---|
+| Monad compiler, parts not read before | About 40 percent of the x86 emitter was read line by line. Operand order for the opcodes that are not commutative, the same stack slot used for both operands, comparison results held in CPU flags until the conditional jump, `JUMPI` on all four limbs, dynamic jump targets through a table over every byte offset, and division and remainder by powers of two at the signed edges all match the specification. Block execution runs contracts in the interpreter first and as compiled code once they are hot, and compiled code is tied to the chain revision it was built for. Not read: multiplication code generation, `EXP`, the byte and sign extension helpers per operand location, inline `CALLDATALOAD` and the runtime helpers for memory copies and hashing. Release v0.16.6, which is not on mainnet yet, adds a new compiled path for shifting a constant by a variable amount. `TickBitmap` and `BitMath` use exactly that shape, and no simulated call can reach compiled code, so that path should be read before validators adopt the release. |
+| evm2 (Ethereum's reth nodes and Tempo) | The scans for jump destinations for AVX-512, AVX2, SSE4.1 and NEON were transcribed instruction by instruction and compared with the scalar rule on 424,000 random and constructed byte strings without a mismatch. Stack, memory, data, call and transient storage instructions match the specification as read, and 85 probes confirmed the edges on both endpoints. One fix in the revision range changes a result (storage read after a rolled-back creation into an address that already has storage), and Tempo has had it since v1.18.2. |
+| Arbitrum One, Robinhood Chain, Elysium | All three report ArbOS 61 and run the Osaka instruction set. The fork of go-ethereum that Nitro v3.12.4 pins differs from upstream v1.17.4 only outside arithmetic, jumps, memory, return data and transient storage. The release the endpoints report (v3.13.0-rc.9) is not public, and Elysium's build names no version. |
+| revm releases | No fix between interpreter 35.0.1 and the newest release corrects an arithmetic, jump, memory, return data or transient storage result of the stock interpreter. |
+| Second clients | OP Mainnet, Unichain, Ink, Soneium and Zora have run op-reth alone since the Karst upgrade of 8 July 2026, Base runs base-reth-node alone, and Celo has run op-reth alone since 22 July 2026. Most of the 21 networks are therefore single-client in practice. |
+
+Check 3 was also run over a longer window on the six networks that never had a second client: 17,434 swaps on Monad, 39,074 on MegaETH, 39,060 on Arc, 28,496 on Elysium, 12,977 on Tempo and 2,071 on HyperEVM. All 139,112 pass the tick relation, and 127,949 of the 129,093 paired ones match the single-step formulas to the unit (`opcodes/swaps-deep.json`). On Monad these swaps ran as compiled code.
+
 ## What this does not cover
 
-- This build. Everything above runs the source as a transcription or the bytecode deployed today. Compiling the checkout would let the second check run on its own bytecode. That needs a compiler, which is not installed here.
-- Compiled code on Monad beyond the 2,176 mined swaps, and the parts of its emitter that were not read.
+- The 23 percent of the bytecode the scripts do not execute yet, listed under coverage above.
+- The repository's own test suite. It needs forge, which is not installed, so whether the tests pass on this build is still open.
+- Compiled code on Monad beyond the 17,434 mined swaps, and the parts of its emitter that were not read.
 - Validators that run other hardware or other builds than the public endpoints: the vector code for jump destinations in evm2, the optional dispatch loop in bor, and any operator on the withdrawn ruint release.
 - The HyperEVM validator and the MegaETH node, which are closed, and the Arc commit behind `arc/v1`.
 - Liquidity changes and hook calls in mined blocks. `ModifyLiquidity` events do not carry the amounts, so only the simulated scripts of the second check cover them, and on Monad those run in the interpreter.
@@ -172,5 +203,25 @@ python3 research/network-risk/tools/opdiff/swaps.py research/network-risk/opcode
 ```bash
 python3 research/network-risk/tools/opdiff/replay.py research/network-risk/opcodes/swaps.json research/network-risk/opcodes/replay.json
 ```
+
+The build and the bytecode-level checks need the compiler package once (`npm install solc@0.8.26` in a directory outside the repository):
+
+```bash
+node research/network-risk/tools/build/compile.js <dir>/node_modules/solc . research/network-risk/build/PoolManager.json
+```
+
+```bash
+PM_BUILD=research/network-risk/build/PoolManager.json python3 research/network-risk/tools/opdiff/buildcheck.py research/network-risk/opcodes/build-check.json 4000
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/bytecode.py research/network-risk/opcodes/pmdiff.json research/network-risk/opcodes/pmdiff2.json research/network-risk/opcodes/bytecode.json 60000000
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/trace.py research/network-risk/opcodes/trace-tempo.json 60
+```
+
+With `PM_BUILD` set, `pmdiff.py`, `pmdiff2.py`, `bytecode.py` and `trace.py` run the built bytecode instead of the deployed one.
 
 Each takes a list of chain ids as further arguments to run on some networks only. The battery and the scripts use fixed seeds, so a rerun after a network upgrade tests the same inputs. A rerun is worth doing after every client release on the single-client networks (Monad, MegaETH, Tempo, HyperEVM, Arc, Robinhood Chain, Elysium) and after any ruint, revm or evm2 upgrade.

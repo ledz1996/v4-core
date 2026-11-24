@@ -158,6 +158,13 @@ def parse(buf):
 
 
 def fetch_code():
+    # PM_BUILD=<json written by tools/build/compile.js> runs the bytecode built from this checkout instead of the deployed one
+    if os.environ.get('PM_BUILD'):
+        b = json.load(open(os.environ['PM_BUILD'])); code = bytearray.fromhex(b['runtime'])
+        refs = [r for v in b['immutableReferences'].values() for r in v]
+        assert len(refs) == 1 and refs[0]['length'] == 32
+        code[refs[0]['start']:refs[0]['start'] + 32] = bytes.fromhex(PM[2:]).rjust(32, b'\0')
+        return bytes(code)
     code = bytes.fromhex(rpc(ETH, 'eth_getCode', [REAL_PM, 'latest'])[2:])
     real = bytes.fromhex(REAL_PM[2:])
     assert code.count(real) == 1

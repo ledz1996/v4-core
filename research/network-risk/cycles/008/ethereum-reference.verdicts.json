@@ -1,0 +1,35 @@
+{
+ "unit": "ethereum-reference",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I ran eth_simulateV1 at block 26,483,972 against https://ethereum-rpc.publicnode.com with the real PoolManager code in place (no stub), sending transfer(A, balance/3) from the PoolManager address. NoMM 0x195ddbbc102e43da6b52015b35ba78396a9ab2c1 returned the word 1, the PoolManager balance fell by 1.005025 times the amount and A received exactly the amount. MOOP 0x05876894a17d10f5cd033894211dbea9faf38f13 gave 1.001001 and SFC 0xed4794d6c7f397f8e07922187074843d472abe2e gave 1.5, both returning 1 with A receiving the full amount. These match raw_charged.json. eth_getLogs of Initialize at https://mainnet.gateway.tenderly.co with NoMM as currency0 or currency1 returns 2 pools, both with hook address zero. I did not recount all 23 pools, did not repeat the return leg and did not read the token sources.",
+   "codeCheck": "take debits the caller by amount (src/PoolManager.sol:294) and calls transfer (src/PoolManager.sol:295). The ERC-20 branch of transfer accepts no return data or the word 1 and never reads the balance (src/types/Currency.sol:55-79). The shared balance therefore falls by more than any delta records. _settle credits only the measured balance increase (src/PoolManager.sol:349-364), so an incoming charge is borne by the payer and cannot inflate a credit. The delta count check in unlock does not see the outflow surplus, because it is outside the delta ledger.",
+   "corrections": "actor: pool-creator. The shortfall comes from the token's own transfer rule, which its author chose, and the victims are LPs and claim holders who chose a pool of that token. No ordinary account gains from it: as the finding itself shows, a deliberate take and return costs the caller the same charge. This is a token hazard outside the opcode focus of cycle 8 and should stay a one-line record. The pool count of 23 rests on the research file except for the 2 NoMM pools that I recounted.",
+   "sources": [
+    {"url": "https://ethereum-rpc.publicnode.com", "supports": "eth_simulateV1 at block 26,483,972, transfer of one third of the balance from the PoolManager with its real code: fall/amount 1.005025 (NoMM), 1.001001 (MOOP), 1.5 (SFC), recipient credited 1.0 times the amount, return word 1."},
+    {"url": "https://mainnet.gateway.tenderly.co", "supports": "eth_getLogs of Initialize from block 21,688,329 with NoMM as topic2 or topic3: 2 pools, hook address zero."}
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "eth_call at https://eth.drpc.org of transfer(A, 0) sent from the PoolManager: yUSD and yETH succeed at block 24,283,368 and revert with 'blacklisted' at 24,283,369 and at latest. xSolvBTC succeeds at 25,518,434 and reverts at 25,518,435 and at latest. ankrETH succeeds at 26,376,472 and reverts with 'This action currently paused' at 26,376,473 and at latest. A control transfer from 0x...beef succeeds at latest for yUSD, yETH and xSolvBTC and reverts for ankrETH, which matches a global pause. eth_getTransactionByHash of 0xf46bcb77...c3b8 returns block 24,283,369, from 0x944416e5df03ee4c14ec44c01495005564e6b07e, to 0x10472f91f67c49260bdd65f016ea0757bb1fc91e, selector 0xf9911c7d, and its input contains the PoolManager address. Initialize logs at https://mainnet.gateway.tenderly.co with yUSD as currency give 60 pools, as the finding says. I did not check the xSolvBTC listing transaction or the event names, which the finding itself rests on computed hashes.",
+   "codeCheck": "take of an ERC-20 reverts with ERC20TransferFailed when the token reverts (src/types/Currency.sol:76-79), so every payout of these tokens from the PoolManager fails. A position holder can still close the delta with mint, which records an ERC-6909 claim and moves no token (src/PoolManager.sol:322-329), so the unlock delta count check can be met. Settle of yUSD or yETH into the PoolManager depends on whether the list also blocks the recipient, which I did not test.",
+   "corrections": "",
+   "sources": [
+    {"url": "https://eth.drpc.org", "supports": "eth_call of a zero transfer from the PoolManager at blocks 24,283,368/24,283,369 (yUSD, yETH), 25,518,434/25,518,435 (xSolvBTC), 26,376,472/26,376,473 (ankrETH) and latest, with a control sender; eth_getTransactionByHash of the yUSD/yETH listing transaction."},
+    {"url": "https://mainnet.gateway.tenderly.co", "supports": "eth_getLogs of Initialize with yUSD as currency: 60 pools."}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {"check": "Lead L-209 for Ethereum: the eighteen call shapes sent to the 18 precompiles, the five system contracts, the system address and the zero address through a forwarding stub at the PoolManager address. Does any answer differ from the plain call sweep of cycle 2, and does any target give a credit or an unpaid outflow?", "agrees": true, "note": "I recomputed the hook address check for the precompile addresses from src/libraries/Hooks.sol:27-47 and 109-127. 0x01, 0x02, 0x03, 0x04, 0x05 and 0x11 set a returns-delta bit without its action bit and fail the check; 0x100 sets only AFTER_REMOVE_LIQUIDITY and passes. A passing precompile must return at least 32 bytes whose first four match the selector (src/libraries/Hooks.sol:152-154), which only IDENTITY would do, and IDENTITY fails the check. IDENTITY as currency answers transfer with an echo whose first word starts with 0xa9059cbb and is not 1, so take reverts (src/types/Currency.sol:68). I did not rerun the sweep."},
+  {"check": "Staking and liquid staking contracts as recipient of a native take (P1) and as currency (P2, P3). What does the PoolManager receive for 1 ETH, and does the caller owe less than what left?", "agrees": true, "note": "take debits the full native amount before the call (src/PoolManager.sol:294-295) and _settle credits only the measured increase of the synced currency (src/PoolManager.sol:356-362). A staking contract that mints to the PoolManager at its public rate gives the caller nothing it could not get by staking directly, and one that credits nothing costs the caller. I did not rerun the simulations."},
+  {"check": "Transaction types and execution contexts of Ethereum against unlock, sync, settle and take: types 0x0 to 0x4, system calls, withdrawals, bundles inside one transaction. Who is msg.sender, what is msg.value and what does transient storage hold in each?", "agrees": true, "note": "EIP-1153 line 56 states that all values in transient storage are discarded at the end of the transaction, so the lock, the delta count and the synced currency start empty in every transaction of every type. unlock checks and clears the lock within one call (src/PoolManager.sol:104-114). A 7702 delegated sender is an ordinary caller of unlock and cannot carry transient state across transactions."}
+ ],
+ "leads": []
+}

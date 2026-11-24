@@ -1,0 +1,25 @@
+{
+ "unit": "core-code-invariants-bits",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Slot index folding on every network: only Avalanche folds, only bit 248, and only for persistent storage; transient slots are not folded anywhere, and the Avalanche fold cannot make two PoolManager slots share one cell.",
+   "agrees": true,
+   "note": "I ran my own eth_call without a to address on all 21 rpc URLs on 2026-11-24 (Ethereum block 26484013, Avalanche block 101243784, Arbitrum One at latest because the endpoint refused a numbered block). The code stores 0xAA at storage slot 0 and 0xBB at transient slot 0 and then loads seven multi-bit indexes that the one-bit probe did not cover: 1<<248, 0xff<<248, the top 96 bits, all 256 bits, the top 128 bits, bits 255 and 254 together, and 1<<160. Every storage and transient load returned zero on every network except SLOAD(1<<248) on Avalanche, which returned 0xAA. SLOAD(0xff<<248) returned zero there, which fits a rule that clears only bit 0 of byte 0. The Avalanche source says the same: storageKey does key[0] &^= 0x01 and TransformStateKey calls it (avalanchego v1.15.3 vms/saevm/cchain/libevm/extstate/statedb.go:48-56), and opTload and opTstore pass the index unchanged (libevm d398bc4dbe41 core/vm/eips.go:197-213). In src the fixed slots are small integers and the four transient constants, and every other slot is a keccak256 output or a fixed offset of at most 6 from one (src/libraries/Pool.sol:83-91; src/libraries/CurrencyDelta.sol:10-16). Two such slots share a cell on Avalanche only if they differ in bit 248 alone, which for two keccak outputs needs a 255 bit near collision and for S and S+n with n from 1 to 6 is impossible because a carry into bit 248 also flips the low bits. The deltas, the lock and the synced currency live in transient storage, which is not folded. The item is correct as written, and its own lead on rules of two or more bits in the Monad, MegaETH, Tempo, Arc and HyperEVM clients stays open; my seven patterns narrow it but do not close it.",
+   "sources": []
+  },
+  {
+   "check": "Address words that reach CALL without a mask (src/types/Currency.sol:48, Currency.sol:73, src/libraries/Hooks.sol:134): a dirty word cannot make the PoolManager call a different account than it books.",
+   "agrees": true,
+   "note": "Code: Currency.transfer passes to and currency to CALL unmasked (src/types/Currency.sol:48 and 73), callHook passes self unmasked (src/libraries/Hooks.sol:134), and the delta slot masks both words to 160 bits (src/libraries/CurrencyDelta.sol:12-13). fromId truncates to 160 bits (src/types/Currency.sol:116-118). Chain: in the same no-to eth_call I ran STATICCALL to a word with all 96 high bits set above 0x04 and above 0x02 and read BALANCE of the all-high-bits zero address. On all 21 networks the call to the dirty 0x04 word succeeded and returned the 32 input bytes, the call to the dirty 0x02 word returned 0x730e0397...0eea32, the SHA-256 of the input word, and BALANCE of the dirty zero address equalled BALANCE(0). So every network uses the low 160 bits for the call target, as the item says, with a wider dirty pattern than the one the item used. The deployed ABI decoder also rejects such words before they reach these lines, which my third check confirms.",
+   "sources": []
+  },
+  {
+   "check": "Calldata width as the deployed contracts enforce it: a word with bits above the declared width cannot reach the pool id hash, a delta slot or a mapping and give a pool or a currency a second identity.",
+   "agrees": true,
+   "note": "I sent my own initialize calls (selector 0x6276cbbe) from 0x...c0ffee01 to all 21 PoolManagers at latest on 2026-11-24 with bit patterns the item did not use. A clean key returned tick 0 everywhere. A key with bit 255 set in the currency0, currency1 or hooks word, bit 31 set in the fee word, bit 255 alone set in the spacing word without sign extension, or bit 255 or bit 161 set in the price word reverted with empty data on every network (data 0x or no data field, depending on the endpoint). The pool id is keccak256 over the 0xa0 bytes of the in-memory struct (src/types/PoolId.sol:11-15), so if a dirty word could reach memory it would yield a second id for one key; the deployed decoder stops it on all 21. The item rightly notes that the build under review was not compiled, so this checks deployed bytecode and not the src build.",
+   "sources": []
+  }
+ ],
+ "leads": []
+}

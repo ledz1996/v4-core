@@ -1,0 +1,211 @@
+{
+ "unit": "core-code-invariants-settlement",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Invariants of flash accounting and custody as this checkout writes them, restated for the opcode focus of this cycle: which instructions each settlement statement depends on, and whether any edge of those instructions can change a credit, a debit, the counter or the lock.",
+   "result": "The invariants are the seven of cycle 2 (lock, closure, credits, debits, custody, one payment bracket, claims) and the four chain properties T1 to T4, and I found nothing in the current text that changes them. I read src/PoolManager.sol:96-114 and 279-384, src/libraries/Lock.sol:8-27, NonzeroDeltaCount.sol:9-34, CurrencyDelta.sol:10-41, CurrencyReserves.sol:11-38, src/types/Currency.sol:40-118, src/ERC6909.sol:25-89, src/ERC6909Claims.sol:13-22, src/libraries/SafeCast.sol:56-59 and src/ProtocolFees.sol:44-70. The settlement path uses few instructions. The delta slot is KECCAK256 of two masked 32 byte words at memory 0 (CurrencyDelta.sol:12-14). The four fixed slots are literals. TLOAD and TSTORE hold the flag, the counter, the deltas and the bracket. The counter moves by ADD and SUB of 1 (NonzeroDeltaCount.sol:21, 31). The delta update is a checked int256 addition (CurrencyDelta.sol:37), so the compiler adds signed comparisons. The credit is a checked subtraction of two balances (PoolManager.sol:360). Every amount passes the cast at SafeCast.sol:56-59, which is a GT style comparison against 2^127. The counter cannot pass below zero: _accountDelta returns on a zero delta (PoolManager.sol:369), it decrements only when next is zero, which means previous was -delta and nonzero, and it increments only when previous is zero (373-377). Every input delta is below 2^127 in size, so the int256 sum at CurrencyDelta.sol:37 would need more than 2^128 calls to overflow. clear compares an int128 with the int256 slot value and can only bring a positive slot to zero (PoolManager.sol:310-319). mint and burn use the masked id currency.toId() for the claim and the truncated currency for the delta, so both sides name the same currency (PoolManager.sol:322-336, Currency.sol:110-118). None of these depends on SAR, SIGNEXTEND, SDIV, SMOD, MULMOD or BYTE. KECCAK256 over 64 bytes, TLOAD, TSTORE, ADD, SUB, AND and the comparisons are in the 185,529 vector battery that OPCODES.md reports clean on all 21 networks. The rollback behaviour of TSTORE inside the PoolManager's own frames is not covered by that battery and is tested in the next item.",
+   "source": "src/PoolManager.sol:349-378"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "T4 on the deployed PoolManager of each network: after an unlock that fails inside a caller's frame (callback REVERT, callback out of gas, callback INVALID, callback that returns with an open delta), are the lock flag, the nonzero delta counter, the caller's delta slot, the synced currency slot and the caller's ERC-6909 balance back to zero, so that the caller cannot go on to call take, mint or burn without the closure check. Also: does a nested unlock revert, does settle with value revert while an ERC-20 is synced, and does take outside unlock revert.",
+   "result": "Yes on all 21 networks. A driver placed by code override at an address with no code calls the deployed PoolManager seven times with eth_call; nothing is deployed or sent. In each callback the driver first calls mint(driver, 1, 1), which opens a delta of -1 for currency id 1 and writes a claim. Read from inside the callback before the revert, the lock flag was 1, the counter 1 and the delta slot -1 on every network, so the writes happened. After each failed unlock the driver read all five values through exttload and balanceOf and got zero on every network, for REVERT, for out of gas at 300,000 gas, for INVALID and for a callback that returned with the delta open, which unlock rejected with CurrencyNotSettled (0x5212cba1, src/PoolManager.sol:112). A callback that minted and burned the same amount returned success and left all five values zero. A nested unlock from inside the callback reverted with AlreadyUnlocked (0x5090d6c6, src/PoolManager.sol:105). After sync(0x04) inside the callback the synced currency slot held 0x04, and settle with 1 wei reverted with NonzeroNativeValue (0xb0ec849e, src/PoolManager.sol:356). take(address(0), driver, 0) after all of this reverted with ManagerLocked (0x54e3ca0d, src/PoolManager.sol:96-99). This confirms that inner writes are undone when the outer frame fails and that the lock cannot be left open by a caught failure, on the code path that eth_call uses on each endpoint. Blocks: Ethereum 26484005; Optimism 159956182; Base 61603838; Unichain 64762782; Zora 54408652; Worldchain 38087752; Ink 62012731; Soneium 31188195; Celo 83610382; X Layer 76742107; Arbitrum One 527071731; Robinhood Chain 122108085; Elysium 10268249; Polygon 97870450; BNB Smart Chain 135435881; Avalanche 101243669; Monad 124963667; MegaETH 32714131; Arc 32880504; HyperEVM 52108363; Tempo 50566887. Tempo needed a gas cap of 40,000,000 because a new storage slot costs more there; the result is the same. Unichain runs its own predeploy bytecode and gave the same result.",
+   "source": "research/network-risk/cycles/008/core-code-invariants-settlement.work/t4/rollback_all.json and research/network-risk/cycles/008/core-code-invariants-settlement.work/t4/rollback_4217.json (script research/network-risk/cycles/008/core-code-invariants-settlement.work/t4/rollback.py, run: python3 -I rollback.py <out> [chainId ...]), eth_call on the RPC URLs in state/networks.json on 2026-11-24"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "T3 on the deployed PoolManager of each network: does msg.value sent with settle arrive in the PoolManager's balance by the same amount inside the same frame, and does a native take of the same amount restore the balance, so that the credit at src/PoolManager.sol:354 matches a real payment.",
+   "result": "Yes on all 21 networks. Inside the callback the driver read BALANCE(PoolManager), called settle with 5 base units, read it again, took 5 base units back with take(address(0), driver, 5), read it a third time and reverted. The second reading was the first plus 5 and the third equal to the first on every network, from 0 on Tempo (the driver's balance came from the state override) to about 3.18 * 10^24 on Polygon. The counter was 1 after settle and 0 after take. The PoolManager therefore sees the value as payment in the same unit as SELFBALANCE and BALANCE report it, and the native payout at src/types/Currency.sol:48 moves the stated amount.",
+   "source": "research/network-risk/cycles/008/core-code-invariants-settlement.work/t4/rollback_all.json, field native and mode 6 of each network"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Monad compiles frequently used contracts to x86 code, and eth_call runs the interpreter, so the probe above did not run the compiled path. Do compiled TSTORE and TLOAD keep the same rollback as the interpreter.",
+   "result": "Yes, by reading the client source on the main branch. The x86 emitter compiles TLOAD and TSTORE to calls of the runtime functions runtime::tload and runtime::tstore (emitter.hpp lines 492-501, dispatched from x86.cpp lines 250-254). The interpreter calls the same runtime::tstore (instruction_table.hpp lines 1357-1375). runtime::tstore exits with an error under a static call and otherwise calls host set_transient_storage, and tload calls get_transient_storage (storage.hpp lines 38-62). The host writes into the current account state of the versioned State object (state.cpp lines 326-329 and 409-413), which is the version stack that the cycle 3 reading found to be popped on a failed frame. Compiled and interpreted code therefore share one transient store and one rollback, and the probe result holds for both. The remaining gap is that I did not confirm that main equals the mainnet release v0.16.5; web3_clientVersion on rpc.monad.xyz returned Monad/unknown.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/x86/emitter.hpp; https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/x86.cpp; https://raw.githubusercontent.com/category-labs/monad/main/category/vm/interpreter/instruction_table.hpp; https://raw.githubusercontent.com/category-labs/monad/main/category/vm/runtime/storage.hpp; https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/state.cpp"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L1",
+   "check": "Bor puts two shared caches in front of the interpreter: a cache of KECCAK256 results for 64 byte inputs and a jump destination analysis cache shared by the BlockSTM V2 workers and the prefetcher. Every delta slot (src/libraries/CurrencyDelta.sol:12-14), every ERC-6909 balance and allowance slot and every mapping slot of the pools is a 64 byte KECCAK256 input. Can either cache return a wrong slot or a wrong jump answer for the PoolManager.",
+   "result": "No, as read at tags v2.11.0, v2.11.1 and develop. opKeccak256 uses the cache only when the input is exactly 64 bytes, keys it by the whole 64 bytes copied into an array, and stores a common.Hash value, which Go copies, so the shared hasher buffer cannot alias a stored entry (instructions.go lines 259-290 at v2.11.1, evm.go line 179 for the type of hasherBuf). The cache is a sync.Map with a size cap, and a speculative execution that is later discarded can only leave entries that are true hashes, because the value is a pure function of the key (keccak_cache.go, bounded_cache.go). The jump destination cache is keyed by the code hash as in go-ethereum and stores the bitmap computed from that code (contract.go lines 82-112). A collision in either cache needs a KECCAK256 collision. I could not confirm which bor release the endpoint runs; polygon.drpc.org answers web3_clientVersion with Geth/v10.0.0/drpc. The 64 byte cache is present at all three revisions read.",
+   "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/vm/instructions.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/vm/keccak_cache.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/vm/bounded_cache.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/vm/contract.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/vm/evm.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.0/core/vm/instructions.go"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Re-entry through the four places where the PoolManager hands control to outside code while settlement state is open: the unlock callback, hooks, the ERC-20 transfer and balanceOf of a currency, and the recipient of a native take. Does any of them run before the PoolManager has written the debit or after it has read a value it then trusts.",
+   "result": "No ordering gap in the current text. take writes the debit before the transfer (src/PoolManager.sol:294-295). mint writes the debit before the claim (326-327) and burn writes the credit before the burn, and the burn reverts the whole call when the balance or allowance is short (334-335, src/ERC6909Claims.sol:13-22, src/ERC6909.sol:85-89). _settle reads the synced currency, rejects value for an ERC-20, reads the balance, resets the slot and then credits, and the only outside call in it is the balanceOf staticcall, which cannot write state (349-364, src/types/Currency.sol:90-96). sync makes the same staticcall and then writes both slots (279-288). Hooks run inside the pool functions and their deltas are booked after the hook returns (178-183, 221-226, src/libraries/Hooks.sol:131-160). A re-entering party shares the lock but not the caller's delta slots, which are keyed by msg.sender (src/libraries/CurrencyDelta.sol:10-16), and unlock returns only when every slot of every party is zero (src/PoolManager.sol:112). The cycle 2 victim and two account searches cover the sequences; this item confirms that the text they model has not changed in the lines they cite.",
+   "source": "src/PoolManager.sol:291-336"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L3",
+   "check": "Token faces, in one line as the cycle focus asks: the earlier attempt at this unit left a sweep of currency pairs whose PoolManager balances move together and an extended settlement model.",
+   "result": "The sweep in the work directory (8,436 named addresses, 2,085 pairs) shows one to one pairs that both pay out (EURe on Ethereum and Polygon), which the model gives no gain (setting 1, 17,367 states), and scaled pairs on Celo that do not pay out; the model gains only for scaled or rate faces that both pay, and the sweep lists none; not followed further in this cycle.",
+   "source": "research/network-risk/cycles/008/core-code-invariants-settlement.work/run1.out; research/network-risk/cycles/008/core-code-invariants-settlement.work/raw/all_faces_summary.json"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L5",
+   "question": "Run the rollback probe of this unit (and the scripts of OPCODES.md) against bytecode compiled from this checkout, placed by state override, once a solc 0.8.26 with via_ir is available.",
+   "why": "Every on-chain test so far ran the bytecode deployed today, so a change in src/ that only shows in a build of this checkout would not have been seen by any probe.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L3",
+   "question": "On BNB Smart Chain the face sweep lists four tokens (0x026c...ffff, 0x489c...ffff, 0xa5b9...ffff, 0xd270...ffff) whose transfer out of the PoolManager raises the PoolManager's balance of 0x7c8d5502b544ddaf8852fc46d1174e34876d545c. Who owns that inflow, and is any of it owed to a user.",
+   "why": "A balance rise during an open sync bracket is credited to the settler (src/PoolManager.sol:358-360); if the inflow belongs to no user it is a windfall, if it belongs to LPs it is a siphon.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": []
+}

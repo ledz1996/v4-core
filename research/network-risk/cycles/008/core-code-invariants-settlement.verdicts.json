@@ -1,0 +1,27 @@
+{
+ "unit": "core-code-invariants-settlement",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "T4 on the deployed PoolManager of each network: after an unlock that fails inside a caller's frame (callback REVERT, out of gas, INVALID, callback that returns with an open delta), are the lock flag, the nonzero delta counter, the caller's delta slot, the synced currency slot and the caller's ERC-6909 balance back to zero; does a nested unlock revert, does settle with value revert while an ERC-20 is synced, and does take outside unlock revert.",
+   "agrees": true,
+   "note": "I read rollback.py in full. The driver checks every mode against Ethereum semantics, including the inside reading of lock 1, counter 1 and delta -1 in mode 1, so a probe that never wrote state would have been flagged. I reran it myself on 2026-11-24 with python3 -I rollback.py <scratchpad>/rb.json 1 143 999 4326 130 5042 and got OK on all six: Ethereum block 0x1941d3a, Unichain 0x3dc3497, Monad 0x772ce89, MegaETH 0x1f32e8c, Arc 0x1f5b960, HyperEVM 0x31b1d47, with mode 6 balances rising by exactly 5 after settle and returning after take on each. The guards it relies on are in the text as cited: AlreadyUnlocked at src/PoolManager.sol:105, CurrencyNotSettled at 112, onlyWhenUnlocked at 96-99, NonzeroNativeValue at 356. rollback_all.json holds 20 networks and rollback_4217.json holds Tempo, which makes 21. The probe runs the deployed bytecode and not a build of this checkout, which the unit already records as a lead. Clearing of transient storage between transactions is outside this probe and is covered by earlier cleared items in state/cleared.json (eth_simulateV1 tests)."
+  },
+  {
+   "check": "Invariants of flash accounting and custody as this checkout writes them: which instructions each settlement statement depends on, and whether any edge of those instructions can change a credit, a debit, the counter or the lock.",
+   "agrees": true,
+   "note": "I read the cited lines. _accountDelta returns on a zero delta and decrements only when next is zero, which with a nonzero delta means previous was nonzero, and increments only when previous is zero (src/PoolManager.sol:367-378), so the counter cannot underflow. applyDelta is a checked int256 addition of an int128 (src/libraries/CurrencyDelta.sol, next = previous + delta). The delta slot is keccak256 of two masked words at memory 0 and 32. toInt128 rejects x >= 2^127 (src/libraries/SafeCast.sol:56-59), so negation of the result in take, mint and clear is safe. clear compares the int128 with the int256 slot and only a positive or zero slot can match (PoolManager.sol:310-319). mint and burn book the delta on fromId(id) and the claim on currency.toId(), which is the same truncated address (src/types/Currency.sol:109-118). _settle rejects value when an ERC-20 is synced, uses a checked subtraction for the credit and resets the currency slot (PoolManager.sol:349-364); the currency slot is written masked (src/libraries/CurrencyReserves.sol). None of these uses SAR, SIGNEXTEND, SDIV, SMOD, MULMOD or BYTE in the source text; the compiler may emit signed comparisons for the checked int256 add, which the OPCODES.md battery covers."
+  },
+  {
+   "check": "Monad compiles frequently used contracts to x86 code, and eth_call runs the interpreter. Do compiled TSTORE and TLOAD keep the same rollback as the interpreter.",
+   "agrees": true,
+   "note": "I fetched https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/x86/emitter.hpp and https://raw.githubusercontent.com/category-labs/monad/main/category/vm/runtime/storage.hpp. The emitter's tload and tstore call call_runtime with runtime::tload and runtime::tstore (emitter.hpp near lines 491-501). runtime::tstore exits with an error under a static call and otherwise calls ctx->host->set_transient_storage on the recipient, and tload calls get_transient_storage (storage.hpp near lines 38-62). The compiled path therefore goes through the same host store as the interpreter. I did not refetch state.cpp or instruction_table.hpp. The gap the unit names stands: main is not confirmed equal to the release the Monad endpoint runs."
+  },
+  {
+   "check": "Bor shared KECCAK256 64 byte cache and jump destination cache: can either return a wrong slot or jump answer for the PoolManager.",
+   "agrees": true,
+   "note": "I fetched https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/vm/instructions.go. opKeccak256 uses the cache only for exactly 64 byte inputs, copies the input into a [64]byte key, and stores evm.hasherBuf by value after hashing that input, so a stored value is always the true hash of its key; on a hit it sets the stack word from the stored hash. A wrong slot would need a cache entry whose value is not the hash of its key, and this code cannot produce one. I did not refetch contract.go for the jump destination cache, and the endpoint's bor version is unconfirmed as the unit says."
+  }
+ ],
+ "leads": []
+}
