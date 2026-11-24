@@ -2,13 +2,15 @@
 same state override as pmdiff) against the trace of the reference interpreter. For
 every step the depth, the program counter and the opcode must agree, and the top
 four stack words must agree except where a word comes from the GAS opcode, which the
-reference does not model. Of the public endpoints only Tempo's serves traces.
+reference does not model.
 
-Usage: python3 trace.py <out.json> [nScripts per set] [rpc url]
+Usage: python3 trace.py <out.json> [nScripts per set] [rpc url] [sets, for example 3 or 123]
+Set 3 is the pmdiff3 set: hooks that return deltas, dynamic fees, protocol fees and owner calls.
+Ink's rpc-qnd endpoint and the HyperEVM archive client at rpc.purroofgroup.com serve traces as well.
 """
 import sys, json, random, time
 from evm import rpc
-import pmdiff as P, pmdiff2 as Q
+import pmdiff as P, pmdiff2 as Q, pmdiff3 as R3
 from pyevm import World, NAMES
 from bytecode import worlds
 
@@ -43,6 +45,7 @@ def compare(url, ov, data, mk, max_steps):
 if __name__ == '__main__':
     out = sys.argv[1]; n = int(sys.argv[2]) if len(sys.argv) > 2 else 40
     url = sys.argv[3] if len(sys.argv) > 3 else 'https://rpc.mainnet.tempo.xyz'
+    sets = sys.argv[4] if len(sys.argv) > 4 else '12'
     code = P.fetch_code(); w1, w2 = worlds(code)
     rnd = random.Random(7_2026_11_24); s1 = [P.script(rnd) for _ in range(250)]
     rnd = random.Random(11_2026_11_24); s2 = [Q.script(rnd, i) for i in range(300)]
@@ -50,7 +53,11 @@ if __name__ == '__main__':
     ov2 = {P.PM: {'code': '0x' + code.hex(), 'balance': hex(10 ** 19)}, P.DRV: {'code': '0x' + Q.driver().hex()}, '0x' + Q.TOKEN.to_bytes(20, 'big').hex(): {'code': '0x' + Q.token().hex()}}
     for f in Q.HOOK_FLAGS: ov2['0x' + (Q.HOOK_BASE | f).to_bytes(20, 'big').hex()] = {'code': '0x' + Q.hook().hex()}
     res = []; tot = {'scripts': 0, 'identical': 0, 'steps': 0, 'different': 0, 'skipped': 0, 'errors': 0}
-    for name, scripts, ov, mk in (('pmdiff', s1, ov1, w1), ('pmdiff2', s2, ov2, w2)):
+    todo = [x for k, x in (('1', ('pmdiff', s1, ov1, w1)), ('2', ('pmdiff2', s2, ov2, w2))) if k in sets]
+    if '3' in sets:
+        rnd = random.Random(3_2026_11_24); s3 = [R3.build(rnd, i, code) for i in range(n)]
+        todo.append(('pmdiff3', s3, R3.overrides(code), lambda: R3.world(code)))
+    for name, scripts, ov, mk in todo:
         for i in range(min(n, len(scripts))):
             r = compare(url, ov, scripts[i][0], mk, 400_000); r.update(set=name, script=i); res.append(r)
             tot['scripts'] += 1
