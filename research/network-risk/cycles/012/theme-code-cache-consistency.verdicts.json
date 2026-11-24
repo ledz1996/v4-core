@@ -1,0 +1,22 @@
+{
+  "unit": "theme-code-cache-consistency",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "bor v2.11.1 BlockSTM V2: can one Call build a Contract whose CodeHash and Code come from two state versions, so that the bitmap of one bytecode is stored under the PoolManager's code hash in the per-block JUMPDEST cache that V2 workers and the prefetcher share (lead L-645).",
+      "agrees": true,
+      "note": "I fetched https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/state/parallel_statedb.go and read it. readCodeKey (lines 360-377) caches the first CodePath read per address for the incarnation, and its comment names the resolveCode and resolveCodeHash race. GetCode (lines 843-864) and GetCodeHash (lines 893-944) both use readCodeKey, and for an MVStore value the hash is cachedCodeHash, which is keccak256 of the same bytes (lines 875-888). When the write predates a destruction, GetCode returns nil and GetCodeHash falls through to EmptyCodeHash or zero, which is still consistent. Reset clears codeReadCache and codeHashCache (lines 303-304). SetCode deletes codeHashCache (line 949), and revertCreate and revertCode in parallel_statedb_journal.go (lines 93-124 of https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/state/parallel_statedb_journal.go) delete it as well. I found no path where the hash key differs from the hash of the bytes analysed. I did not re-read safe_base.go or the prefetcher, so the base path rests on the research reading."
+    },
+    {
+      "check": "BNB Smart Chain v1.8.2: JUMPDEST caches shared across transactions or workers, and the pooled Contract objects (lead L-646).",
+      "agrees": true,
+      "note": "I fetched https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/contract.go. It has a process-wide lru codeBitmapCache of 2048 entries keyed by CodeHash (lines 27-30) and fills it from codeBitmap(c.Code) on a miss (lines 99-113). In core/vm/evm.go Call sets the contract with SetCallCode(evm.resolveCodeHash(addr), code) right after code := evm.resolveCode(addr), both on the one StateDB (lines 353-363). StateDB.SetCode computes Keccak256Hash(code) (core/state/statedb.go lines 509-514). The RPC override calls statedb.SetCode (internal/ethapi/override/override.go line 108), and SetStorage copies the old object's hash together with its code field (statedb.go lines 545-548), so an eth_call cannot store a bitmap under a hash that is not that of the analysed bytes. I did not re-read the prefetcher or the Contract pool."
+    },
+    {
+      "check": "Monad v0.16.5, and v0.16.7 which rpc.monad.xyz now reports: can the varcode cache (interpreter code and native code keyed by code hash) store or find analysis or machine code of one bytecode under the PoolManager's code hash, for a 7702-delegated account or for an account created and called in the same block under optimistic parallel execution (lead L-647).",
+      "agrees": true,
+      "note": "I fetched the v0.16.5 files. execute_message.cpp lines 327-330 read the hash with state.get_code_hash(msg.code_address) and then fetch code by that hash with state.read_code(hash), so the VM never receives a hash and code read apart. state3/state.cpp read_code (lines 523-532) looks up code_ and then block_state by hash, and set_code (lines 576-587) keys by keccak256(code). can_merge compares original and actual code_hash (lines 664-666). varcode_cache.cpp try_set_raw (lines 74-82) returns an existing entry without comparing bytes, which is safe only while every insert uses keccak256 of its bytes. That held on the paths I read. I did not re-read block_state.cpp, delegation.cpp or the v0.16.7 diff."
+    }
+  ],
+  "leads": []
+}

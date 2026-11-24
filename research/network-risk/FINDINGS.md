@@ -1,6 +1,6 @@
 # All findings
 
-120 findings on record after cycle 11, in-scope ones first.
+123 findings on record after cycle 12, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -3093,6 +3093,85 @@ Sources:
 - https://rpc.purroofgroup.com (web3_clientVersion returns reth/v0.1.0-f0cad31/x86_64-unknown-linux-gnu)
 - https://rpc.purroofgroup.com (debug_traceTransaction and prestateTracer over 2,762 mined PoolManager transactions against receipts of https://rpc.hyperliquid.xyz/evm: 0 status or log mismatches, 258 post and 227 pre slots equal (theme-closed-producers.work/raw/hyper.json))
 - https://rpc.hyperliquid.xyz/evm (eth_getStorageAt at latest of 222 touched PoolManager slots equals nanoreth (theme-closed-producers.work/raw/hyper_slots.json))
+
+## F-121. BNB Chain's own RPC nodes run a geth build whose commit is not in the public repository
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: BNB Smart Chain.
+
+What differs on the network: bsc-dataseed1.bnbchain.org and bsc-dataseed2.bnbchain.org answer web3_clientVersion with Geth/v1.8.2-4e1c8247-20261104. The v1.8.2 tag is commit 54afaff4 of 2026-11-03. GitHub returns not found for the compare view v1.8.2...4e1c8247 and HTTP 422 for the commit, while the tag commit and the later pre-release commit 4bd1c730 resolve. The geth version string appends the first 8 characters of the build commit and the build date, so the official endpoints run code built one day after the release from a commit the public repository does not hold.
+
+How it meets the code: Every BSC reading of cycles 8 to 12 (interpreter, jump destination cache, keccak opcode, state) used the public v1.8.2 tag. A build from an unpublished commit can differ in any of these. The vectors and scripts of this cycle ran against that build and gave the specified results, so whatever differs is outside what 185,529 opcode vectors, 8,415 MULMOD sequence vectors and the PoolManager scripts reach. The most likely explanation is a private security or operational patch on top of v1.8.2, as BNB Chain has shipped before, which nobody outside can read.
+
+What is at risk: No loss path. The difference is that the code serving BNB Chain's own endpoints, and possibly its validators, cannot be read, so the source readings of this review cover the public release only.
+
+What it takes: None for the fact. A harmful difference would need BNB Chain or a validator to run a faulty private build.
+
+What can be done: Ask BNB Chain which commit 4e1c8247 is and whether validators run it, and rerun the vector and script sets after Jenner on 2026-12-08 against both dataseed and reth-bsc.
+
+Second reviewer's corrections: The 20261104 field is the commit date of 4e1c8247 taken by git show --format=%ct (internal/build/env.go lines 164-176), not the build date. The statement that a private security patch is the most likely explanation is a guess without a source. I could not open the GitHub commit or compare pages (HTTP 403); the absence of 4e1c8247 rests on the raw.githubusercontent.com 404 and on the research agent's report.
+
+Code: `src/libraries/FullMath.sol:14-116`, `src/PoolManager.sol:291-364`.
+
+Sources:
+
+- https://bsc-dataseed1.bnbchain.org (web3_clientVersion returned Geth/v1.8.2-4e1c8247-20261104/linux-amd64/go1.26.10 on 2026-11-24, and dataseed2 the same)
+- https://github.com/bnb-chain/bsc/releases (v1.8.2 is commit 54afaff, released 2026-11-03; tmp-master-4bd1c730-20261117 is a later pre-release)
+- https://github.com/bnb-chain/bsc/commit/54afaff (the tag commit resolves (54afaff4da31ac9e49ba646a4f65104edac5a2f3, 2026-11-03), while https://github.com/bnb-chain/bsc/commit/4e1c8247 returned HTTP 422 and https://github.com/bnb-chain/bsc/compare/v1.8.2...4e1c8247 returned not found)
+
+## F-122. Withdrawals on OP Mainnet, Unichain and Ink now settle against kona-client on the Cannon MIPS64 machine, a Rust build that no RPC endpoint runs
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Optimism, Unichain, Ink.
+
+What differs on the network: On Ethereum the client that answers eth_call also produces the state that matters. On these three chains the state that L1 accepts for withdrawals is fixed by the respected game type of the AnchorStateRegistry. A read on Ethereum at block 26,486,262 returns respectedGameType 9 on all three, which the OP contracts name SUPER_CANNON_KONA. The game implementation 0x19af533c... (SuperFaultDisputeGame 0.8.0) carries absolutePrestate 0x03e5a548...37c9 and the MIPS64 VM 0xacc005dc... version 1.10.1. The superchain registry lists that prestate as the cannon64-kona-interop build of release 1.9.0. The monorepo tag kona-client/v1.9.0 pins revm 43.0.2, revm-interpreter 43.0.1, op-revm 20.0.0, ruint 1.20.0 and alloy-primitives 1.7.3, compiled with Rust 1.95 for the big-endian MIPS64 target of Cannon. The nodes behind the public endpoints are op-reth builds on x86-64 or arm64. Cycle 7 cleared the kona proof issues on the ground that no chain used kona as its respected proof; that ground no longer holds for these three chains.
+
+How it meets the code: If the MIPS64 build of revm computed one opcode differently from the x86 node for some input, a transaction hitting that input would give one post-state on L2 and another in the proof program. The PoolManager paths where such an input could arise are mulmod(a, b, not(0)) and mulmod(a, b, denominator) in src/libraries/FullMath.sol:24 and :48, the sar and signextend in src/libraries/TickBitmap.sol:38, the shifts and byte lookups of src/libraries/BitMath.sol:16-22 and :40-45, div(not(0), price) in src/libraries/TickMath.sol:104 and the rounding mulmod in src/libraries/SqrtPriceMath.sol:252. Any account could then disprove the honest output root by running the public program, so proposals covering that block would lose and L1 withdrawals of every user would stall until governance changed the prestate. Pool balances inside L2 would not move. This review found no such opcode difference. ruint 1.20.0 has one architecture-specific path, the borrow chain behind limb comparison (src/algorithms/mod.rs:144-185), with a portable fallback of two overflowing_sub calls (src/algorithms/add.rs:24-35). Its division uses the MG10 reciprocal on u64 and u128 products, and u128 products on MIPS64 lower to DMULTU, whose on-chain semantics in MIPS64Instructions.sol:794-798 are the exact 128-bit product. The same targeted vectors were run through a transcription of the Go library that World Chain's program uses with DMULTU as the multiplier and gave no mismatch (see cleared). The Rust path itself was read, not executed.
+
+What is at risk: No loss path found. A divergence would freeze L1 withdrawals of all users of the three chains, including withdrawals of tokens taken out of the PoolManager, until operators replaced the prestate. Funds held by the PoolManager on L2 stay where they are.
+
+What it takes: An opcode result that differs between revm 43 on x86-64 and the same code compiled for Cannon MIPS64. None is known. Matching the prestate hash to the kona-client/v1.9.0 tag rests on the registry entry; the build was not reproduced.
+
+What can be done: Deployers can run kona-client from the same prestate against blocks that contain PoolManager transactions, or watch for output roots that a SUPER_CANNON_KONA game rejects. Operators can add the opcode battery of this review to the kona test suite on the MIPS64 target.
+
+Second reviewer's corrections: The cited MIPS64Instructions.sol is the develop branch; the line numbers there need not match the source of the deployed 1.10.1 VM, though version() on chain is 1.10.1 as claimed. The link from the prestate hash to the kona-client/v1.9.0 tag rests on the registry entry, as the finding says. If an opcode divergence between the MIPS64 kona build and op-reth existed, both the triggering transaction and the challenge would be open to an ordinary account under permissionless type 9 games, and the effect would fall on L1 withdrawals rather than on PoolManager funds; with no divergence known, actor operator and severity info stand.
+
+Code: `src/libraries/FullMath.sol:24`, `src/libraries/FullMath.sol:48`, `src/libraries/TickBitmap.sol:38`, `src/libraries/BitMath.sol:16-22`, `src/libraries/TickMath.sol:104`, `src/libraries/SqrtPriceMath.sol:252`.
+
+Sources:
+
+- https://ethereum-rpc.publicnode.com eth_call respectedGameType() on AnchorStateRegistry 0x23b2c629..., 0x27cf508e..., 0xee018baf... (from OptimismPortal.anchorStateRegistry()) (respected game type 9 on OP Mainnet, Unichain and Ink (cycles/012/theme-proof-builds.work/op/dgf.json))
+- https://ethereum-rpc.publicnode.com eth_call gameImpls(9), gameArgs(9), gameAtIndex(gameCount-1), absolutePrestate(), vm() on DisputeGameFactory 0xe5965ab5..., 0x2f12d621..., 0x10d7b350... (implementation 0x19af533c... version 0.8.0, prestate 0x03e5a54835d39c1d83b198314473e1f111c3539c04f65c3e8a9b8ccebe3737c9, VM 0xacc005dc... version 1.10.1 on the newest game of each chain (dgf2.json))
+- https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/dispute/lib/Types.sol (game type 9 is SUPER_CANNON_KONA, 1 PERMISSIONED_CANNON, 5 SUPER_PERMISSIONED)
+- https://raw.githubusercontent.com/ethereum-optimism/superchain-registry/main/validation/standard/standard-prestates.toml (0x03e5a548...37c9 is listed as cannon64-kona-interop of release 1.9.0 (and 1.9.0-rc.1))
+- https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/rust/Cargo.lock (revm 43.0.2, revm-interpreter 43.0.1, op-revm 20.0.0, ruint 1.20.0, alloy-primitives 1.7.3)
+- https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/rust/kona/docker/fpvm-prestates/cannon-repro.dockerfile (kona prestates are built with the cannon-builder image and the Rust toolchain of rust/rust-toolchain.toml (1.95))
+- https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/cannon/libraries/MIPS64Instructions.sol (dmultu, ddivu, multu and divu semantics at lines 743-813; version 1.10.1 of MIPS64.sol matches the on-chain VM)
+- https://raw.githubusercontent.com/recmo/uint/v1.20.0/src/algorithms/mod.rs (only the limb comparison borrow chain has an x86_64-specific path)
+- research/network-risk/state/cleared.json: cycle 7 entry of unit op-stack-eth on the kona fallback proof program (the earlier clearance relied on no chain using kona as its respected proof)
+
+## F-123. Zora, World Chain and Soneium settle withdrawals on a permissioned proposer, and Zora and Soneium name no proof program at all
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Zora, Worldchain, Soneium.
+
+What differs on the network: Zora and World Chain respect game type 1 (PERMISSIONED_CANNON). Zora's implementation args carry the absolute prestate 0xdead0000...0000, so no step can ever be proven and the outcome rests on the permissioned proposer and challenger. World Chain's carries 0x033c0009...4dbb6e, the cannon64 build of op-program 1.9.0 (op-geth v1.101604.0 pseudo-version of 2025-12-08, holiman/uint256 v1.3.2, Go 1.24.10, GOARCH=mips64 GOMIPS64=softfloat). Soneium respects type 5 (SUPER_PERMISSIONED): the newest game 0xfe326897... was created and resolved DEFENDER_WINS in the same second by proposer 0x49cc743a..., and absolutePrestate() and vm() revert on it.
+
+How it meets the code: For these chains the state behind a withdrawal is what the operator's proposer asserts. An ordinary account cannot make that assertion differ from the L2 state that the PoolManager's users see, because no proof program is consulted on Zora and Soneium, and on World Chain only the permissioned challenger can play the program. A wrong opcode in the proof build therefore cannot be turned against users by an unprivileged party on these three chains. It also means no program checks the operator's state root.
+
+What is at risk: No loss path for an unprivileged account. A dishonest or faulty proposer could finalise any state, which is an operator risk to every bridged asset, including tokens withdrawn from the PoolManager.
+
+What it takes: Operator action only.
+
+What can be done: Deployers should list these chains as operator-settled in the deployment checklist.
+
+Second reviewer's corrections: Zora does name a VM in gameArgs (0xacc005dc...) but with the placeholder prestate 0xdead..., so the statement that it names no proof program holds for the program, not the VM. State cleared.json cycle 10 (op-stack-eth) describes World Chain's proof client as kona with revm 42.0.1, while the respected prestate read here is the cannon64 op-program build; the earlier entry concerns a different or older proof path and should not be read as the current respected one.
+
+Code: `src/PoolManager.sol:349-364`, `src/types/Currency.sol:48`.
+
+Sources:
+
+- https://ethereum-rpc.publicnode.com eth_call respectedGameType(), gameImpls(1|5), gameArgs(1|5), gameAtIndex(gameCount-1) on the DisputeGameFactory and AnchorStateRegistry of each chain (respected types 1, 1 and 5; Zora prestate 0xdead..., World Chain prestate 0x033c0009..., Soneium game resolved at creation with status 2 (cycles/012/theme-proof-builds.work/op/dgf2.json))
+- https://raw.githubusercontent.com/ethereum-optimism/superchain-registry/main/validation/standard/standard-prestates.toml (0x033c000916b4...4dbb6e is cannon64 of release 1.9.0)
+- https://raw.githubusercontent.com/ethereum-optimism/optimism/op-program/v1.9.0/go.mod (toolchain go1.24.10, holiman/uint256 v1.3.2, op-geth replace v1.101604.0-synctest.0.0.20251208094937)
+- https://raw.githubusercontent.com/ethereum-optimism/optimism/op-program/v1.9.0/op-program/Makefile (op-program-client64.elf is built with GOOS=linux GOARCH=mips64 GOMIPS64=softfloat (line 34))
 
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 

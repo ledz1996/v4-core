@@ -1,0 +1,219 @@
+{
+ "unit": "theme-proof-builds",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Withdrawals on OP Mainnet, Unichain and Ink now settle against kona-client on the Cannon MIPS64 machine, a Rust build that no RPC endpoint runs",
+   "chainIds": [
+    10,
+    130,
+    57073
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10",
+    "A14"
+   ],
+   "effect": "degrade",
+   "actor": "operator",
+   "severity": "info",
+   "difference": "On Ethereum the client that answers eth_call also produces the state that matters. On these three chains the state that L1 accepts for withdrawals is fixed by the respected game type of the AnchorStateRegistry. A read on Ethereum at block 26,486,262 returns respectedGameType 9 on all three, which the OP contracts name SUPER_CANNON_KONA. The game implementation 0x19af533c... (SuperFaultDisputeGame 0.8.0) carries absolutePrestate 0x03e5a548...37c9 and the MIPS64 VM 0xacc005dc... version 1.10.1. The superchain registry lists that prestate as the cannon64-kona-interop build of release 1.9.0. The monorepo tag kona-client/v1.9.0 pins revm 43.0.2, revm-interpreter 43.0.1, op-revm 20.0.0, ruint 1.20.0 and alloy-primitives 1.7.3, compiled with Rust 1.95 for the big-endian MIPS64 target of Cannon. The nodes behind the public endpoints are op-reth builds on x86-64 or arm64. Cycle 7 cleared the kona proof issues on the ground that no chain used kona as its respected proof; that ground no longer holds for these three chains.",
+   "mechanism": "If the MIPS64 build of revm computed one opcode differently from the x86 node for some input, a transaction hitting that input would give one post-state on L2 and another in the proof program. The PoolManager paths where such an input could arise are mulmod(a, b, not(0)) and mulmod(a, b, denominator) in src/libraries/FullMath.sol:24 and :48, the sar and signextend in src/libraries/TickBitmap.sol:38, the shifts and byte lookups of src/libraries/BitMath.sol:16-22 and :40-45, div(not(0), price) in src/libraries/TickMath.sol:104 and the rounding mulmod in src/libraries/SqrtPriceMath.sol:252. Any account could then disprove the honest output root by running the public program, so proposals covering that block would lose and L1 withdrawals of every user would stall until governance changed the prestate. Pool balances inside L2 would not move. This review found no such opcode difference. ruint 1.20.0 has one architecture-specific path, the borrow chain behind limb comparison (src/algorithms/mod.rs:144-185), with a portable fallback of two overflowing_sub calls (src/algorithms/add.rs:24-35). Its division uses the MG10 reciprocal on u64 and u128 products, and u128 products on MIPS64 lower to DMULTU, whose on-chain semantics in MIPS64Instructions.sol:794-798 are the exact 128-bit product. The same targeted vectors were run through a transcription of the Go library that World Chain's program uses with DMULTU as the multiplier and gave no mismatch (see cleared). The Rust path itself was read, not executed.",
+   "impact": "No loss path found. A divergence would freeze L1 withdrawals of all users of the three chains, including withdrawals of tokens taken out of the PoolManager, until operators replaced the prestate. Funds held by the PoolManager on L2 stay where they are.",
+   "preconditions": "An opcode result that differs between revm 43 on x86-64 and the same code compiled for Cannon MIPS64. None is known. Matching the prestate hash to the kona-client/v1.9.0 tag rests on the registry entry; the build was not reproduced.",
+   "mitigations": "Deployers can run kona-client from the same prestate against blocks that contain PoolManager transactions, or watch for output roots that a SUPER_CANNON_KONA game rejects. Operators can add the opcode battery of this review to the kona test suite on the MIPS64 target.",
+   "coreRefs": [
+    "src/libraries/FullMath.sol:24",
+    "src/libraries/FullMath.sol:48",
+    "src/libraries/TickBitmap.sol:38",
+    "src/libraries/BitMath.sol:16-22",
+    "src/libraries/TickMath.sol:104",
+    "src/libraries/SqrtPriceMath.sol:252"
+   ],
+   "sources": [
+    {
+     "url": "https://ethereum-rpc.publicnode.com eth_call respectedGameType() on AnchorStateRegistry 0x23b2c629..., 0x27cf508e..., 0xee018baf... (from OptimismPortal.anchorStateRegistry())",
+     "supports": "respected game type 9 on OP Mainnet, Unichain and Ink (cycles/012/theme-proof-builds.work/op/dgf.json)"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com eth_call gameImpls(9), gameArgs(9), gameAtIndex(gameCount-1), absolutePrestate(), vm() on DisputeGameFactory 0xe5965ab5..., 0x2f12d621..., 0x10d7b350...",
+     "supports": "implementation 0x19af533c... version 0.8.0, prestate 0x03e5a54835d39c1d83b198314473e1f111c3539c04f65c3e8a9b8ccebe3737c9, VM 0xacc005dc... version 1.10.1 on the newest game of each chain (dgf2.json)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/dispute/lib/Types.sol",
+     "supports": "game type 9 is SUPER_CANNON_KONA, 1 PERMISSIONED_CANNON, 5 SUPER_PERMISSIONED"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/superchain-registry/main/validation/standard/standard-prestates.toml",
+     "supports": "0x03e5a548...37c9 is listed as cannon64-kona-interop of release 1.9.0 (and 1.9.0-rc.1)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/rust/Cargo.lock",
+     "supports": "revm 43.0.2, revm-interpreter 43.0.1, op-revm 20.0.0, ruint 1.20.0, alloy-primitives 1.7.3"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/rust/kona/docker/fpvm-prestates/cannon-repro.dockerfile",
+     "supports": "kona prestates are built with the cannon-builder image and the Rust toolchain of rust/rust-toolchain.toml (1.95)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/cannon/libraries/MIPS64Instructions.sol",
+     "supports": "dmultu, ddivu, multu and divu semantics at lines 743-813; version 1.10.1 of MIPS64.sol matches the on-chain VM"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/recmo/uint/v1.20.0/src/algorithms/mod.rs",
+     "supports": "only the limb comparison borrow chain has an x86_64-specific path"
+    },
+    {
+     "url": "research/network-risk/state/cleared.json: cycle 7 entry of unit op-stack-eth on the kona fallback proof program",
+     "supports": "the earlier clearance relied on no chain using kona as its respected proof"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Zora, World Chain and Soneium settle withdrawals on a permissioned proposer, and Zora and Soneium name no proof program at all",
+   "chainIds": [
+    7777777,
+    480,
+    1868
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A14"
+   ],
+   "effect": "degrade",
+   "actor": "operator",
+   "severity": "info",
+   "difference": "Zora and World Chain respect game type 1 (PERMISSIONED_CANNON). Zora's implementation args carry the absolute prestate 0xdead0000...0000, so no step can ever be proven and the outcome rests on the permissioned proposer and challenger. World Chain's carries 0x033c0009...4dbb6e, the cannon64 build of op-program 1.9.0 (op-geth v1.101604.0 pseudo-version of 2025-12-08, holiman/uint256 v1.3.2, Go 1.24.10, GOARCH=mips64 GOMIPS64=softfloat). Soneium respects type 5 (SUPER_PERMISSIONED): the newest game 0xfe326897... was created and resolved DEFENDER_WINS in the same second by proposer 0x49cc743a..., and absolutePrestate() and vm() revert on it.",
+   "mechanism": "For these chains the state behind a withdrawal is what the operator's proposer asserts. An ordinary account cannot make that assertion differ from the L2 state that the PoolManager's users see, because no proof program is consulted on Zora and Soneium, and on World Chain only the permissioned challenger can play the program. A wrong opcode in the proof build therefore cannot be turned against users by an unprivileged party on these three chains. It also means no program checks the operator's state root.",
+   "impact": "No loss path for an unprivileged account. A dishonest or faulty proposer could finalise any state, which is an operator risk to every bridged asset, including tokens withdrawn from the PoolManager.",
+   "preconditions": "Operator action only.",
+   "mitigations": "Deployers should list these chains as operator-settled in the deployment checklist.",
+   "coreRefs": [
+    "src/PoolManager.sol:349-364",
+    "src/types/Currency.sol:48"
+   ],
+   "sources": [
+    {
+     "url": "https://ethereum-rpc.publicnode.com eth_call respectedGameType(), gameImpls(1|5), gameArgs(1|5), gameAtIndex(gameCount-1) on the DisputeGameFactory and AnchorStateRegistry of each chain",
+     "supports": "respected types 1, 1 and 5; Zora prestate 0xdead..., World Chain prestate 0x033c0009..., Soneium game resolved at creation with status 2 (cycles/012/theme-proof-builds.work/op/dgf2.json)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/superchain-registry/main/validation/standard/standard-prestates.toml",
+     "supports": "0x033c000916b4...4dbb6e is cannon64 of release 1.9.0"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-program/v1.9.0/go.mod",
+     "supports": "toolchain go1.24.10, holiman/uint256 v1.3.2, op-geth replace v1.101604.0-synctest.0.0.20251208094937"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-program/v1.9.0/op-program/Makefile",
+     "supports": "op-program-client64.elf is built with GOOS=linux GOARCH=mips64 GOMIPS64=softfloat (line 34)"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "Lead L-663, part two. The consensus-v61 replay is built by go1.25.9 for GOARCH=wasm. Which lowering do bits.Mul64, bits.Add64, bits.Sub64 and bits.Div64 get there, and does holiman/uint256 v1.3.2 on that lowering give the specified result for the MULMOD, MUL, DIV, SDIV, MOD, SMOD, ADDMOD, shift, BYTE and SIGNEXTEND vectors of targeted.py and battery.py and for the pool math of v4math.py.",
+   "result": "intrinsics.go of go1.25.9 lists wasm for none of the four (lines 1222-1252: Mul64, Add64 and Sub64 for amd64, arm64, ppc64, s390x, mips64, riscv64 and loong64; Div64 for amd64 only), so the replay runs the generic Go code of math/bits/bits.go lines 386-560. Wasm.rules lines 102-138 lower a shift by a variable amount to Select(shift, 0, amount < 64) unless the prove pass shows the amount below 64, which is Go's own semantics; the uint256 shifts by 64 - shift (uint256.go:520-580, 1042-1149) are therefore 0 for shift 0 as on x86. A Python transcription of the generic bits code and of uint256.go, div.go and mod.go of v1.3.2 (the 332 straight-line bits statements of Reciprocal and reduce4 translated by script, control flow by hand), behind the opSHL, opSHR and opSAR bounds checks of go-ethereum v1.16.4 instructions.go:188-228, matched the reference on all 85,544 targeted vectors, 96,224 arithmetic battery vectors, 25,321 mulDiv, mulDivRoundingUp and bit scan cases and 19,498 ticks of getSqrtPriceAtTick and getTickAtSqrtPrice. The primitives alone matched exact arithmetic on 400,000 cases each and reciprocal2by1 on 400,004 normalised divisors. A planted wrong Mul64 gave 212 mismatches and a planted unguarded wasm shift gave 303 in 3,000 vectors, so the harness can fail. This covers the library and its lowering, not the Go wasm code generator for ordinary 64-bit arithmetic, which was not read.",
+   "source": "https://raw.githubusercontent.com/golang/go/go1.25.9/src/cmd/compile/internal/ssagen/intrinsics.go ; https://raw.githubusercontent.com/golang/go/go1.25.9/src/cmd/compile/internal/ssa/_gen/Wasm.rules ; https://raw.githubusercontent.com/golang/go/go1.25.9/src/math/bits/bits.go ; https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go ; https://raw.githubusercontent.com/holiman/uint256/v1.3.2/mod.go ; https://raw.githubusercontent.com/holiman/uint256/v1.3.2/div.go ; cycles/012/theme-proof-builds.work/go/uint256-wasm-vectors.json, prims.json, faults.json"
+  },
+  {
+   "chainIds": [
+    480
+   ],
+   "lens": "L1",
+   "check": "Part one for World Chain: op-program 1.9.0 on Cannon MIPS64 runs op-geth with holiman/uint256 v1.3.2. On mips64 Go intrinsifies Mul64, Add64 and Sub64 and leaves Div64 and Len64 generic. Do the opcode edges of OPCODES.md come out right on that target.",
+   "result": "The same transcription with Mul64 replaced by the DMULTU semantics of MIPS64Instructions.sol:794-798 (uint128(rs) * uint128(rt), hi = res >> 64) and the generic Div64 (which uses DDIVU, lines 807-813, exact unsigned quotient and remainder) matched all 85,544 targeted vectors, 96,224 battery vectors, the mulDiv and bit scan cases and 19,498 ticks. The 32-bit MULTU and DIVU paths sign-extend their results to 64 bits as the MIPS64 specification asks. The game on World Chain is permissioned, so the program is played by the operator only.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/cannon/libraries/MIPS64Instructions.sol ; https://raw.githubusercontent.com/golang/go/go1.25.9/src/cmd/compile/internal/ssagen/intrinsics.go ; cycles/012/theme-proof-builds.work/go/uint256-wasm-vectors.json"
+  },
+  {
+   "chainIds": [
+    10,
+    130,
+    57073
+   ],
+   "lens": "L1",
+   "check": "Part one for kona-client 1.9.0: keccak cache and KECCAK256 on MIPS64.",
+   "result": "The workspace lock of kona-client/v1.9.0 resolves alloy-primitives 1.7.3 with fixed-cache and keccak-asm, because op-reth in the same workspace enables them; whether the kona-client feature set on the MIPS64 target links the cache was not determined. Either way cycle 11 found that the cache compares the full key under a lock and cannot return the hash of another input, and keccak-asm has no MIPS64 assembly, so KECCAK256 runs portable Rust code there.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/rust/Cargo.lock ; https://raw.githubusercontent.com/ethereum-optimism/optimism/kona-client/v1.9.0/rust/Cargo.toml ; state/cleared.json (cycle 11, keccak cache)"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Part three: do Monad v0.16.6 and v0.16.7 change the compile decision or the size bound against v0.16.5, and which release do mainnet producers run.",
+   "result": "vm.cpp is byte-identical in v0.16.5, v0.16.6 and v0.16.7, including the revision check at lines 151-157 and the gas threshold at lines 178-187 that starts compilation once interpretation of a code hash has used max_code_size(offset, size) gas. x86.hpp (max_code_size = offset + 32 x bytecode size), CompilerConfig (offset 10 x 1024) and Emitter::estimate_size are unchanged. emitter.cpp is identical between v0.16.6 and v0.16.7; the change from v0.16.5 is the compiled shift of a constant by a variable amount, transcribed in cycle 9. The Monad release page lists v0.16.5 for mainnet on 2026-10-22 and v0.16.7 as testnet only (2026-11-19, mainnet N/A); v0.16.6 has no mainnet date. The public endpoint answers web3_clientVersion with Monad/0.16.7, so the RPC fleet runs a release the page does not list for mainnet. Simulated calls on Monad use the interpreter in every release read, so this does not change what eth_call tested.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/vm.cpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/vm.cpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/vm/compiler/ir/x86/emitter.cpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/compiler/ir/x86/emitter.cpp ; https://docs.monad.xyz/developer-essentials/changelog/releases.md ; https://rpc.monad.xyz web3_clientVersion = Monad/0.16.7"
+  },
+  {
+   "chainIds": [
+    1,
+    8453,
+    42220,
+    196,
+    137,
+    56,
+    43114,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Networks outside parts one to three of this unit.",
+   "result": "This unit read no separate proof build for them. Ethereum, Polygon, BNB Smart Chain, Avalanche, Tempo and Arc settle on the client that produces blocks. MegaETH and HyperEVM producers were covered by cycles 10 and 11 through mined results. Base, Celo and X Layer have proof systems that this unit did not identify fully; they are carried as leads.",
+   "source": "OPCODES.md sections on cycles 10 and 11 ; https://docs.base.org/specifications/base-protocol/proofs/proof-contracts"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "question": "Does the Monad v0.16.5 emitter's size estimate for the 24,009 byte PoolManager stay under 778,528 bytes? The bound leaves 682,492 bytes for code and read-only data after the 96,036 byte jump table, about 65 x86 bytes per EVM instruction or 150 per instruction that is not PUSH, DUP, SWAP or POP. The estimate depends on asmjit's encoded text size and needs a build of the compiler, or the node's compiler statistics log line num_size_out_of_bound_compilation_errors.",
+   "why": "Decides whether the compiled-path transcriptions of cycles 9 to 11 describe code that runs for the PoolManager. Both outcomes were tested: the interpreter by eth_call, the compiled path by transcription and mined swaps.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    10,
+    130,
+    57073
+   ],
+   "lens": "L1",
+   "question": "Run the targeted and battery vectors through kona-client 1.9.0 itself: reproduce the cannon64-kona-interop prestate 0x03e5a548...37c9 from tag kona-client/v1.9.0 and execute a block containing the vectors in the Cannon MIPS64 emulator.",
+   "why": "The Rust MIPS64 path was read, not executed. It is now the respected proof on three chains.",
+   "priority": "medium"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-649",
+   "outcome": "finding",
+   "answer": "OP Mainnet, Unichain and Ink respect SUPER_CANNON_KONA (type 9) with prestate 0x03e5a548...37c9, the registry's cannon64-kona-interop of release 1.9.0 on MIPS64 VM 1.10.1, embedding revm 43.0.2, revm-interpreter 43.0.1, ruint 1.20.0 and alloy-primitives 1.7.3. World Chain respects PERMISSIONED_CANNON with op-program 1.9.0 (op-geth v1.101604.0, uint256 v1.3.2, Go 1.24.10, mips64 softfloat). Zora respects PERMISSIONED_CANNON with prestate 0xdead..., Soneium SUPER_PERMISSIONED with instant resolution and no prestate, Base AggregateVerifier type 621 (TEE plus SP1). No opcode difference from the x86 node was found for the OPCODES.md edges on the uint256 path; the ruint MIPS64 path was read only. Recorded as two information findings at operator level."
+  },
+  {
+   "leadId": "L-663",
+   "outcome": "cleared",
+   "answer": "go1.25.9 does not intrinsify Mul64, Add64, Sub64 or Div64 on wasm, so the replay runs math/bits' generic code, and variable shifts get the Select guard of Wasm.rules. The transcription of that code and of uint256 v1.3.2 matched every targeted, battery and v4math case, and planted faults were caught."
+  },
+  {
+   "leadId": "L-648",
+   "outcome": "inconclusive",
+   "answer": "Mainnet release per the Monad release page is v0.16.5 (2026-10-22); the RPC reports 0.16.7, which the page lists for testnet only. The bound is 778,528 bytes and the estimate is asmjit text size plus 32 bytes per pending handler and per read-only constant plus 96,036 bytes of jump table; the text size cannot be computed from source without building the emitter. v0.16.6 and v0.16.7 change neither the bound nor the decision logic."
+  }
+ ]
+}

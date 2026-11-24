@@ -1,0 +1,83 @@
+{
+ "unit": "established-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "On 2026-11-24 I sent web3_clientVersion to bsc-dataseed1.bnbchain.org and bsc-dataseed2.bnbchain.org and both returned Geth/v1.8.2-4e1c8247-20261104/linux-amd64/go1.26.10. The GitHub releases page lists v1.8.2 as commit 54afaff of 2026-11-03 and a later pre-release tmp-master-4bd1c730-20261117. github.com commit pages returned HTTP 403 to my curl, so I tested the commit through raw.githubusercontent.com: version/version.go resolves at the short id 54afaff4 and at the full tag commit, and returns 404 at 4e1c8247. internal/version/version.go WithCommit appends the first 8 characters of the git commit (lines 46-55), and version.Meta is the empty string at v1.8.2 (version/version.go), so the date is appended. That date comes from getDate, which runs git show -s --format=%ct on the commit (internal/build/env.go lines 164-176). It is the commit date of 4e1c8247, not the build date.",
+   "codeCheck": "The cited lines exist: FullMath.mulDiv at src/libraries/FullMath.sol:14-116 and the swap path in src/PoolManager.sol. No line of src/ depends on the build identity. The finding claims no code effect, and none follows.",
+   "corrections": "The 20261104 field is the commit date of 4e1c8247 taken by git show --format=%ct (internal/build/env.go lines 164-176), not the build date. The statement that a private security patch is the most likely explanation is a guess without a source. I could not open the GitHub commit or compare pages (HTTP 403); the absence of 4e1c8247 rests on the raw.githubusercontent.com 404 and on the research agent's report.",
+   "sources": [
+    {
+     "url": "https://bsc-dataseed1.bnbchain.org",
+     "supports": "web3_clientVersion = Geth/v1.8.2-4e1c8247-20261104/linux-amd64/go1.26.10 on 2026-11-24, dataseed2 the same"
+    },
+    {
+     "url": "https://github.com/bnb-chain/bsc/releases",
+     "supports": "v1.8.2 is commit 54afaff released 03 Nov; Jenner on BSC mainnet 2026-12-08 02:30 UTC"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/internal/version/version.go",
+     "supports": "WithCommit appends gitCommit[:8] and gitDate when Meta is not stable, lines 46-55"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/internal/build/env.go",
+     "supports": "getDate formats the commit time from git show --format=%ct, lines 164-176"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/4e1c8247/version/version.go",
+     "supports": "HTTP 404, while the same path at 54afaff4 returns 200"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "The bor releases page shows v2.12.0-beta as a pre-release of 23 Nov at commit 350427e. It says mainnet operators should wait for v2.12.0, that MULMOD caches the reciprocal of a repeated full-width modulus (#2310), and that --precompile-cache defaults to off (#2431). core/vm/mulmod_memo.go at v2.12.0-beta (66 lines) takes the memo only when z[3] != 0. It compares the whole modulus with mm.mod != *z, recomputes uint256.Reciprocal on a miss and then calls MulModWithReciprocal (lines 55-66). evm.go line 219 makes the memo a field of the EVM, and opMulmod calls it at instructions.go line 202. In holiman/uint256 v1.3.2, pinned at go.mod line 59, MulModWithReciprocal (uint256.go lines 688-715) and MulMod (lines 720-748) are the same function except that MulMod computes mu := Reciprocal(m) itself. Zero inputs, narrow moduli and the 512 bit path are identical. The output is therefore a function of (x, y, m) alone. The memo state only selects where the reciprocal comes from, and the reciprocal is always Reciprocal of the stored modulus. shared_cache.go lines 162-241 key the keccak cache on string(data) of the full input, copy the key on Store, keep the first entry with LoadOrStore and stop inserting when full. opKeccak256 (instructions.go lines 264-303) takes the widened path only when keccakCache is set. Both changes compute the specified results as read. I did not confirm the phrase 'both interpreter loops': I found a single opMulmod call site in instructions.go.",
+   "codeCheck": "mulmod appears in src/libraries at FullMath.sol:24 (mulmod(a, b, not(0))), FullMath.sol:48, FullMath.sol:112 and SqrtPriceMath.sol:252, as cited. The modulus not(0) has a nonzero top limb, so it always takes the memo path. TickBitmap.sol:67-73 hashes 64 bytes (mstore 0 and 0x20, keccak256(0, 0x40)). That input takes the legacy 64-byte cache path, which already existed in v2.11.1, so the widened cache does not change it. No line of src/ computes anything else under this release.",
+   "corrections": "'Both interpreter loops' is not confirmed by what I read; opMulmod in core/vm/instructions.go line 202 is the only call site I saw. No endpoint runs v2.12.0-beta, so this rests on the source reading only.",
+   "sources": [
+    {
+     "url": "https://github.com/0xPolygon/bor/releases",
+     "supports": "v2.12.0-beta pre-release of 23 Nov, commit 350427e, #2310 MULMOD reciprocal, #2431 --precompile-cache default off, mainnet operators should wait for v2.12.0"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/v2.12.0-beta/core/vm/mulmod_memo.go",
+     "supports": "memo compares the full modulus and recomputes Reciprocal on a miss, lines 55-66"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/v2.12.0-beta/core/vm/instructions.go",
+     "supports": "opMulmod calls evm.mulmodMemo.mulmod at line 202; opKeccak256 cache paths at lines 264-303"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go",
+     "supports": "MulModWithReciprocal lines 688-715 and MulMod lines 720-748 differ only in where mu comes from"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/v2.12.0-beta/core/vm/shared_cache.go",
+     "supports": "keccakResultCache keyed by string(data), copy on store, LoadOrStore, no eviction, lines 162-241"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Lead L-646 for BSC geth v1.8.2: is any code-derived cache shared across transactions or workers and keyed by a code hash read apart from the code.",
+   "agrees": true,
+   "note": "core/vm/contract.go at v1.8.2 has a process-wide lru codeBitmapCache of 2048 entries keyed by common.Hash (lines 27-30). isCode stores codeBitmap(c.Code) under c.CodeHash (lines 99-112). In Call, code comes from resolveCode and the hash from resolveCodeHash, and they are set together through SetCallCode with no execution in between (evm.go lines 353-363). For a delegated account both functions follow the same ParseDelegation of the same GetCode result (lines 700-724). Init code uses the zero hash (line 631) and skips the shared map. contract_pool.go clears CodeHash and analysis on reuse. State overrides go through SetCode, which hashes the code. I found no path where the key is not the hash of the analysed bytes."
+  },
+  {
+   "check": "Does the MULMOD memo of bor v2.12.0-beta give the stock result for every input, including FullMath's modulus 2^256-1, destination equal to modulus, and state carried between calls, frames and transactions of one EVM.",
+   "agrees": true,
+   "note": "I read mulmod_memo.go lines 55-66 and uint256 v1.3.2 lines 688-748. mm.mod is a value copy of *z taken before z is overwritten. mm.mu is always Reciprocal(mm.mod). MulModWithReciprocal with that mu is MulMod line for line, and the aliasing of z and m is the same in both. The carried state cannot change a result."
+  },
+  {
+   "check": "The cycle 11 critic's concern for bor v2.11.1: under BlockSTM, can resolveCode and resolveCodeHash of one Call read two versions of a delegating account's code, so that a bitmap is stored in the block-shared jump destination cache under another contract's code hash.",
+   "agrees": true,
+   "note": "parallel_statedb.go at v2.11.1: readCodeKey caches the first MVHashMap read per address for the transaction (lines 365-377), and the field comment at lines 170-177 names this case. GetCode (lines 843-863) and GetCodeHash (lines 889-935) apply the same writerIdx > suicideIdx rule to the same pinned read. When a destruction wins, GetCode returns nil, so Call does not run code and no bitmap is stored. Code written by earlier transactions is hashed from the pinned bytes by cachedCodeHash (lines 871-887). Base code and base hash come from one base state. SetCode deletes the hash memo (line 949). I did not read the journal revert lines 93-104 or the prefetcher views, which the finding leaves to the code theme."
+  }
+ ],
+ "leads": []
+}

@@ -1,0 +1,22 @@
+{
+  "unit": "theme-mined-liquidity-2",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Polygon: mined liquidity removals and fee collections against the source (lead L-656). The 9 transactions that differ paid less than the liquidity events owe, each explained by a clear(currency, amount) frame for exactly the missing amount.",
+      "agrees": true,
+      "note": "I traced 0x49220f86c51ac487182aa897d098518fcd3be430f60b841c4aec577deb3575cc with debug_traceTransaction (callTracer) on https://polygon.drpc.org. Inside one unlock (0x48c89491) the router reads its delta with exttload, which returns 0x1434, and then calls clear (0x80f0b44c) on PoolManager 0x67366782805870060151383f4bbff9dab53e5cd6 with currency 0xe7c3d8c9a439fede00d2600032d5db0be71c3c29 and amount 0x1434, which is 5172, the shortfall listed in raw/clear-137.json. src/PoolManager.sol:310-319 lowers only the caller's own delta and reverts unless the amount equals that delta exactly, and moves no token. sync at src/PoolManager.sol:279-288 records the whole balance as reserves afterwards, so the cleared units are not credited to a later settler. The shortfall is the caller's own choice and costs nobody else."
+    },
+    {
+      "check": "BNB Smart Chain: analyze2.py reported removal 0x8002882c1d01fe1b67bf93e4dbe41c95fa25ab6cba23b3308ea1e5ac94128562 in block 135486780 as paying too much; the traces show it paid exactly the owed 838,295,195,085,037 wei.",
+      "agrees": true,
+      "note": "This was the only reported over-payment, so a wrong clearance here would cost the most. I traced the transaction on bsc-mainnet.nodereal.io (the endpoint named in the work directory) with callTracer. modifyLiquidity (0x5a6bcfda) on PoolManager 0x28e2ea090877bf75740558f6bfb36a5ffee9e9df returns callerDelta amount0 0x2fa6ccf51e8ed, exttload then reads the same native delta, and the only value frame out of the PoolManager is take (0x0b0d9c09) of address(0) to 0x93c9c9d9f4cc3161083239200aae355a890e4c45 with value 838,295,195,085,037 wei, equal to 0x2fa6ccf51e8ed. take at src/PoolManager.sol:291-297 debits the caller by the same amount it sends. The excess analyze2.py saw came from the balance-difference fallback in a block with four PoolManager transactions, as the item says."
+    },
+    {
+      "check": "Robinhood Chain: the one storage difference is the lpFee of pool 0xc7d0f2af34a9f85c70a7f8fb16a441cd68b2a241e31946f2bfea68f8ba3d18f5, stored as 10000 where Pool.initialize stores 0 for a dynamic fee pool; the hook set it through updateDynamicLPFee.",
+      "agrees": true,
+      "note": "eth_getStorageAt on https://rpc.mainnet.chain.robinhood.com for PoolManager 0x8366a39cc670b4001a1121b8f6a443a643e40951 at keccak256(poolId, 6) (POOLS_SLOT 6, src/libraries/StateLibrary.sol:11) returned 0x000000002710000000f2761800000000000000000000000000000001000276a4: lpFee 0x2710 (10000), protocol fee 0, tick 0xf27618 (-887272). The receipt of 0x58102f95af876699d51cc064d0761797b7d74ec2dc585d622d904329bed804bd (status 1, block 0x74a897f) holds the Initialize event with fee 0x800000 and hook 0x48b8f6ad3a1b4aa477314c9a23035b8f84dde8cc, followed by a hook event carrying the pool id and 0x2710. src/libraries/LPFeeLibrary.sol:51-54 returns 0 for a dynamic fee, src/libraries/Pool.sol:100-106 stores it, and src/PoolManager.sol:339-346 lets only key.hooks change it. The difference is a hook-set fee and not a math fault. I also checked the return-delta item: src/libraries/Hooks.sol:209-244 and 285-315 subtract hookDelta from the caller delta and src/PoolManager.sol:178-183 and 221-226 credit hookDelta to the hook, so the two sum to the pool delta, with int128 checks in src/types/BalanceDelta.sol:34-46."
+    }
+  ],
+  "leads": []
+}
