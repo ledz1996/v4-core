@@ -7,7 +7,7 @@ State on 2026-11-24. This part of the review asks one question: does any of the 
 No difference was found. Four independent checks agree, and each covers a weakness of the others.
 
 1. A battery of 185,529 opcode test vectors gave the specified result on every one of the 21 networks, with no mismatch.
-2. The deployed PoolManager bytecode, placed at the same address with the same empty state on every network, answered 250 scripts of about 12,000 calls identically on 17 networks. On Polygon, Monad and Tempo the only differences are calls that ran out of gas.
+2. The deployed PoolManager bytecode, placed at the same address with the same empty state on every network, answered 550 scripts of about 28,000 calls with the same bytes as on Ethereum. The scripts cover the pool math, hook callbacks, token transfers with unusual return data and revert handling. The only differences, on Polygon, Monad, Tempo, Elysium and HyperEVM, are swaps that ran out of gas.
 3. 99,903 swaps that the networks have already mined satisfy the exact relations the source's math fixes. All 99,903 pass the tick relation. Of the 88,576 that could be paired with the swap before them, 85,278 match the single-step formulas to the unit, and 228 of the 229 sampled multi-step swaps replay to the unit.
 4. A reading of the node source for the networks whose interpreter is not go-ethereum or stock revm found no opcode that departs from the specification.
 
@@ -54,10 +54,16 @@ The same script must give the same bytes everywhere, because code, state and inp
 
 | Result | Networks |
 |---|---|
-| All 250 scripts identical to Ethereum | OP Mainnet, Base, Unichain, Zora, World Chain, Ink, Soneium, Celo, X Layer, Arbitrum One, Robinhood Chain, Elysium, BNB Smart Chain, Avalanche, MegaETH, Arc, HyperEVM |
+| All 250 scripts of the first set identical to Ethereum | OP Mainnet, Base, Unichain, Zora, World Chain, Ink, Soneium, Celo, X Layer, Arbitrum One, Robinhood Chain, Elysium, BNB Smart Chain, Avalanche, MegaETH, Arc, HyperEVM |
 | Identical except where a call ran out of gas | Polygon (231 at 25 million gas), Monad (229), Tempo (240) |
 
 The exceptions are a gas matter. Read with the `GAS` opcode, the Ethereum, Polygon and Tempo endpoints give a simulated call at most 50 million gas and Monad gives 150 million. The scripts that differ contain a swap at tick spacing 1 across most of the price range, which needs 36 to 50 million gas on Ethereum and more on the three networks, where storage reads or new storage slots cost more. Run again with the largest gas each endpoint grants, all but six script and network pairs become identical. In those six the first differing call is the heavy swap, which fails with empty return data on the side that has less gas (Polygon twice, Tempo once, and Ethereum three times against Monad), and every call before it is identical. Details are in `opcodes/pmdiff-gas.json`. That swaps across many ticks cost more gas on some networks is already recorded in `REPORT.md` as a delay without loss.
+
+`tools/opdiff/pmdiff2.py` repeats the method for the call paths, which the first set leaves out because its pools have no hook and its currencies have no code. A hook double and a token double are placed by state override. The hook answers every callback with a selector word and two configured words cut to a configured length, optionally with a flipped selector or as a revert. The token reports a configured balance and answers `transfer` in one of nine shapes: true, nothing, false, 31 bytes, a revert with data, 64 bytes, the number 2, an empty revert, and one byte. This runs the assembly of `Hooks.callHook`, `Currency.transfer` and `CustomRevert.bubbleUpAndRevertWith`, the parsing of hook return deltas and fee overrides, `sync` and `settle` against a moving balance, and native payouts to an account without code and to two precompiles.
+
+The 300 scripts make 16,263 calls. On Ethereum 14,622 succeed and 1,264 fail, with twelve different revert selectors among the failures, so the wrapped error paths are compared too. Sixteen networks return the same bytes as Ethereum for all 300 scripts. Polygon and Monad differ on 20 scripts each at 25 million gas, Tempo on 6, Elysium and HyperEVM on 1. In every one the first differing call is a swap with an open price limit that runs past the pool's liquidity and walks the rest of the tick range word by word, which is where the gas goes. With the largest gas each endpoint grants, 39 of the 48 become identical and 9 still end at such a swap on the side with less gas (`opcodes/pmdiff2-gas.json`).
+
+Taken together the two sets make 11,000 comparisons of a script on a network against the same script on Ethereum. 10,985 are identical, and the 15 that are not stop at a swap that one side could not afford.
 
 ## Check 3: swaps the networks have already mined
 
@@ -135,7 +141,7 @@ For the pool math the fault would have been hard to reach even on an affected no
 - Compiled code on Monad beyond the 2,176 mined swaps, and the parts of its emitter that were not read.
 - Validators that run other hardware or other builds than the public endpoints: the vector code for jump destinations in evm2, the optional dispatch loop in bor, and any operator on the withdrawn ruint release.
 - The HyperEVM validator and the MegaETH node, which are closed, and the Arc commit behind `arc/v1`.
-- Liquidity changes in mined blocks. `ModifyLiquidity` events do not carry the amounts, so only the simulated scripts of the second check cover them.
+- Liquidity changes and hook calls in mined blocks. `ModifyLiquidity` events do not carry the amounts, so only the simulated scripts of the second check cover them, and on Monad those run in the interpreter.
 
 ## How to run it again
 
@@ -153,6 +159,10 @@ python3 research/network-risk/tools/opdiff/targeted.py research/network-risk/opc
 
 ```bash
 python3 research/network-risk/tools/opdiff/pmdiff.py research/network-risk/opcodes/pmdiff.json 250
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/pmdiff2.py research/network-risk/opcodes/pmdiff2.json 300
 ```
 
 ```bash

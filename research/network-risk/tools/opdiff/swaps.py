@@ -14,7 +14,7 @@ A swap of several steps at one liquidity rounds once per step and lands a few un
 from the single-step values; it is counted as "multi". Whatever fits none of this is
 "other" and is listed for a closer look. Usage: python3 swaps.py <out.json> [chainId ...]
 """
-import sys, json, time, concurrent.futures as cf
+import sys, os, json, time, concurrent.futures as cf
 from evm import rpc, networks, keccak, s, MASK
 import v4math as m
 
@@ -27,7 +27,7 @@ def get_logs(url, pm, lo, hi):
     return rpc(url, 'eth_getLogs', [{'address': pm, 'fromBlock': hex(lo), 'toBlock': hex(hi), 'topics': [[SWAP, MODIFY]]}], timeout=90)
 
 
-def collect(url, pm, want=6000, max_calls=60):
+def collect(url, pm, want=int(os.environ.get('SWAPS_WANT', 6000)), max_calls=int(os.environ.get('SWAPS_CALLS', 60))):
     head = int(rpc(url, 'eth_blockNumber', []), 16) - 2
     span = 2000; hi = head; logs = []; calls = 0; lo_seen = head
     while len(logs) < want and calls < max_calls and hi > 0:

@@ -58,6 +58,8 @@ Findings marked plausible or unverified pull their network family back into the 
 
 Revisits rotate through eight work items: a sweep of the chain's special addresses with the PoolManager as caller, an opcode comparison against the node's source, the faces of the native asset, known weaknesses of the network, added transaction types, upcoming forks, the assets pools hold, and ways to block other users' exits. The same network gets different questions each time.
 
+Since 24 November 2026 the review concentrates on opcode behaviour per network and its effect on the pool math, and token and hook sweeps are no longer scheduled by default. A ninth work item covers it: the client's arithmetic and control flow, read at the running release and tested with the scripts in `tools/opdiff`. To plan such a cycle, pass `--angles 8,3 --themes 0` to `plan.py`, which gives every chosen network family that item and the known-weaknesses item. `OPCODES.md` holds the results and says how to rerun the scripts.
+
 Separately, two readings of the source run every cycle and rotate through six directions: two file-by-file passes, a swap trace, a liquidity trace, an attempt to break the custody invariants, and a check of every mask, shift and cast.
 
 ## Rules the agents work under

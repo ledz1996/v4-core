@@ -7,7 +7,7 @@ State on 2026-11-23: cycles 1 to 7 are merged. The ledger holds 110 findings, 91
 On 24 November the review turned to one narrower question: does any network compute an opcode, or run control flow, differently from Ethereum in a way that changes the PoolManager's arithmetic or logic? The full account is in `OPCODES.md`. No difference was found.
 
 - 185,529 opcode test vectors gave the specified result on all 21 networks. They include 8,908 inputs built to hit a wrong `MULMOD` result that one release of the integer library under reth based nodes shipped in October 2026.
-- The deployed PoolManager bytecode, placed with the same empty state on every network, answered 250 scripts of swaps and liquidity changes byte for byte the same on 17 networks. On Polygon, Monad and Tempo the only differences are swaps that ran out of gas.
+- The deployed PoolManager bytecode, placed with the same empty state on every network, answered 550 scripts of swaps, liquidity changes, hook callbacks and token transfers byte for byte as on Ethereum in 10,985 of 11,000 comparisons. The other 15 stop at a swap that ran out of gas on one side.
 - 99,903 mined swaps satisfy the tick relation of `TickMath`, and 85,278 match the single-step formulas of `SwapMath` to the unit. Of 229 multi-step swaps that were replayed step by step from chain storage, 228 match to the unit and one could not be read.
 - The node source of Monad, BNB Smart Chain, Polygon, Avalanche, Tempo, MegaETH and Arc shows no opcode that departs from the specification. BNB Smart Chain carried a bytecode fusion feature with real faults until v1.7.8 and removed it in v1.8.0.
 
