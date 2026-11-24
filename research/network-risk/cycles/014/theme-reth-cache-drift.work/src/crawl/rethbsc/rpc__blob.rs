@@ -1,0 +1,554 @@
+use alloy_consensus::{transaction::TxHashRef, BlockHeader};
+use alloy_eips::{
+    eip2718::{Typed2718, EIP4844_TX_TYPE_ID},
+    eip7594::BlobTransactionSidecarVariant,
+    BlockNumberOrTag,
+};
+use alloy_primitives::B256;
+use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::ErrorObject};
+use reth_provider::{BlockIdReader, BlockReader, TransactionsProvider};
+use reth_transaction_pool::{BlobStoreError, TransactionPool};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+/// Inner blob sidecar data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlobSidecarData {
+    /// Blobs (full or truncated to 32 bytes)
+    pub blobs: Vec<String>,
+    /// Commitments
+    pub commitments: Vec<String>,
+    /// Proofs
+    pub proofs: Vec<String>,
+}
+
+/// Blob sidecar response with optional truncation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlobSidecarResponse {
+    /// Blob sidecar data
+    pub blob_sidecar: BlobSidecarData,
+    /// Block hash
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_hash: Option<String>,
+    /// Block number
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_number: Option<String>,
+    /// Transaction hash
+    pub tx_hash: String,
+    /// Transaction index in block
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_index: Option<String>,
+}
+
+/// Blob RPC API for BSC
+#[rpc(server, namespace = "eth")]
+pub trait BlobApi {
+    /// Get blob sidecar by transaction hash
+    /// 
+    /// # Parameters
+    /// - `tx_hash`: Transaction hash
+    /// - `full_blob_flag`: If true returns full blob, if false returns first 32 bytes (default: true)
+    #[method(name = "getBlobSidecarByTxHash")]
+    async fn get_blob_sidecar_by_tx_hash(
+        &self,
+        tx_hash: B256,
+        full_blob_flag: Option<bool>,
+    ) -> RpcResult<Option<BlobSidecarResponse>>;
+
+    /// Get blob sidecars for a block
+    /// 
+    /// # Parameters
+    /// - `block_number`: Block number (hex), hash, or tag ("latest", "earliest", "safe", "finalized")
+    /// - `full_blob_flag`: If true returns full blob, if false returns first 32 bytes (default: true)
+    #[method(name = "getBlobSidecars")]
+    async fn get_blob_sidecars(
+        &self,
+        block_number: String,
+        full_blob_flag: Option<bool>,
+    ) -> RpcResult<Vec<BlobSidecarResponse>>;
+}
+
+/// Implementation of BlobApi
+pub struct BlobApiImpl<Pool, Provider> {
+    /// Transaction pool with blob store
+    pool: Pool,
+    /// Provider for blockchain data
+    provider: Provider,
+    missing_warning_window_secs: u64,
+}
+
+impl<Pool, Provider> BlobApiImpl<Pool, Provider> {
+    /// Create a new BlobApi instance
+    pub fn new(pool: Pool, provider: Provider, minimal: bool) -> Self {
+        // Match the DA request window, or the shorter minimal-mode sweep policy.
+        let missing_warning_window_secs = if minimal { 60 * 60 } else { 1_572_480 };
+        Self { pool, provider, missing_warning_window_secs }
+    }
+
+    fn within_warning_window(&self, timestamp: u64, now: u64) -> bool {
+        now.checked_sub(timestamp).is_some_and(|age| age <= self.missing_warning_window_secs)
+    }
+}
+
+impl<Pool, Provider> BlobApiImpl<Pool, Provider>
+where
+    Pool: TransactionPool + Clone + 'static,
+    Provider: TransactionsProvider + BlockIdReader + Clone + 'static,
+{
+    /// Convert BlobTransactionSidecarVariant to BlobSidecarResponse
+    fn sidecar_to_response(
+        tx_hash: B256,
+        sidecar: Arc<BlobTransactionSidecarVariant>,
+        full_blob: bool,
+        block_number: Option<u64>,
+        block_hash: Option<B256>,
+        index: Option<u64>,
+    ) -> BlobSidecarResponse {
+        let (blobs, commitments, proofs) = match sidecar.as_ref() {
+            BlobTransactionSidecarVariant::Eip4844(eip4844) => {
+                let blobs: Vec<String> = eip4844
+                    .blobs
+                    .iter()
+                    .map(|blob| {
+                        if full_blob {
+                            format!("0x{}", hex::encode(blob.as_slice()))
+                        } else {
+                            // Return first 32 bytes only
+                            format!("0x{}", hex::encode(&blob.as_slice()[..32.min(blob.as_slice().len())]))
+                        }
+                    })
+                    .collect();
+
+                let commitments: Vec<String> = eip4844
+                    .commitments
+                    .iter()
+                    .map(|c| format!("0x{}", hex::encode(c.as_slice())))
+                    .collect();
+
+                let proofs: Vec<String> = eip4844
+                    .proofs
+                    .iter()
+                    .map(|p| format!("0x{}", hex::encode(p.as_slice())))
+                    .collect();
+
+                (blobs, commitments, proofs)
+            }
+            BlobTransactionSidecarVariant::Eip7594(eip7594) => {
+                let blobs: Vec<String> = eip7594
+                    .blobs
+                    .iter()
+                    .map(|blob| {
+                        if full_blob {
+                            format!("0x{}", hex::encode(blob.as_slice()))
+                        } else {
+                            // Return first 32 bytes only
+                            format!("0x{}", hex::encode(&blob.as_slice()[..32.min(blob.as_slice().len())]))
+                        }
+                    })
+                    .collect();
+
+                let commitments: Vec<String> = eip7594
+                    .commitments
+                    .iter()
+                    .map(|c| format!("0x{}", hex::encode(c.as_slice())))
+                    .collect();
+
+                // EIP7594 uses cell_proofs instead of proofs
+                let proofs: Vec<String> = eip7594
+                    .cell_proofs
+                    .iter()
+                    .map(|p| format!("0x{}", hex::encode(p.as_slice())))
+                    .collect();
+
+                (blobs, commitments, proofs)
+            }
+        };
+
+        BlobSidecarResponse {
+            blob_sidecar: BlobSidecarData {
+                blobs,
+                commitments,
+                proofs,
+            },
+            block_hash: block_hash.map(|h| format!("0x{:x}", h)),
+            block_number: block_number.map(|n| format!("0x{:x}", n)),
+            tx_hash: format!("0x{:x}", tx_hash),
+            tx_index: index.map(|i| format!("0x{:x}", i)),
+        }
+    }
+
+    /// Parse block number string (hex, tag, or hash)
+    fn parse_block_number(&self, block_str: &str) -> RpcResult<u64> {
+        // Handle tags
+        match block_str {
+            "latest" => {
+                return self.provider.best_block_number()
+                    .map_err(|e| ErrorObject::owned(
+                        -32603,
+                        format!("Failed to get latest block: {}", e),
+                        None::<()>,
+                    ))
+            }
+            "earliest" => return Ok(0),
+            "safe" | "finalized" => {
+                let tag = if block_str == "safe" {
+                    BlockNumberOrTag::Safe
+                } else {
+                    BlockNumberOrTag::Finalized
+                };
+                return super::finality::resolve_finality_block(&self.provider, tag);
+            }
+            _ => {}
+        }
+
+        // Try hex number
+        if let Some(hex_str) = block_str.strip_prefix("0x") {
+            if let Ok(num) = u64::from_str_radix(hex_str, 16) {
+                return Ok(num);
+            }
+        }
+
+        // Try as decimal
+        if let Ok(num) = block_str.parse::<u64>() {
+            return Ok(num);
+        }
+
+        // Try as block hash (32 bytes hex)
+        if block_str.len() == 66 || (block_str.len() == 64 && !block_str.starts_with("0x")) {
+            let hash_str = block_str.strip_prefix("0x").unwrap_or(block_str);
+            if let Ok(hash_bytes) = hex::decode(hash_str) {
+                if hash_bytes.len() == 32 {
+                    let block_hash = B256::from_slice(&hash_bytes);
+                    // Try to get block by hash
+                    if let Ok(Some(block_num)) = self.provider.block_number(block_hash) {
+                        return Ok(block_num);
+                    }
+                }
+            }
+        }
+
+        Err(ErrorObject::owned(
+            -32602,
+            format!("Invalid block number format: {}", block_str),
+            None::<()>,
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl<Pool, Provider> BlobApiServer for BlobApiImpl<Pool, Provider>
+where
+    Pool: TransactionPool + Clone + Send + Sync + 'static,
+    Provider: TransactionsProvider + BlockIdReader + BlockReader + Clone + Send + Sync + 'static,
+{
+    /// Get blob sidecar by transaction hash
+    async fn get_blob_sidecar_by_tx_hash(
+        &self,
+        tx_hash: B256,
+        full_blob_flag: Option<bool>,
+    ) -> RpcResult<Option<BlobSidecarResponse>> {
+        let full_blob = full_blob_flag.unwrap_or(true);
+
+        tracing::debug!(
+            "eth_getBlobSidecarByTxHash called for tx {:?}, full_blob: {}",
+            tx_hash,
+            full_blob
+        );
+
+        // Try to get blob from pool's blob store
+        let sidecar = match self.pool.get_blob(tx_hash) {
+            Ok(Some(sidecar)) => sidecar,
+            Ok(None) => {
+                tracing::debug!("No blob sidecar found for tx {:?}", tx_hash);
+                return Ok(None);
+            }
+            Err(BlobStoreError::MissingSidecar(_)) => {
+                tracing::debug!("No blob sidecar found for tx {:?}", tx_hash);
+                return Ok(None);
+            }
+            Err(e) => {
+                tracing::error!("Failed to get blob from store: {}", e);
+                return Err(ErrorObject::owned(
+                    -32603,
+                    format!("Failed to get blob from store: {}", e),
+                    None::<()>,
+                ));
+            }
+        };
+
+        // Try to get transaction metadata (block number, hash, index)
+        let (block_number, block_hash, index) = if let Ok(Some(tx_id)) = self.provider.transaction_id(tx_hash) {
+            if let Ok(Some(block_num)) = self.provider.block_by_transaction_id(tx_id) {
+                // Get block hash
+                let block_hash = self.provider.block_hash(block_num).ok().flatten();
+                
+                // Try to get transaction index in block
+                let index = if let Ok(Some(txs)) = self.provider.transactions_by_block(block_num.into()) {
+                    txs.iter()
+                        .position(|tx| *tx.tx_hash() == tx_hash)
+                        .map(|pos| pos as u64)
+                } else {
+                    None
+                };
+
+                (Some(block_num), block_hash, index)
+            } else {
+                (None, None, None)
+            }
+        } else {
+            (None, None, None)
+        };
+
+        let response = Self::sidecar_to_response(
+            tx_hash,
+            sidecar,
+            full_blob,
+            block_number,
+            block_hash,
+            index,
+        );
+
+        Ok(Some(response))
+    }
+
+    /// Get blob sidecars for a block
+    async fn get_blob_sidecars(
+        &self,
+        block_number: String,
+        full_blob_flag: Option<bool>,
+    ) -> RpcResult<Vec<BlobSidecarResponse>> {
+        let full_blob = full_blob_flag.unwrap_or(true);
+
+        tracing::debug!(
+            "eth_getBlobSidecars called for block {}, full_blob: {}",
+            block_number,
+            full_blob
+        );
+
+        // Parse block number
+        let block_num = self.parse_block_number(&block_number)?;
+
+        // Get all transactions in the block
+        let transactions = self
+            .provider
+            .transactions_by_block(block_num.into())
+            .map_err(|e| {
+                ErrorObject::owned(
+                    -32603,
+                    format!("Failed to get transactions for block {}: {}", block_num, e),
+                    None::<()>,
+                )
+            })?;
+
+        let Some(txs) = transactions else {
+            tracing::debug!("Block {} not found", block_num);
+            return Err(ErrorObject::owned(
+                -32602,
+                format!("Block {} not found", block_num),
+                None::<()>,
+            ));
+        };
+
+        // Get block hash
+        let block_hash = self.provider.block_hash(block_num).ok().flatten();
+
+        // Collect only blob (type-3) tx hashes with their block-level index.
+        let blob_txs: Vec<(B256, u64)> = txs.iter()
+            .enumerate()
+            .filter(|(_, tx)| tx.ty() == EIP4844_TX_TYPE_ID)
+            .map(|(idx, tx)| (*tx.tx_hash(), idx as u64))
+            .collect();
+        let blob_tx_hashes: Vec<B256> = blob_txs.iter().map(|(h, _)| *h).collect();
+
+        // Build hash → block-level tx_index map.
+        let hash_to_idx: std::collections::HashMap<B256, u64> = blob_txs.into_iter().collect();
+
+        // Get blobs only for blob transactions.
+        let blob_results = self.pool.get_all_blobs(blob_tx_hashes).map_err(|e| {
+            ErrorObject::owned(
+                -32603,
+                format!("Failed to get blobs for block {}: {}", block_num, e),
+                None::<()>,
+            )
+        })?;
+
+        if blob_results.len() != hash_to_idx.len() {
+            let timestamp = self.provider.header_by_number(block_num)
+                .ok().flatten().map(|h| h.timestamp());
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs());
+            let recent = timestamp.zip(now)
+                .is_some_and(|(timestamp, now)| self.within_warning_window(timestamp, now));
+            let missing: Vec<_> = hash_to_idx.keys()
+                .filter(|hash| !blob_results.iter().any(|(found, _)| found == *hash))
+                .collect();
+            if recent {
+                tracing::warn!(
+                    target: "bsc::blob", block_number = block_num, ?block_hash, timestamp,
+                    missing_warning_window_secs = self.missing_warning_window_secs,
+                    expected = hash_to_idx.len(), found = blob_results.len(), ?missing,
+                    "Block blob sidecars missing within expected availability window"
+                );
+            } else {
+                tracing::debug!(
+                    target: "bsc::blob", block_number = block_num, ?block_hash, timestamp,
+                    expected = hash_to_idx.len(), found = blob_results.len(), ?missing,
+                    "Block blob sidecars missing from local store"
+                );
+            }
+        }
+
+        // Convert to responses with correct block-level tx_index.
+        let mut responses = Vec::new();
+        for (tx_hash, sidecar) in blob_results.into_iter() {
+            let tx_index = hash_to_idx.get(&tx_hash).copied();
+            let response = Self::sidecar_to_response(
+                tx_hash,
+                sidecar,
+                full_blob,
+                Some(block_num),
+                block_hash,
+                tx_index,
+            );
+            responses.push(response);
+        }
+
+        tracing::debug!(
+            "Found {} blob sidecars for block {}",
+            responses.len(),
+            block_num
+        );
+
+        Ok(responses)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_blob_warning_respects_retention() {
+        for (minimal, window) in [(false, 1_572_480), (true, 3_600)] {
+            let api = BlobApiImpl::new((), (), minimal);
+            let timestamp = 100;
+            assert!(api.within_warning_window(timestamp, timestamp));
+            assert!(api.within_warning_window(timestamp, timestamp + window));
+            assert!(!api.within_warning_window(timestamp, timestamp + window + 1));
+            assert!(!api.within_warning_window(timestamp, timestamp - 1));
+        }
+    }
+
+    #[test]
+    fn test_blob_sidecar_response_serialization() {
+        let response = BlobSidecarResponse {
+            blob_sidecar: BlobSidecarData {
+                blobs: vec!["0x00".to_string()],
+                commitments: vec!["0x01".to_string()],
+                proofs: vec!["0x02".to_string()],
+            },
+            block_hash: Some("0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string()),
+            block_number: Some("0x100".to_string()),
+            tx_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
+            tx_index: Some("0x0".to_string()),
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("blobSidecar"));
+        assert!(json.contains("txHash"));
+        assert!(json.contains("blockNumber"));
+        assert!(json.contains("blockHash"));
+        assert!(json.contains("txIndex"));
+    }
+    #[tokio::test]
+    async fn finality_tags_select_distinct_blob_sidecars() {
+        use alloy_consensus::{Header, TxEip4844};
+        use alloy_eips::eip4844::{BlobTransactionSidecar, Bytes48};
+        use alloy_primitives::{Address, Signature, U256};
+        use reth_chain_state::{ExecutedBlock, NewCanonicalChain};
+        use reth_ethereum_primitives::{Block, BlockBody, TransactionSigned};
+        use reth_primitives_traits::{RecoveredBlock, SealedHeader};
+        use reth_provider::{
+            providers::BlockchainProvider, test_utils::create_test_provider_factory,
+            CanonChainTracker,
+        };
+        use reth_transaction_pool::{blobstore::BlobStore, test_utils::testing_pool};
+
+        let factory = create_test_provider_factory();
+        let mut parent = SealedHeader::seal_slow(Header { number: 94, ..Default::default() });
+        let provider = BlockchainProvider::with_latest(factory, parent.clone()).unwrap();
+        let pool = testing_pool();
+        let mut blocks = Vec::new();
+        let mut headers = std::collections::BTreeMap::new();
+        let mut hashes = std::collections::BTreeMap::new();
+        for number in 95..=100 {
+            let tx = TransactionSigned::new_unhashed(
+                TxEip4844 { nonce: number, ..Default::default() }.into(),
+                Signature::new(U256::ZERO, U256::ZERO, false),
+            );
+            hashes.insert(number, *tx.hash());
+            // Distinct nonempty sidecar responses prove the handler selected the correct block.
+            // KZG validation is outside this RPC selection test.
+            pool.blob_store()
+                .insert(
+                    *tx.hash(),
+                    BlobTransactionSidecar {
+                        blobs: vec![],
+                        commitments: vec![Bytes48::repeat_byte(number as u8)],
+                        proofs: vec![Bytes48::ZERO],
+                    }
+                    .into(),
+                )
+                .unwrap();
+            let block = RecoveredBlock::new_unhashed(
+                Block {
+                    header: Header { number, parent_hash: parent.hash(), ..Default::default() },
+                    body: BlockBody { transactions: vec![tx], ..Default::default() },
+                },
+                vec![Address::ZERO],
+            );
+            parent = block.clone_sealed_header();
+            headers.insert(number, parent.clone());
+            blocks.push(ExecutedBlock { recovered_block: Arc::new(block), ..Default::default() });
+        }
+        provider
+            .canonical_in_memory_state()
+            .update_chain(NewCanonicalChain::Commit { new: blocks });
+        provider.set_canonical_head(headers[&100].clone());
+        let api = BlobApiImpl::new(pool, provider.clone(), false);
+        // A head is present, but neither finality marker is available yet.
+        assert_eq!(api.parse_block_number("latest").unwrap(), 100);
+        for tag in ["safe", "finalized"] {
+            let error = api.get_blob_sidecars(tag.into(), None).await.unwrap_err();
+            assert_eq!(error.code(), -32603);
+            assert!(error.message().contains(tag));
+        }
+        provider.set_safe(headers[&98].clone());
+        provider.set_finalized(headers[&95].clone());
+        for (input, number) in
+            [("latest", 100), ("safe", 98), ("finalized", 95), ("0x62", 98), ("95", 95)]
+        {
+            for full in [None, Some(false), Some(true)] {
+                let responses = api.get_blob_sidecars(input.into(), full).await.unwrap();
+                assert_eq!(responses.len(), 1);
+                let response = &responses[0];
+                assert_eq!(response.block_number, Some(format!("0x{number:x}")));
+                assert_eq!(response.block_hash, Some(format!("0x{:x}", headers[&number].hash())));
+                assert_eq!(response.tx_hash, format!("0x{:x}", hashes[&number]));
+                assert_eq!(response.tx_index.as_deref(), Some("0x0"));
+                assert_eq!(
+                    response.blob_sidecar.commitments,
+                    vec![format!("0x{}", hex::encode([number as u8; 48]))]
+                );
+            }
+        }
+        let response = api.get_blob_sidecars(headers[&98].hash().to_string(), None).await.unwrap();
+        assert_eq!(response[0].tx_hash, format!("0x{:x}", hashes[&98]));
+        assert_eq!(api.parse_block_number(&hex::encode(headers[&98].hash())).unwrap(), 98);
+        assert_eq!(api.parse_block_number("earliest").unwrap(), 0);
+        assert_eq!(api.get_blob_sidecars("pending".into(), None).await.unwrap_err().code(), -32602);
+        assert_eq!(api.get_blob_sidecars("invalid".into(), None).await.unwrap_err().code(), -32602);
+    }
+}

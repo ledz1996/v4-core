@@ -1,0 +1,686 @@
+use alloy_primitives::Address;
+use k256::ecdsa::SigningKey;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+use crate::consensus::parlia::DEFAULT_MIN_GAS_TIP;
+
+/// Mining configuration for BSC PoSA
+#[derive(Clone)]
+pub struct MiningConfig {
+    /// Enable mining
+    pub enabled: bool,
+    /// Validator address for this node
+    pub validator_address: Option<Address>,
+    /// Signing key for this node
+    pub signing_key: Option<SigningKey>,
+    /// Path to validator private key file
+    pub keystore_path: Option<PathBuf>,
+    /// Password for keystore file
+    pub keystore_password: Option<String>,
+    /// Alternative: Private key as hex string (NOT RECOMMENDED for production)
+    pub private_key_hex: Option<String>,
+    /// Block gas limit
+    pub gas_limit: Option<u64>,
+    /// Minimum gas tip
+    pub min_gas_tip: Option<u128>,
+    /// Submit built payload to the import service
+    pub submit_built_payload: bool,
+    /// Enable greedy merge
+    pub greedy_merge: bool,
+    // MEV related parameters
+    /// Validator commission rate (in basis points, 100 = 1%)
+    pub validator_commission: Option<u64>,
+    /// Bid simulation left over time in milliseconds
+    pub bid_simulation_left_over: Option<u64>,
+    /// No interrupt left over time in milliseconds
+    pub no_interrupt_left_over: Option<u64>,
+    /// Time reserved to finalize a block (compute state root, distribute income, seal) before the
+    /// next header's timestamp — go-bsc's `Config.DelayLeftOver`. This is the knob
+    /// `mev_sendBidBlock`'s admission deadline (`bidMustBefore`) subtracts, distinct from
+    /// [`Self::no_interrupt_left_over`] which only bounds bid *simulation*.
+    pub delay_left_over: Option<u64>,
+    /// Maximum bids per builder per block
+    pub max_bids_per_builder: Option<u32>,
+    /// Builder fee ceiling in wei (as hex string for large numbers)
+    pub builder_fee_ceil: Option<u128>,
+    /// List of allowed builder addresses (whitelist)
+    pub allowed_builders: Option<Vec<Address>>,
+    /// Whether the `mev_sendBidBlock` RPC (BEP-675 builder-proposed blocks) is accepted.
+    /// Off by default; enable with `--mining.bid-block-enabled` or `BSC_MINING_BID_BLOCK_ENABLED`.
+    pub bid_block_enabled: bool,
+    /// BEP-675 gRPC listener port (default 8552); zero uses the default.
+    pub mev_grpc_port: u16,
+    /// Explicitly disable the BEP-675 gRPC transport.
+    pub mev_grpc_disabled: bool,
+    /// Maximum process-wide in-flight gRPC `SendBidBlock` calls.
+    pub mev_grpc_concurrency: u32,
+    /// Total gRPC request timeout in milliseconds.
+    pub mev_grpc_request_timeout_ms: u64,
+    /// Use the reth 2.0 sparse-trie background task for state-root computation
+    /// during payload build.
+    ///
+    /// When `true`, the BSC miner spawns a `StateRootHandle` per payload job,
+    /// streams per-tx state diffs into it via `set_state_hook`, and consumes the
+    /// precomputed `(state_root, trie_updates)` at finish time — mirroring
+    /// upstream `crates/ethereum/payload`'s flow. Falls back to the legacy
+    /// synchronous `state_root_with_updates` path when the global spawner has
+    /// not been registered or returns `None`.
+    pub use_sparse_trie_state_root: bool,
+}
+
+impl std::fmt::Debug for MiningConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MiningConfig")
+            .field("enabled", &self.enabled)
+            .field("validator_address", &self.validator_address)
+            .field("keystore_path", &self.keystore_path)
+            .field("keystore_password", &self.keystore_password.as_ref().map(|_| "<redacted>"))
+            .field("private_key_hex", &self.private_key_hex.as_ref().map(|_| "<redacted>"))
+            .field("gas_limit", &self.gas_limit)
+            .field("min_gas_tip", &self.min_gas_tip)
+            .field("submit_built_payload", &self.submit_built_payload)
+            .field("validator_commission", &self.validator_commission)
+            .field("bid_simulation_left_over", &self.bid_simulation_left_over)
+            .field("no_interrupt_left_over", &self.no_interrupt_left_over)
+            .field("delay_left_over", &self.delay_left_over)
+            .field("max_bids_per_builder", &self.max_bids_per_builder)
+            .field("builder_fee_ceil", &self.builder_fee_ceil)
+            .field("allowed_builders", &self.allowed_builders)
+            .field("bid_block_enabled", &self.bid_block_enabled)
+            .field("mev_grpc_port", &self.mev_grpc_port)
+            .field("mev_grpc_disabled", &self.mev_grpc_disabled)
+            .field("mev_grpc_concurrency", &self.mev_grpc_concurrency)
+            .field("mev_grpc_request_timeout_ms", &self.mev_grpc_request_timeout_ms)
+            .field("use_sparse_trie_state_root", &self.use_sparse_trie_state_root)
+            .finish()
+    }
+}
+
+/// Default for `no_interrupt_left_over`: the minimum wall-clock time that must remain before the
+/// block's target timestamp for a newly arrived bid to preempt an in-flight simulation — enough
+/// to run one worst-case simulation to completion and still finalize the block.
+///
+/// Mirrors go-bsc's `getDefaultNoInterruptLeftOver` formula but substitutes reth-bsc's own
+/// finalize reserve: worst-case bid execution (55M gas ceil at an assumed 500 Mgas/s = 110ms) plus
+/// a 10ms buffer plus [`DELAY_LEFT_OVER`](super::payload::DELAY_LEFT_OVER) (120ms vs go-bsc's
+/// 15ms, as reth-bsc's state-root computation is slower), giving 240ms vs go-bsc's 135ms.
+pub fn default_no_interrupt_left_over() -> u64 {
+    const DEFAULT_GAS_CEIL: u64 = 55_000_000;
+    const EXPECTED_PROCESSING_SPEED_GAS_PER_MS: u64 = 500_000; // 500 Mgas/s
+    let bid_processing_ms = DEFAULT_GAS_CEIL / EXPECTED_PROCESSING_SPEED_GAS_PER_MS;
+    let buffer_ms = 10;
+    bid_processing_ms + buffer_ms + super::payload::DELAY_LEFT_OVER
+}
+
+impl Default for MiningConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            validator_address: None,
+            signing_key: None,
+            keystore_path: None,
+            keystore_password: None,
+            private_key_hex: None,
+            gas_limit: Some(30_000_000),
+            min_gas_tip: Some(DEFAULT_MIN_GAS_TIP),
+            submit_built_payload: false,
+            greedy_merge: true,
+            // MEV defaults
+            validator_commission: Some(100),     // 1%
+            bid_simulation_left_over: Some(20),  // 20ms (go-bsc's defaultBidSimulationLeftOver)
+            no_interrupt_left_over: Some(default_no_interrupt_left_over()),
+            delay_left_over: Some(15),           // 15ms (go-bsc's defaultDelayLeftOver)
+            max_bids_per_builder: Some(2),       // go-bsc's defaultMaxBidsPerBuilder
+            builder_fee_ceil: Some(1_000_000_000_000_000_000), // 1 BNB
+            allowed_builders: None, // No builders by default (reject all)
+            bid_block_enabled: false, // BEP-675 BidBlock path off by default
+            mev_grpc_port: 8552,
+            mev_grpc_disabled: false,
+            mev_grpc_concurrency: 32,
+            mev_grpc_request_timeout_ms: 10_000,
+            use_sparse_trie_state_root: false, // Opt-in for now (perf testing)
+        }
+    }
+}
+
+impl MiningConfig {
+    /// Validate the mining configuration
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        // For mining, a key source is required; validator_address can be derived from the key.
+        if self.keystore_path.is_none() && self.private_key_hex.is_none() {
+            return Err(
+                "Mining enabled but no keystore_path or private_key_hex specified".to_string()
+            );
+        }
+
+        if self.keystore_path.is_some() && self.keystore_password.is_none() {
+            return Err("Keystore path specified but no password provided".to_string());
+        }
+
+        Ok(())
+    }
+
+    /// Check if mining is properly configured
+    pub fn is_mining_enabled(&self) -> bool {
+        self.enabled && (self.keystore_path.is_some() || self.private_key_hex.is_some())
+    }
+
+    /// Get the desired gas limit for the specified chain ID.
+    /// Returns the configured gas_limit if set, otherwise returns chain-specific defaults:
+    /// - BSC Mainnet (56): 140M
+    /// - BSC Testnet (97): 100M  
+    /// - Local/Other: 40M
+    pub fn get_gas_limit(&self, chain_id: u64) -> u64 {
+        self.gas_limit.unwrap_or({
+            match chain_id {
+                56 => 140_000_000, // BSC mainnet
+                97 => 100_000_000, // BSC testnet
+                _ => 40_000_000,   // Local development
+            }
+        })
+    }
+
+    pub fn get_min_gas_tip(&self) -> u128 {
+        self.min_gas_tip.unwrap_or(DEFAULT_MIN_GAS_TIP)
+    }
+
+    // MEV parameter getters with defaults
+
+    /// Get validator commission rate (in basis points, 100 = 1%)
+    pub fn get_validator_commission(&self) -> u64 {
+        self.validator_commission.unwrap_or(100) // Default: 1%
+    }
+
+    /// Get bid simulation left over time in milliseconds
+    pub fn get_bid_simulation_left_over(&self) -> u64 {
+        self.bid_simulation_left_over.unwrap_or(20) // Default: 20ms (go-bsc default)
+    }
+
+    /// Get no interrupt left over time in milliseconds
+    pub fn get_no_interrupt_left_over(&self) -> u64 {
+        self.no_interrupt_left_over.unwrap_or_else(default_no_interrupt_left_over)
+    }
+
+    /// Get the block-finalization time reserve in milliseconds (go-bsc's `DelayLeftOver`).
+    pub fn get_delay_left_over(&self) -> u64 {
+        self.delay_left_over.unwrap_or(15) // Default: 15ms
+    }
+
+    /// Get maximum bids per builder per block
+    pub fn get_max_bids_per_builder(&self) -> u32 {
+        self.max_bids_per_builder.unwrap_or(2) // Default: 2 (go-bsc default)
+    }
+
+    /// Get builder fee ceiling in wei
+    pub fn get_builder_fee_ceil(&self) -> u128 {
+        self.builder_fee_ceil.unwrap_or(1_000_000_000_000_000_000) // Default: 1 BNB
+    }
+
+    /// Whether the `mev_sendBidBlock` RPC (BEP-675) is accepted.
+    pub fn get_bid_block_enabled(&self) -> bool {
+        self.bid_block_enabled
+    }
+
+    /// Effective BEP-675 gRPC port; zero uses the default, not an ephemeral port.
+    pub fn get_mev_grpc_port(&self) -> u16 {
+        if self.mev_grpc_port == 0 {
+            8552
+        } else {
+            self.mev_grpc_port
+        }
+    }
+
+    /// Transport configuration, independent of runtime pause and hardfork activation.
+    pub fn is_mev_grpc_enabled(&self) -> bool {
+        self.enabled && self.bid_block_enabled && !self.mev_grpc_disabled
+    }
+
+    /// Maximum in-flight gRPC submissions, applying the go-bsc default when set to zero.
+    pub fn get_mev_grpc_concurrency(&self) -> u32 {
+        if self.mev_grpc_concurrency == 0 {
+            32
+        } else {
+            self.mev_grpc_concurrency
+        }
+    }
+
+    /// Total gRPC request timeout in milliseconds, applying the go-bsc default when set to zero.
+    pub fn get_mev_grpc_request_timeout_ms(&self) -> u64 {
+        if self.mev_grpc_request_timeout_ms == 0 {
+            10_000
+        } else {
+            self.mev_grpc_request_timeout_ms
+        }
+    }
+
+    /// Generate a new validator configuration with a freshly generated random key.
+    ///
+    /// The key is random per call and per process. It previously hard-coded Anvil development
+    /// account #0, which meant any node that reached here — see [`Self::ensure_keys_available`],
+    /// which `main.rs` calls when mining is enabled with no key supplied — would sign blocks with a
+    /// key published in Foundry's documentation, and so impersonatable by anyone. A random key is
+    /// still not fit for production, but it is not *pre-compromised*, and it matches what this
+    /// function has always claimed to do.
+    pub fn generate_for_development() -> Self {
+        use rand::Rng;
+
+        // Rejection-sample so the result is always a valid secp256k1 scalar; raw random bytes can
+        // fall outside the curve order (astronomically unlikely, but a silent fallback to
+        // `Self::default()` on a bad draw would disable mining for no visible reason).
+        let private_key_hex = loop {
+            let candidate: [u8; 32] = rand::rng().random();
+            let hex = format!("0x{}", alloy_primitives::hex::encode(candidate));
+            if keystore::load_private_key_from_hex(&hex).is_ok() {
+                break hex;
+            }
+        };
+
+        // Derive validator address from private key
+        if let Ok(signing_key) = keystore::load_private_key_from_hex(&private_key_hex) {
+            let validator_address = keystore::get_validator_address(&signing_key);
+
+            Self {
+                enabled: true,
+                validator_address: Some(validator_address),
+                signing_key: Some(signing_key),
+                private_key_hex: Some(private_key_hex.to_string()),
+                keystore_path: None,
+                keystore_password: None,
+                gas_limit: Some(30_000_000),
+                min_gas_tip: Some(DEFAULT_MIN_GAS_TIP),
+                submit_built_payload: false,
+                // Use default MEV parameters
+                validator_commission: Some(100),
+                bid_simulation_left_over: Some(20),
+                no_interrupt_left_over: Some(default_no_interrupt_left_over()),
+                delay_left_over: Some(15),
+                max_bids_per_builder: Some(2),
+                builder_fee_ceil: Some(1_000_000_000_000_000_000),
+                allowed_builders: None,
+                bid_block_enabled: false,
+                mev_grpc_port: 8552,
+                mev_grpc_disabled: false,
+                mev_grpc_concurrency: 32,
+                mev_grpc_request_timeout_ms: 10_000,
+                greedy_merge: true,
+                use_sparse_trie_state_root: false,
+            }
+        } else {
+            // Fallback to default if key generation fails
+            Self::default()
+        }
+    }
+
+    /// Auto-generate keys if mining is enabled but no keys provided
+    pub fn ensure_keys_available(mut self) -> Self {
+        if self.enabled && self.keystore_path.is_none() && self.private_key_hex.is_none() {
+            tracing::info!("Mining enabled but no keys provided - generating development keys");
+            let generated = Self::generate_for_development();
+
+            // Keep existing config but use generated keys
+            self.validator_address = generated.validator_address;
+            self.private_key_hex = generated.private_key_hex;
+
+            if let Some(addr) = self.validator_address {
+                tracing::warn!("AUTO-GENERATED validator keys for development:");
+                tracing::warn!("Validator Address: {}", addr);
+                tracing::warn!(
+                    "Private Key: {} (KEEP SECURE!)",
+                    self.private_key_hex.as_ref().unwrap()
+                );
+                tracing::warn!("These are DEVELOPMENT keys - do not use in production!");
+            }
+        }
+
+        self
+    }
+
+    /// Create a ready-to-use development mining configuration
+    pub fn development() -> Self {
+        Self { enabled: true, ..Default::default() }.ensure_keys_available()
+    }
+
+    /// Load configuration from environment variables
+    pub fn from_env() -> Self {
+        let enabled = std::env::var("BSC_MINING_ENABLED")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false);
+
+        let private_key_hex = std::env::var("BSC_PRIVATE_KEY").ok();
+
+        let keystore_path = std::env::var("BSC_KEYSTORE_PATH").ok().map(Into::into);
+        let keystore_password = std::env::var("BSC_KEYSTORE_PASSWORD").ok();
+
+        let gas_limit = std::env::var("BSC_GAS_LIMIT").ok().and_then(|v| v.parse().ok());
+
+        let min_gas_tip = std::env::var("BSC_MIN_GAS_TIP").ok().and_then(|v| v.parse().ok());
+
+        let submit_built_payload = std::env::var("BSC_SUBMIT_BUILT_PAYLOAD")
+            .ok()
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false);
+
+        let greedy_merge = std::env::var("BSC_GREEDY_MERGE")
+            .ok()
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(true);
+
+        // MEV parameters from environment
+        let validator_commission =
+            std::env::var("BSC_VALIDATOR_COMMISSION").ok().and_then(|v| v.parse().ok());
+
+        let bid_simulation_left_over =
+            std::env::var("BSC_BID_SIMULATION_LEFT_OVER").ok().and_then(|v| v.parse().ok());
+
+        let no_interrupt_left_over =
+            std::env::var("BSC_NO_INTERRUPT_LEFT_OVER").ok().and_then(|v| v.parse().ok());
+
+        let delay_left_over =
+            std::env::var("BSC_DELAY_LEFT_OVER").ok().and_then(|v| v.parse().ok());
+
+        let max_bids_per_builder =
+            std::env::var("BSC_MAX_BIDS_PER_BUILDER").ok().and_then(|v| v.parse().ok());
+
+        let builder_fee_ceil =
+            std::env::var("BSC_BUILDER_FEE_CEIL").ok().and_then(|v| v.parse().ok());
+
+        // Parse allowed builders from comma-separated addresses
+        let allowed_builders = std::env::var("BSC_ALLOWED_BUILDERS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|addr| addr.trim().parse::<Address>().ok())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|v| !v.is_empty());
+
+        let use_sparse_trie_state_root = std::env::var("BSC_MINING_USE_SPARSE_TRIE_STATE_ROOT")
+            .ok()
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false);
+
+        let bid_block_enabled = std::env::var("BSC_MINING_BID_BLOCK_ENABLED")
+            .ok()
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false);
+
+        let mev_grpc_port =
+            std::env::var("BSC_MEV_GRPC_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(8552);
+        let mev_grpc_disabled = std::env::var("BSC_MEV_GRPC_DISABLED")
+            .ok()
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        let mev_grpc_concurrency = std::env::var("BSC_MEV_GRPC_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(32);
+        let mev_grpc_request_timeout_ms = std::env::var("BSC_MEV_GRPC_REQUEST_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10_000);
+
+        let mut cfg = Self {
+            enabled,
+            private_key_hex,
+            keystore_path,
+            keystore_password,
+            gas_limit,
+            min_gas_tip,
+            submit_built_payload,
+            greedy_merge,
+            validator_commission,
+            bid_simulation_left_over,
+            no_interrupt_left_over,
+            delay_left_over,
+            max_bids_per_builder,
+            builder_fee_ceil,
+            allowed_builders,
+            bid_block_enabled,
+            mev_grpc_port,
+            mev_grpc_disabled,
+            mev_grpc_concurrency,
+            mev_grpc_request_timeout_ms,
+            use_sparse_trie_state_root,
+            ..Default::default()
+        };
+
+        // If a private key is present but validator_address is not, derive it automatically.
+        if cfg.validator_address.is_none() {
+            if let Some(ref pk_hex) = cfg.private_key_hex {
+                if let Ok(sk) = keystore::load_private_key_from_hex(pk_hex) {
+                    cfg.validator_address = Some(keystore::get_validator_address(&sk));
+                }
+            } else if let (Some(ref path), Some(ref pass)) =
+                (&cfg.keystore_path, &cfg.keystore_password)
+            {
+                if let Ok(sk) = keystore::load_private_key_from_keystore(path, pass) {
+                    cfg.validator_address = Some(keystore::get_validator_address(&sk));
+                }
+            }
+        }
+
+        cfg.ensure_keys_available()
+    }
+}
+
+// Global override for mining configuration set via CLI
+static GLOBAL_MINING_CONFIG: OnceLock<MiningConfig> = OnceLock::new();
+
+/// Set a global mining configuration to override env defaults (typically from CLI args)
+pub fn set_global_mining_config(cfg: MiningConfig) -> Result<(), Box<MiningConfig>> {
+    GLOBAL_MINING_CONFIG.set(cfg).map_err(Box::new)
+}
+
+/// Get the global mining configuration override if set
+pub fn get_global_mining_config() -> Option<&'static MiningConfig> {
+    GLOBAL_MINING_CONFIG.get()
+}
+
+/// Key management for validators
+pub mod keystore {
+    use alloy_primitives::keccak256;
+    use alloy_primitives::Address;
+    use k256::ecdsa::{signature::Signer, Signature, SigningKey};
+    use std::path::Path;
+
+    /// Load private key from keystore file
+    pub fn load_private_key_from_keystore(
+        keystore_path: &Path,
+        password: &str,
+    ) -> Result<SigningKey, Box<dyn std::error::Error + Send + Sync>> {
+        let mut key_bytes = eth_keystore::decrypt_key(keystore_path, password)?; // Vec<u8>
+        if key_bytes.len() != 32 {
+            return Err("Decrypted private key must be 32 bytes".into());
+        }
+        let signing_key = SigningKey::from_slice(&key_bytes)?;
+        // Immediately zeroize the decrypted key material from heap memory
+        use zeroize::Zeroize;
+        key_bytes.zeroize();
+        Ok(signing_key)
+    }
+
+    /// Load private key from hex string
+    pub fn load_private_key_from_hex(
+        hex_key: &str,
+    ) -> Result<SigningKey, Box<dyn std::error::Error + Send + Sync>> {
+        let key_bytes =
+            alloy_primitives::hex::decode(hex_key.strip_prefix("0x").unwrap_or(hex_key))?;
+        if key_bytes.len() != 32 {
+            return Err("Private key must be 32 bytes".into());
+        }
+
+        let signing_key = SigningKey::from_slice(&key_bytes)?;
+        Ok(signing_key)
+    }
+
+    /// Get validator address from private key
+    pub fn get_validator_address(signing_key: &SigningKey) -> Address {
+        let public_key = signing_key.verifying_key();
+        let public_bytes = public_key.to_encoded_point(false);
+        let hash = keccak256(&public_bytes.as_bytes()[1..]); // Skip 0x04 prefix
+        Address::from_slice(&hash[12..])
+    }
+
+    /// Create signing function with loaded private key
+    pub fn create_signing_function(
+        signing_key: SigningKey,
+    ) -> impl Fn(Address, &str, &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
+           + Send
+           + Sync
+           + 'static {
+        move |_addr: Address,
+              _mimetype: &str,
+              data: &[u8]|
+              -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+            let hash = keccak256(data);
+            let signature: Signature = signing_key.sign(hash.as_slice());
+            Ok(signature.to_bytes().to_vec())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bid_block_disabled_by_default() {
+        assert!(!MiningConfig::default().get_bid_block_enabled());
+    }
+
+    #[test]
+    fn mev_grpc_defaults_match_go_bsc() {
+        let config = MiningConfig::default();
+        assert_eq!(config.get_mev_grpc_port(), 8552);
+        assert_eq!(config.get_mev_grpc_concurrency(), 32);
+        assert_eq!(config.get_mev_grpc_request_timeout_ms(), 10_000);
+    }
+
+    #[test]
+    fn mev_grpc_zero_port_uses_default_and_explicit_disable() {
+        let mut config = MiningConfig {
+            enabled: true,
+            bid_block_enabled: true,
+            mev_grpc_port: 0,
+            private_key_hex: Some("01".repeat(32)),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+        assert_eq!(config.get_mev_grpc_port(), 8552);
+        assert!(config.is_mev_grpc_enabled());
+        config.mev_grpc_disabled = true;
+        assert!(config.validate().is_ok());
+        assert!(!config.is_mev_grpc_enabled());
+        assert_eq!(config.get_mev_grpc_port(), 8552);
+    }
+
+    #[test]
+    fn mev_grpc_explicit_port_is_preserved() {
+        for port in [1, 8552, 9999, u16::MAX] {
+            let config = MiningConfig { mev_grpc_port: port, ..Default::default() };
+            assert_eq!(config.get_mev_grpc_port(), port);
+        }
+    }
+
+    #[test]
+    fn bid_simulation_left_over_matches_go_bsc_default() {
+        // go-bsc's `defaultBidSimulationLeftOver = 20 * time.Millisecond`.
+        assert_eq!(MiningConfig::default().get_bid_simulation_left_over(), 20);
+    }
+
+    #[test]
+    fn max_bids_per_builder_matches_go_bsc_default() {
+        assert_eq!(MiningConfig::default().get_max_bids_per_builder(), 2);
+        assert_eq!(
+            MiningConfig { max_bids_per_builder: None, ..Default::default() }
+                .get_max_bids_per_builder(),
+            2
+        );
+    }
+
+    #[test]
+    fn no_interrupt_left_over_follows_go_bsc_formula_with_reth_reserve() {
+        // go-bsc's `getDefaultNoInterruptLeftOver()` formula (55M gas ceil @ an assumed
+        // 500 Mgas/s = 110ms bidProcessing + 10ms buffer + delayLeftOver), with reth-bsc's
+        // 120ms finalize reserve (`DELAY_LEFT_OVER`) instead of go-bsc's 15ms: 240ms vs 135ms.
+        assert_eq!(
+            MiningConfig::default().get_no_interrupt_left_over(),
+            110 + 10 + crate::node::miner::payload::DELAY_LEFT_OVER
+        );
+    }
+
+    #[test]
+    fn delay_left_over_defaults_to_go_bsc_value() {
+        // go-bsc's `defaultDelayLeftOver = 15 * time.Millisecond`; distinct from and smaller than
+        // `no_interrupt_left_over` (240ms default), which bounds bid simulation, not block sealing.
+        assert_eq!(MiningConfig::default().get_delay_left_over(), 15);
+    }
+
+    #[test]
+    fn test_mining_config_validation() {
+        let mut config = MiningConfig::default();
+        assert!(config.validate().is_ok()); // Disabled by default should be OK
+
+        config.enabled = true;
+        assert!(config.validate().is_err()); // Enabled but no signing key configured
+
+        config.validator_address =
+            Some("0x1234567890abcdef1234567890abcdef12345678".parse().unwrap());
+        assert!(config.validate().is_err()); // Still no signing key specified
+
+        config.private_key_hex =
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string());
+        assert!(config.validate().is_ok()); // Now properly configured
+    }
+
+    #[test]
+    fn test_key_loading() {
+        let test_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let signing_key = keystore::load_private_key_from_hex(test_key).unwrap();
+        let address = keystore::get_validator_address(&signing_key);
+
+        // Verify we can get an address from the key
+        assert_ne!(address, Address::ZERO);
+    }
+
+    #[test]
+    fn test_load_private_key_from_keystore_file() {
+        use std::fs;
+        use std::io::Write;
+        use std::path::PathBuf;
+        use uuid::Uuid;
+
+        // This is a real V3 keystore JSON (address bcdd0d2c...) with password "0123456789"
+        let keystore_json = r#"{"address":"bcdd0d2cda5f6423e57b6a4dcd75decbe31aecf0","crypto":{"cipher":"aes-128-ctr","ciphertext":"f7505ced32fe3037d6dc25ae7e9716858e516bacfb0dc28c9995f01cf7fee84a","cipherparams":{"iv":"d93e5314f18ccfc8330e1ad37534fa29"},"kdf":"scrypt","kdfparams":{"dklen":32,"n":262144,"p":1,"r":8,"salt":"1fb8f954f70fb0ddb8be5b1fb57d821df21dda700682f382baed311dde95a6c7"},"mac":"c501bb033f94cb9efc3c63fe1547555fc1412d3abb8b400cacda37bd9de888ec"},"id":"7246dc9c-d170-4009-8878-8628be169836","version":3}"#;
+
+        // Write to a temporary file
+        let mut path: PathBuf = std::env::temp_dir();
+        let fname =
+            format!("UTC--test-{}--bcdd0d2cda5f6423e57b6a4dcd75decbe31aecf0", Uuid::new_v4());
+        path.push(fname);
+        {
+            let mut f = fs::File::create(&path).unwrap();
+            f.write_all(keystore_json.as_bytes()).unwrap();
+            f.sync_all().unwrap();
+        }
+
+        // Decrypt with the known password
+        let signing_key = keystore::load_private_key_from_keystore(&path, "0123456789").unwrap();
+        // convert signing_key to hex string
+        let signing_key_hex = alloy_primitives::hex::encode(signing_key.to_bytes());
+        println!("signing_key: 0x{}", signing_key_hex);
+
+        let address = keystore::get_validator_address(&signing_key);
+
+        // Expect derived address to match the keystore address
+        let expected: Address = "0xbcdd0d2cda5f6423e57b6a4dcd75decbe31aecf0".parse().unwrap();
+        assert_eq!(address, expected);
+
+        // Cleanup best-effort
+        let _ = fs::remove_file(&path);
+    }
+}

@@ -1,0 +1,869 @@
+//! Celo EVM configuration for reth.
+//!
+//! Bridges the Celo EVM ([`CeloEvmFactory`]) with reth's node framework,
+//! analogous to `reth-optimism-evm` for vanilla OP Stack chains.
+
+// Most deps in this crate are only used by std-only modules (node, pool,
+// payload, rpc, chainspec) or the binary target. Only warn on unused deps in
+// std builds to avoid spurious warnings under `cargo hack check
+// --no-default-features`.
+#![cfg_attr(all(not(test), feature = "std"), warn(unused_crate_dependencies))]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+// Binary-only deps (used by src/bin/celo_reth.rs but not by the library).
+// Suppress `unused_crate_dependencies` on the std library compilation unit.
+#[cfg(feature = "std")]
+use {
+    clap as _, futures_util as _, reth_cli_runner as _, reth_cli_util as _, reth_db as _,
+    reth_node_metrics as _, reth_optimism_cli as _, reth_optimism_exex as _,
+    reth_optimism_trie as _, reth_provider as _, reth_rpc_server_types as _, reth_tasks as _,
+    reth_tracing as _, reth_transaction_pool as _, tracing as _,
+};
+
+use alloc::{boxed::Box, format, sync::Arc};
+use alloy_consensus::{BlockHeader, Header};
+use alloy_evm::{FromRecoveredTx, FromTxWithEncoded};
+use alloy_op_evm::block::receipt_builder::OpReceiptBuilder;
+use alloy_primitives::U256;
+use core::any::Any;
+use op_alloy_consensus::EIP1559ParamError;
+use op_revm::OpSpecId;
+use reth_chainspec::EthChainSpec;
+use reth_evm::{
+    BlockExecutorForEvm, CallerGasAllowanceError, ConfigureEvm, Database, EvmEnv, EvmEnvFor,
+    EvmFor, InspectorFor, TxEnvFor,
+    eth::NextEvmEnvAttributes,
+    execute::{BasicBlockBuilder, BlockBuilder, BlockExecutor},
+};
+use reth_optimism_chainspec::OpChainSpec;
+use reth_optimism_forks::OpHardforks;
+use reth_primitives_traits::{NodePrimitives, SealedBlock, SealedHeader, SignedTransaction};
+use revm::context::Transaction;
+
+pub mod primitives;
+pub mod receipt;
+pub mod receipts;
+
+#[cfg(feature = "std")]
+pub mod node;
+
+#[cfg(feature = "std")]
+pub mod pool;
+
+#[cfg(feature = "std")]
+pub mod payload;
+
+#[cfg(feature = "std")]
+pub mod payload_metrics;
+
+#[cfg(feature = "std")]
+pub mod rpc;
+
+#[cfg(feature = "std")]
+pub mod chainspec;
+
+#[cfg(feature = "std")]
+pub mod state_import;
+
+#[cfg(feature = "std")]
+pub mod celo_migrate_v2;
+
+#[cfg(feature = "std")]
+pub mod download_repair;
+
+#[cfg(feature = "std")]
+pub mod snapshot_manifest;
+
+#[cfg(all(test, feature = "std"))]
+pub(crate) mod test_utils;
+
+pub use primitives::*;
+pub use receipt::CeloReceipt;
+pub use receipts::CeloRethReceiptBuilder;
+
+// Re-export block assembler and execution context from op-reth (same for Celo as OP Stack).
+pub use alloy_op_evm::{OpBlockExecutor, post_exec::PostExecExecutorExt};
+pub use reth_optimism_evm::{
+    ConfigurePostExecEvm, OpBlockAssembler, OpBlockExecutionCtx, OpNextBlockEnvAttributes,
+    PostExecMode, l1,
+};
+
+// Re-export Celo EVM types.
+pub use alloy_celo_evm::{CeloEvm, CeloEvmFactory, block::CeloBlockExecutorFactory};
+
+use reth_optimism_primitives::DepositReceipt;
+
+#[cfg(feature = "std")]
+use {
+    reth_evm::{ConfigureEngineEvm, ExecutableTxIterator, ExecutionCtxFor},
+    reth_optimism_payload_builder::OpExecData,
+    reth_primitives_traits::TxTy,
+};
+
+pub use celo_revm::constants::CELO_EIP_1559_BASE_FEE_FLOOR as CELO_BASE_FEE_FLOOR;
+
+/// Gas limit for the `balanceOf` read behind a CIP-64 gas allowance. The token is caller-chosen,
+/// so the read must not get the 30M system-call default; 1M is the bound the pool validator uses
+/// for the same call.
+const FEE_BALANCE_READ_GAS_LIMIT: u64 = 1_000_000;
+
+/// Compute the next block's base fee for Celo.
+///
+/// Pre-Jovian, applies the 25 Gwei base fee floor. Post-Jovian, the chain spec already
+/// enforces `min_base_fee` from the parent's extra data.
+pub fn celo_next_block_base_fee<H, ChainSpec>(
+    chain_spec: &Arc<ChainSpec>,
+    parent: &H,
+    timestamp: u64,
+) -> Option<u64>
+where
+    H: alloy_consensus::BlockHeader,
+    ChainSpec: reth_chainspec::EthChainSpec<Header = H> + OpHardforks,
+{
+    let raw = chain_spec.next_block_base_fee(parent, timestamp)?;
+    if chain_spec.is_jovian_active_at_timestamp(timestamp) {
+        Some(raw)
+    } else {
+        Some(raw.max(CELO_BASE_FEE_FLOOR))
+    }
+}
+
+/// Celo EVM configuration (analogous to [`OpEvmConfig`](reth_optimism_evm::OpEvmConfig)).
+#[derive(Debug)]
+pub struct CeloEvmConfig<
+    ChainSpec = OpChainSpec,
+    N: NodePrimitives = CeloPrimitives,
+    R = CeloRethReceiptBuilder,
+> {
+    /// Inner [`CeloBlockExecutorFactory`]. Constructs a fresh receipt builder bound to the
+    /// EVM's own CIP-64 storage on every `create_executor` call.
+    pub executor_factory: CeloBlockExecutorFactory<R, Arc<ChainSpec>>,
+    /// Block assembler (shared with OP Stack).
+    pub block_assembler: OpBlockAssembler<ChainSpec>,
+    #[doc(hidden)]
+    pub _pd: core::marker::PhantomData<N>,
+}
+
+impl<ChainSpec, N: NodePrimitives, R> Clone for CeloEvmConfig<ChainSpec, N, R> {
+    fn clone(&self) -> Self {
+        Self {
+            executor_factory: self.executor_factory.clone(),
+            block_assembler: self.block_assembler.clone(),
+            _pd: self._pd,
+        }
+    }
+}
+
+impl<ChainSpec: OpHardforks> CeloEvmConfig<ChainSpec> {
+    /// Creates a new [`CeloEvmConfig`] with the given chain spec.
+    pub fn celo(chain_spec: Arc<ChainSpec>) -> Self {
+        Self::celo_with_blocklist(
+            chain_spec,
+            alloy_celo_evm::blocklist::FeeCurrencyBlocklist::default(),
+        )
+    }
+
+    /// Creates a new [`CeloEvmConfig`] with the given chain spec and shared fee currency blocklist.
+    pub fn celo_with_blocklist(
+        chain_spec: Arc<ChainSpec>,
+        blocklist: alloy_celo_evm::blocklist::FeeCurrencyBlocklist,
+    ) -> Self {
+        // No shared CIP-64 storage here: each `CeloEvm` produced by the factory owns its own,
+        // and the executor factory re-binds the receipt builder to that per-EVM storage on
+        // every `create_executor` call.
+        let evm_factory = CeloEvmFactory::default().with_blocklist(blocklist);
+        Self {
+            block_assembler: OpBlockAssembler::new(chain_spec.clone()),
+            executor_factory: CeloBlockExecutorFactory::new(chain_spec, evm_factory),
+            _pd: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<ChainSpec, N, R> CeloEvmConfig<ChainSpec, N, R>
+where
+    ChainSpec: OpHardforks,
+    N: NodePrimitives,
+{
+    /// Returns the chain spec associated with this configuration.
+    pub const fn chain_spec(&self) -> &Arc<ChainSpec> {
+        self.executor_factory.spec()
+    }
+
+    /// Builds a block execution context with an optional post-exec mode override.
+    pub fn context_for_block_with_post_exec_mode(
+        &self,
+        block: &SealedBlock<N::Block>,
+        post_exec_mode: Option<PostExecMode>,
+    ) -> OpBlockExecutionCtx {
+        OpBlockExecutionCtx {
+            parent_hash: block.header().parent_hash(),
+            parent_beacon_block_root: block.header().parent_beacon_block_root(),
+            extra_data: block.header().extra_data().clone(),
+            post_exec_mode: post_exec_mode.unwrap_or_default(),
+        }
+    }
+
+    /// Builds a next-block execution context with the provided post-exec mode.
+    pub fn context_for_next_block_with_post_exec_mode(
+        &self,
+        parent: &SealedHeader<N::BlockHeader>,
+        attributes: OpNextBlockEnvAttributes,
+        post_exec_mode: PostExecMode,
+    ) -> OpBlockExecutionCtx {
+        OpBlockExecutionCtx {
+            parent_hash: parent.hash(),
+            parent_beacon_block_root: attributes.parent_beacon_block_root,
+            extra_data: attributes.extra_data,
+            post_exec_mode,
+        }
+    }
+}
+
+impl<ChainSpec, N, R> ConfigureEvm for CeloEvmConfig<ChainSpec, N, R>
+where
+    ChainSpec: EthChainSpec<Header = Header> + OpHardforks,
+    N: NodePrimitives<
+            Receipt = R::Receipt,
+            SignedTx = R::Transaction,
+            BlockHeader = Header,
+            BlockBody = alloy_consensus::BlockBody<R::Transaction>,
+            Block = alloy_consensus::Block<R::Transaction>,
+        >,
+    R: From<alloy_celo_evm::cip64_storage::Cip64Storage>
+        + OpReceiptBuilder<
+            Receipt: DepositReceipt,
+            Transaction: SignedTransaction
+                             + alloy_consensus::Transaction
+                             + op_alloy_consensus::OpTransaction,
+        > + Send
+        + Sync
+        + 'static,
+    celo_revm::CeloTransaction<revm::context::TxEnv>:
+        FromRecoveredTx<R::Transaction> + FromTxWithEncoded<R::Transaction>,
+    Self: Send + Sync + Unpin + Clone + 'static,
+{
+    type Primitives = N;
+    type Error = EIP1559ParamError;
+    type NextBlockEnvCtx = OpNextBlockEnvAttributes;
+    type BlockExecutorFactory = CeloBlockExecutorFactory<R, Arc<ChainSpec>>;
+    type BlockAssembler = OpBlockAssembler<ChainSpec>;
+
+    fn block_executor_factory(&self) -> &Self::BlockExecutorFactory {
+        &self.executor_factory
+    }
+
+    fn block_assembler(&self) -> &Self::BlockAssembler {
+        &self.block_assembler
+    }
+
+    fn evm_env(&self, header: &Header) -> Result<EvmEnv<OpSpecId>, Self::Error> {
+        Ok(alloy_op_evm::evm_env_for_op_block(
+            header,
+            self.chain_spec(),
+            self.chain_spec().chain().id(),
+        ))
+    }
+
+    fn next_evm_env(
+        &self,
+        parent: &Header,
+        attributes: &Self::NextBlockEnvCtx,
+    ) -> Result<EvmEnv<OpSpecId>, Self::Error> {
+        Ok(alloy_op_evm::evm_env_for_op_next_block(
+            parent,
+            NextEvmEnvAttributes {
+                timestamp: attributes.timestamp,
+                suggested_fee_recipient: attributes.suggested_fee_recipient,
+                prev_randao: attributes.prev_randao,
+                gas_limit: attributes.gas_limit,
+                slot_number: None,
+            },
+            celo_next_block_base_fee(self.chain_spec(), parent, attributes.timestamp)
+                .unwrap_or_default(),
+            self.chain_spec(),
+            self.chain_spec().chain().id(),
+        ))
+    }
+
+    /// Captures the block-start [`celo_revm::FeeCurrencyContext`] for mid-block call simulations.
+    ///
+    /// Fee-currency exchange rates are block-scoped consensus state: every transaction of a
+    /// block settles at the rates read from block-start state. Capturing the context here lets
+    /// the debug API seed it into call EVMs created over mid-block state (`debug_traceCall` with
+    /// a transaction index, `debug_traceCallMany`), which would otherwise re-load the rates from
+    /// the wrong state.
+    fn capture_block_replay_ctx<DB: Database>(
+        &self,
+        db: &mut DB,
+        evm_env: &EvmEnvFor<Self>,
+    ) -> Option<Box<dyn Any + Send>> {
+        let mut evm = self.evm_with_env(&mut *db, evm_env.clone());
+        Some(Box::new(evm.create_fee_currency_context()))
+    }
+
+    /// Seeds a mid-block call simulation EVM with the captured block-start fee currency context.
+    ///
+    /// The context's `updated_at_block` stamp makes the CIP-64 handler skip its lazy per-block
+    /// load only while the EVM's block environment still matches the captured block; the debug
+    /// API re-captures per simulated block (e.g. per `debug_traceCallMany` bundle).
+    fn seed_block_replay_ctx<DB, I>(&self, evm: &mut EvmFor<Self, DB, I>, ctx: &(dyn Any + Send))
+    where
+        DB: Database,
+        I: InspectorFor<Self, DB>,
+    {
+        if let Some(fee_currency_context) = ctx.downcast_ref::<celo_revm::FeeCurrencyContext>() {
+            evm.set_fee_currency_context(fee_currency_context.clone());
+        }
+    }
+
+    /// A CIP-64 request pays gas in its fee currency, so the allowance is the caller's ERC20
+    /// balance divided by the fee-currency cap. `value` still moves native CELO: it must fit the
+    /// native balance, but it is not taken out of the fee balance. Native requests divide the
+    /// native balance less `value`, as the default does. Mirrors op-geth's estimator.
+    fn caller_gas_allowance<DB: Database>(
+        &self,
+        db: &mut DB,
+        evm_env: &EvmEnvFor<Self>,
+        tx_env: &TxEnvFor<Self>,
+    ) -> Result<u64, CallerGasAllowanceError<DB::Error>> {
+        let caller = tx_env.caller();
+        let value = tx_env.value();
+        let native_balance = db
+            .basic(caller)
+            .map_err(CallerGasAllowanceError::Database)?
+            .map(|account| account.balance)
+            .unwrap_or_default();
+        let Some(native_spendable) = native_balance.checked_sub(value) else {
+            return Err(CallerGasAllowanceError::InsufficientFunds {
+                cost: value,
+                balance: native_balance,
+            });
+        };
+
+        let spendable = match tx_env.fee_currency {
+            None => native_spendable,
+            Some(fee_currency) => {
+                let mut evm = self.evm_with_env(&mut *db, evm_env.clone());
+                evm.erc20_balance(fee_currency, caller, FEE_BALANCE_READ_GAS_LIMIT).map_err(
+                    |err| {
+                        CallerGasAllowanceError::FeeBalance(format!(
+                            "balanceOf({caller}) on fee currency {fee_currency} failed: {err}"
+                        ))
+                    },
+                )?
+            }
+        };
+
+        Ok(spendable
+            .checked_div(U256::from(tx_env.gas_price()))
+            // Zero when the gas price is zero; callers only ask with a non-zero price.
+            .unwrap_or_default()
+            .saturating_to())
+    }
+
+    fn context_for_block(
+        &self,
+        block: &'_ SealedBlock<N::Block>,
+    ) -> Result<OpBlockExecutionCtx, Self::Error> {
+        Ok(OpBlockExecutionCtx {
+            parent_hash: block.header().parent_hash(),
+            parent_beacon_block_root: block.header().parent_beacon_block_root(),
+            extra_data: block.header().extra_data().clone(),
+            // SDM is unscheduled on Celo (`RollupConfig::is_sdm_active` returns false),
+            // so post-exec verification never runs.
+            post_exec_mode: PostExecMode::default(),
+        })
+    }
+
+    fn context_for_next_block(
+        &self,
+        parent: &SealedHeader<N::BlockHeader>,
+        attributes: Self::NextBlockEnvCtx,
+    ) -> Result<OpBlockExecutionCtx, Self::Error> {
+        Ok(OpBlockExecutionCtx {
+            parent_hash: parent.hash(),
+            parent_beacon_block_root: attributes.parent_beacon_block_root,
+            extra_data: attributes.extra_data,
+            post_exec_mode: PostExecMode::default(),
+        })
+    }
+
+    /// Builds the generic next-block executor. The current OpEthApi overrides the generic
+    /// pending-block build path. The normal payload service and witness/debug execution use
+    /// `post_exec_builder_for_next_block` instead, even with post-exec disabled. Both builders
+    /// enable the local fee currency blocklist on this release branch; block import and
+    /// derivation re-execution bypass them and leave it untouched.
+    fn builder_for_next_block<'a, DB: Database + 'a>(
+        &'a self,
+        db: &'a mut revm::database::State<DB>,
+        parent: &'a SealedHeader<<N as NodePrimitives>::BlockHeader>,
+        attributes: Self::NextBlockEnvCtx,
+    ) -> Result<
+        impl BlockBuilder<Primitives = Self::Primitives, Executor = BlockExecutorForEvm<'a, Self, DB>>,
+        Self::Error,
+    > {
+        let evm_env = self.next_evm_env(parent, &attributes)?;
+        let evm = self.evm_with_env(db, evm_env).with_blocklist_enabled();
+        let ctx = self.context_for_next_block(parent, attributes)?;
+        let builder = self.create_block_builder(evm, parent, ctx);
+        // Sequencing-only observability: the decorator is transparent, and it emits nothing
+        // unless a `PayloadMetricsBuilder` attempt is active on this thread. no-std proof
+        // builds return the bare builder.
+        #[cfg(feature = "std")]
+        let builder = crate::payload_metrics::PayloadMetricsBlockBuilder::new(builder);
+        Ok(builder)
+    }
+}
+
+impl<ChainSpec, N, R> ConfigurePostExecEvm for CeloEvmConfig<ChainSpec, N, R>
+where
+    ChainSpec: EthChainSpec<Header = Header> + OpHardforks + Send + Sync + Unpin + 'static,
+    N: NodePrimitives<
+            Receipt = R::Receipt,
+            SignedTx = R::Transaction,
+            BlockHeader = Header,
+            BlockBody = alloy_consensus::BlockBody<R::Transaction>,
+            Block = alloy_consensus::Block<R::Transaction>,
+        >,
+    R: From<alloy_celo_evm::cip64_storage::Cip64Storage>
+        + OpReceiptBuilder<
+            Receipt: DepositReceipt,
+            Transaction: SignedTransaction
+                             + alloy_consensus::Transaction
+                             + op_alloy_consensus::OpTransaction,
+        > + Clone
+        + Send
+        + Sync
+        + Unpin
+        + 'static,
+    celo_revm::CeloTransaction<revm::context::TxEnv>:
+        FromRecoveredTx<R::Transaction> + FromTxWithEncoded<R::Transaction>,
+    Self: Send + Sync + Unpin + Clone + 'static,
+{
+    fn post_exec_executor_for_block<'a, DB: Database>(
+        &'a self,
+        db: &'a mut revm::database::State<DB>,
+        block: &'a SealedBlock<<Self::Primitives as NodePrimitives>::Block>,
+        post_exec_mode: PostExecMode,
+    ) -> Result<
+        impl BlockExecutor<
+            Transaction = <Self::Primitives as NodePrimitives>::SignedTx,
+            Receipt = <Self::Primitives as NodePrimitives>::Receipt,
+        > + PostExecExecutorExt
+        + 'a,
+        Self::Error,
+    > {
+        // Receipt-building executor built outside `create_executor`, so enable CIP-64 receipt
+        // storage as that path does.
+        let evm = self.evm_for_block(db, block.header())?.with_cip64_store_enabled();
+        let ctx = self.context_for_block_with_post_exec_mode(block, Some(post_exec_mode));
+        // Bind a fresh receipt builder to this EVM's per-instance CIP-64 storage.
+        let builder = R::from(evm.cip64_storage().clone());
+
+        Ok(OpBlockExecutor::new(evm, ctx, self.executor_factory.spec(), builder))
+    }
+
+    fn post_exec_builder_for_next_block<'a, DB: Database + 'a>(
+        &'a self,
+        db: &'a mut revm::database::State<DB>,
+        parent: &'a SealedHeader<<Self::Primitives as NodePrimitives>::BlockHeader>,
+        attributes: Self::NextBlockEnvCtx,
+        post_exec_mode: PostExecMode,
+    ) -> Result<
+        impl BlockBuilder<
+            Primitives = Self::Primitives,
+            Executor: PostExecExecutorExt
+                          + BlockExecutor<
+                Evm: alloy_evm::Evm<DB: core::ops::DerefMut<Target = revm::database::State<DB>>>,
+            >,
+        > + 'a,
+        Self::Error,
+    > {
+        let evm_env = self.next_evm_env(parent, &attributes)?;
+        // The normal payload service and debug_executePayload's witness builder use this method,
+        // even with PostExecMode::Disabled. Enable the blocklist like `builder_for_next_block`
+        // on this release branch, and receipt storage like `create_executor`.
+        let evm =
+            self.evm_with_env(db, evm_env).with_blocklist_enabled().with_cip64_store_enabled();
+        let ctx =
+            self.context_for_next_block_with_post_exec_mode(parent, attributes, post_exec_mode);
+        let builder = R::from(evm.cip64_storage().clone());
+        let executor =
+            OpBlockExecutor::new(evm, ctx.clone(), self.executor_factory.spec(), builder);
+
+        let builder = BasicBlockBuilder::<'a, CeloBlockExecutorFactory<R, Arc<ChainSpec>>, _, _, N> {
+            executor,
+            transactions: alloc::vec::Vec::new(),
+            ctx,
+            parent,
+            assembler: self.block_assembler(),
+        };
+        // Same sequencing-side instrumentation as `builder_for_next_block`; see there for the
+        // std-only rationale.
+        #[cfg(feature = "std")]
+        let builder = crate::payload_metrics::PayloadMetricsBlockBuilder::new(builder);
+        Ok(builder)
+    }
+}
+
+#[cfg(feature = "std")]
+impl<ChainSpec, N, R> ConfigureEngineEvm<OpExecData> for CeloEvmConfig<ChainSpec, N, R>
+where
+    ChainSpec: EthChainSpec<Header = Header> + OpHardforks,
+    N: NodePrimitives<
+            Receipt = R::Receipt,
+            SignedTx = R::Transaction,
+            BlockHeader = Header,
+            BlockBody = alloy_consensus::BlockBody<R::Transaction>,
+            Block = alloy_consensus::Block<R::Transaction>,
+        >,
+    R: From<alloy_celo_evm::cip64_storage::Cip64Storage>
+        + OpReceiptBuilder<
+            Receipt: DepositReceipt,
+            Transaction: SignedTransaction
+                             + alloy_consensus::Transaction
+                             + op_alloy_consensus::OpTransaction,
+        > + Send
+        + Sync
+        + 'static,
+    celo_revm::CeloTransaction<revm::context::TxEnv>:
+        FromRecoveredTx<R::Transaction> + FromTxWithEncoded<R::Transaction>,
+    Self: Send + Sync + Unpin + Clone + 'static,
+{
+    fn evm_env_for_payload(&self, payload: &OpExecData) -> Result<EvmEnvFor<Self>, Self::Error> {
+        use alloy_primitives::U256;
+        use revm::{
+            context::{BlockEnv, CfgEnv},
+            context_interface::block::BlobExcessGasAndPrice,
+            primitives::hardfork::SpecId,
+        };
+
+        let timestamp = payload.payload.timestamp();
+        let spec =
+            reth_optimism_evm::revm_spec_by_timestamp_after_bedrock(self.chain_spec(), timestamp);
+
+        let cfg_env = CfgEnv::new()
+            .with_chain_id(self.chain_spec().chain().id())
+            .with_spec_and_mainnet_gas_params(spec);
+
+        let blob_excess_gas_and_price = spec
+            .into_eth_spec()
+            .is_enabled_in(SpecId::CANCUN)
+            .then_some(BlobExcessGasAndPrice { excess_blob_gas: 0, blob_gasprice: 1 });
+
+        let block_env = BlockEnv {
+            number: U256::from(payload.payload.block_number()),
+            beneficiary: payload.payload.as_v1().fee_recipient,
+            timestamp: U256::from(timestamp),
+            difficulty: if spec.into_eth_spec() >= SpecId::MERGE {
+                U256::ZERO
+            } else {
+                payload.payload.as_v1().prev_randao.into()
+            },
+            prevrandao: (spec.into_eth_spec() >= SpecId::MERGE)
+                .then(|| payload.payload.as_v1().prev_randao),
+            gas_limit: payload.payload.as_v1().gas_limit,
+            basefee: payload.payload.as_v1().base_fee_per_gas.to(),
+            blob_excess_gas_and_price,
+            slot_num: 0,
+        };
+
+        Ok(alloy_evm::EvmEnv { cfg_env, block_env })
+    }
+
+    fn context_for_payload<'a>(
+        &self,
+        payload: &'a OpExecData,
+    ) -> Result<ExecutionCtxFor<'a, Self>, Self::Error> {
+        Ok(OpBlockExecutionCtx {
+            parent_hash: payload.parent_hash(),
+            parent_beacon_block_root: payload.sidecar.parent_beacon_block_root(),
+            extra_data: payload.payload.as_v1().extra_data.clone(),
+            post_exec_mode: PostExecMode::default(),
+        })
+    }
+
+    fn tx_iterator_for_payload(
+        &self,
+        payload: &OpExecData,
+    ) -> Result<impl ExecutableTxIterator<Self>, Self::Error> {
+        use alloy_primitives::Bytes;
+        use reth_primitives_traits::WithEncoded;
+        use reth_storage_errors::any::AnyError;
+
+        let transactions = payload.payload.transactions().clone();
+        let convert = |encoded: Bytes| {
+            let tx = <TxTy<Self::Primitives> as alloy_eips::Decodable2718>::decode_2718_exact(
+                encoded.as_ref(),
+            )
+            .map_err(AnyError::new)?;
+            let signer = tx.try_recover().map_err(AnyError::new)?;
+            Ok::<_, AnyError>(WithEncoded::new(encoded, tx.with_signer(signer)))
+        };
+
+        Ok((transactions, convert))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_consensus::Header;
+    use reth_optimism_chainspec::OpChainSpecBuilder;
+
+    /// Helper: build a pre-Jovian chain spec (Granite activated at genesis,
+    /// pre-Holocene so standard EIP-1559 base fee computation is used).
+    fn pre_jovian_chain_spec() -> Arc<reth_optimism_chainspec::OpChainSpec> {
+        Arc::new(
+            OpChainSpecBuilder::default()
+                .chain(reth_chainspec::Chain::from_id(42220))
+                .genesis(Default::default())
+                .granite_activated()
+                .build(),
+        )
+    }
+
+    /// Helper: build a post-Jovian chain spec (Jovian activated at genesis).
+    fn jovian_chain_spec() -> Arc<reth_optimism_chainspec::OpChainSpec> {
+        Arc::new(
+            OpChainSpecBuilder::default()
+                .chain(reth_chainspec::Chain::from_id(42220))
+                .genesis(Default::default())
+                .jovian_activated()
+                .build(),
+        )
+    }
+
+    mod caller_gas_allowance {
+        use super::*;
+        use alloy_primitives::{Address, Bytes, hex};
+        use celo_revm::CeloTransaction;
+        use core::convert::Infallible;
+        use op_revm::OpTransaction;
+        use revm::{
+            context::TxEnv,
+            database::InMemoryDB,
+            state::{AccountInfo, Bytecode},
+        };
+
+        const CALLER: Address = Address::with_last_byte(0xCA);
+        const TOKEN: Address = Address::with_last_byte(0x70);
+        const GAS_PRICE: u128 = 10;
+
+        /// Stand-in for `balanceOf`: answers every call with storage slot 0.
+        const SLOT0_RETURNER: &[u8] = &hex!("60005460005260206000f3");
+
+        fn db(native_balance: U256, fee_balance: Option<U256>) -> InMemoryDB {
+            let mut db = InMemoryDB::default();
+            db.insert_account_info(
+                CALLER,
+                AccountInfo { balance: native_balance, ..Default::default() },
+            );
+            if let Some(fee_balance) = fee_balance {
+                let code = Bytecode::new_raw(Bytes::from_static(SLOT0_RETURNER));
+                db.insert_account_info(
+                    TOKEN,
+                    AccountInfo {
+                        code_hash: code.hash_slow(),
+                        code: Some(code),
+                        ..Default::default()
+                    },
+                );
+                db.insert_account_storage(TOKEN, U256::ZERO, fee_balance).unwrap();
+            }
+            db
+        }
+
+        fn tx_env(fee_currency: Option<Address>, value: U256) -> CeloTransaction<TxEnv> {
+            let mut tx = CeloTransaction::new(OpTransaction {
+                base: TxEnv { caller: CALLER, gas_price: GAS_PRICE, value, ..Default::default() },
+                enveloped_tx: Some(Bytes::new()),
+                deposit: Default::default(),
+            });
+            tx.fee_currency = fee_currency;
+            tx
+        }
+
+        fn allowance(
+            db: &mut InMemoryDB,
+            tx: &CeloTransaction<TxEnv>,
+        ) -> Result<u64, CallerGasAllowanceError<Infallible>> {
+            CeloEvmConfig::celo(pre_jovian_chain_spec()).caller_gas_allowance(
+                db,
+                &EvmEnv::default(),
+                tx,
+            )
+        }
+
+        #[test]
+        fn native_request_divides_native_balance_less_value() {
+            let mut db = db(U256::from(1_000), None);
+            assert_eq!(allowance(&mut db, &tx_env(None, U256::from(100))).unwrap(), 90);
+        }
+
+        /// The fee is paid in the currency, so a caller without any CELO is fine.
+        #[test]
+        fn cip64_request_divides_fee_currency_balance() {
+            let mut db = db(U256::ZERO, Some(U256::from(5_000)));
+            assert_eq!(allowance(&mut db, &tx_env(Some(TOKEN), U256::ZERO)).unwrap(), 500);
+        }
+
+        #[test]
+        fn cip64_value_must_fit_the_native_balance() {
+            let mut db = db(U256::from(50), Some(U256::from(5_000)));
+            let err = allowance(&mut db, &tx_env(Some(TOKEN), U256::from(100))).unwrap_err();
+            assert!(matches!(
+                err,
+                CallerGasAllowanceError::InsufficientFunds { cost, balance }
+                    if cost == U256::from(100) && balance == U256::from(50)
+            ));
+        }
+
+        #[test]
+        fn cip64_value_is_not_taken_from_the_fee_balance() {
+            let mut db = db(U256::from(1_000), Some(U256::from(5_000)));
+            assert_eq!(allowance(&mut db, &tx_env(Some(TOKEN), U256::from(100))).unwrap(), 500);
+        }
+
+        /// No code at the token, so `balanceOf` yields nothing to decode. The error names the
+        /// token and the caller and does not guess at why the read failed.
+        #[test]
+        fn cip64_unreadable_fee_balance_is_an_error_naming_the_token() {
+            let mut db = db(U256::ZERO, None);
+            let err = allowance(&mut db, &tx_env(Some(TOKEN), U256::ZERO)).unwrap_err();
+            assert!(
+                matches!(&err, CallerGasAllowanceError::FeeBalance(msg)
+                    if msg.contains(&format!("{TOKEN}")) && msg.contains(&format!("{CALLER}"))),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn base_fee_returned_without_floor_post_jovian() {
+        use alloy_primitives::B64;
+        use op_alloy_consensus::encode_jovian_extra_data;
+        use reth_chainspec::BaseFeeParams;
+
+        let cs = jovian_chain_spec();
+        // Jovian requires encoded extra_data: use chain defaults (zero params) with
+        // min_base_fee = 0 so the floor doesn't interfere.
+        let extra_data = encode_jovian_extra_data(
+            B64::ZERO,
+            BaseFeeParams::ethereum(),
+            0, // min_base_fee
+        )
+        .unwrap();
+        // Parent header with base fee = 7 wei, 50% utilization.
+        // EIP-1559 at 50% yields the same base fee (7).
+        // Post-Jovian, the 25 Gwei floor is NOT applied.
+        let parent = Header {
+            base_fee_per_gas: Some(7),
+            gas_limit: 30_000_000,
+            gas_used: 15_000_000,
+            timestamp: 10,
+            extra_data,
+            ..Default::default()
+        };
+        let result = celo_next_block_base_fee(&cs, &parent, 12);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 7, "Post-Jovian should not clamp to the base fee floor");
+    }
+
+    #[test]
+    fn base_fee_floor_applied_pre_jovian() {
+        let cs = pre_jovian_chain_spec();
+        // Parent header with base fee = 7 wei, gas limit 30M, gas used 15M (50%).
+        // EIP-1559 formula at 50% utilization yields the same base fee.
+        // The floor should bump it to 25 Gwei.
+        let parent = Header {
+            base_fee_per_gas: Some(7),
+            gas_limit: 30_000_000,
+            gas_used: 15_000_000,
+            timestamp: 10,
+            ..Default::default()
+        };
+        let result = celo_next_block_base_fee(&cs, &parent, 12);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), CELO_BASE_FEE_FLOOR);
+    }
+
+    #[test]
+    fn base_fee_above_floor_unchanged_pre_jovian() {
+        let cs = pre_jovian_chain_spec();
+        // Parent with base fee well above the floor (50 Gwei), 50% utilization.
+        let parent = Header {
+            base_fee_per_gas: Some(50_000_000_000),
+            gas_limit: 30_000_000,
+            gas_used: 15_000_000,
+            timestamp: 10,
+            ..Default::default()
+        };
+        let result = celo_next_block_base_fee(&cs, &parent, 12).unwrap();
+        // At 50% utilization, EIP-1559 keeps base fee the same.
+        assert_eq!(result, 50_000_000_000);
+    }
+
+    /// Regression: at the Jovian activation boundary, the floor must be decided by the
+    /// *new* block's timestamp, not the parent's. The first Jovian block should NOT
+    /// have the 25 Gwei floor applied even though its parent is pre-Jovian.
+    #[test]
+    fn jovian_activation_boundary_no_floor() {
+        use alloy_primitives::B64;
+        use op_alloy_consensus::encode_holocene_extra_data;
+        use reth_chainspec::{BaseFeeParams, ForkCondition};
+        use reth_optimism_forks::OpHardfork;
+
+        // Chain spec where Jovian activates at timestamp 100.
+        let cs = Arc::new(
+            OpChainSpecBuilder::default()
+                .chain(reth_chainspec::Chain::from_id(42220))
+                .genesis(Default::default())
+                .isthmus_activated()
+                .with_fork(OpHardfork::Jovian, ForkCondition::Timestamp(100))
+                .build(),
+        );
+
+        // Parent at timestamp 99 (pre-Jovian, Holocene-active) with Holocene-encoded
+        // extra_data (9 bytes, version 0). Use low base fee (7 wei) that would be
+        // clamped by the 25 Gwei floor.
+        let extra_data = encode_holocene_extra_data(B64::ZERO, BaseFeeParams::ethereum()).unwrap();
+        let parent = Header {
+            base_fee_per_gas: Some(7),
+            gas_limit: 30_000_000,
+            gas_used: 15_000_000,
+            timestamp: 99,
+            extra_data,
+            ..Default::default()
+        };
+
+        // New block at timestamp 100 (first Jovian block): floor should NOT apply.
+        let result = celo_next_block_base_fee(&cs, &parent, 100);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 7, "First Jovian block should not apply the 25 Gwei floor");
+
+        // Sanity: a block at timestamp 99 (still pre-Jovian) SHOULD get the floor.
+        let result_pre = celo_next_block_base_fee(&cs, &parent, 99);
+        assert!(result_pre.is_some());
+        assert_eq!(result_pre.unwrap(), CELO_BASE_FEE_FLOOR);
+    }
+
+    #[test]
+    fn base_fee_floor_clamps_low_computed_fee() {
+        let cs = pre_jovian_chain_spec();
+        // Parent with base fee = 1 Gwei, empty block (gas_used = 0).
+        // EIP-1559 with empty block would lower base fee, but floor should clamp.
+        let parent = Header {
+            base_fee_per_gas: Some(1_000_000_000),
+            gas_limit: 30_000_000,
+            gas_used: 0,
+            timestamp: 10,
+            ..Default::default()
+        };
+        let result = celo_next_block_base_fee(&cs, &parent, 12).unwrap();
+        assert_eq!(result, CELO_BASE_FEE_FLOOR, "Low base fee should be clamped to floor");
+    }
+}

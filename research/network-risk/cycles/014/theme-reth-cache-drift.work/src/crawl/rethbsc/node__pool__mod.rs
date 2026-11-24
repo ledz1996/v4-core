@@ -1,0 +1,224 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
+use alloy_consensus::{BlockHeader, Transaction};
+use alloy_eips::merge::EPOCH_SLOTS;
+use reth::api::FullNodeTypes;
+use reth::api::{NodePrimitives, NodeTypes};
+use reth::builder::{
+    components::{create_blob_store_with_cache, PoolBuilder, TxPoolBuilder},
+    BuilderContext,
+};
+use reth_chainspec::{EthChainSpec, EthereumHardforks, ForkCondition, Hardforks};
+use reth_ethereum_primitives::TransactionSigned as EthTxSigned;
+use reth_evm::ConfigureEvm;
+use reth_payload_primitives::PayloadTypes;
+use reth_primitives_traits::SignedTransaction;
+use reth_primitives_traits::constants::MAX_TX_GAS_LIMIT_OSAKA;
+use reth_transaction_pool::{
+    blobstore::DiskFileBlobStore, error::InvalidPoolTransactionError, PoolTransaction,
+    TransactionOrigin, TransactionValidationOutcome, TransactionValidationTaskExecutor,
+    TransactionValidator,
+};
+use reth_transaction_pool::{
+    CoinbaseTipOrdering, EthPooledTransaction, EthTransactionValidator, Pool,
+};
+
+use crate::evm::blacklist::{self, BlacklistedAddressError};
+use crate::hardforks::bsc::BscHardfork;
+
+pub(crate) mod tip;
+use crate::node::evm::config::EIP1559_INITIAL_BASE_FEE;
+use tip::{current_tip_floor, meets_tip_floor};
+
+/// A blacklisted transaction is a bad transaction, so the peer that sent it is penalized.
+impl reth_transaction_pool::error::PoolTransactionError for BlacklistedAddressError {
+    fn is_bad_transaction(&self) -> bool {
+        true
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// BSC transaction validator: adds blacklist validation and Osaka gas limit check
+/// to the default Ethereum transaction validator.
+///
+/// EthereumHardfork::Osaka is blocked in BscChainSpec to prevent EIP-7594 sidecar conversion,
+/// so the upstream pool validator's Osaka gas limit check never fires. This validator
+/// compensates by tracking BscHardfork::Osaka activation independently.
+#[derive(Debug, Clone)]
+pub struct BscTxValidator<V> {
+    inner: Arc<V>,
+    osaka_activated: Arc<AtomicBool>,
+    osaka_timestamp: Option<u64>,
+}
+
+impl<V> BscTxValidator<V> {
+    pub fn new(inner: V, osaka_activated: bool, osaka_timestamp: Option<u64>) -> Self {
+        Self {
+            inner: Arc::new(inner),
+            osaka_activated: Arc::new(AtomicBool::new(osaka_activated)),
+            osaka_timestamp,
+        }
+    }
+}
+
+impl<V> TransactionValidator for BscTxValidator<V>
+where
+    V: TransactionValidator + Send + Sync + 'static,
+{
+    type Transaction = <V as TransactionValidator>::Transaction;
+    type Block = <V as TransactionValidator>::Block;
+
+    async fn validate_transaction(
+        &self,
+        origin: TransactionOrigin,
+        transaction: Self::Transaction,
+    ) -> TransactionValidationOutcome<Self::Transaction> {
+        if blacklist::check_tx_basic_blacklist(transaction.sender(), transaction.to()) {
+            tracing::debug!(target: "bsc::txpool", "Blacklisted transaction: {:?}", transaction.hash());
+            return TransactionValidationOutcome::Invalid(
+                transaction,
+                InvalidPoolTransactionError::other(BlacklistedAddressError()),
+            );
+        }
+
+        if self.osaka_activated.load(Ordering::Relaxed)
+            && transaction.gas_limit() > MAX_TX_GAS_LIMIT_OSAKA
+        {
+            return TransactionValidationOutcome::Invalid(
+                transaction,
+                reth_primitives_traits::transaction::error::InvalidTransactionError::GasLimitTooHigh
+                    .into(),
+            );
+        }
+
+        // Check miner gas price floor (set by miner_setGasPrice RPC).
+        // Reject transactions whose effective tip is below the miner's configured minimum.
+        if !meets_tip_floor(
+            transaction.effective_tip_per_gas(EIP1559_INITIAL_BASE_FEE),
+            current_tip_floor(),
+        ) {
+            return TransactionValidationOutcome::Invalid(
+                transaction,
+                InvalidPoolTransactionError::Underpriced,
+            );
+        }
+
+        // Delegate to internal validator
+        self.inner.validate_transaction(origin, transaction).await
+    }
+
+    fn on_new_head_block(&self, new_tip_block: &reth_primitives_traits::SealedBlock<Self::Block>) {
+        if let Some(osaka_ts) = self.osaka_timestamp {
+            self.osaka_activated.store(
+                new_tip_block.header().timestamp() >= osaka_ts,
+                Ordering::Relaxed,
+            );
+        }
+        self.inner.on_new_head_block(new_tip_block)
+    }
+}
+
+/// BSC custom transaction pool builder: add blacklist validation to the default Ethereum pool builder.
+#[derive(Debug, Default, Clone, Copy)]
+#[non_exhaustive]
+pub struct BscPoolBuilder;
+
+impl<Types, Node, Evm> PoolBuilder<Node, Evm> for BscPoolBuilder
+where
+    Node: FullNodeTypes<Types = Types>,
+    Types: NodeTypes<
+        ChainSpec: EthChainSpec + EthereumHardforks + Hardforks,
+        Primitives: NodePrimitives<SignedTx = EthTxSigned>,
+    >,
+    <Types as NodeTypes>::Primitives: NodePrimitives<SignedTx: SignedTransaction>,
+    <Types as NodeTypes>::Payload: PayloadTypes,
+    EthPooledTransaction<EthTxSigned>: reth_transaction_pool::EthPoolTransaction,
+    EthPooledTransaction<EthTxSigned>: PoolTransaction,
+    Evm: ConfigureEvm<
+            Primitives: NodePrimitives<
+                BlockHeader = <<Types as NodeTypes>::Primitives as NodePrimitives>::BlockHeader,
+                Block = <<Types as NodeTypes>::Primitives as NodePrimitives>::Block,
+            >,
+        > + Clone + Send + Sync + 'static,
+{
+    type Pool = Pool<
+        TransactionValidationTaskExecutor<
+            BscTxValidator<EthTransactionValidator<Node::Provider, EthPooledTransaction, Evm>>,
+        >,
+        CoinbaseTipOrdering<EthPooledTransaction>,
+        DiskFileBlobStore,
+    >;
+
+    async fn build_pool(self, ctx: &BuilderContext<Node>, evm_config: Evm) -> eyre::Result<Self::Pool> {
+        // Disable the upstream protocol base fee check (MIN_PROTOCOL_BASE_FEE = 7 wei)
+        // because BSC handles min gas price dynamically via miner_setGasPrice RPC
+        // and enforces it in BscTxValidator instead.
+        let mut pool_config = ctx.pool_config().with_disabled_protocol_base_fee();
+        // Block bodies share this store; leaving the pool does not make a blob disposable.
+        pool_config.retain_blobs_on_discard = true;
+
+        // Same as upstream: derive blob cache size based on time
+        let blob_cache_size = if let Some(blob_cache_size) = pool_config.blob_cache_size {
+            Some(blob_cache_size)
+        } else {
+            use alloy_eips::eip7840::BlobParams;
+            use std::time::SystemTime;
+
+            let current_timestamp =
+                SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
+            let blob_params = ctx
+                .chain_spec()
+                .blob_params_at_timestamp(current_timestamp)
+                .unwrap_or_else(BlobParams::cancun);
+            Some((blob_params.target_blob_count * EPOCH_SLOTS * 2) as u32)
+        };
+
+        let blob_store = create_blob_store_with_cache(ctx, blob_cache_size)?;
+
+        // Register blob store globally so the block-body serving path can
+        // look up blob sidecars by tx hash (for GetBlockBodies responses).
+        crate::shared::set_global_blob_store(std::sync::Arc::new(blob_store.clone()));
+
+        // Build default Ethereum validator executor
+        // BSC rejected EIP-7594 (PeerDAS), so we disable EIP-7594 sidecar support to always
+        // use v0 (legacy) blob sidecars and reject v1 (EIP-7594) sidecars.
+        let validator = TransactionValidationTaskExecutor::eth_builder(ctx.provider().clone(), evm_config)
+            .with_max_tx_input_bytes(ctx.config().txpool.max_tx_input_bytes)
+            .kzg_settings(ctx.kzg_settings()?)
+            .with_local_transactions_config(pool_config.local_transactions_config.clone())
+            .set_tx_fee_cap(ctx.config().rpc.rpc_tx_fee_cap)
+            .with_max_tx_gas_limit(ctx.config().txpool.max_tx_gas_limit)
+            .with_minimum_priority_fee(ctx.config().txpool.minimum_priority_fee)
+            .with_additional_tasks(ctx.config().txpool.additional_validation_tasks)
+            .no_eip7594()
+            .build_with_tasks(ctx.task_executor().clone(), blob_store.clone());
+
+        // Determine BscHardfork::Osaka activation for pool-level gas limit check.
+        // EthereumHardfork::Osaka is blocked in BscChainSpec to prevent EIP-7594
+        // sidecar conversion, so the upstream validator's Osaka check never fires.
+        let osaka_timestamp = match ctx.chain_spec().fork(BscHardfork::Osaka) {
+            ForkCondition::Timestamp(ts) => Some(ts),
+            _ => None,
+        };
+        let osaka_activated = osaka_timestamp
+            .is_some_and(|ts| ctx.head().timestamp >= ts);
+
+        let validator = validator.map(|v| BscTxValidator::new(v, osaka_activated, osaka_timestamp));
+
+        // Build txpool and start maintenance task
+        let transaction_pool = TxPoolBuilder::new(ctx)
+            .with_validator(validator)
+            .build_and_spawn_maintenance_task(blob_store, pool_config)?;
+
+        tracing::info!(target: "bsc::txpool", "Transaction pool with blacklist validation initialized");
+        Ok(transaction_pool)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests;

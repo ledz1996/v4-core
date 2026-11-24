@@ -1,0 +1,826 @@
+use std::collections::{BTreeMap, HashMap};
+
+use super::vote::{VoteAddress, VoteAttestation, VoteData};
+use crate::metrics::BscVoteMetrics;
+use alloy_primitives::{Address, BlockHash, BlockNumber};
+use once_cell::sync::Lazy;
+use reth_codecs::{Compress, Decompress, DecompressError};
+use serde::{Deserialize, Serialize};
+
+/// Number of blocks after which we persist snapshots to DB.
+pub const CHECKPOINT_INTERVAL: u64 = 1024;
+
+// ---------------------------------------------------------------------------
+// Hard-fork constants (kept in sync with bsc_official/parlia.go)
+// ---------------------------------------------------------------------------
+
+/// Default settings prior to Lorentz.
+pub const DEFAULT_EPOCH_LENGTH: u64 = 200;
+pub const DEFAULT_TURN_LENGTH: u8 = 1;
+
+/// Lorentz hard-fork parameters.
+pub const LORENTZ_EPOCH_LENGTH: u64 = 500;
+pub const LORENTZ_TURN_LENGTH: u8 = 8;
+
+/// Maxwell hard-fork parameters.
+pub const MAXWELL_EPOCH_LENGTH: u64 = 1000;
+pub const MAXWELL_TURN_LENGTH: u8 = 16;
+
+pub const DEFAULT_BLOCK_INTERVAL: u64 = 3000;   // 3000 ms
+pub const LORENTZ_BLOCK_INTERVAL: u64 = 1500;   // 1500 ms
+pub const MAXWELL_BLOCK_INTERVAL: u64 = 750;    //  750 ms
+pub const FERMI_BLOCK_INTERVAL: u64 = 450;      //  450 ms
+
+/// Global metrics for vote attestation operations.
+static VOTE_METRICS: Lazy<BscVoteMetrics> = Lazy::new(BscVoteMetrics::default);
+
+/// `ValidatorInfo` holds metadata for a validator at a given epoch.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub struct ValidatorInfo {
+    /// 1-based index (offset by +1) within `validators` list.
+    pub index: u64,
+    /// Validator's BLS vote address (optional before Bohr upgrade; zero bytes if unknown).
+    pub vote_addr: VoteAddress,
+}
+
+/// In-memory snapshot of Parlia epoch state.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    /// Current epoch length. (200 for legacy, changes after Bohr).
+    pub epoch_num: u64,
+    /// Block number of the epoch boundary.
+    pub block_number: BlockNumber,
+    /// Hash of that block.
+    pub block_hash: BlockHash,
+    /// Sorted validator set (ascending by address).
+    pub validators: Vec<Address>,
+    /// Extra information about validators (index + vote addr).
+    pub validators_map: HashMap<Address, ValidatorInfo>,
+    /// Map of recent proposers: block → proposer address.
+    pub recent_proposers: BTreeMap<BlockNumber, Address>,
+    /// Latest vote data attested by the validator set.
+    pub vote_data: VoteData,
+    /// Configurable turn-length (default = 1 before Bohr).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_length: Option<u8>,
+
+    /// Expected block interval in milliseconds.
+    pub block_interval: u64,
+
+    /// Recent fork hashes extracted from block headers' extra data (bytes 28..32 of vanity).
+    #[serde(default)]
+    pub recent_fork_hashes: BTreeMap<BlockNumber, String>,
+}
+
+impl Snapshot {
+    /// Creates a new empty snapshot with given validators.
+    /// Create a brand-new snapshot at an epoch boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        mut validators: Vec<Address>,
+        block_number: BlockNumber,
+        block_hash: BlockHash,
+        epoch_num: u64,
+        vote_addrs: Option<Vec<VoteAddress>>, // one-to-one with `validators`
+    ) -> Self {
+        // Ensure epoch_num is never zero to prevent division by zero errors
+        let epoch_num = if epoch_num == 0 { DEFAULT_EPOCH_LENGTH } else { epoch_num };
+        let mut validators_map = HashMap::new();
+        if let Some(vote_addrs) = vote_addrs {
+            assert_eq!(
+                validators.len(),
+                vote_addrs.len(),
+                "validators and vote_addrs length not equal",
+            );
+
+            // Step 1: Build mapping with original order to maintain validator->vote_addr correspondence
+            for (i, v) in validators.iter().enumerate() {
+                let info = ValidatorInfo { 
+                    index: 0,  // Will be set after sorting
+                    vote_addr: vote_addrs[i] 
+                };
+                validators_map.insert(*v, info);
+            }
+
+            // Step 2: Sort validators
+            validators.sort();
+
+            // Step 3: Set index based on sorted position
+            for (i, v) in validators.iter().enumerate() {
+                if let Some(info) = validators_map.get_mut(v) {
+                    info.index = i as u64 + 1;
+                }
+            }
+        } else {
+            // Pre-Bohr, vote addresses are unknown.
+            // Sort first, then create map with indices
+            validators.sort();
+            for (i, v) in validators.iter().enumerate() {
+                let info = ValidatorInfo {
+                    index: i as u64 + 1,
+                    vote_addr: VoteAddress::ZERO,
+                };
+                validators_map.insert(*v, info);
+            }
+        }
+
+        Self {
+            epoch_num,
+            block_number,
+            block_hash,
+            validators,
+            validators_map,
+            recent_proposers: Default::default(),
+            vote_data: Default::default(),
+            turn_length: Some(DEFAULT_TURN_LENGTH),
+            block_interval: DEFAULT_BLOCK_INTERVAL,
+            recent_fork_hashes: Default::default(),
+        }
+    }
+
+    /// Apply the next block to the snapshot
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply<H, ChainSpec>(
+        &self,
+        validator: Address,
+        next_header: &H,
+        mut new_validators: Vec<Address>,
+        vote_addrs: Option<Vec<VoteAddress>>,
+        attestation: Option<VoteAttestation>,
+        turn_length: Option<u8>,
+        chain_spec: &ChainSpec,
+    ) -> Option<Self>
+    where
+        H: alloy_consensus::BlockHeader + alloy_primitives::Sealable,
+        ChainSpec: crate::hardforks::BscHardforks,
+    {
+        let block_number = next_header.number();
+        if self.block_number + 1 != block_number || self.block_hash != next_header.parent_hash() {
+            return None; // non-continuous block
+        }
+
+        // Clone base.
+        let original_snap = self.clone();
+        let mut snap = self.clone();
+        snap.block_hash = next_header.hash_slow();
+        snap.block_number = block_number;
+
+        // Maintain recent proposer window.
+        let limit = self.miner_history_check_len() + 1;
+        if block_number >= limit {
+            snap.recent_proposers.remove(&(block_number - limit));
+        }
+
+        // Maintain recent fork hash window.
+        let version_limit = self.version_history_check_len();
+        if block_number >= version_limit {
+            snap.recent_fork_hashes.remove(&(block_number - version_limit));
+        }
+
+        // Extract fork hash from header extra data bytes [28..32] (last 4 bytes of vanity).
+        let extra = next_header.extra_data();
+        if extra.len() >= super::constants::EXTRA_VANITY_LEN {
+            let fork_hash = hex::encode(
+                &extra[super::constants::EXTRA_VANITY_LEN - 4..super::constants::EXTRA_VANITY_LEN],
+            );
+            snap.recent_fork_hashes.insert(block_number, fork_hash);
+        }
+
+        // Validate proposer belongs to validator set and hasn't over-proposed.
+        if !snap.validators.contains(&validator) {
+            return None;
+        }
+
+        let header_timestamp = next_header.timestamp();
+        let header_number = next_header.number();
+        let is_bohr = chain_spec.is_bohr_active_at_timestamp(header_number, header_timestamp);
+        if is_bohr {
+            if snap.sign_recently(validator) {
+                tracing::warn!("Failed to apply block due to over-proposed, validator: {:?}, block_number: {:?}", validator, block_number);
+                return None;
+            }
+        } else {
+            for &v in snap.recent_proposers.values() {
+                if v == validator {
+                    tracing::warn!("Failed to apply block due to over-proposed, validator: {:?}, block_number: {:?}", validator, block_number);
+                    return None;
+                }
+            }
+        }
+        snap.update_attestation(chain_spec, next_header, attestation);
+        snap.recent_proposers.insert(block_number, validator);
+
+        let is_maxwell_active =
+            chain_spec.is_maxwell_active_at_timestamp(header_number, header_timestamp);
+        if is_maxwell_active {
+            let latest_finalized_block_number = snap.get_finalized_number();
+            // BEP-524: Clear entries up to the latest finalized block
+            let blocks_to_remove: Vec<u64> = snap
+                .recent_proposers
+                .keys()
+                .filter(|&&block_number| block_number <= latest_finalized_block_number)
+                .copied()
+                .collect();
+            for block_number in blocks_to_remove {
+                snap.recent_proposers.remove(&block_number);
+            }
+        }
+
+        let is_lorentz_active =
+            chain_spec.is_lorentz_active_at_timestamp(header_number, header_timestamp);
+        let is_fermi_active =
+            chain_spec.is_fermi_active_at_timestamp(header_number, header_timestamp);
+        if is_fermi_active {
+            snap.block_interval = FERMI_BLOCK_INTERVAL;
+        } else if is_maxwell_active {
+            snap.block_interval = MAXWELL_BLOCK_INTERVAL;
+        } else if is_lorentz_active {
+            snap.block_interval = LORENTZ_BLOCK_INTERVAL;
+        }
+
+        let epoch_length = snap.epoch_num;
+        let next_block_number = block_number + 1;
+        if snap.epoch_num == DEFAULT_EPOCH_LENGTH
+            && is_lorentz_active
+            && next_block_number.is_multiple_of(LORENTZ_EPOCH_LENGTH)
+        {
+            snap.epoch_num = LORENTZ_EPOCH_LENGTH;
+        }
+        if snap.epoch_num == LORENTZ_EPOCH_LENGTH
+            && is_maxwell_active
+            && next_block_number.is_multiple_of(MAXWELL_EPOCH_LENGTH)
+        {
+            snap.epoch_num = MAXWELL_EPOCH_LENGTH;
+        }
+
+        // change validator set
+        let epoch_key = u64::MAX - block_number / epoch_length;
+        if !new_validators.is_empty()
+            && (!is_bohr || !snap.recent_proposers.contains_key(&epoch_key))
+        {
+            // Epoch change driven by new validator set / checkpoint header.
+            if let Some(tl) = turn_length { snap.turn_length = Some(tl) }
+
+            if is_bohr {
+                // BEP-404: Clear Miner History when Switching Validators Set
+                snap.recent_proposers = Default::default();
+                snap.recent_proposers.insert(epoch_key, Address::default());
+            } else {
+                let old_limit = snap.validators.len() / 2 + 1;
+                let new_limit = new_validators.len() / 2 + 1;
+                if new_limit < old_limit {
+                    for i in 0..(old_limit - new_limit) {
+                        snap.recent_proposers.remove(&(block_number - new_limit as u64 - i as u64));
+                    }
+                }
+            }
+
+            // Build new validators map.
+            let mut validators_map = HashMap::new();
+            if let Some(vote_addrs) = vote_addrs {
+                assert_eq!(
+                    new_validators.len(),
+                    vote_addrs.len(),
+                    "validators and vote_addrs length not equal",
+                );
+
+                // Step 1: Build mapping with original order to maintain validator->vote_addr correspondence
+                for (i, v) in new_validators.iter().enumerate() {
+                    validators_map.insert(*v, ValidatorInfo { 
+                        index: 0,  // Will be set after sorting
+                        vote_addr: vote_addrs[i] 
+                    });
+                }
+
+                // Step 2: Sort validators
+                new_validators.sort();
+
+                // Step 3: Set index based on sorted position
+                for (i, v) in new_validators.iter().enumerate() {
+                    if let Some(info) = validators_map.get_mut(v) {
+                        info.index = i as u64 + 1;
+                    }
+                }
+            } else {
+                // Pre-Luban: no vote addresses, just sort and create default entries
+                new_validators.sort();
+                for (i, v) in new_validators.iter().enumerate() {
+                    validators_map.insert(*v, ValidatorInfo {
+                        index: i as u64 + 1,
+                        vote_addr: VoteAddress::ZERO,
+                    });
+                }
+            }
+            // Clean up fork hashes that exceed the new window after validator set change
+            let old_version_len = original_snap.version_history_check_len();
+            let new_version_len = snap.version_history_check_len();
+            if new_version_len < old_version_len {
+                for i in new_version_len..old_version_len {
+                    snap.recent_fork_hashes.remove(&(block_number.saturating_sub(i)));
+                }
+            }
+
+            snap.validators = new_validators;
+            snap.validators_map = validators_map;
+        }
+        tracing::trace!(
+            "Succeed to apply snapshot, block_number: {:?}, original_snap: {:?}, new_snap: {:?}",
+            block_number,
+            original_snap,
+            snap
+        );
+        Some(snap)
+    }
+
+    pub fn update_attestation<H, BscChainSpec>(
+        &mut self,
+        chain_spec: &BscChainSpec,
+        header: &H,
+        attestation: Option<VoteAttestation>,
+    ) where
+        H: alloy_consensus::BlockHeader + alloy_primitives::Sealable,
+        BscChainSpec: crate::hardforks::BscHardforks,
+    {
+        if let Some(att) = attestation {
+            if !chain_spec.is_fermi_active_at_timestamp(header.number(), header.timestamp()) {
+                let target_number = att.data.target_number;
+                let target_hash = att.data.target_hash;
+                if target_number + 1 != header.number() || target_hash != header.parent_hash() {
+                    tracing::warn!("Failed to update attestation, target_number: {:?}, target_hash: {:?}, header_number: {:?}, header_parent_hash: {:?}", target_number, target_hash, header.number(), header.parent_hash());
+                    VOTE_METRICS.attestation_update_errors_total.increment(1);
+                    return;
+                }
+            }
+            // Keep parity with go-bsc:
+            // only perform target-only update when the snapshot already has attestation data.
+            let has_existing_attestation = self.vote_data.source_number != 0
+                || self.vote_data.source_hash != BlockHash::ZERO
+                || self.vote_data.target_number != 0
+                || self.vote_data.target_hash != BlockHash::ZERO;
+            if has_existing_attestation && att.data.source_number + 1 != att.data.target_number {
+                self.vote_data.target_number = att.data.target_number;
+                self.vote_data.target_hash = att.data.target_hash;
+            } else {
+                self.vote_data = att.data;
+            }
+        }
+    }
+
+    /// Returns `true` if `proposer` is in-turn according to snapshot rules.
+    pub fn is_inturn(&self, proposer: Address) -> bool {
+        let inturn_val = self.inturn_validator();
+        let is_inturn = inturn_val == proposer;
+
+        if !is_inturn {
+            tracing::trace!(
+                "is_inturn check: proposer=0x{:x}, inturn_validator=0x{:x}, is_inturn={}, validators={:?}",
+                proposer, inturn_val, is_inturn, self.validators
+            );
+        }
+
+        is_inturn
+    }
+
+    /// Number of blocks to look back when checking proposer history.
+    pub fn miner_history_check_len(&self) -> u64 {
+        let turn = u64::from(self.turn_length.unwrap_or(1));
+        (self.validators.len() / 2 + 1) as u64 * turn - 1
+    }
+
+    /// Number of blocks to track fork hash history.
+    /// Matches geth: validators_count * turn_length
+    pub fn version_history_check_len(&self) -> u64 {
+        let turn = u64::from(self.turn_length.unwrap_or(1));
+        self.validators.len() as u64 * turn
+    }
+
+    /// Validator that should propose the **next** block.
+    pub fn inturn_validator(&self) -> Address {
+        let turn_length = u64::from(self.turn_length.unwrap_or(DEFAULT_TURN_LENGTH));
+        let next_block = self.block_number + 1;
+        let offset = (next_block / turn_length) as usize % self.validators.len();
+        let next_validator = self.validators[offset];
+
+        tracing::trace!(
+            "inturn_validator debug info, snapshot_block={}, next_block={}, turn_length={}, offset={}, validators_len={}, next_validator=0x{:x}",
+            self.block_number, next_block, turn_length, offset, self.validators.len(), next_validator
+        );
+
+        next_validator
+    }
+
+    /// Returns index in `validators` for `validator` if present.
+    pub fn index_of(&self, validator: Address) -> Option<usize> {
+        self.validators.iter().position(|&v| v == validator)
+    }
+
+    /// Returns true if `block_number` is the last block of the current turn window.
+    /// When turn_length is 1 (pre-Bohr), every block is considered last in turn.
+    pub fn last_block_in_one_turn(&self, block_number: u64) -> bool {
+        let tl = u64::from(self.turn_length.unwrap_or(DEFAULT_TURN_LENGTH));
+        if tl <= 1 {
+            return true;
+        }
+        block_number % tl == tl - 1
+    }
+
+    /// Returns true if `block_number` is the first block of the current turn window.
+    /// When turn_length is 1 (pre-Bohr), every block is considered first in turn.
+    pub fn first_block_in_one_turn(&self, block_number: u64) -> bool {
+        let tl = u64::from(self.turn_length.unwrap_or(DEFAULT_TURN_LENGTH));
+        if tl <= 1 {
+            return true;
+        }
+        block_number.is_multiple_of(tl)
+    }
+
+    /// Count how many times each validator has signed in the recent window.
+    pub fn count_recent_proposers(&self) -> HashMap<Address, u8> {
+        let left_bound = if self.block_number > self.miner_history_check_len() {
+            self.block_number - self.miner_history_check_len()
+        } else {
+            0
+        };
+        let mut counts = HashMap::new();
+        for (&block, &v) in &self.recent_proposers {
+            if block <= left_bound || v == Address::default() {
+                continue;
+            }
+            *counts.entry(v).or_insert(0) += 1;
+            // tracing::debug!("count_recent_proposers, block: {:?}, validator: {:?}, count: {:?}", block, v, counts.get(&v).unwrap());
+        }
+        counts
+    }
+
+    /// Returns `true` if `validator` has signed too many blocks recently.
+    pub fn sign_recently(&self, validator: Address) -> bool {
+        self.sign_recently_by_counts(validator, &self.count_recent_proposers())
+    }
+
+    /// Helper that takes pre-computed counts.
+    pub fn sign_recently_by_counts(
+        &self,
+        validator: Address,
+        counts: &HashMap<Address, u8>,
+    ) -> bool {
+        if let Some(&times) = counts.get(&validator) {
+            let allowed = u64::from(self.turn_length.unwrap_or(1));
+            if u64::from(times) >= allowed {
+                tracing::debug!("Recently signed, validator: {:?}, block_number: {:?}, times: {:?}, allowed: {:?}", validator, self.block_number, times, allowed);
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn get_finalized_number(&self) -> BlockNumber {
+        if self.vote_data.source_number > 0 {
+            self.vote_data.source_number
+        } else {
+            0
+        }
+    }
+}
+
+// DB compression helpers
+impl Compress for Snapshot {
+    type Compressed = Vec<u8>;
+
+    fn compress(self) -> Self::Compressed {
+        serde_cbor::to_vec(&self).expect("serialize Snapshot")
+    }
+
+    fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(&self, buf: &mut B) {
+        let bytes = self.clone().compress();
+        buf.put_slice(&bytes);
+    }
+}
+
+impl Decompress for Snapshot {
+    fn decompress(value: &[u8]) -> Result<Self, DecompressError> {
+        serde_cbor::from_slice(value).map_err(DecompressError::new)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chainspec::{bsc_testnet, BscChainSpec};
+    use alloy_consensus::Header;
+    use alloy_primitives::{address, b256};
+
+    fn addr(n: u64) -> Address {
+        // simple helper to create distinct addresses with different last byte.
+        Address::repeat_byte((n & 0xff) as u8)
+    }
+
+    #[test]
+    fn sign_recently_detects_over_propose() {
+        // three validators
+        let validators = vec![addr(1), addr(2), addr(3)];
+        let mut snap =
+            Snapshot::new(validators.clone(), 0, BlockHash::default(), DEFAULT_EPOCH_LENGTH, None);
+
+        // simulate that validator 1 proposed previous block 0
+        snap.recent_proposers.insert(1, addr(1));
+        snap.block_number = 1;
+
+        // now at block 1, same validator proposes again -> should be flagged
+        assert!(snap.sign_recently(addr(1)));
+        // other validator should be fine
+        assert!(!snap.sign_recently(addr(2)));
+    }
+
+    #[test]
+    fn sign_recently_allows_within_limit() {
+        let validators = vec![addr(1), addr(2), addr(3)];
+        let snap = Snapshot::new(validators, 0, BlockHash::default(), DEFAULT_EPOCH_LENGTH, None);
+        // no recent entries, validator should be allowed
+        assert!(!snap.sign_recently(addr(1)));
+    }
+
+    #[test]
+    fn test_snapshot_new_with_zero_epoch_num() {
+        // Test that creating a snapshot with epoch_num = 0 defaults to DEFAULT_EPOCH_LENGTH
+        let validators = vec![address!("0x1234567890123456789012345678901234567890")];
+        let block_hash =
+            b256!("0x1234567890123456789012345678901234567890123456789012345678901234");
+
+        let snapshot = Snapshot::new(validators.clone(), 0, block_hash, 0, None);
+
+        // Should default to DEFAULT_EPOCH_LENGTH, not 0
+        assert_eq!(snapshot.epoch_num, DEFAULT_EPOCH_LENGTH);
+        assert_ne!(
+            snapshot.epoch_num, 0,
+            "epoch_num should never be zero to prevent division by zero"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_new_with_valid_epoch_num() {
+        // Test that creating a snapshot with valid epoch_num preserves the value
+        let validators = vec![address!("0x1234567890123456789012345678901234567890")];
+        let block_hash =
+            b256!("0x1234567890123456789012345678901234567890123456789012345678901234");
+        let custom_epoch = 500u64;
+
+        let snapshot = Snapshot::new(validators.clone(), 0, block_hash, custom_epoch, None);
+
+        // Should preserve the custom epoch value
+        assert_eq!(snapshot.epoch_num, custom_epoch);
+    }
+
+    #[test]
+    fn test_snapshot_apply_no_division_by_zero() {
+        // Test that applying a snapshot with epoch operations doesn't cause division by zero
+        let validators = vec![address!("0x1234567890123456789012345678901234567890")];
+        let block_hash =
+            b256!("0x1234567890123456789012345678901234567890123456789012345678901234");
+
+        // Create snapshot with epoch_num = 0 (should be fixed to DEFAULT_EPOCH_LENGTH)
+        let snapshot = Snapshot::new(validators.clone(), 0, block_hash, 0, None);
+
+        // Create a mock header for apply operation
+        struct MockHeader {
+            number: u64,
+            parent_hash: alloy_primitives::B256,
+            beneficiary: Address,
+            extra_data: alloy_primitives::Bytes,
+        }
+
+        impl alloy_consensus::BlockHeader for MockHeader {
+            fn number(&self) -> u64 {
+                self.number
+            }
+            fn beneficiary(&self) -> Address {
+                self.beneficiary
+            }
+            fn gas_limit(&self) -> u64 {
+                8000000
+            }
+            fn gas_used(&self) -> u64 {
+                0
+            }
+            fn timestamp(&self) -> u64 {
+                1000000
+            }
+            fn extra_data(&self) -> &alloy_primitives::Bytes {
+                &self.extra_data
+            }
+            fn base_fee_per_gas(&self) -> Option<u64> {
+                None
+            }
+            fn difficulty(&self) -> alloy_primitives::U256 {
+                alloy_primitives::U256::from(1)
+            }
+            fn transactions_root(&self) -> alloy_primitives::B256 {
+                alloy_primitives::B256::ZERO
+            }
+            fn state_root(&self) -> alloy_primitives::B256 {
+                alloy_primitives::B256::ZERO
+            }
+            fn receipts_root(&self) -> alloy_primitives::B256 {
+                alloy_primitives::B256::ZERO
+            }
+            fn logs_bloom(&self) -> alloy_primitives::Bloom {
+                alloy_primitives::Bloom::ZERO
+            }
+            fn parent_hash(&self) -> alloy_primitives::B256 {
+                self.parent_hash
+            }
+            fn ommers_hash(&self) -> alloy_primitives::B256 {
+                alloy_primitives::B256::ZERO
+            }
+            fn withdrawals_root(&self) -> Option<alloy_primitives::B256> {
+                None
+            }
+            fn mix_hash(&self) -> Option<alloy_primitives::B256> {
+                None
+            }
+            fn nonce(&self) -> Option<alloy_primitives::FixedBytes<8>> {
+                None
+            }
+            fn blob_gas_used(&self) -> Option<u64> {
+                None
+            }
+            fn excess_blob_gas(&self) -> Option<u64> {
+                None
+            }
+            fn parent_beacon_block_root(&self) -> Option<alloy_primitives::B256> {
+                None
+            }
+            fn requests_hash(&self) -> Option<alloy_primitives::B256> {
+                None
+            }
+            fn block_access_list_hash(&self) -> Option<alloy_primitives::B256> {
+                None
+            }
+            fn slot_number(&self) -> Option<u64> {
+                None
+            }
+        }
+
+        impl alloy_primitives::Sealable for MockHeader {
+            fn hash_slow(&self) -> alloy_primitives::B256 {
+                alloy_primitives::keccak256(format!("mock_header_{}", self.number))
+            }
+        }
+
+        let header = MockHeader {
+            number: 1,
+            parent_hash: block_hash,
+            beneficiary: validators[0],
+            extra_data: alloy_primitives::Bytes::new(),
+        };
+
+        // Create a mock chain spec for testing
+        use crate::chainspec::{bsc_testnet, BscChainSpec};
+        let chain_spec = BscChainSpec::from(bsc_testnet());
+
+        // This should not panic due to division by zero
+        let result = snapshot.apply(
+            validators[0],
+            &header,
+            vec![], // new_validators
+            None,   // vote_addrs
+            None,   // attestation
+            None,   // turn_length
+            &chain_spec,
+        );
+
+        assert!(result.is_some(), "Apply should succeed without division by zero");
+        let new_snapshot = result.unwrap();
+        assert_eq!(new_snapshot.block_number, 1);
+        assert_ne!(
+            new_snapshot.epoch_num, 0,
+            "Applied snapshot should maintain non-zero epoch_num"
+        );
+    }
+
+    #[test]
+    fn test_inturn_validator_no_division_by_zero() {
+        // Test that inturn_validator calculation doesn't cause division by zero
+        let validators = vec![
+            address!("0x1234567890123456789012345678901234567890"),
+            address!("0x2345678901234567890123456789012345678901"),
+        ];
+        let block_hash =
+            b256!("0x1234567890123456789012345678901234567890123456789012345678901234");
+
+        // Create snapshot with epoch_num = 0 (should be fixed)
+        let snapshot = Snapshot::new(validators.clone(), 0, block_hash, 0, None);
+
+        // This should not panic
+        let inturn = snapshot.inturn_validator();
+        assert!(validators.contains(&inturn), "Should return a valid validator");
+    }
+
+    #[test]
+    fn test_miner_history_check_len_no_division_by_zero() {
+        // Test that miner_history_check_len calculation works correctly
+        let validators = vec![
+            address!("0x1234567890123456789012345678901234567890"),
+            address!("0x2345678901234567890123456789012345678901"),
+        ];
+        let block_hash =
+            b256!("0x1234567890123456789012345678901234567890123456789012345678901234");
+
+        let snapshot = Snapshot::new(validators.clone(), 0, block_hash, 0, None);
+
+        // This should not panic and should return a reasonable value
+        let check_len = snapshot.miner_history_check_len();
+        assert!(check_len > 0, "Check length should be positive");
+    }
+
+    #[test]
+    fn update_attestation_first_non_consecutive_vote_replaces_full_data() {
+        let validators = vec![addr(1), addr(2), addr(3)];
+        let mut snapshot =
+            Snapshot::new(validators, 20, BlockHash::from([9u8; 32]), DEFAULT_EPOCH_LENGTH, None);
+        let chain_spec = BscChainSpec::from(bsc_testnet());
+
+        let vote_data = VoteData {
+            source_number: 10,
+            source_hash: BlockHash::from([1u8; 32]),
+            target_number: 20,
+            target_hash: BlockHash::from([2u8; 32]),
+        };
+        let attestation = VoteAttestation::new_with_vote_data(vote_data);
+        let header = Header {
+            number: 21,
+            timestamp: 1,
+            parent_hash: vote_data.target_hash,
+            ..Default::default()
+        };
+
+        snapshot.update_attestation(&chain_spec, &header, Some(attestation));
+        assert_eq!(snapshot.vote_data, vote_data);
+    }
+
+    #[test]
+    fn update_attestation_non_consecutive_vote_updates_only_target_when_existing_data_present() {
+        let validators = vec![addr(1), addr(2), addr(3)];
+        let mut snapshot =
+            Snapshot::new(validators, 20, BlockHash::from([9u8; 32]), DEFAULT_EPOCH_LENGTH, None);
+        let chain_spec = BscChainSpec::from(bsc_testnet());
+
+        snapshot.vote_data = VoteData {
+            source_number: 8,
+            source_hash: BlockHash::from([3u8; 32]),
+            target_number: 9,
+            target_hash: BlockHash::from([4u8; 32]),
+        };
+
+        let vote_data = VoteData {
+            source_number: 10,
+            source_hash: BlockHash::from([1u8; 32]),
+            target_number: 20,
+            target_hash: BlockHash::from([2u8; 32]),
+        };
+        let attestation = VoteAttestation::new_with_vote_data(vote_data);
+        let header = Header {
+            number: 21,
+            timestamp: 1,
+            parent_hash: vote_data.target_hash,
+            ..Default::default()
+        };
+
+        snapshot.update_attestation(&chain_spec, &header, Some(attestation));
+        assert_eq!(snapshot.vote_data.source_number, 8);
+        assert_eq!(snapshot.vote_data.source_hash, BlockHash::from([3u8; 32]));
+        assert_eq!(snapshot.vote_data.target_number, 20);
+        assert_eq!(snapshot.vote_data.target_hash, BlockHash::from([2u8; 32]));
+    }
+
+    #[test]
+    fn update_attestation_consecutive_vote_replaces_full_data() {
+        let validators = vec![addr(1), addr(2), addr(3)];
+        let mut snapshot =
+            Snapshot::new(validators, 20, BlockHash::from([9u8; 32]), DEFAULT_EPOCH_LENGTH, None);
+        let chain_spec = BscChainSpec::from(bsc_testnet());
+
+        snapshot.vote_data = VoteData {
+            source_number: 8,
+            source_hash: BlockHash::from([3u8; 32]),
+            target_number: 9,
+            target_hash: BlockHash::from([4u8; 32]),
+        };
+
+        let vote_data = VoteData {
+            source_number: 20,
+            source_hash: BlockHash::from([5u8; 32]),
+            target_number: 21,
+            target_hash: BlockHash::from([6u8; 32]),
+        };
+        let attestation = VoteAttestation::new_with_vote_data(vote_data);
+        let header = Header {
+            number: 22,
+            timestamp: 1,
+            parent_hash: vote_data.target_hash,
+            ..Default::default()
+        };
+
+        snapshot.update_attestation(&chain_spec, &header, Some(attestation));
+        assert_eq!(snapshot.vote_data, vote_data);
+    }
+}

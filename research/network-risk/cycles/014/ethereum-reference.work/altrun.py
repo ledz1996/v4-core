@@ -4,7 +4,8 @@ import sys, os, runpy
 OPD = '/home/user/v4-core/research/network-risk/tools/opdiff'
 sys.path.insert(0, OPD)
 import evm
-ALT = [(1001, 'Ethereum geth v1.16.7 (1rpc)', 'https://1rpc.io/eth'),
+ALT = [(1, 'Ethereum', 'https://ethereum-rpc.publicnode.com'),
+       (1001, 'Ethereum geth v1.16.7 (1rpc)', 'https://1rpc.io/eth'),
        (1002, 'Ethereum geth v1.16.7 (bloxroute)', 'https://eth.rpc.blxrbdn.com'),
        (1003, 'Ethereum reth v2.10.0 evm2 (blastapi)', 'https://eth-mainnet.public.blastapi.io'),
        (1004, 'Ethereum reth v2.7.0 revm (nodies)', 'https://eth-pokt.nodies.app'),

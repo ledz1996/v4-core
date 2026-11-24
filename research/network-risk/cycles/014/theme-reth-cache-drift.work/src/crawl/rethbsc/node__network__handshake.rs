@@ -1,0 +1,130 @@
+use super::upgrade_status::{UpgradeStatus, UpgradeStatusExtension};
+use alloy_rlp::Decodable;
+use futures::SinkExt;
+use reth_eth_wire::{
+    errors::{EthHandshakeError, EthStreamError},
+    handshake::{EthRlpxHandshake, EthereumEthHandshake, UnauthEth},
+    UnifiedStatus,
+};
+use reth_eth_wire_types::{DisconnectReason, EthVersion};
+use reth_ethereum_forks::ForkFilter;
+use std::{future::Future, pin::Pin};
+use tokio::time::{timeout, Duration};
+use tokio_stream::StreamExt;
+use tracing::debug;
+
+#[derive(Debug, Default)]
+/// The Binance Smart Chain (BSC) P2P handshake.
+#[non_exhaustive]
+pub struct BscHandshake;
+
+impl BscHandshake {
+    /// Negotiate the upgrade status message.
+    pub async fn upgrade_status(
+        unauth: &mut dyn UnauthEth,
+        negotiated_status: UnifiedStatus,
+    ) -> Result<UnifiedStatus, EthStreamError> {
+        if negotiated_status.version > EthVersion::Eth66 {
+            // Send upgrade status message. When EVN is enabled, we ask peers
+            // to NOT broadcast transactions to us (disable peer tx broadcast).
+            // This mirrors the BSC EVN behavior where validator/sentry nodes
+            // avoid mempool flooding between EVN peers.
+            let evn_enabled = crate::node::network::evn::is_evn_ready();
+            let disable_tx_broadcast_forbidden = crate::node::network::evn::get_global_evn_config().map(|cfg| cfg.disable_tx_broadcast_forbidden).unwrap_or(false);
+            let upgrade_msg = UpgradeStatus {
+                extension: UpgradeStatusExtension { disable_peer_tx_broadcast: evn_enabled && !disable_tx_broadcast_forbidden },
+            };
+            tracing::debug!(target: "bsc_handshake", "Sending upgrade status message, EVN enabled: {}, disable tx broadcast forbidden: {}", evn_enabled, disable_tx_broadcast_forbidden);
+            unauth.start_send_unpin(upgrade_msg.into_rlpx())?;
+
+            // Receive peer's upgrade status response.
+            //
+            // None of the three error branches below disconnects with ProtocolBreach.
+            // A peer that doesn't speak BSC UpgradeStatus (vanilla geth, wrong-fork
+            // client) is not misbehaving; the warn! logs still capture raw bytes /
+            // msg_len / eth version for diagnosing wire corruption.
+            let their_msg = match unauth.next().await {
+                Some(Ok(msg)) => msg,
+                Some(Err(e)) => {
+                    debug!(
+                        target: "bsc_handshake",
+                        eth_version = ?negotiated_status.version,
+                        error = %e,
+                        "BSC upgrade-status: wire error while reading peer's UpgradeStatus reply; aborting handshake (no ProtocolBreach disconnect emitted by us)"
+                    );
+                    return Err(EthStreamError::from(e));
+                }
+                None => {
+                    debug!(
+                        target: "bsc_handshake",
+                        eth_version = ?negotiated_status.version,
+                        "BSC upgrade-status: peer closed stream before sending UpgradeStatus reply; sending DisconnectRequested (NOT counted as ProtocolBreach)"
+                    );
+                    unauth.disconnect(DisconnectReason::DisconnectRequested).await?;
+                    return Err(EthStreamError::EthHandshakeError(EthHandshakeError::NoResponse));
+                }
+            };
+
+            // Decode their response
+            match UpgradeStatus::decode(&mut their_msg.as_ref()).map_err(|e| {
+                debug!(
+                    target: "bsc_handshake",
+                    eth_version = ?negotiated_status.version,
+                    msg_len = their_msg.len(),
+                    decode_error = %e,
+                    "BSC upgrade-status: failed to decode peer's UpgradeStatus reply (raw msg follows): msg={their_msg:x}"
+                );
+                EthStreamError::InvalidMessage(e.into())
+            }) {
+                Ok(their_status) => {
+                    tracing::trace!(target: "bsc_handshake", "bsc handshake: upgrade status: {:?}", their_status);
+                    // Successful handshake; log remote's EVN preference
+                    // TODO: cannot get peer id here, need to add it to the upgrade status message.
+                    if their_status.extension.disable_peer_tx_broadcast {
+                        debug!(target: "bsc_handshake", "Peer requests: disable TX broadcast towards them (EVN)");
+                    }
+                    return Ok(negotiated_status);
+                }
+                Err(e) => {
+                    // Most common cause: peer doesn't speak BSC UpgradeStatus
+                    // (vanilla geth / wrong-fork client) — that's not a protocol
+                    // violation. Disconnect gracefully (matches the empty-stream
+                    // path above) so the peer goes through Low backoff and stays
+                    // retry-eligible, instead of being treated as fatal.
+                    debug!(
+                        target: "bsc_handshake",
+                        eth_version = ?negotiated_status.version,
+                        msg_len = their_msg.len(),
+                        error = %e,
+                        "BSC upgrade-status: decode failed -> sending DisconnectRequested (peer likely not a BSC client or doesn't implement UpgradeStatus; treated as graceful, no protocol_breach metric increment)"
+                    );
+                    unauth.disconnect(DisconnectReason::DisconnectRequested).await?;
+                    return Err(EthStreamError::EthHandshakeError(
+                        EthHandshakeError::NoResponse,
+                    ));
+                }
+            }
+        }
+
+        Ok(negotiated_status)
+    }
+}
+
+impl EthRlpxHandshake for BscHandshake {
+    fn handshake<'a>(
+        &'a self,
+        unauth: &'a mut dyn UnauthEth,
+        status: UnifiedStatus,
+        fork_filter: ForkFilter,
+        timeout_limit: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<UnifiedStatus, EthStreamError>> + 'a + Send>> {
+        Box::pin(async move {
+            let fut = async {
+                let negotiated_status =
+                    EthereumEthHandshake(unauth).eth_handshake(status, fork_filter).await?;
+                Self::upgrade_status(unauth, negotiated_status).await
+            };
+            timeout(timeout_limit, fut).await.map_err(|_| EthStreamError::StreamTimeout)?
+        })
+    }
+}

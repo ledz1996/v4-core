@@ -1,0 +1,602 @@
+#![allow(unused)]
+use alloy_chains::Chain;
+use core::any::Any;
+use reth_chainspec::ForkCondition;
+use reth_ethereum_forks::{hardfork, ChainHardforks, EthereumHardfork, Hardfork};
+use revm::primitives::hardfork::SpecId;
+
+hardfork!(
+    /// The name of a bsc hardfork.
+    ///
+    /// When building a list of hardforks for a chain, it's still expected to mix with [`EthereumHardfork`].
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[derive(Default)]
+    BscHardfork {
+        /// Initial hardfork of BSC.
+        Frontier,
+        /// BSC `Ramanujan` hardfork
+        Ramanujan,
+        /// BSC `Niels` hardfork
+        Niels,
+        /// BSC `MirrorSync` hardfork
+        MirrorSync,
+        /// BSC `Bruno` hardfork
+        Bruno,
+        /// BSC `Euler` hardfork
+        Euler,
+        /// BSC `Nano` hardfork
+        Nano,
+        /// BSC `Moran` hardfork
+        Moran,
+        /// BSC `Gibbs` hardfork
+        Gibbs,
+        /// BSC `Planck` hardfork
+        Planck,
+        /// BSC `Luban` hardfork
+        Luban,
+        /// BSC `Plato` hardfork
+        Plato,
+        /// BSC `Hertz` hardfork
+        Hertz,
+        /// BSC `HertzFix` hardfork
+        HertzFix,
+        /// BSC `Kepler` hardfork
+        Kepler,
+        /// BSC `Feynman` hardfork
+        Feynman,
+        /// BSC `FeynmanFix` hardfork
+        FeynmanFix,
+        /// BSC `Cancun` hardfork
+        Cancun,
+        /// BSC `Haber` hardfork
+        Haber,
+        /// BSC `HaberFix` hardfork
+        HaberFix,
+        /// BSC `Bohr` hardfork
+        Bohr,
+        /// BSC `Tycho` hardfork - June 2024, added blob transaction support
+        Tycho,
+        /// BSC `Pascal` hardfork - March 2025, added smart contract wallets
+        Pascal,
+        /// BSC `Lorentz` hardfork
+        Lorentz,
+        /// BSC `Maxwell` hardfork
+        Maxwell,
+        /// BSC `Fermi` hardfork
+        #[default]
+        Fermi,
+        /// BSC `Osaka` hardfork
+        Osaka,
+        /// BSC `Mendel` hardfork
+        Mendel,
+        /// BSC `Pasteur` hardfork - sequenced immediately after Mendel
+        Pasteur,
+        /// BSC `Jenner` hardfork - sequenced immediately after Pasteur
+        Jenner,
+    }
+);
+
+impl BscHardfork {
+    /// Bsc mainnet list of hardforks.
+    pub fn bsc_mainnet() -> ChainHardforks {
+        ChainHardforks::new(vec![
+            (EthereumHardfork::Frontier.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Homestead.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Tangerine.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::SpuriousDragon.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Byzantium.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Constantinople.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Petersburg.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Istanbul.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::MuirGlacier.boxed(), ForkCondition::Block(0)),
+            (Self::Ramanujan.boxed(), ForkCondition::Block(0)),
+            (Self::Niels.boxed(), ForkCondition::Block(0)),
+            (Self::MirrorSync.boxed(), ForkCondition::Block(5184000)),
+            (Self::Bruno.boxed(), ForkCondition::Block(13082000)),
+            (Self::Euler.boxed(), ForkCondition::Block(18907621)),
+            (Self::Nano.boxed(), ForkCondition::Block(21962149)),
+            (Self::Moran.boxed(), ForkCondition::Block(22107423)),
+            (Self::Gibbs.boxed(), ForkCondition::Block(23846001)),
+            (Self::Planck.boxed(), ForkCondition::Block(27281024)),
+            (Self::Luban.boxed(), ForkCondition::Block(29020050)),
+            (Self::Plato.boxed(), ForkCondition::Block(30720096)),
+            (EthereumHardfork::Berlin.boxed(), ForkCondition::Block(31302048)),
+            (EthereumHardfork::London.boxed(), ForkCondition::Block(31302048)),
+            (Self::Hertz.boxed(), ForkCondition::Block(31302048)),
+            (Self::HertzFix.boxed(), ForkCondition::Block(34140700)),
+            (EthereumHardfork::Shanghai.boxed(), ForkCondition::Timestamp(1705996800)), /* 2024-01-23 08:00:00 AM UTC */
+            (Self::Kepler.boxed(), ForkCondition::Timestamp(1705996800)), /* 2024-01-23 08:00:00 AM UTC */
+            (Self::Feynman.boxed(), ForkCondition::Timestamp(1713419340)), /* 2024-04-18 05:49:00 AM UTC */
+            (Self::FeynmanFix.boxed(), ForkCondition::Timestamp(1713419340)), /* 2024-04-18 05:49:00 AM UTC */
+            (EthereumHardfork::Cancun.boxed(), ForkCondition::Timestamp(1718863500)), /* 2024-06-20 06:05:00 AM UTC */
+            (Self::Cancun.boxed(), ForkCondition::Timestamp(1718863500)), /* 2024-06-20 06:05:00 AM UTC */
+            (Self::Haber.boxed(), ForkCondition::Timestamp(1718863500)), /* 2024-06-20 06:05:00 AM UTC */
+            (Self::Tycho.boxed(), ForkCondition::Timestamp(1718863500)), /* 2024-06-20 06:05:00 AM UTC - Tycho hardfork with blob transactions */
+            (Self::HaberFix.boxed(), ForkCondition::Timestamp(1727316120)), /* 2024-09-26 02:02:00 AM UTC */
+            (Self::Bohr.boxed(), ForkCondition::Timestamp(1727317200)),     /* 2024-09-26
+                                                                             * 02:20:00
+                                                                             * AM UTC */
+            (EthereumHardfork::Prague.boxed(), ForkCondition::Timestamp(1742436600)), /* 2025-03-20 02:10:00 AM UTC */
+            (Self::Pascal.boxed(), ForkCondition::Timestamp(1742436600)), /* 2025-03-20 02:10:00 AM UTC - deployed with Prague */
+            (Self::Lorentz.boxed(), ForkCondition::Timestamp(1745903100)), /* 2025-04-29 05:05:00 AM UTC */
+            (Self::Maxwell.boxed(), ForkCondition::Timestamp(1751250600)), /* 2025-06-30 02:30:00 AM UTC */
+            (Self::Fermi.boxed(), ForkCondition::Timestamp(1768357800)), /* 2026-01-14 02:30:00 AM UTC */
+            (Self::Osaka.boxed(), ForkCondition::Timestamp(1777343400)),
+            (Self::Mendel.boxed(), ForkCondition::Timestamp(1777343400)),
+            (Self::Pasteur.boxed(), ForkCondition::Timestamp(1787625000)), /* 2026-08-25 02:30:00 AM UTC */
+            (Self::Jenner.boxed(), ForkCondition::Timestamp(1796697000)), /* 2026-12-08 02:30:00 AM UTC */
+        ])
+    }
+
+    /// Bsc testnet list of hardforks.
+    pub fn bsc_testnet() -> ChainHardforks {
+        ChainHardforks::new(vec![
+            (EthereumHardfork::Frontier.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Homestead.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Tangerine.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::SpuriousDragon.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Byzantium.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Constantinople.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Petersburg.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Istanbul.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::MuirGlacier.boxed(), ForkCondition::Block(0)),
+            (Self::Ramanujan.boxed(), ForkCondition::Block(1010000)),
+            (Self::Niels.boxed(), ForkCondition::Block(1014369)),
+            (Self::MirrorSync.boxed(), ForkCondition::Block(5582500)),
+            (Self::Bruno.boxed(), ForkCondition::Block(13837000)),
+            (Self::Euler.boxed(), ForkCondition::Block(19203503)),
+            (Self::Gibbs.boxed(), ForkCondition::Block(22800220)),
+            (Self::Nano.boxed(), ForkCondition::Block(23482428)),
+            (Self::Moran.boxed(), ForkCondition::Block(23603940)),
+            (Self::Planck.boxed(), ForkCondition::Block(28196022)),
+            (Self::Luban.boxed(), ForkCondition::Block(29295050)),
+            (Self::Plato.boxed(), ForkCondition::Block(29861024)),
+            (EthereumHardfork::Berlin.boxed(), ForkCondition::Block(31103030)),
+            (EthereumHardfork::London.boxed(), ForkCondition::Block(31103030)),
+            (Self::Hertz.boxed(), ForkCondition::Block(31103030)),
+            (Self::HertzFix.boxed(), ForkCondition::Block(35682300)),
+            (EthereumHardfork::Shanghai.boxed(), ForkCondition::Timestamp(1702972800)),
+            (Self::Kepler.boxed(), ForkCondition::Timestamp(1702972800)),
+            (Self::Feynman.boxed(), ForkCondition::Timestamp(1710136800)),
+            (Self::FeynmanFix.boxed(), ForkCondition::Timestamp(1711342800)),
+            (EthereumHardfork::Cancun.boxed(), ForkCondition::Timestamp(1713330442)),
+            (Self::Cancun.boxed(), ForkCondition::Timestamp(1713330442)),
+            (Self::Haber.boxed(), ForkCondition::Timestamp(1716962820)),
+            (Self::HaberFix.boxed(), ForkCondition::Timestamp(1719986788)),
+            (Self::Bohr.boxed(), ForkCondition::Timestamp(1724116996)),
+            (Self::Tycho.boxed(), ForkCondition::Timestamp(1713330442)), /* 2024-04-17 05:07:22 AM UTC - Tycho testnet */
+            (EthereumHardfork::Prague.boxed(), ForkCondition::Timestamp(1740452880)),
+            (Self::Pascal.boxed(), ForkCondition::Timestamp(1740452880)),
+            (Self::Lorentz.boxed(), ForkCondition::Timestamp(1744097580)),
+            (Self::Maxwell.boxed(), ForkCondition::Timestamp(1748243100)),
+            (Self::Fermi.boxed(), ForkCondition::Timestamp(1762741500)),
+            (Self::Osaka.boxed(), ForkCondition::Timestamp(1774319400)),
+            (Self::Mendel.boxed(), ForkCondition::Timestamp(1774319400)),
+            (Self::Pasteur.boxed(), ForkCondition::Timestamp(1784601000)), /* 2026-07-21 02:30:00 AM UTC */
+            (Self::Jenner.boxed(), ForkCondition::Timestamp(1793241000)), /* 2026-10-29 02:30:00 AM UTC */
+        ])
+    }
+
+    /// Bsc qanet list of hardforks.
+    pub fn bsc_qanet() -> ChainHardforks {
+        ChainHardforks::new(vec![
+            (EthereumHardfork::Frontier.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Homestead.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Tangerine.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::SpuriousDragon.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Byzantium.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Constantinople.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Petersburg.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::Istanbul.boxed(), ForkCondition::Block(0)),
+            (EthereumHardfork::MuirGlacier.boxed(), ForkCondition::Block(0)),
+            (Self::Ramanujan.boxed(), ForkCondition::Block(0)),
+            (Self::Niels.boxed(), ForkCondition::Block(0)),
+            (Self::MirrorSync.boxed(), ForkCondition::Block(1)),
+            (Self::Bruno.boxed(), ForkCondition::Block(1)),
+            (Self::Euler.boxed(), ForkCondition::Block(2)),
+            (Self::Nano.boxed(), ForkCondition::Block(3)),
+            (Self::Moran.boxed(), ForkCondition::Block(3)),
+            (Self::Gibbs.boxed(), ForkCondition::Block(4)),
+            (Self::Planck.boxed(), ForkCondition::Block(5)),
+            (Self::Luban.boxed(), ForkCondition::Block(6)),
+            (Self::Plato.boxed(), ForkCondition::Block(7)),
+            (EthereumHardfork::Berlin.boxed(), ForkCondition::Block(8)),
+            (EthereumHardfork::London.boxed(), ForkCondition::Block(8)),
+            (Self::Hertz.boxed(), ForkCondition::Block(8)),
+            (Self::HertzFix.boxed(), ForkCondition::Block(8)),
+            (EthereumHardfork::Shanghai.boxed(), ForkCondition::Timestamp(1754967081)),
+            (Self::Kepler.boxed(), ForkCondition::Timestamp(1754967081)),
+            (Self::Feynman.boxed(), ForkCondition::Timestamp(1754967081)),
+            (Self::FeynmanFix.boxed(), ForkCondition::Timestamp(1754967081)),
+            (EthereumHardfork::Cancun.boxed(), ForkCondition::Timestamp(1754967081)),
+            (Self::Cancun.boxed(), ForkCondition::Timestamp(1754967081)),
+            (Self::Haber.boxed(), ForkCondition::Timestamp(1754967081)),
+            (Self::HaberFix.boxed(), ForkCondition::Timestamp(1754967081)),
+            (Self::Bohr.boxed(), ForkCondition::Timestamp(1754967081)),
+            (EthereumHardfork::Prague.boxed(), ForkCondition::Timestamp(1754967081)),
+            (Self::Pascal.boxed(), ForkCondition::Timestamp(1754967081)),
+            (Self::Lorentz.boxed(), ForkCondition::Timestamp(1754967081)),
+            (Self::Maxwell.boxed(), ForkCondition::Timestamp(1754967101)),
+            (Self::Fermi.boxed(), ForkCondition::Timestamp(1761030900)),
+            // Osaka and Mendel activated on qanet at 2026-08-05 02:30:00 AM UTC. Both are
+            // geth-compatible: geth accepted blocks 21323714..21327713 with only Pasteur deferred.
+            (Self::Osaka.boxed(), ForkCondition::Timestamp(1785897000)),
+            (Self::Mendel.boxed(), ForkCondition::Timestamp(1785897000)),
+            // Pasteur: 2026-08-05 09:00:00 AM UTC. The first attempt (at 1785897000, block
+            // 21323714) split the cluster because the system-contract upgrade wrote the new
+            // StakeHub/Governor code to plain state without committing the changed codeHash to the
+            // trie, so the block's state root described the un-upgraded state and geth rejected it
+            // (`invalid merkle root`). Fixed by reporting those writes to the state hook; this
+            // re-arms the transition to verify the fix on qanet.
+            // Must stay equal to geth's `--override.pasteur` on this cluster.
+            (Self::Pasteur.boxed(), ForkCondition::Timestamp(1785920400)),
+            // Jenner: 2026-10-05 05:00:00 UTC (13:00:00 UTC+8).
+            (Self::Jenner.boxed(), ForkCondition::Timestamp(1791176400)),
+        ])
+    }
+
+    pub fn bsc_local() -> ChainHardforks {
+        ChainHardforks::new(vec![
+            (EthereumHardfork::Frontier.boxed(), ForkCondition::Block(0)),
+            (Self::Bohr.boxed(), ForkCondition::Block(0)),
+        ])
+    }
+}
+
+/// Match helper method since it's not possible to match on `dyn Hardfork`
+fn match_hardfork<H, HF, BHF>(fork: H, hardfork_fn: HF, bsc_hardfork_fn: BHF) -> Option<u64>
+where
+    H: Hardfork,
+    HF: Fn(&EthereumHardfork) -> Option<u64>,
+    BHF: Fn(&BscHardfork) -> Option<u64>,
+{
+    let fork: &dyn Any = &fork;
+    if let Some(fork) = fork.downcast_ref::<EthereumHardfork>() {
+        return hardfork_fn(fork);
+    }
+    fork.downcast_ref::<BscHardfork>().and_then(bsc_hardfork_fn)
+}
+
+impl From<BscHardfork> for SpecId {
+    fn from(spec: BscHardfork) -> Self {
+        match spec {
+            BscHardfork::Frontier
+            | BscHardfork::Ramanujan
+            | BscHardfork::Niels
+            | BscHardfork::MirrorSync
+            | BscHardfork::Bruno
+            | BscHardfork::Euler
+            | BscHardfork::Gibbs
+            | BscHardfork::Nano
+            | BscHardfork::Moran
+            | BscHardfork::Planck
+            | BscHardfork::Luban
+            | BscHardfork::Plato => SpecId::MUIR_GLACIER,
+            BscHardfork::Hertz | BscHardfork::HertzFix => SpecId::LONDON,
+            BscHardfork::Kepler | BscHardfork::Feynman | BscHardfork::FeynmanFix => {
+                SpecId::SHANGHAI
+            }
+            BscHardfork::Cancun
+            | BscHardfork::Haber
+            | BscHardfork::HaberFix
+            | BscHardfork::Bohr
+            | BscHardfork::Tycho => SpecId::CANCUN,
+            BscHardfork::Pascal
+            | BscHardfork::Lorentz
+            | BscHardfork::Maxwell
+            | BscHardfork::Fermi => SpecId::PRAGUE,
+            BscHardfork::Osaka |
+            BscHardfork::Mendel |
+            BscHardfork::Pasteur |
+            BscHardfork::Jenner => SpecId::OSAKA,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chainspec::{bsc::bsc_mainnet, bsc_chapel::bsc_testnet};
+
+    #[test]
+    fn test_pasteur_is_sequenced_after_mendel() {
+        // Derived ordering must place Pasteur as the highest fork so that
+        // `spec >= BscHardfork::Pasteur` is the first/highest dispatcher check.
+        assert!(BscHardfork::Pasteur > BscHardfork::Mendel);
+        assert!(BscHardfork::Pasteur > BscHardfork::Osaka);
+        // Pasteur is a BSC-only precompile/system-contract fork with no new EVM spec.
+        assert_eq!(SpecId::from(BscHardfork::Pasteur), SpecId::OSAKA);
+    }
+
+    #[test]
+    fn test_pasteur_scheduled_on_testnet() {
+        // Testnet has an announced Pasteur activation: 2026-07-21 02:30:00 AM UTC.
+        assert_eq!(
+            BscHardfork::bsc_testnet().fork(BscHardfork::Pasteur),
+            ForkCondition::Timestamp(1784601000),
+            "Pasteur should activate on testnet at its announced timestamp"
+        );
+    }
+
+    #[test]
+    fn test_pasteur_scheduled_on_mainnet() {
+        // Mainnet has an announced Pasteur activation: 2026-08-25 02:30:00 AM UTC.
+        assert_eq!(
+            BscHardfork::bsc_mainnet().fork(BscHardfork::Pasteur),
+            ForkCondition::Timestamp(1787625000),
+            "Pasteur should activate on mainnet at its announced timestamp"
+        );
+    }
+
+    #[test]
+    fn test_qanet_fork_schedule_is_ordered() {
+        let qanet = BscHardfork::bsc_qanet();
+        const OSAKA_MENDEL: u64 = 1785897000; // 2026-08-05 02:30:00 UTC
+        const PASTEUR: u64 = 1785920400; // 2026-08-05 09:00:00 UTC
+        const JENNER: u64 = 1791176400; // 2026-10-05 05:00:00 UTC (13:00:00 UTC+8)
+
+        // Osaka and Mendel activated together at 2026-08-05 02:30:00 AM UTC.
+        for fork in [BscHardfork::Osaka, BscHardfork::Mendel] {
+            assert_eq!(
+                qanet.fork(fork),
+                ForkCondition::Timestamp(OSAKA_MENDEL),
+                "{fork:?} should be active on qanet from the 2026-08-05 02:30 UTC activation"
+            );
+        }
+
+        // Pasteur re-armed after the state-hook fix. It must stay in sync with geth's
+        // `--override.pasteur` on the QA cluster, and must not precede Osaka/Mendel.
+        assert_eq!(
+            qanet.fork(BscHardfork::Pasteur),
+            ForkCondition::Timestamp(PASTEUR),
+            "Pasteur should activate on qanet at its re-armed timestamp"
+        );
+        // Ordering is compile-time enforced: Pasteur must never precede Osaka/Mendel.
+        const _: () = assert!(PASTEUR > OSAKA_MENDEL);
+        assert!(
+            qanet.fork(BscHardfork::Mendel).active_at_timestamp(PASTEUR),
+            "Mendel must already be active when Pasteur activates"
+        );
+
+        let jenner = qanet.fork(BscHardfork::Jenner);
+        assert_eq!(jenner, ForkCondition::Timestamp(JENNER));
+        const _: () = assert!(JENNER > PASTEUR);
+        assert!(
+            qanet.fork(BscHardfork::Pasteur).active_at_timestamp(JENNER),
+            "Pasteur must already be active when Jenner activates"
+        );
+        assert!(!jenner.active_at_timestamp(JENNER - 1));
+        assert!(jenner.active_at_timestamp(JENNER));
+        assert!(jenner.active_at_timestamp(JENNER + 1));
+
+        // Fermi precedes the whole group.
+        assert!(
+            qanet.fork(BscHardfork::Fermi).active_at_timestamp(1785897000),
+            "Fermi must already be active when Osaka/Mendel activate"
+        );
+    }
+
+    #[test]
+    fn test_pasteur_resolves_at_its_timestamp() {
+        use crate::node::evm::config::revm_spec_by_timestamp_and_block_number;
+
+        // Give Pasteur a concrete activation just after Mendel (1777343400 on mainnet).
+        let pasteur_time = 1_777_343_400 + 1_000;
+        let mut cs = bsc_mainnet();
+        cs.hardforks.insert(BscHardfork::Pasteur, ForkCondition::Timestamp(pasteur_time));
+        let spec = crate::chainspec::BscChainSpec::from(cs);
+
+        let block = 50_000_000; // well past London activation (31302048)
+
+        // Just before Pasteur, the latest fork is still Mendel.
+        assert_eq!(
+            revm_spec_by_timestamp_and_block_number(spec.clone(), pasteur_time - 1, block),
+            BscHardfork::Mendel
+        );
+        // At/after Pasteur's timestamp, it resolves to Pasteur.
+        assert_eq!(
+            revm_spec_by_timestamp_and_block_number(spec.clone(), pasteur_time, block),
+            BscHardfork::Pasteur
+        );
+    }
+
+    #[test]
+    fn test_jenner_is_sequenced_after_pasteur() {
+        // Derived ordering must place Jenner (BEP-706) right after Pasteur so that
+        // `spec >= BscHardfork::Jenner` is the highest dispatcher check
+        // (mirrors go-bsc: Jenner sits between Pasteur and the far-future upstream forks).
+        assert!(BscHardfork::Jenner > BscHardfork::Pasteur);
+        assert!(BscHardfork::Jenner > BscHardfork::Mendel);
+        assert!(BscHardfork::Jenner > BscHardfork::Osaka);
+        // Jenner adds a BSC-only precompile; it introduces no new EVM rule set.
+        assert_eq!(SpecId::from(BscHardfork::Jenner), SpecId::OSAKA);
+    }
+
+    #[test]
+    fn test_jenner_scheduled_on_testnet() {
+        // Chapel JennerTime matches go-bsc: 2026-10-29 02:30:00 AM UTC (1793241000).
+        assert_eq!(
+            BscHardfork::bsc_testnet().fork(BscHardfork::Jenner),
+            ForkCondition::Timestamp(1793241000),
+            "Jenner should activate on testnet at its announced timestamp"
+        );
+    }
+
+    #[test]
+    fn test_jenner_scheduled_on_mainnet() {
+        // Mainnet JennerTime matches go-bsc: 2026-12-08 02:30:00 AM UTC (1796697000).
+        assert_eq!(
+            BscHardfork::bsc_mainnet().fork(BscHardfork::Jenner),
+            ForkCondition::Timestamp(1796697000),
+            "Jenner should activate on mainnet at its announced timestamp"
+        );
+    }
+
+    #[test]
+    fn test_jenner_not_scheduled_on_local() {
+        assert_eq!(BscHardfork::bsc_local().fork(BscHardfork::Jenner), ForkCondition::Never);
+    }
+
+    #[test]
+    fn test_is_jenner_activation_boundary() {
+        use crate::hardforks::BscHardforks;
+
+        // Mirrors go-bsc TestIsJenner: exactly at JennerTime -> active; one second
+        // before -> inactive; one second after -> active.
+        let jenner_time = 1_790_000_000u64;
+        let mut cs = bsc_mainnet();
+        cs.hardforks.insert(BscHardfork::Jenner, ForkCondition::Timestamp(jenner_time));
+        let spec = crate::chainspec::BscChainSpec::from(cs);
+
+        let block = 50_000_000; // well past London activation (31302048)
+        assert!(!spec.is_jenner_active_at_timestamp(block, jenner_time - 1));
+        assert!(spec.is_jenner_active_at_timestamp(block, jenner_time));
+        assert!(spec.is_jenner_active_at_timestamp(block, jenner_time + 1));
+
+        // The convention shared by every timestamp fork helper: inert before London.
+        let pre_london_block = 1_000;
+        assert!(!spec.is_jenner_active_at_timestamp(pre_london_block, jenner_time));
+
+        // Transition helper: first block whose timestamp crosses the boundary.
+        assert!(spec.is_jenner_transition_at_timestamp(block, jenner_time, jenner_time - 1));
+        assert!(!spec.is_jenner_transition_at_timestamp(block, jenner_time + 1, jenner_time));
+        assert!(!spec.is_jenner_transition_at_timestamp(block, jenner_time - 1, jenner_time - 2));
+    }
+
+    #[test]
+    fn test_jenner_resolves_at_its_timestamp() {
+        use crate::node::evm::config::revm_spec_by_timestamp_and_block_number;
+
+        // Give Jenner a concrete activation just after Pasteur (1787625000 on mainnet).
+        let jenner_time = 1_787_625_000 + 1_000;
+        let mut cs = bsc_mainnet();
+        cs.hardforks.insert(BscHardfork::Jenner, ForkCondition::Timestamp(jenner_time));
+        let spec = crate::chainspec::BscChainSpec::from(cs);
+
+        let block = 50_000_000; // well past London activation (31302048)
+
+        // Just before Jenner, the latest fork is still Pasteur.
+        assert_eq!(
+            revm_spec_by_timestamp_and_block_number(spec.clone(), jenner_time - 1, block),
+            BscHardfork::Pasteur
+        );
+        // At/after Jenner's timestamp, it resolves to Jenner.
+        assert_eq!(
+            revm_spec_by_timestamp_and_block_number(spec.clone(), jenner_time, block),
+            BscHardfork::Jenner
+        );
+        // The built-in mainnet schedule still resolves to Pasteur at these timestamps,
+        // before its Jenner activation.
+        let plain = crate::chainspec::BscChainSpec::from(bsc_mainnet());
+        assert_eq!(
+            revm_spec_by_timestamp_and_block_number(plain.clone(), jenner_time, block),
+            BscHardfork::Pasteur
+        );
+        assert_eq!(
+            revm_spec_by_timestamp_and_block_number(plain, jenner_time - 1, block),
+            BscHardfork::Pasteur
+        );
+    }
+
+    #[test]
+    fn test_hardfork_activation_order_differences() {
+        // Test the critical difference between mainnet and testnet activation orders
+        // This demonstrates why the order in revm_spec_by_timestamp_and_block_number matters
+
+        // Mainnet activation blocks (from the code):
+        // Euler: 18907621, Nano: 21962149, Moran: 22107423, Gibbs: 23846001
+        // Order: Gibbs -> Moran -> Nano -> Euler (newest to oldest)
+
+        // Testnet activation blocks (from the code):
+        // Euler: 19203503, Gibbs: 22800220, Nano: 23482428, Moran: 23603940
+        // Order: Moran -> Nano -> Gibbs -> Euler (newest to oldest)
+
+        // Test mainnet chain spec
+        let mainnet_spec = crate::chainspec::BscChainSpec::from(bsc_mainnet());
+
+        // Test blocks around the critical transition points
+        // Block 23846000: Should be Moran (before Gibbs activation)
+        assert_eq!(
+            crate::node::evm::config::revm_spec_by_timestamp_and_block_number(
+                mainnet_spec.clone(),
+                1700000000, // Some timestamp
+                23846000
+            ),
+            BscHardfork::Moran
+        );
+
+        // Block 23846001: Should be Gibbs (Gibbs activation block)
+        assert_eq!(
+            crate::node::evm::config::revm_spec_by_timestamp_and_block_number(
+                mainnet_spec.clone(),
+                1700000000, // Some timestamp
+                23846001
+            ),
+            BscHardfork::Gibbs
+        );
+
+        // Block 22107422: Should be Nano (before Moran activation)
+        assert_eq!(
+            crate::node::evm::config::revm_spec_by_timestamp_and_block_number(
+                mainnet_spec.clone(),
+                1700000000, // Some timestamp
+                22107422
+            ),
+            BscHardfork::Nano
+        );
+
+        // Block 22107423: Should be Moran (Moran activation block)
+        assert_eq!(
+            crate::node::evm::config::revm_spec_by_timestamp_and_block_number(
+                mainnet_spec.clone(),
+                1700000000, // Some timestamp
+                22107423
+            ),
+            BscHardfork::Moran
+        );
+
+        // Test testnet chain spec
+        let testnet_spec = crate::chainspec::BscChainSpec::from(bsc_testnet());
+
+        // Test blocks around the critical transition points for testnet
+        // Block 23603939: Should be Nano (before Moran activation)
+        assert_eq!(
+            crate::node::evm::config::revm_spec_by_timestamp_and_block_number(
+                testnet_spec.clone(),
+                1700000000, // Some timestamp
+                23603939
+            ),
+            BscHardfork::Nano
+        );
+
+        // Block 23603940: Should be Moran (Moran activation block)
+        assert_eq!(
+            crate::node::evm::config::revm_spec_by_timestamp_and_block_number(
+                testnet_spec.clone(),
+                1700000000, // Some timestamp
+                23603940
+            ),
+            BscHardfork::Moran
+        );
+
+        // Block 23482427: Should be Gibbs (before Nano activation)
+        assert_eq!(
+            crate::node::evm::config::revm_spec_by_timestamp_and_block_number(
+                testnet_spec.clone(),
+                1700000000, // Some timestamp
+                23482427
+            ),
+            BscHardfork::Gibbs
+        );
+
+        // Block 23482428: Should be Nano (Nano activation block)
+        assert_eq!(
+            crate::node::evm::config::revm_spec_by_timestamp_and_block_number(
+                testnet_spec.clone(),
+                1700000000, // Some timestamp
+                23482428
+            ),
+            BscHardfork::Nano
+        );
+    }
+}

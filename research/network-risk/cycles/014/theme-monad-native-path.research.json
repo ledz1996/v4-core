@@ -1,0 +1,173 @@
+{
+ "unit": "theme-monad-native-path",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Monad nodes that serve call traces execute blocks with the interpreter only, so no public data shows compiled execution of the PoolManager",
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "actor": "operator",
+   "severity": "info",
+   "difference": "Monad v0.16.7 runs two execution engines. The execution daemon builds its VM as InterpreterOnly when it is started with --trace-calls and as Dual (interpreter plus native x86 compiler) otherwise (cmd/monad/main.cpp lines 146, 214 and 484-488). Call frames are recorded and committed only when tracing is enabled (runloop_monad.cpp lines 233-245 and 330-337). Every RPC method that executes code uses a second, InterpreterOnly VM (rpc/monad_executor.cpp lines 1306-1309, used at 1525, 1547, 1824 and 1969; monad-rpc debug_replay.rs lines 61-64 and 236-237). Ethereum has one execution semantics per client and every serving node runs it.",
+   "mechanism": "Every public Monad endpoint that answers debug_traceTransaction with the call tracer (rpc.monad.xyz, rpc1, rpc2 via eRPC, rpc-mainnet.monadinfra.com, monad-mainnet.gateway.tatum.io) returns stored frames, so those nodes ran their block execution with --trace-calls and therefore with the interpreter. Their receipts and logs, among them every Swap and ModifyLiquidity event earlier cycles and this unit checked, are interpreter output. The only link between those nodes and validators that may run compiled code is the delayed merkle root of the state, checked D = 3 blocks later. On chain this is visible: in blocks 125,115,001 to 125,118,000 all 689 out-of-gas frames of 1,582 failed transactions, 19 of them PoolManager frames (swap with 94,784 gas, take with 1,844 to 18,922 gas), carry status 3 \"out of gas\", which is what the interpreter writes (interpreter/stack.hpp line 44); compiled code would end a static gas shortfall through error_label_ with StatusCode::Error (emitter.cpp lines 636, 679, 1054-1069), which debug.rs lines 381-388 map to \"error\". A compiled-only fault in a PoolManager branch that no block has taken yet (the overflow fallback of src/libraries/SqrtPriceMath.sol:52, the amount above 2^160 branch at src/libraries/SqrtPriceMath.sol:97 and 105, the 512 bit branch of the Q128 mulDiv at src/libraries/Position.sol:94-96) could be triggered by an ordinary swap or removal, and nobody can test it in advance through RPC. If two thirds of validators ran such a build, the canonical PoolManager state would follow the compiled result and the tracing RPC fleet would fall out of consensus. No such fault was found: the compiled paths for MULMOD, shifts, comparisons, sign extension and jumps were transcribed in cycles 9 to 13 without a mismatch, and the state roots of the tracing nodes agree with consensus at the finalized tip (block 125,124,132 on 2026-11-24).",
+   "impact": "No loss path was found. The finding corrects the evidence base: OPCODES.md says the Monad mined swaps \"ran as compiled code\", and cycle 11 says call frames are what block execution recorded. Both are true only of an interpreter run on the tracing node. Compiled execution is covered by reading and by state root agreement, not by any served receipt, log or frame.",
+   "preconditions": "A fault in the native compiler of the release that validators run, on an input that no mined block has produced yet. It needs no role from the attacker, but it needs a client defect that no reading has found.",
+   "mitigations": "Before liquidity arrives, run one non-tracing Dual mode node (a local monad build replaying mainnet blocks without --trace-calls) and compare its receipts with a tracing node for transactions that take each untaken branch. Ask Monad which execution mode validators run. Treat Monad state root agreement, not RPC answers, as the producer evidence.",
+   "coreRefs": [
+    "src/libraries/SqrtPriceMath.sol:42-52",
+    "src/libraries/SqrtPriceMath.sol:94-106",
+    "src/libraries/Position.sol:94-96",
+    "src/libraries/FullMath.sol:21-38"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/cmd/monad/main.cpp",
+     "supports": "lines 146, 214, 484-488: --trace-calls selects vm::VM::InterpreterOnly for block execution, otherwise Dual, with the comment that the compiler does not expose the error exit codes call traces need"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/runloop/runloop_monad.cpp",
+     "supports": "lines 233-245: CallTracer only when enable_tracing; lines 330-337: call_frames committed with the receipts"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/rpc/monad_executor.cpp",
+     "supports": "lines 1306-1309 InterpreterOnly vm_ member, used by eth_call (1525, 1547), the trace replay (1824) and eth_simulateV1 (1969)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/category-labs/monad-bft/v0.16.7/monad-rpc/src/handlers/debug.rs",
+     "supports": "lines 520-540 and 599-680: callTracer reads stored frames; lines 381-388 map status 3 to out of gas and other failures to error"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/category-labs/monad-bft/v0.16.7/monad-rpc/src/handlers/debug_replay.rs",
+     "supports": "lines 61-64 and 236-237: prestateTracer requests replay through eth_trace_block_or_transaction of the eth_call executor"
+    },
+    {
+     "url": "https://docs.monad.xyz/monad-arch/consensus/asynchronous-execution.md",
+     "supports": "proposals carry the state merkle root of block N-3; nodes whose execution differs fall out of consensus (copy in cycles/013/high-throughput.work/raw/monad-async-exec.md lines 85-96)"
+    },
+    {
+     "url": "rpc debug_traceTransaction callTracer at rpc.monad.xyz, rpc1.monad.xyz, rpc-mainnet.monadinfra.com (results: research/network-risk/cycles/014/theme-monad-native-path.work/oogscan.json)",
+     "supports": "debug_traceTransaction callTracer over 1,582 failed transactions in blocks 125,115,001-125,118,000 at the endpoints of oogscan.py: 689 out-of-gas frames all status out of gas, 19 on the PoolManager, none reported as error"
+    },
+    {
+     "url": "rpc https://rpc.monad.xyz web3_clientVersion and debug_traceTransaction 0xd5d7b9bf9dc21f66a1186a11f4637a0c0acff3bb859e0e698d01ed891a027ebd on 2026-11-24",
+     "supports": "Monad/0.16.7; stored frames returned by rpc.monad.xyz, rpc1, rpc2, rpc-mainnet.monadinfra.com and monad-mainnet.gateway.tatum.io; rpc3 and rpc.ankr.com refuse the method"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Step 1 (lead L-700): does any Monad RPC method execute on the block execution VM instead of the InterpreterOnly VM, at the release the endpoints report (Monad/0.16.7).",
+   "result": "No. eth_call and debug_traceCall (monad_executor.cpp 1525 and 1547), debug_traceTransaction, debug_traceBlockByNumber and debug_traceBlockByHash with the prestate tracer (debug_replay.rs 61-64, 236-237, monad_executor.cpp 1824) and eth_simulateV1 (monad_executor.cpp 1969) all pass the member vm_ declared InterpreterOnly at 1306-1309. The call tracer executes nothing and returns frames stored by the node's own block execution (debug.rs 520-540), and a node stores frames only when it runs with --trace-calls, which also makes its block VM InterpreterOnly (main.cpp 484-488). No endpoint can run battery.py or pmdiff6.py inputs on compiled code, so they were not rerun.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/rpc/monad_executor.cpp ; https://raw.githubusercontent.com/category-labs/monad-bft/v0.16.7/monad-rpc/src/handlers/mod.rs lines 316-395 and 426-449 ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/cmd/monad/main.cpp"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Step 2: every mined v4 swap on Monad in blocks 124,719,001 to 125,119,000 (4,000 windows of 100 blocks, none missing, eth_getLogs at rpc.monad.xyz, rpc1, rpc3 and rpc-mainnet.monadinfra.com) against SwapMath.computeSwapStep as transcribed in tools/opdiff/v4math.py, with every mulDiv call tagged by site and by whether a*b needs more than 256 bits (bigcheck.py, run_big.py).",
+   "result": "629,293 Swap events; 614,687 paired with the previous swap of the pool at equal liquidity; 612,273 match one step to the unit (579,469 exact input, 26,362 exact output, 6,442 to target) and 2,341 of the other 2,414 sit within the several-step tolerance of swaps.py. 129,567 matching swaps take the 512 bit branch of FullMath.mulDiv (src/libraries/FullMath.sol:33-100): 128,231 in getNextSqrtPriceFromAmount0RoundingUp (src/libraries/SqrtPriceMath.sol:47 and 71, L times sqrtPrice at or above 2^160) and 1,336 in getAmount0Delta (src/libraries/SqrtPriceMath.sol:208-209). The overflow fallback of src/libraries/SqrtPriceMath.sol:52 is taken by 0 of 295,043 calls and the amount above 2^160 branch of src/libraries/SqrtPriceMath.sol:95-97 and 103-105 by 0 of 294,879. The newest 40,000 blocks were also replayed through the whole Pool.swap loop from parent-block storage with cycle 13's replay2.py: 53,503 swaps, 51,928 single step and 1,575 full loop, 0 unmatched, 170 full-loop swaps with a 512 bit product, fee check 1,540 of 1,540, fee growth 40 of 40. These events are interpreter output of the tracing RPC nodes (see the finding); their state effects agree with consensus through the state root.",
+   "source": "research/network-risk/cycles/014/theme-monad-native-path.work/big.json ; research/network-risk/cycles/014/theme-monad-native-path.work/replay2-v4.json ; src/libraries/SqrtPriceMath.sol:38-74"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Step 2: mined Swap events of v3 style pools on Monad in the same blocks (topic Swap(address,address,int256,int256,uint160,uint128,int24), any emitter; factory() and fee() read from each pool; Uniswap v3 factory 0x204faca1764b154221e35c0d20abb3c525710498 from developers.uniswap.org) against the same v4math formulas.",
+   "result": "53,532 swaps from pools of 12 factories, 49,726 paired. Uniswap v3: 24,373 pairs, 24,172 exact, 200 of the 201 others within the several-step tolerance, 1,787 with a 512 bit product (1,061 next price, 726 amount0). Over all factories 43,821 exact and 9,324 with a 512 bit product. Factory 0x10253594a832f967994b44f33411940533302acb charges a fee other than fee() returns (478 pips stored, 379 to 388 charged): with the fee that fits, 5,605 of its swaps match, the output in each is exact, and 4 outputs differ (2 within the several-step tolerance). Five v3 swaps (1 Uniswap, 2 factory 0x6b5f564339dbad6b780249827f2198a841feb7f3, 2 factory 0x10253594) are left unexplained and were not replayed through the loop. No v3 swap takes the overflow fallback or the amount above 2^160 branch. The v3 sources were not read in this unit; the match shows that these pools give the values of this repository's formulas.",
+   "source": "research/network-risk/cycles/014/theme-monad-native-path.work/big.json ; research/network-risk/cycles/014/theme-monad-native-path.work/fork-10253594.json ; research/network-risk/cycles/014/theme-monad-native-path.work/raw/uniswap-v3-monad-deployments.mdx"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Step 2 planted fault: MULMOD(a, b, 2^256 - 1) returns one more than the true remainder, on every call (FAULT=mm1) or only when a*b >= 2^256 (FAULT=mm1big).",
+   "result": "mm1: 0 of 614,687 v4 pairs and 0 of 49,726 v3 pairs match, because the 1e6 and Q96 denominators then take the 512 bit branch with a wrong high word. mm1big: unmatched v4 pairs rise from 2,414 to 3,167 and v3 from 5,905 to 7,723, and the full-loop replay of the newest 40,000 blocks goes from 0 to 78 unmatched. The fault is caught only for even denominators. With an odd denominator, twos is 1 and add(div(sub(0, twos), twos), 1) is 0 (src/libraries/FullMath.sol:59-75), so prod1 drops out and the result is prod0 times the inverse modulo 2^256, which is exact whenever the quotient fits. oddden.py confirms this on 400,000 inputs: 0 wrong results for 200,129 odd denominators and 199,871 of 199,871 wrong for even ones. A fault in the high word for an odd denominator therefore cannot change a PoolManager amount unless it moves prod1 between zero and nonzero or across the require at src/libraries/FullMath.sol:30.",
+   "source": "research/network-risk/cycles/014/theme-monad-native-path.work/big-fault-mm1.json ; research/network-risk/cycles/014/theme-monad-native-path.work/big-fault-mm1big.json ; research/network-risk/cycles/014/theme-monad-native-path.work/replay2-v4-fault-mm1big.json ; research/network-risk/cycles/014/theme-monad-native-path.work/oddden.json ; src/libraries/FullMath.sol:59-99"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Step 3: is a contract of the v3 pool's size (22,586 bytes, eth_getCode of 0x4538053fc57d72eb70c6f822a3275531760bc7fd) or of the PoolManager's size (24,009 bytes) compiled.",
+   "result": "Not decidable without a build of the emitter. The bound is max_code_size = 10,240 (CompilerConfig default, compiler/ir/x86/types.hpp line 141) + 32 x bytecode size (x86.hpp lines 53-64): 778,528 bytes for the PoolManager and 732,992 for the v3 pool. The estimate checked after every instruction and block (x86.cpp lines 308-341 and 466-479) is text size + 32 per pending CALLDATALOAD or BYTE handler + 32 per read-only constant + 4 x bytecode size (emitter.cpp lines 1020-1029), so the jump table alone takes 96,036 and 90,344 bytes and the PoolManager compiles only if its x86 text stays below about 682,000 bytes, 65 bytes per EVM instruction. Over the bound the Nativecode has no entry point and vm.cpp lines 152-157 interpret it for the rest of the revision. The observable the plan proposed does not exist in served data: frames are stored only by tracing nodes, which interpret, and gas is equal in both modes (cycle 13, emitter.cpp 3106-3116).",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/compiler/ir/x86/types.hpp ; research/network-risk/cycles/013/high-throughput.work/src/v0.16.7/category_vm_compiler_ir_x86.hpp lines 53-64 ; research/network-risk/cycles/013/high-throughput.work/src/v0.16.7/category_vm_compiler_ir_x86_emitter.cpp lines 1020-1029 ; research/network-risk/cycles/013/high-throughput.work/src/v0.16.7/category_vm_vm.cpp lines 140-186"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Step 4 (lead L-693): do mined transactions call clear, transferFrom, approve, donate, burn through a spender or operator, setOperator or transfer on the Monad PoolManager.",
+   "result": "Call frames of 6,000 random PoolManager transactions from blocks 124,719,001-125,119,000 hold 0 calls to clear, transferFrom, approve, donate, burn, setOperator or transfer, 17 to mint and 2 to settleFor (selscan.py). PoolManager logs over blocks 123,960,201-125,119,000 (11,588 windows, none missing) hold 1,339 mint and 57 burn Transfer events, every burn with caller equal to owner (src/ERC6909.sol:88), and no Donate (src/PoolManager.sol donate emits it), no Approval (src/ERC6909.sol:53), no OperatorSet (src/ERC6909.sol:61) and no Transfer by a spender (src/ERC6909.sol:45, src/ERC6909Claims.sol:13-21). The full history was not scanned because eth_getLogs on every public endpoint is limited to 100 blocks. clear emits no event, so its absence rests on the traced sample.",
+   "source": "research/network-risk/cycles/014/theme-monad-native-path.work/selscan.json ; research/network-risk/cycles/014/theme-monad-native-path.work/pmlogs-tally.json ; src/ERC6909.sol:25-89"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "question": "Which execution mode do Monad mainnet validators run (Dual or InterpreterOnly), and can a non-tracing Dual node be run locally from the v0.16.7 source to replay mainnet blocks and compare its receipts with a tracing node's for transactions that take the overflow fallback at src/libraries/SqrtPriceMath.sol:52, the amount above 2^160 branch at :97 and :105, and the Q128 512 bit branch at src/libraries/Position.sol:94-96?",
+   "why": "No public endpoint serves compiled execution, so these branches have no producer evidence and the 0 mined instances in 629,293 swaps means they never ran on any engine in a block.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "question": "Build the v0.16.7 x86 emitter with stubbed runtime symbols (asmjit sources listed in its CMakeLists.txt, evmc headers, a stub for the quill logger) and print estimate_size() for the 24,009 byte PoolManager runtime and the 22,586 byte v3 pool: are they under 778,528 and 732,992 bytes?",
+   "why": "If the PoolManager is over the bound it is never compiled and the compiled-path question disappears; g++, clang and cmake are present in this environment.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "question": "OPCODES.md (Check 4, swaps-deep paragraph) states that the Monad mined swaps ran as compiled code. Should it be reworded to say they are interpreter output of tracing RPC nodes, agreed with validators only through the delayed state root?",
+   "why": "Later units build on that sentence.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-700",
+   "outcome": "inconclusive",
+   "answer": "No Monad RPC method runs on the block execution VM: eth_call, debug_traceCall, prestate replays and eth_simulateV1 use the InterpreterOnly vm_ of monad_executor.cpp 1306-1309, and call tracer frames come from nodes whose --trace-calls flag makes block execution InterpreterOnly (main.cpp 484-488). Mined evidence: 629,293 v4 and 53,532 v3 style swaps in 400,000 blocks; 129,567 v4 and 9,324 v3 matching swaps take the 512 bit mulDiv branch and all fit to the unit; none takes the overflow fallback or the amount above 2^160 branch. Planted MULMOD faults are caught. Those events were computed by the interpreter on tracing nodes and agree with validators only through the state root, so compiled execution still has no direct evidence."
+  },
+  {
+   "leadId": "L-676",
+   "outcome": "inconclusive",
+   "answer": "Bound 778,528 bytes (10,240 + 32 x 24,009), estimate = text + pending handlers + 32 x rodata + 96,036 jump table; needs a build. No served observable separates the modes: gas is identical and frames exist only on tracing nodes, which interpret (all 19 PoolManager out-of-gas frames in 3,000 blocks report out of gas, as the interpreter does)."
+  },
+  {
+   "leadId": "L-692",
+   "outcome": "inconclusive",
+   "answer": "The generic 512 bit mulDiv branch now has 129,567 mined v4 instances on Monad that match. Still with no mined instance in blocks 124,719,001-125,119,000: the overflow fallback (0 of 295,043 calls), amount above 2^160 (0 of 294,879), clear, transferFrom, approve, donate and burns by a spender (0 in 6,000 traced transactions and in 1.16 million blocks of logs). Mined data on Monad comes from interpreting nodes in any case, so a deployment test mined on chain would also be read back through an interpreter."
+  },
+  {
+   "leadId": "L-693",
+   "outcome": "cleared",
+   "answer": "No: 0 clear frames in 6,000 traced PoolManager transactions from 400,000 recent blocks, which adds to the 3,507 of cycle 13. clear moves no tokens and credits nothing."
+  }
+ ]
+}

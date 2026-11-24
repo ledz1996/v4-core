@@ -1,0 +1,732 @@
+use alloy_consensus::Sealable;
+use alloy_eips::BlockNumberOrTag;
+use alloy_primitives::{BlockHash, B256};
+use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::ErrorObject};
+use reth_provider::{BlockIdReader, HeaderProvider};
+use serde::{Deserialize, Serialize};
+
+use crate::consensus::parlia::{Snapshot, SnapshotProvider};
+
+use std::{str::FromStr, sync::Arc};
+
+/// Validator information in the snapshot (matches BSC official format)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatorInfo {
+    #[serde(rename = "index:omitempty")]
+    pub index: u64,
+    pub vote_address: Vec<u8>, // 48-byte vote address array as vec for serde compatibility
+}
+
+impl Default for ValidatorInfo {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            vote_address: vec![0; 48], // All zeros as shown in BSC example
+        }
+    }
+}
+
+/// Official BSC Parlia snapshot response structure matching bsc-erigon
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotResult {
+    pub number: u64,
+    pub hash: String,
+    pub epoch_length: u64,
+    pub block_interval: u64,
+    pub turn_length: u8,
+    pub validators: std::collections::BTreeMap<String, ValidatorInfo>,
+    pub recents: std::collections::BTreeMap<String, String>,
+    pub recent_fork_hashes: std::collections::BTreeMap<String, String>,
+    #[serde(rename = "attestation:omitempty")]
+    pub attestation: Option<serde_json::Value>,
+}
+
+impl From<Snapshot> for SnapshotResult {
+    fn from(snapshot: Snapshot) -> Self {
+        // Convert validators to the expected format: address -> ValidatorInfo (BTreeMap for sorted output)
+        let validators: std::collections::BTreeMap<String, ValidatorInfo> = snapshot
+            .validators
+            .iter()
+            .map(|addr| {
+                let validator_info = snapshot.validators_map.get(addr).cloned().unwrap_or_default();
+                (
+                    format!("0x{addr:040x}"), // 40-char hex address
+                    ValidatorInfo {
+                        index: validator_info.index,
+                        vote_address: validator_info.vote_addr.to_vec(),
+                    },
+                )
+            })
+            .collect();
+
+        // Convert recent proposers to string format: block_number -> address (BTreeMap for sorted output)
+        let recents: std::collections::BTreeMap<String, String> = snapshot
+            .recent_proposers
+            .iter()
+            .map(|(block_num, addr)| (block_num.to_string(), format!("0x{addr:040x}")))
+            .collect();
+
+        // Convert recent fork hashes from snapshot data (BTreeMap for sorted output)
+        let recent_fork_hashes: std::collections::BTreeMap<String, String> = snapshot
+            .recent_fork_hashes
+            .iter()
+            .map(|(block_num, hash)| (block_num.to_string(), hash.clone()))
+            .collect();
+
+        // Convert vote_data to attestation format (PascalCase to match geth-bsc)
+        let attestation = if snapshot.vote_data.target_number > 0 {
+            Some(serde_json::json!({
+                "SourceNumber": snapshot.vote_data.source_number,
+                "SourceHash": format!("0x{:064x}", snapshot.vote_data.source_hash),
+                "TargetNumber": snapshot.vote_data.target_number,
+                "TargetHash": format!("0x{:064x}", snapshot.vote_data.target_hash),
+            }))
+        } else {
+            None
+        };
+
+        Self {
+            number: snapshot.block_number,
+            hash: format!("0x{:064x}", snapshot.block_hash),
+            epoch_length: snapshot.epoch_num, // Use actual epoch length from snapshot
+            block_interval: snapshot.block_interval, // Use actual block interval from snapshot
+            turn_length: snapshot.turn_length.unwrap_or(1),
+            validators,
+            recents,
+            recent_fork_hashes,
+            attestation,
+        }
+    }
+}
+
+/// Parlia snapshot RPC API (matches BSC official standard)
+#[rpc(server, namespace = "parlia")]
+pub trait ParliaApi {
+    /// Get snapshot at a specific block number (official BSC API method)
+    /// Params: block number as hex string (e.g., "0x123132")
+    #[method(name = "getSnapshot")]
+    async fn get_snapshot(&self, block_number: String) -> RpcResult<Option<SnapshotResult>>;
+
+    /// Get snapshot at a specific block hash (official BSC API method)
+    /// Params: block hash as hex string
+    #[method(name = "getSnapshotAtHash")]
+    async fn get_snapshot_at_hash(&self, block_hash: String) -> RpcResult<Option<SnapshotResult>>;
+
+    /// Get validator addresses at a specific block number (official BSC API method)
+    /// Params: block number as hex string (e.g., "0x123132")
+    #[method(name = "getValidators")]
+    async fn get_validators(&self, block_number: String) -> RpcResult<Vec<String>>;
+
+    /// Get validator addresses at a specific block hash (official BSC API method)
+    /// Params: block hash as hex string
+    #[method(name = "getValidatorsAtHash")]
+    async fn get_validators_at_hash(&self, block_hash: String) -> RpcResult<Vec<String>>;
+
+    /// Get the justified block number at a specific block (official BSC API method)
+    /// Params: block number as hex string (e.g., "0x123132")
+    #[method(name = "getJustifiedNumber")]
+    async fn get_justified_number(&self, block_number: String) -> RpcResult<u64>;
+
+    /// Get the finalized block number at a specific block (official BSC API method)
+    /// Params: block number as hex string (e.g., "0x123132")
+    #[method(name = "getFinalizedNumber")]
+    async fn get_finalized_number(&self, block_number: String) -> RpcResult<u64>;
+
+    /// Build call data for StakeHub.addNodeIDs(bytes32[] nodeIDs). Returns { to, data } as hex.
+    #[method(name = "buildAddNodeIDsCall")]
+    async fn build_add_node_ids_call(&self, node_ids: Vec<String>) -> RpcResult<ContractCall>;
+
+    /// Build call data for StakeHub.removeNodeIDs(bytes32[] nodeIDs). Returns { to, data } as hex.
+    #[method(name = "buildRemoveNodeIDsCall")]
+    async fn build_remove_node_ids_call(&self, node_ids: Vec<String>) -> RpcResult<ContractCall>;
+}
+
+/// Implementation of the Parlia snapshot RPC API
+pub struct ParliaApiImpl<P: SnapshotProvider, B: HeaderProvider + BlockIdReader + Send + Sync> {
+    /// Snapshot provider for accessing validator snapshots
+    snapshot_provider: Arc<P>,
+    provider: B,
+}
+
+/// Wrapper for trait object to work around Sized requirement
+pub struct DynSnapshotProvider {
+    inner: Arc<dyn SnapshotProvider + Send + Sync>,
+}
+
+impl DynSnapshotProvider {
+    pub fn new(provider: Arc<dyn SnapshotProvider + Send + Sync>) -> Self {
+        Self { inner: provider }
+    }
+}
+
+impl SnapshotProvider for DynSnapshotProvider {
+    fn insert(&self, snapshot: Snapshot) {
+        self.inner.insert(snapshot)
+    }
+
+    fn snapshot_by_hash(&self, block_hash: &BlockHash) -> Option<Snapshot> {
+        self.inner.snapshot_by_hash(block_hash)
+    }
+}
+
+impl<P, B> ParliaApiImpl<P, B>
+where
+    P: SnapshotProvider + Send + Sync + 'static,
+    B: HeaderProvider + BlockIdReader + Send + Sync + 'static,
+{
+    /// Create a new Parlia API instance
+    pub fn new(snapshot_provider: Arc<P>, provider: B) -> Self {
+        Self { snapshot_provider, provider }
+    }
+
+    /// Parse block number string (hex, tag, or hash)
+    fn parse_block_number(&self, block_str: &str) -> RpcResult<u64> {
+        // Handle tags
+        match block_str {
+            "latest" => {
+                return self.provider.best_block_number().map_err(|e| {
+                    ErrorObject::owned(
+                        -32603,
+                        format!("Failed to get latest block: {}", e),
+                        None::<()>,
+                    )
+                })
+            }
+            "earliest" => return Ok(0),
+            "safe" | "finalized" => {
+                let tag = if block_str == "safe" {
+                    BlockNumberOrTag::Safe
+                } else {
+                    BlockNumberOrTag::Finalized
+                };
+                return super::finality::resolve_finality_block(&self.provider, tag);
+            }
+            _ => {}
+        }
+
+        // Try hex number
+        if let Some(hex_str) = block_str.strip_prefix("0x") {
+            if let Ok(num) = u64::from_str_radix(hex_str, 16) {
+                return Ok(num);
+            }
+        }
+
+        // Try as decimal
+        if let Ok(num) = block_str.parse::<u64>() {
+            return Ok(num);
+        }
+
+        // Try as block hash (32 bytes hex)
+        if block_str.len() == 66 || (block_str.len() == 64 && !block_str.starts_with("0x")) {
+            let hash_str = block_str.strip_prefix("0x").unwrap_or(block_str);
+            if let Ok(hash_bytes) = hex::decode(hash_str) {
+                if hash_bytes.len() == 32 {
+                    let block_hash = B256::from_slice(&hash_bytes);
+                    // Try to get block by hash
+                    if let Ok(Some(block_num)) = self.provider.block_number(block_hash) {
+                        return Ok(block_num);
+                    }
+                }
+            }
+        }
+
+        Err(ErrorObject::owned(
+            -32602,
+            format!("Invalid block number format: {}", block_str),
+            None::<()>,
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl<P, B> ParliaApiServer for ParliaApiImpl<P, B>
+where
+    P: SnapshotProvider + Send + Sync + 'static,
+    B: HeaderProvider + BlockIdReader + Send + Sync + 'static,
+{
+    /// Get snapshot at a specific block number (matches BSC official API.GetSnapshot)
+    /// Accepts block number as hex string like "0x123132"
+    async fn get_snapshot(&self, block_number: String) -> RpcResult<Option<SnapshotResult>> {
+        let block_number = self.parse_block_number(&block_number)?;
+        let header = self.provider.header_by_number(block_number).map_err(|e| {
+            ErrorObject::owned(-32603, format!("Failed to get header by number: {}", e), None::<()>)
+        })?;
+
+        let Some(header) = header else {
+            return Ok(None);
+        };
+
+        let block_hash = header.hash_slow();
+        match self.snapshot_provider.snapshot_by_hash(&block_hash) {
+            Some(snapshot) => {
+                tracing::debug!(
+                    "Found snapshot for block {}: validators={}, epoch_num={}, block_hash=0x{:x}",
+                    block_number,
+                    snapshot.validators.len(),
+                    snapshot.epoch_num,
+                    snapshot.block_hash
+                );
+                let result: SnapshotResult = snapshot.into();
+                Ok(Some(result))
+            }
+            None => {
+                tracing::warn!("No snapshot found for block number {}", block_number);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Get snapshot at a specific block hash (matches BSC official API.GetSnapshotAtHash)
+    async fn get_snapshot_at_hash(&self, block_hash: String) -> RpcResult<Option<SnapshotResult>> {
+        let block_hash = BlockHash::from_str(&block_hash)
+            .map_err(|_| ErrorObject::owned(-32602, "Invalid block hash format", None::<()>))?;
+
+        match self.snapshot_provider.snapshot_by_hash(&block_hash) {
+            Some(snapshot) => {
+                tracing::debug!(
+                    "Found snapshot for block hash {}: validators={}, epoch_num={}, block_number={}",
+                    block_hash,
+                    snapshot.validators.len(),
+                    snapshot.epoch_num,
+                    snapshot.block_number
+                );
+                let result: SnapshotResult = snapshot.into();
+                Ok(Some(result))
+            }
+            None => {
+                tracing::warn!("No snapshot found for block hash {}", block_hash);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Get validator addresses at a specific block number
+    async fn get_validators(&self, block_number: String) -> RpcResult<Vec<String>> {
+        let block_number = self.parse_block_number(&block_number)?;
+        let header = self.provider.header_by_number(block_number).map_err(|e| {
+            ErrorObject::owned(-32603, format!("Failed to get header by number: {}", e), None::<()>)
+        })?;
+
+        let Some(header) = header else {
+            return Err(ErrorObject::owned(-32602, "Header not found", None::<()>));
+        };
+
+        let block_hash = header.hash_slow();
+        match self.snapshot_provider.snapshot_by_hash(&block_hash) {
+            Some(snapshot) => {
+                let validators: Vec<String> =
+                    snapshot.validators.iter().map(|addr| format!("0x{:040x}", addr)).collect();
+                tracing::debug!(
+                    "Found {} validators for block number {}",
+                    validators.len(),
+                    block_number
+                );
+                Ok(validators)
+            }
+            None => {
+                tracing::warn!("No snapshot found for block number {}", block_number);
+                Err(ErrorObject::owned(-32602, "No snapshot found", None::<()>))
+            }
+        }
+    }
+
+    /// Get validator addresses at a specific block hash
+    async fn get_validators_at_hash(&self, block_hash: String) -> RpcResult<Vec<String>> {
+        let block_hash = BlockHash::from_str(&block_hash)
+            .map_err(|_| ErrorObject::owned(-32602, "Invalid block hash format", None::<()>))?;
+
+        match self.snapshot_provider.snapshot_by_hash(&block_hash) {
+            Some(snapshot) => {
+                let validators: Vec<String> =
+                    snapshot.validators.iter().map(|addr| format!("0x{:040x}", addr)).collect();
+                tracing::debug!(
+                    "Found {} validators for block hash {}",
+                    validators.len(),
+                    block_hash
+                );
+                Ok(validators)
+            }
+            None => {
+                tracing::warn!("No snapshot found for block hash {}", block_hash);
+                Err(ErrorObject::owned(-32602, "No snapshot found", None::<()>))
+            }
+        }
+    }
+
+    /// Get justified block number at a specific block
+    async fn get_justified_number(&self, block_number: String) -> RpcResult<u64> {
+        let block_number = self.parse_block_number(&block_number)?;
+        let header = self
+            .provider
+            .header_by_number(block_number)
+            .map_err(|e| {
+                ErrorObject::owned(
+                    -32603,
+                    format!("Failed to get header by number: {}", e),
+                    None::<()>,
+                )
+            })?
+            .ok_or(ErrorObject::owned(-32602, "Header not found", None::<()>))?;
+
+        let snapshot = self
+            .snapshot_provider
+            .snapshot_by_hash(&header.hash_slow())
+            .ok_or(ErrorObject::owned(-32602, "No snapshot found for block", None::<()>))?;
+
+        tracing::debug!(
+            "Justified number for block {}: {}",
+            block_number,
+            snapshot.vote_data.target_number
+        );
+        Ok(snapshot.vote_data.target_number)
+    }
+
+    /// Get finalized block number at a specific block
+    async fn get_finalized_number(&self, block_number: String) -> RpcResult<u64> {
+        let block_number = self.parse_block_number(&block_number)?;
+        let header = self
+            .provider
+            .header_by_number(block_number)
+            .map_err(|e| {
+                ErrorObject::owned(
+                    -32603,
+                    format!("Failed to get header by number: {}", e),
+                    None::<()>,
+                )
+            })?
+            .ok_or(ErrorObject::owned(-32602, "Header not found", None::<()>))?;
+
+        let snapshot = self
+            .snapshot_provider
+            .snapshot_by_hash(&header.hash_slow())
+            .ok_or(ErrorObject::owned(-32602, "No snapshot found for block", None::<()>))?;
+
+        let finalized_number = snapshot.get_finalized_number();
+        tracing::debug!("Finalized number for block {}: {}", block_number, finalized_number);
+        Ok(finalized_number)
+    }
+
+    async fn build_add_node_ids_call(&self, node_ids: Vec<String>) -> RpcResult<ContractCall> {
+        let ids = parse_node_ids(node_ids)?;
+        let (to, data) = crate::system_contracts::encode_add_node_ids_call(ids);
+        Ok(ContractCall {
+            to: format!("0x{to:040x}"),
+            data: format!("0x{}", alloy_primitives::hex::encode(data)),
+        })
+    }
+
+    async fn build_remove_node_ids_call(&self, node_ids: Vec<String>) -> RpcResult<ContractCall> {
+        let ids = parse_node_ids(node_ids)?;
+        let (to, data) = crate::system_contracts::encode_remove_node_ids_call(ids);
+        Ok(ContractCall {
+            to: format!("0x{to:040x}"),
+            data: format!("0x{}", alloy_primitives::hex::encode(data)),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractCall {
+    pub to: String,
+    pub data: String,
+}
+
+fn parse_node_ids(input: Vec<String>) -> RpcResult<Vec<[u8; 32]>> {
+    let mut out = Vec::with_capacity(input.len());
+    for s in input {
+        let s = s.strip_prefix("0x").unwrap_or(&s);
+        let bytes = match alloy_primitives::hex::decode(s) {
+            Ok(b) => b,
+            Err(_) => return Err(ErrorObject::owned(-32602, "Invalid nodeID hex", None::<()>)),
+        };
+        if bytes.len() != 32 {
+            return Err(ErrorObject::owned(-32602, "NodeID must be 32 bytes", None::<()>));
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        out.push(arr);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chainspec::{bsc_testnet, BscChainSpec};
+    use crate::consensus::parlia::provider::EnhancedDbSnapshotProvider;
+    use crate::consensus::parlia::VoteData;
+    use alloy_consensus::Header;
+    use alloy_primitives::b256;
+    use core::ops::RangeBounds;
+    use reth_db::test_utils::create_test_rw_db;
+    use reth_primitives_traits::SealedHeader;
+    use reth_provider::ProviderResult;
+    use std::sync::LazyLock;
+
+    static TEST_GENSIS_HEADER: LazyLock<Header> = LazyLock::new(|| Header {
+        parent_hash: b256!("0x043851a1a96c9912fcdcf4ed27ac73b1d2c1a790c3ee0e3acc1b55cc75685a11"),
+        number: 0,
+        ..Header::default()
+    });
+    static TEST_HEADER: LazyLock<Header> = LazyLock::new(|| Header {
+        parent_hash: b256!("0x7b781c398681c3735b40a60956e9b89e0ec2158f0850b6449e999de4c5889e87"),
+        number: 100,
+        ..Header::default()
+    });
+    /// Minimal test provider that satisfies the required traits with stubbed methods.
+    #[derive(Clone, Debug)]
+    struct TestProvider {
+        safe: Option<u64>,
+        finalized: Option<u64>,
+        fail_markers: bool,
+    }
+
+    impl Default for TestProvider {
+        fn default() -> Self {
+            Self { safe: Some(98), finalized: Some(95), fail_markers: false }
+        }
+    }
+
+    impl BlockIdReader for TestProvider {
+        fn pending_block_num_hash(&self) -> ProviderResult<Option<alloy_eips::BlockNumHash>> {
+            Ok(None)
+        }
+        fn safe_block_num_hash(&self) -> ProviderResult<Option<alloy_eips::BlockNumHash>> {
+            if self.fail_markers {
+                return Err(reth_provider::ProviderError::UnsupportedProvider);
+            }
+            Ok(self.safe.map(|number| alloy_eips::BlockNumHash::new(number, B256::ZERO)))
+        }
+        fn finalized_block_num_hash(&self) -> ProviderResult<Option<alloy_eips::BlockNumHash>> {
+            if self.fail_markers {
+                return Err(reth_provider::ProviderError::UnsupportedProvider);
+            }
+            Ok(self.finalized.map(|number| alloy_eips::BlockNumHash::new(number, B256::ZERO)))
+        }
+    }
+
+    impl reth_provider::BlockHashReader for TestProvider {
+        fn block_hash(
+            &self,
+            _number: alloy_primitives::BlockNumber,
+        ) -> ProviderResult<Option<alloy_primitives::B256>> {
+            Ok(None)
+        }
+
+        fn canonical_hashes_range(
+            &self,
+            _start: alloy_primitives::BlockNumber,
+            _end: alloy_primitives::BlockNumber,
+        ) -> ProviderResult<Vec<alloy_primitives::B256>> {
+            Ok(Vec::new())
+        }
+    }
+
+    impl reth_provider::BlockNumReader for TestProvider {
+        fn chain_info(&self) -> ProviderResult<reth_chainspec::ChainInfo> {
+            Ok(Default::default())
+        }
+
+        fn best_block_number(&self) -> ProviderResult<alloy_primitives::BlockNumber> {
+            Ok(100)
+        }
+
+        fn last_block_number(&self) -> ProviderResult<alloy_primitives::BlockNumber> {
+            Ok(100)
+        }
+
+        fn block_number(
+            &self,
+            hash: alloy_primitives::B256,
+        ) -> ProviderResult<Option<alloy_primitives::BlockNumber>> {
+            Ok([0, 95, 98, 100].into_iter().find(|number| {
+                self.header_by_number(*number).unwrap().unwrap().hash_slow() == hash
+            }))
+        }
+    }
+
+    impl reth_provider::HeaderProvider for TestProvider {
+        type Header = alloy_consensus::Header;
+
+        fn header(
+            &self,
+            _block_hash: alloy_primitives::BlockHash,
+        ) -> ProviderResult<Option<Self::Header>> {
+            Ok(None)
+        }
+
+        fn header_by_number(&self, _num: u64) -> ProviderResult<Option<Self::Header>> {
+            match _num {
+                0 => Ok(Some((*TEST_GENSIS_HEADER).clone())),
+                95 | 98 | 100 => Ok(Some(Header { number: _num, ..(*TEST_HEADER).clone() })),
+                _ => Ok(None),
+            }
+        }
+
+        fn header_td(
+            &self,
+            _hash: &alloy_primitives::BlockHash,
+        ) -> ProviderResult<Option<alloy_primitives::U256>> {
+            Ok(None)
+        }
+
+        fn header_td_by_number(
+            &self,
+            _number: alloy_primitives::BlockNumber,
+        ) -> ProviderResult<Option<alloy_primitives::U256>> {
+            Ok(None)
+        }
+
+        fn headers_range(
+            &self,
+            _range: impl RangeBounds<alloy_primitives::BlockNumber>,
+        ) -> ProviderResult<Vec<Self::Header>> {
+            Ok(Vec::new())
+        }
+
+        fn sealed_header(
+            &self,
+            _number: alloy_primitives::BlockNumber,
+        ) -> ProviderResult<Option<SealedHeader<Self::Header>>> {
+            Ok(None)
+        }
+
+        fn sealed_headers_while(
+            &self,
+            _range: impl RangeBounds<alloy_primitives::BlockNumber>,
+            _predicate: impl FnMut(&SealedHeader<Self::Header>) -> bool,
+        ) -> ProviderResult<Vec<SealedHeader<Self::Header>>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_api() {
+        // Build an EnhancedDbSnapshotProvider backed by a temp DB and noop header provider
+        let db = create_test_rw_db();
+        let chain_spec = Arc::new(BscChainSpec::from(bsc_testnet()));
+        let snapshot_provider =
+            Arc::new(EnhancedDbSnapshotProvider::new(db.clone(), 2048, chain_spec));
+
+        // Insert a test snapshot
+        let test_snapshot = Snapshot {
+            block_number: TEST_HEADER.number,
+            block_hash: TEST_HEADER.hash_slow(),
+            validators: vec![
+                alloy_primitives::Address::random(),
+                alloy_primitives::Address::random(),
+            ],
+            epoch_num: 200,
+            turn_length: Some(1),
+            vote_data: VoteData { target_number: 99, source_number: 98, ..Default::default() },
+            ..Default::default()
+        };
+        snapshot_provider.insert(test_snapshot.clone());
+        snapshot_provider.insert(Snapshot {
+            block_number: 0,
+            block_hash: TEST_GENSIS_HEADER.hash_slow(),
+            ..Default::default()
+        });
+
+        let provider = TestProvider::default();
+        let api = ParliaApiImpl::new(snapshot_provider, provider);
+
+        // Test getSnapshot with block number
+        let result = api.get_snapshot("latest".to_string()).await.unwrap();
+        assert!(result.is_some());
+        let snapshot_result = result.unwrap();
+        assert_eq!(snapshot_result.number, 100);
+        assert_eq!(snapshot_result.validators.len(), 2);
+        assert_eq!(snapshot_result.epoch_length, 200);
+        assert_eq!(snapshot_result.turn_length, 1);
+
+        // Test getSnapshotAtHash with block hash
+        let result = api.get_snapshot_at_hash(TEST_HEADER.hash_slow().to_string()).await.unwrap();
+        assert!(result.is_some());
+        let snapshot_result = result.unwrap();
+        assert_eq!(snapshot_result.number, 100);
+
+        // Test getValidators with block number
+        let validators = api.get_validators("0x64".to_string()).await.unwrap();
+        assert_eq!(validators.len(), 2);
+
+        // Test getValidatorsAtHash with block hash
+        let validators =
+            api.get_validators_at_hash(TEST_HEADER.hash_slow().to_string()).await.unwrap();
+        assert_eq!(validators.len(), 2);
+
+        // Test getJustifiedNumber
+        assert_eq!(99, api.get_justified_number("latest".to_string()).await.unwrap());
+        assert_eq!(0, api.get_justified_number("earliest".to_string()).await.unwrap());
+
+        // Test getFinalizedNumber
+        let finalized = api.get_finalized_number("latest".to_string()).await.unwrap();
+        assert!(finalized <= 99); // Finalized number should be <= justified number
+    }
+
+    #[tokio::test]
+    async fn finality_tags_select_canonical_snapshots_and_preserve_other_inputs() {
+        let db = create_test_rw_db();
+        let snapshots = Arc::new(EnhancedDbSnapshotProvider::new(
+            db,
+            2048,
+            Arc::new(BscChainSpec::from(bsc_testnet())),
+        ));
+        let provider = TestProvider::default();
+        for number in [0, 95, 98, 100] {
+            snapshots.insert(Snapshot {
+                block_number: number,
+                block_hash: provider.header_by_number(number).unwrap().unwrap().hash_slow(),
+                validators: vec![alloy_primitives::Address::repeat_byte(number as u8)],
+                ..Default::default()
+            });
+        }
+        let api = ParliaApiImpl::new(snapshots, provider);
+        for (input, number) in [
+            ("latest", 100),
+            ("safe", 98),
+            ("finalized", 95),
+            ("earliest", 0),
+            ("0x62", 98),
+            ("95", 95),
+        ] {
+            let snapshot = api.get_snapshot(input.into()).await.unwrap().unwrap();
+            assert_eq!(snapshot.number, number);
+            assert_eq!(
+                api.get_validators(input.into()).await.unwrap(),
+                vec![format!("0x{:040x}", alloy_primitives::Address::repeat_byte(number as u8))]
+            );
+        }
+        let hash = api.provider.header_by_number(98).unwrap().unwrap().hash_slow();
+        assert_eq!(api.get_snapshot(hash.to_string()).await.unwrap().unwrap().number, 98);
+        assert_eq!(api.parse_block_number(&hex::encode(hash)), Ok(98));
+        assert_eq!(api.get_snapshot("pending".into()).await.unwrap_err().code(), -32602);
+        assert_eq!(api.get_snapshot("invalid".into()).await.unwrap_err().code(), -32602);
+    }
+
+    #[tokio::test]
+    async fn finality_marker_failures_are_not_latest_fallbacks() {
+        for provider in [
+            TestProvider { safe: None, finalized: None, ..Default::default() },
+            TestProvider { fail_markers: true, ..Default::default() },
+        ] {
+            let snapshots = Arc::new(EnhancedDbSnapshotProvider::new(
+                create_test_rw_db(),
+                2048,
+                Arc::new(BscChainSpec::from(bsc_testnet())),
+            ));
+            let api = ParliaApiImpl::new(snapshots, provider);
+            assert_eq!(api.parse_block_number("latest"), Ok(100));
+            for tag in ["safe", "finalized"] {
+                let error = api.get_snapshot(tag.into()).await.unwrap_err();
+                assert_eq!(error.code(), -32603);
+                assert!(error.message().contains(tag));
+                if api.provider.fail_markers {
+                    assert!(error
+                        .message()
+                        .contains(&reth_provider::ProviderError::UnsupportedProvider.to_string()));
+                }
+            }
+        }
+    }
+}

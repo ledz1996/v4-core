@@ -1,0 +1,394 @@
+//! Celo transaction types and trait implementations.
+
+use alloy_eips::{Encodable2718, Typed2718};
+use alloy_evm::{FromRecoveredTx, FromTxWithEncoded, IntoTxEnv};
+use alloy_primitives::{Address, Bytes};
+use auto_impl::auto_impl;
+use celo_alloy_consensus::{CeloTxEnvelope, CeloTxType, TxCip64};
+use op_alloy_consensus::TxDeposit;
+use op_revm::{
+    OpTransaction,
+    transaction::{OpTxTr, deposit::DepositTransactionParts},
+};
+use revm::{
+    context::TxEnv,
+    context_interface::transaction::Transaction,
+    handler::SystemCallTx,
+    primitives::{B256, Log, TxKind, U256},
+};
+use std::vec::Vec;
+
+#[auto_impl(&, &mut, Box, Arc)]
+pub trait CeloTxTr: OpTxTr {
+    fn fee_currency(&self) -> Option<Address>;
+
+    /// Returns `true` if transaction is of type CIP-64.
+    fn is_cip64(&self) -> bool {
+        self.tx_type() == CeloTxType::Cip64 as u8
+    }
+
+    /// Returns `true` if this transaction pays fees in native CELO.
+    ///
+    /// Only an absent `feeCurrency` is native. The zero address is a currency like any
+    /// other and fails the directory lookup as unregistered. op-geth's field is a nil-able
+    /// pointer where only nil means native (`core/types/celo_dynamic_fee_tx_v2.go`), so a
+    /// CIP-64 tx carrying twenty zero bytes is invalid there and a block containing one is
+    /// rejected; treating it as native here would let celo-reth build such a block.
+    fn is_fee_in_celo(&self) -> bool {
+        self.fee_currency().is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Logs and gas tracking for CIP-64 debit and credit EVM calls.
+pub struct Cip64Info {
+    /// Gas used by the debit call (net, after refunds)
+    pub debit_gas_used: u64,
+    /// Gas refunded by the debit call
+    pub debit_gas_refunded: u64,
+    /// Gas used by the credit call (net, after refunds)
+    pub credit_gas_used: u64,
+    /// Gas refunded by the credit call
+    pub credit_gas_refunded: u64,
+    /// Logs from system calls (debit/credit) that need to be merged into the final receipt
+    pub logs_pre: Vec<Log>,
+    pub logs_post: Vec<Log>,
+    /// Base fee converted to the ERC20 fee currency (set during handler execution)
+    pub base_fee_in_erc20: Option<u128>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CeloTransaction<T: Transaction> {
+    pub op_tx: OpTransaction<T>,
+    pub fee_currency: Option<Address>,
+    pub cip64_tx_info: Option<Cip64Info>,
+    /// Pre-computed effective gas price for CIP-64 transactions.
+    /// This is calculated using the base fee converted to the fee currency.
+    /// When set, this value is returned by `effective_gas_price()` instead of
+    /// computing it from the native base fee.
+    pub effective_gas_price: Option<u128>,
+}
+
+impl<T: Transaction> CeloTransaction<T> {
+    pub const fn new(op_tx: OpTransaction<T>) -> Self {
+        Self {
+            op_tx,
+            fee_currency: None,
+            cip64_tx_info: None,
+            effective_gas_price: None,
+        }
+    }
+}
+
+impl Default for CeloTransaction<TxEnv> {
+    fn default() -> Self {
+        Self {
+            op_tx: OpTransaction::default(),
+            fee_currency: None,
+            cip64_tx_info: None,
+            effective_gas_price: None,
+        }
+    }
+}
+
+impl SystemCallTx for CeloTransaction<TxEnv> {
+    fn new_system_tx_with_caller(
+        caller: Address,
+        system_contract_address: Address,
+        data: Bytes,
+    ) -> Self {
+        Self::new_system_tx_with_gas_limit(caller, system_contract_address, data, 30_000_000)
+    }
+}
+
+impl CeloTransaction<TxEnv> {
+    /// Creates new transaction for system call with custom gas limit.
+    pub fn new_system_tx_with_gas_limit(
+        caller: Address,
+        system_contract_address: Address,
+        data: Bytes,
+        gas_limit: u64,
+    ) -> Self {
+        Self::new(OpTransaction::new(TxEnv {
+            caller,
+            data,
+            kind: TxKind::Call(system_contract_address),
+            gas_limit,
+            ..Default::default()
+        }))
+    }
+}
+
+impl<T: revm::context::Transaction + alloy_evm::TransactionEnvMut> alloy_evm::TransactionEnvMut
+    for CeloTransaction<T>
+{
+    fn set_gas_limit(&mut self, gas_limit: u64) {
+        alloy_evm::TransactionEnvMut::set_gas_limit(&mut self.op_tx.base, gas_limit);
+    }
+
+    fn set_nonce(&mut self, nonce: u64) {
+        alloy_evm::TransactionEnvMut::set_nonce(&mut self.op_tx.base, nonce);
+    }
+
+    fn set_access_list(&mut self, access_list: alloy_eips::eip2930::AccessList) {
+        alloy_evm::TransactionEnvMut::set_access_list(&mut self.op_tx.base, access_list);
+    }
+}
+
+impl<T: Transaction> Transaction for CeloTransaction<T> {
+    type AccessListItem<'a>
+        = T::AccessListItem<'a>
+    where
+        T: 'a;
+    type Authorization<'a>
+        = T::Authorization<'a>
+    where
+        T: 'a;
+
+    fn tx_type(&self) -> u8 {
+        self.op_tx.tx_type()
+    }
+
+    fn caller(&self) -> Address {
+        self.op_tx.caller()
+    }
+
+    fn gas_limit(&self) -> u64 {
+        self.op_tx.gas_limit()
+    }
+
+    fn value(&self) -> U256 {
+        self.op_tx.value()
+    }
+
+    fn input(&self) -> &Bytes {
+        self.op_tx.input()
+    }
+
+    fn nonce(&self) -> u64 {
+        self.op_tx.nonce()
+    }
+
+    fn kind(&self) -> TxKind {
+        self.op_tx.kind()
+    }
+
+    fn chain_id(&self) -> Option<u64> {
+        self.op_tx.chain_id()
+    }
+
+    fn access_list(&self) -> Option<impl Iterator<Item = Self::AccessListItem<'_>>> {
+        self.op_tx.access_list()
+    }
+
+    fn max_priority_fee_per_gas(&self) -> Option<u128> {
+        self.op_tx.max_priority_fee_per_gas()
+    }
+
+    fn max_fee_per_gas(&self) -> u128 {
+        self.op_tx.max_fee_per_gas()
+    }
+
+    fn gas_price(&self) -> u128 {
+        self.op_tx.gas_price()
+    }
+
+    fn blob_versioned_hashes(&self) -> &[B256] {
+        self.op_tx.blob_versioned_hashes()
+    }
+
+    fn max_fee_per_blob_gas(&self) -> u128 {
+        self.op_tx.max_fee_per_blob_gas()
+    }
+
+    fn effective_gas_price(&self, base_fee: u128) -> u128 {
+        // For CIP-64 transactions, return the pre-computed effective gas price
+        // that was calculated using the base fee converted to the fee currency.
+        // This ensures the GASPRICE opcode returns the correct value.
+        if let Some(egp) = self.effective_gas_price {
+            return egp;
+        }
+        self.op_tx.effective_gas_price(base_fee)
+    }
+
+    fn authorization_list_len(&self) -> usize {
+        self.op_tx.authorization_list_len()
+    }
+
+    fn authorization_list(&self) -> impl Iterator<Item = Self::Authorization<'_>> {
+        self.op_tx.authorization_list()
+    }
+}
+
+impl<T: Transaction> OpTxTr for CeloTransaction<T> {
+    fn enveloped_tx(&self) -> Option<&Bytes> {
+        self.op_tx.enveloped_tx()
+    }
+
+    fn source_hash(&self) -> Option<B256> {
+        self.op_tx.source_hash()
+    }
+
+    fn mint(&self) -> Option<u128> {
+        self.op_tx.mint()
+    }
+
+    fn is_system_transaction(&self) -> bool {
+        self.op_tx.is_system_transaction()
+    }
+}
+
+impl<T: Transaction> CeloTxTr for CeloTransaction<T> {
+    fn fee_currency(&self) -> Option<Address> {
+        self.fee_currency
+    }
+}
+
+#[cfg(feature = "alloy-op-evm")]
+impl alloy_op_evm::block::OpTxEnv for CeloTransaction<TxEnv> {
+    fn encoded_bytes(&self) -> Option<&Bytes> {
+        self.enveloped_tx()
+    }
+}
+
+// Trait implementations for transaction conversion (from alloy-evm)
+
+impl<T: Transaction> IntoTxEnv<Self> for CeloTransaction<T> {
+    fn into_tx_env(self) -> Self {
+        self
+    }
+}
+
+impl FromTxWithEncoded<CeloTxEnvelope> for CeloTransaction<TxEnv> {
+    fn from_encoded_tx(tx: &CeloTxEnvelope, caller: Address, encoded: Bytes) -> Self {
+        let base = match tx {
+            CeloTxEnvelope::Legacy(tx) => TxEnv::from_recovered_tx(tx.tx(), caller),
+            CeloTxEnvelope::Eip1559(tx) => TxEnv::from_recovered_tx(tx.tx(), caller),
+            CeloTxEnvelope::Eip2930(tx) => TxEnv::from_recovered_tx(tx.tx(), caller),
+            CeloTxEnvelope::Eip7702(tx) => TxEnv::from_recovered_tx(tx.tx(), caller),
+            CeloTxEnvelope::Cip64(tx) => {
+                let TxCip64 {
+                    chain_id,
+                    nonce,
+                    gas_limit,
+                    to,
+                    value,
+                    input,
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                    access_list,
+                    fee_currency: _,
+                } = tx.tx();
+                TxEnv {
+                    tx_type: tx.ty(),
+                    caller,
+                    gas_limit: *gas_limit,
+                    gas_price: *max_fee_per_gas,
+                    kind: *to,
+                    value: *value,
+                    data: input.clone(),
+                    nonce: *nonce,
+                    chain_id: Some(*chain_id),
+                    gas_priority_fee: Some(*max_priority_fee_per_gas),
+                    access_list: access_list.clone(),
+                    ..Default::default()
+                }
+            }
+            CeloTxEnvelope::Deposit(tx) => {
+                let TxDeposit {
+                    to,
+                    value,
+                    gas_limit,
+                    input,
+                    source_hash: _,
+                    from: _,
+                    mint: _,
+                    is_system_transaction: _,
+                } = tx.inner();
+                TxEnv {
+                    tx_type: tx.ty(),
+                    caller,
+                    gas_limit: *gas_limit,
+                    kind: *to,
+                    value: *value,
+                    data: input.clone(),
+                    ..Default::default()
+                }
+            }
+        };
+
+        let deposit = if let CeloTxEnvelope::Deposit(tx) = tx {
+            DepositTransactionParts {
+                source_hash: tx.source_hash,
+                mint: Some(tx.mint),
+                is_system_transaction: tx.is_system_transaction,
+            }
+        } else {
+            Default::default()
+        };
+
+        let fee_currency: Option<Address> = match tx {
+            CeloTxEnvelope::Cip64(tx) => tx.tx().fee_currency,
+            _ => None,
+        };
+
+        Self {
+            op_tx: OpTransaction {
+                base,
+                enveloped_tx: Some(encoded),
+                deposit,
+            },
+            fee_currency,
+            cip64_tx_info: None,
+            effective_gas_price: None,
+        }
+    }
+}
+
+impl FromRecoveredTx<CeloTxEnvelope> for CeloTransaction<TxEnv> {
+    fn from_recovered_tx(tx: &CeloTxEnvelope, sender: Address) -> Self {
+        let encoded = tx.encoded_2718();
+        Self::from_encoded_tx(tx, sender, encoded.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use revm::primitives::Address;
+
+    #[test]
+    fn test_cip64_transaction_fields() {
+        let cip64_tx = CeloTransaction {
+            op_tx: OpTransaction {
+                base: TxEnv {
+                    tx_type: CeloTxType::Cip64 as u8,
+                    gas_limit: 10,
+                    gas_price: 100,
+                    gas_priority_fee: Some(5),
+                    ..Default::default()
+                },
+                enveloped_tx: None,
+                deposit: DepositTransactionParts::default(),
+            },
+            fee_currency: Some(Address::with_last_byte(1)),
+            cip64_tx_info: None,
+            effective_gas_price: None,
+        };
+        // Verify transaction type
+        assert_eq!(cip64_tx.tx_type(), CeloTxType::Cip64 as u8);
+        // Verify common fields access
+        assert_eq!(cip64_tx.gas_limit(), 10);
+        assert_eq!(
+            cip64_tx.kind(),
+            revm::primitives::TxKind::Call(Address::ZERO)
+        );
+        // Verify gas related calculations
+        assert_eq!(cip64_tx.effective_gas_price(90), 95);
+        assert_eq!(cip64_tx.max_fee_per_gas(), 100);
+        // Verify CIP-64 fields
+        assert_eq!(cip64_tx.fee_currency(), Some(Address::with_last_byte(1)));
+    }
+}

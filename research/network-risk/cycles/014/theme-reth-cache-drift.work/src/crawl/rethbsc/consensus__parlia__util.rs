@@ -1,0 +1,276 @@
+
+use alloy_consensus::Header;
+use alloy_primitives::{B256, U256, bytes::BytesMut, keccak256};
+use alloy_rlp::Encodable;
+use bytes::BufMut;
+use std::env;
+use super::constants::EXTRA_SEAL_LEN;
+use crate::consensus::parlia::Snapshot;
+use alloy_primitives::Address;
+use crate::consensus::parlia::{DIFF_NOTURN, DIFF_INTURN};
+
+const SECONDS_PER_DAY: u64 = 86400; // 24 * 60 * 60
+
+pub fn is_same_day_in_utc(first: u64, second: u64) -> bool {
+    let interval = env::var("BREATHE_BLOCK_INTERVAL")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(SECONDS_PER_DAY);
+
+    first / interval == second / interval
+}
+
+pub fn is_breathe_block(last_block_time: u64, block_time: u64) -> bool {
+    last_block_time != 0 && !is_same_day_in_utc(last_block_time, block_time)
+}
+
+/// Print all header fields that participate for debug.
+pub fn debug_header(header: &Header, chain_id: u64, context: &str) {
+    let block_id = format!("#{}-0x{:x}", header.number, alloy_primitives::keccak256(header.parent_hash.as_slice()));
+    let signed_extra_data =
+        &header.extra_data[..header.extra_data.len().saturating_sub(EXTRA_SEAL_LEN)];
+    
+    tracing::trace!(
+        target: "bsc::parlia::util",
+        context = context,
+        block_id = %block_id,
+        chain_id = chain_id,
+        parent_hash = %format!("0x{:x}", header.parent_hash),
+        ommers_hash = %format!("0x{:x}", header.ommers_hash),
+        beneficiary = %format!("0x{:x}", header.beneficiary),
+        state_root = %format!("0x{:x}", header.state_root),
+        transactions_root = %format!("0x{:x}", header.transactions_root),
+        receipts_root = %format!("0x{:x}", header.receipts_root),
+        logs_bloom = %format!("0x{}", alloy_primitives::hex::encode(header.logs_bloom)),
+        difficulty = %header.difficulty.to_string(),
+        number = header.number,
+        gas_limit = header.gas_limit,
+        gas_used = header.gas_used,
+        timestamp = header.timestamp,
+        extra_data_len = header.extra_data.len(),
+        signed_extra_data_len = signed_extra_data.len(),
+        signed_extra_data = %format!("0x{}", alloy_primitives::hex::encode(signed_extra_data)),
+        mix_hash = %format!("0x{:x}", header.mix_hash),
+        nonce = %header.nonce.to_string(),
+        base_fee_per_gas = ?header.base_fee_per_gas,
+        withdrawals_root = ?header.withdrawals_root.map(|h| format!("0x{:x}", h)),
+        blob_gas_used = ?header.blob_gas_used,
+        excess_blob_gas = ?header.excess_blob_gas,
+        parent_beacon_block_root = ?header.parent_beacon_block_root.map(|h| format!("0x{:x}", h)),
+        requests_hash = ?header.requests_hash.map(|h| format!("0x{:x}", h)),
+    );
+}
+
+pub fn hash_with_chain_id(header: &Header, chain_id: u64) -> B256 {
+    let mut out = BytesMut::new();
+    encode_header_with_chain_id(header, &mut out, chain_id);
+    keccak256(&out[..])
+}
+
+pub fn encode_header_with_chain_id(header: &Header, out: &mut dyn BufMut, chain_id: u64) {
+    rlp_header(header, chain_id).encode(out);
+    Encodable::encode(&U256::from(chain_id), out);
+    Encodable::encode(&header.parent_hash, out);
+    Encodable::encode(&header.ommers_hash, out);
+    Encodable::encode(&header.beneficiary, out);
+    Encodable::encode(&header.state_root, out);
+    Encodable::encode(&header.transactions_root, out);
+    Encodable::encode(&header.receipts_root, out);
+    Encodable::encode(&header.logs_bloom, out);
+    Encodable::encode(&header.difficulty, out);
+    Encodable::encode(&U256::from(header.number), out);
+    Encodable::encode(&header.gas_limit, out);
+    Encodable::encode(&header.gas_used, out);
+    Encodable::encode(&header.timestamp, out);
+    // `saturating_sub` so a short `extra_data` yields an empty slice instead of panicking;
+    // callers reject such headers, this only keeps the hasher itself total.
+    let signed_extra_data =
+        &header.extra_data[..header.extra_data.len().saturating_sub(EXTRA_SEAL_LEN)];
+    Encodable::encode(&signed_extra_data, out);
+    Encodable::encode(&header.mix_hash, out);
+    Encodable::encode(&header.nonce, out);
+
+    if let Some(parent_beacon_block_root) = header.parent_beacon_block_root {
+        if parent_beacon_block_root == B256::default() {
+            // A header decoded from the wire cannot reach here with these fields unset (they
+            // precede `parent_beacon_block_root` positionally in the RLP list), but a
+            // hand-constructed one can. Encode the default so the hash simply fails to match
+            // instead of panicking; `rlp_header` below must use the same defaults.
+            Encodable::encode(&U256::from(header.base_fee_per_gas.unwrap_or_default()), out);
+            Encodable::encode(&header.withdrawals_root.unwrap_or_default(), out);
+            Encodable::encode(&header.blob_gas_used.unwrap_or_default(), out);
+            Encodable::encode(&header.excess_blob_gas.unwrap_or_default(), out);
+            Encodable::encode(&parent_beacon_block_root, out);
+            // https://github.com/bnb-chain/BEPs/blob/master/BEPs/BEP-466.md
+            if let Some(requests_hash) = header.requests_hash {
+                Encodable::encode(&requests_hash, out);
+            }
+        }
+    }
+}
+
+fn rlp_header(header: &Header, chain_id: u64) -> alloy_rlp::Header {
+    let mut rlp_head = alloy_rlp::Header { list: true, payload_length: 0 };
+
+    // add chain_id make more security
+    rlp_head.payload_length += U256::from(chain_id).length(); // chain_id
+    rlp_head.payload_length += header.parent_hash.length(); // parent_hash
+    rlp_head.payload_length += header.ommers_hash.length(); // ommers_hash
+    rlp_head.payload_length += header.beneficiary.length(); // beneficiary
+    rlp_head.payload_length += header.state_root.length(); // state_root
+    rlp_head.payload_length += header.transactions_root.length(); // transactions_root
+    rlp_head.payload_length += header.receipts_root.length(); // receipts_root
+    rlp_head.payload_length += header.logs_bloom.length(); // logs_bloom
+    rlp_head.payload_length += header.difficulty.length(); // difficulty
+    rlp_head.payload_length += U256::from(header.number).length(); // block height
+    rlp_head.payload_length += header.gas_limit.length(); // gas_limit
+    rlp_head.payload_length += header.gas_used.length(); // gas_used
+    rlp_head.payload_length += header.timestamp.length(); // timestamp
+    let signed_extra_data =
+        &header.extra_data[..header.extra_data.len().saturating_sub(EXTRA_SEAL_LEN)];
+    rlp_head.payload_length += signed_extra_data.length(); // extra_data
+    rlp_head.payload_length += header.mix_hash.length(); // mix_hash
+    rlp_head.payload_length += header.nonce.length(); // nonce
+
+    if let Some(parent_beacon_block_root) = header.parent_beacon_block_root {
+        if parent_beacon_block_root == B256::default() {
+            // Same defaults as `encode_header_with_chain_id`, or the declared payload length
+            // would not match the bytes actually written.
+            rlp_head.payload_length +=
+                U256::from(header.base_fee_per_gas.unwrap_or_default()).length();
+            rlp_head.payload_length += header.withdrawals_root.unwrap_or_default().length();
+            rlp_head.payload_length += header.blob_gas_used.unwrap_or_default().length();
+            rlp_head.payload_length += header.excess_blob_gas.unwrap_or_default().length();
+            rlp_head.payload_length += parent_beacon_block_root.length();
+            // https://github.com/bnb-chain/BEPs/blob/master/BEPs/BEP-466.md
+            if let Some(requests_hash) = header.requests_hash {
+                rlp_head.payload_length += requests_hash.length();
+            }
+        }
+    }
+    rlp_head
+}
+
+pub fn calculate_millisecond_timestamp(header: &Header) -> u64 {
+    // Plain uint64 wrap-around like go-bsc's `Header.MilliTimestamp()`
+    // (`h.Time*1000 + milliseconds`): consensus-valid headers never overflow,
+    // but this helper also runs on unvalidated inputs (RPC-supplied headers,
+    // fuzzing), where Rust's debug overflow panic would diverge from geth.
+    header.timestamp.wrapping_mul(1000).wrapping_add(millisecond_remainder(header))
+}
+
+/// The sub-second millisecond remainder encoded in the header's `mix_hash` tail (BEP-520).
+pub fn millisecond_remainder(header: &Header) -> u64 {
+    let mix_digest = header.mix_hash;
+
+    if mix_digest != B256::ZERO {
+        let bytes = mix_digest.as_slice();
+        // Convert last 8 bytes to u64 (big-endian), equivalent to Go's uint256.SetBytes32().Uint64()
+        let mut result = 0u64;
+        for &byte in bytes.iter().skip(24).take(8) {
+            result = (result << 8) | u64::from(byte);
+        }
+        result
+    } else {
+        0
+    }
+}
+
+pub fn set_millisecond_part_of_timestamp(timestamp_ms: u64, header: &mut Header) {
+    let milliseconds_part = timestamp_ms % 1000;
+    let mut mix_hash_bytes = [0u8; 32];
+    mix_hash_bytes[24..32].copy_from_slice(&milliseconds_part.to_be_bytes());
+    header.mix_hash = B256::new(mix_hash_bytes);
+}
+
+pub fn calculate_difficulty(snap: &Snapshot, signer: Address) -> U256 {
+    if snap.is_inturn(signer) {
+        return DIFF_INTURN
+    }
+    DIFF_NOTURN
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_consensus::Header;
+    use alloy_primitives::B256;
+
+    /// `parent_beacon_block_root` is set but the optional fields that precede it in the RLP
+    /// list are not — impossible for a header decoded from the wire, but reachable for a
+    /// hand-built one, and it used to unwrap straight into a panic.
+    #[test]
+    fn hash_with_chain_id_tolerates_missing_optional_fields() {
+        let header = Header {
+            extra_data: vec![0u8; EXTRA_SEAL_LEN + 32].into(),
+            parent_beacon_block_root: Some(B256::ZERO),
+            base_fee_per_gas: None,
+            withdrawals_root: None,
+            blob_gas_used: None,
+            excess_blob_gas: None,
+            ..Default::default()
+        };
+
+        // No panic, and the declared RLP payload length matches what was written: the
+        // encoder and the length calculation have to agree on the substituted defaults.
+        let mut out = BytesMut::new();
+        encode_header_with_chain_id(&header, &mut out, 56);
+        let mut slice: &[u8] = out.as_ref();
+        let rlp_head = alloy_rlp::Header::decode(&mut slice).expect("valid RLP list");
+        assert!(rlp_head.list);
+        assert_eq!(rlp_head.payload_length, slice.len());
+    }
+
+    /// `extra_data` shorter than the seal is rejected by callers, but the hasher itself must
+    /// not underflow on it.
+    #[test]
+    fn hash_with_chain_id_tolerates_short_extra_data() {
+        let header = Header { extra_data: vec![0u8; 3].into(), ..Default::default() };
+        let _ = hash_with_chain_id(&header, 56);
+    }
+
+    #[test]
+    fn test_calculate_millisecond_timestamp_without_mix_hash() {
+        // Create a header with current timestamp and zero mix_hash
+        let timestamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+
+        let header = Header { timestamp, mix_hash: B256::ZERO, ..Default::default() };
+
+        let result = calculate_millisecond_timestamp(&header);
+        assert_eq!(result, timestamp * 1000);
+    }
+
+    #[test]
+    fn test_calculate_millisecond_timestamp_wraps_like_geth() {
+        // go-bsc's Header.MilliTimestamp() is plain uint64 arithmetic: an
+        // out-of-domain timestamp (unvalidated header) wraps instead of
+        // panicking in debug builds. (u64::MAX * 1000) mod 2^64 = 2^64 - 1000.
+        let mut mix = [0u8; 32];
+        mix[24..32].copy_from_slice(&123u64.to_be_bytes());
+        let header =
+            Header { timestamp: u64::MAX, mix_hash: B256::new(mix), ..Default::default() };
+        assert_eq!(
+            calculate_millisecond_timestamp(&header),
+            u64::MAX.wrapping_mul(1000).wrapping_add(123)
+        );
+        assert_eq!(calculate_millisecond_timestamp(&header), 18_446_744_073_709_550_739);
+    }
+
+    #[test]
+    fn test_calculate_millisecond_timestamp_with_milliseconds() {
+        // Create a header with current timestamp and mix_hash containing milliseconds
+        let timestamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+
+        let milliseconds = 750u64;
+        let mut mix_hash_bytes = [0u8; 32];
+        mix_hash_bytes[24..32].copy_from_slice(&milliseconds.to_be_bytes());
+        let mix_hash = B256::new(mix_hash_bytes);
+
+        let header = Header { timestamp, mix_hash, ..Default::default() };
+
+        let result = calculate_millisecond_timestamp(&header);
+        assert_eq!(result, timestamp * 1000 + milliseconds);
+    }
+}
