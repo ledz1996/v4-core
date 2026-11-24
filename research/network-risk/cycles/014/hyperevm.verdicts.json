@@ -1,0 +1,39 @@
+{
+ "unit": "hyperevm",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "plausible",
+   "severity": "medium",
+   "factCheck": "The chain facts that can be read hold. I scanned blocks 52,159,808 to 52,160,020 on https://rpc.purroofgroup.com and found gas price 0 transactions with r = 0x1 (no signature). Examples: 0xf5c76b47... at block 52,160,008 sent from 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24 to USDC 0xb88339cb7199b77e23db6e890353e22632ba630f with transfer(0xc20699185c15d0a2fd65779bb5d69f5b0b113c00, ...), and 0x4d4f2710... at block 52,160,019 sent from the treasury 0xc206... to USDC with transfer(0x6b9e77..., ...). eth_getCode on https://rpc.hyperliquid.xyz/evm returns 2,175 bytes of proxy code at 0x6b9e77..., so HyperCore makes a contract with code the msg.sender of a token transfer, and that contract's nonce (0x2439c4) and the nonce field of these transactions rise with each one, so the nonce watch in the mitigations works. eth_getTransactionCount for the PoolManager is 0x1 on both endpoints at head 0x31be6b3. The saved spotMeta (520 tokens) has no evmContract equal to the PoolManager. The aligned-quote-assets page, fetched now, says the treasury deployer designates the treasury address, both deployers stake 500k HYPE, activation is by validator vote, and the linked contract rebalances with the treasury address in a 9:1 ratio. The transfers page, fetched now, gives the three finalize routes (create nonce, slot 0, keccak256(\"HyperCore deployer\")). On the PoolManager, slot 0 holds the owner 0x2d09d0c2f82c59b19b3c65a48ce2c550bf0921f9 and slot 0x8c306a6a12fff1951878e8621be6674add1102cd359dd968efbbe797629ef84f (keccak256 of \"HyperCore deployer\", computed locally) is zero. The unconfirmed link is whether HyperCore would accept a contract it did not create, such as the PoolManager, as an AQAv2 treasury address and send transfers from it. The validator source is closed and no document or record says, so the verdict stays plausible.",
+   "codeCheck": "sync reads balanceOfSelf only inside the caller's transaction (src/PoolManager.sol:279-288) and _settle reads it again and takes the difference (src/PoolManager.sol:349-365). Transient storage is cleared between transactions, so a system transaction that moves the PoolManager's balance cannot be credited to anyone through settle. Pool state, ERC-6909 balances and protocolFeesAccrued keep counting the moved tokens as owed. take and collectProtocolFees then call Currency.transfer, which reverts with ERC20TransferFailed when the token refuses (src/types/Currency.sol:55-87). The last claimants in that token cannot withdraw. A balance moved into the PoolManager by the 9:1 rebalance would sit outside every account and help no one, so the effect is freeze only, as the finding says. I found no guard in src/ that would stop the freeze, and no path by which an ordinary account gains.",
+   "corrections": "",
+   "sources": [
+    {"url": "https://rpc.purroofgroup.com eth_getBlockByNumber 52,159,808 to 52,160,020, 2026-11-24", "supports": "Unsigned system transactions (r = 0x1, gas price 0) sent from the contract 0x6b9e77... and from the treasury 0xc206... calling USDC transfer, with nonces rising"},
+    {"url": "https://rpc.hyperliquid.xyz/evm eth_getCode and eth_getTransactionCount 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24, 2026-11-24", "supports": "The sender has proxy code and nonce 0x2439c4"},
+    {"url": "https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F, 2026-11-24", "supports": "PoolManager nonce 0x1"},
+    {"url": "https://rpc.hyperliquid.xyz/evm eth_getStorageAt PoolManager slots 0x0 and 0x8c306a6a12fff1951878e8621be6674add1102cd359dd968efbbe797629ef84f, 2026-11-24", "supports": "Slot 0 holds the owner contract and the HyperCore deployer slot is zero"},
+    {"url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md", "supports": "Treasury deployer designates the treasury, 500k HYPE stake each, activation by validator vote, linked contract rebalances with the treasury"},
+    {"url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers.md", "supports": "Finalize routes for a link and system transactions that call transfer as the system address"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Rerun of battery.py and targeted.py for chain 999 on the official node at head 52,154,676.",
+   "agrees": true,
+   "note": "battery.json and targeted.json in the work directory show 99,985 and 85,544 vectors run on https://rpc.hyperliquid.xyz/evm with mismatchCount 0 and no errors. The clearance covers the official RPC node only; the validator binary is closed, which the unit already records."
+  },
+  {
+   "check": "New vectors: shift amount, BYTE index and SIGNEXTEND size with nonzero high limbs and a small low limb, and DIV, SDIV, MOD, SMOD, EXP, ADDMOD, MULMOD over edge words, 2,736 vectors on both HyperEVM endpoints.",
+   "agrees": true,
+   "note": "I ran 12 vectors of my own as initcode through eth_call on both endpoints: SHL by 2^64+1, SHR by 2^128+3, SAR of a negative word by 2^255+1 and by 2^64, BYTE at 2^64+5 and 2^192+8, SIGNEXTEND with size 2^128+3 and 2^64, SDIV of -2^255 by -1, SMOD of -2^255 by -1, MULMOD(2^256-1, 2^256-1, 2^128) and EXP(2, 256). All 12 matched the specification on https://rpc.hyperliquid.xyz/evm and https://rpc.purroofgroup.com. highlimb-official.json records 2,736 vectors, 0 mismatches, 0 errors."
+  },
+  {
+   "check": "Is any HyperCore spot token linked to the PoolManager address?",
+   "agrees": true,
+   "note": "The saved spotMeta has 520 tokens and none names the PoolManager. eth_getStorageAt shows slot 0 holds the owner contract 0x2d09... and the keccak256(\"HyperCore deployer\") slot is zero, so neither storage route of finalizeEvmContract can name an ordinary account. No function in src/ writes a caller chosen slot; ERC-6909 and pool writes go to keccak derived mapping slots, and hitting the fixed slot would need a keccak preimage."
+  }
+ ],
+ "leads": []
+}

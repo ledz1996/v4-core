@@ -1,0 +1,389 @@
+{
+ "unit": "theme-reth-cache-drift",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Base and Celo block builders read through the reth execution cache that still has the stale branch for a destroyed account without code, when the operator enables cache sharing",
+   "chainIds": [
+    8453,
+    42220
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A10",
+    "A14"
+   ],
+   "effect": "degrade",
+   "actor": "operator",
+   "severity": "low",
+   "difference": "Base v1.5.6 pins base/reth tag base-v2.5.2.11 (9e380dd) and Celo's endpoints report reth/v2.2.0-74cc8bb, which is celo-org/reth 74cc8bb pinned by celo-kona tag celo/reth-v1.0.10. In both, ExecutionCache::insert_state handles a destroyed account whose original info has no code by removing the account entry and continuing, so the storage the block wrote after re-creating that account is never put into the cache and any word cached for it earlier survives (base/reth cached_state.rs lines 1278-1297, celo-org/reth cached_state.rs lines 863-882). reth v2.9.0 and reth pull request 28148 replace this with a removal only when the current info is None. Unlike stock op-reth, both block builders read state through this cache when the engine hands it over: Base's flashblocks builder (crates/builder/core/src/flashblocks/payload.rs lines 260-295, through BuilderStateProvider in crates/execution/payload/src/config.rs lines 477-500) and Celo's fork of the OP payload builder (celo-org/optimism b08a8d0 rust/op-reth/crates/payload/src/builder.rs lines 333-366). The engine hands the cache over only when --engine.share-execution-cache-with-payload-builder is set; its default is false in both forks (crates/node/core/src/args/engine.rs line 291 for Base, line 289 for Celo; crates/engine/primitives/src/config.rs line 262 and 238). On a sequencer the cache is fed after each locally built block through InsertExecutedBlock and on_inserted_executed_block, which calls the same insert_state (base/reth tree/payload_processor/mod.rs lines 435-470, celo-org/reth tree/payload_processor/mod.rs lines 722-757, tree/mod.rs line 1547).",
+   "mechanism": "1. The faulty branch is taken only for an account that the block destroyed and whose info at the start of the block had the empty code hash: an address that did not exist and was created and self-destructed in one transaction, a funded or empty account without code that a CREATE or CREATE2 landed on and that self-destructed in the same transaction, or an empty account removed under EIP-161. When a later transaction of the same block creates the address again, the bundle carries status DestroyedChanged, current info and the new storage, and the old code drops all of it. 2. A word for that address must already sit in the storage cache, indexed by (address, slot). Such an address had no code at the start of the block, so the cached word is its pre-block value, which is zero for every account that can be destroyed (accounts without code that keep storage, such as an EIP-7702 account whose delegation was cleared, have a nonce and cannot be destroyed). The reth fix's own test produces the cached zero through a prewarm read (reth pull request 28148, test_insert_state_recreated_account_updates_cached_storage). On a sequencer that only builds, the cache is filled by insert_state of built blocks and by prewarming of payloads it validated, for example while it was a standby in a high availability set. I could not trace which reads of an ordinary block would put a zero for a codeless address into the cache on these builds; this link is unconfirmed. 3. When both conditions hold and sharing is on, the builder executes a later block with the stale zero where the canonical value is what the re-created contract wrote. The produced block's state differs from what a node without the cache and the proof program compute from the same transactions. 4. The PoolManager's own slots are never on this branch: it has code from deployment and is never destroyed, so its words are replaced by insert_storage after every block, and transient storage (src/libraries/CurrencyDelta.sol:21-39, src/libraries/CurrencyReserves.sol:17-36) is not cached across transactions at all. The only accounts that can read stale words are contracts created in the block that destroyed their address, which are new contracts made by whoever made them. A token, hook, router, PositionManager or Permit2 that a victim pool already uses had code before that block and cannot be destroyed under EIP-6780, and a proxy's implementation is run with the proxy's storage. So a stale word can only change what an attacker-made token returns to sync and settle (src/PoolManager.sol:279-288, 349-364) or what an attacker-made hook decides, which such contracts can do without any cache fault.",
+   "impact": "No funds held by the PoolManager for other users move. If the flag is on and the trigger works, an ordinary account can make the sequencer publish unsafe blocks whose state differs from the derived chain. Followers without the fault reject them and the sequencer's chain is rewritten when derivation reaches them, so swaps and liquidity changes in those blocks are re-executed under different state. Their slippage limits still bind. Parties that act on unsafe-head state (exchanges crediting deposits, fast bridges and intent fillers) bear the risk, and output proposals made by a node with the same fault can be disputed, which delays withdrawals.",
+   "preconditions": "The operator runs the Base or Celo sequencer with --engine.share-execution-cache-with-payload-builder (non-default; Base's and Celo's production flags are not public), and the cache holds a word for an address without code before the block that destroys and re-creates it. An ordinary account can send the destroy and re-create transactions.",
+   "mitigations": "Ask Base and Celo whether their sequencers set the sharing flag, and ask both to move to a base with reth pull request 28148 (reth v2.9.0 or later, or celo-org/reth 4e0169d, which celo-kona main already pins and which has the fix). Integrations should treat unsafe-head state on these chains as revocable.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364",
+    "src/types/Currency.sol:90-95",
+    "src/libraries/CurrencyDelta.sol:21-39"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/execution-cache/src/cached_state.rs",
+     "supports": "lines 1278-1297: destroyed account without original code is removed from the account cache and skipped with continue, storage not inserted"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs",
+     "supports": "lines 863-882: the same branch, byte-identical to reth v2.2.0 cached_state.rs"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.9.0/crates/engine/execution-cache/src/cached_state.rs",
+     "supports": "the fixed branch first appears in a reth release at v2.9.0 (remove only when account.info is None); v2.8.1 still has the old one"
+    },
+    {
+     "url": "https://patch-diff.githubusercontent.com/raw/paradigmxyz/reth/pull/28148.patch",
+     "supports": "fix dated 25 October 2026; its test caches a zero through CachedStateProvider::new_prewarm and expects the written 7 after insert_state of a DestroyedChanged account"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base/v1.5.6/Cargo.lock",
+     "supports": "base v1.5.6 pins reth-execution-cache and reth-engine-tree from base/reth tag base-v2.5.2.11 (9e380dd); base-builder-core and base-execution-payload-builder depend on reth-execution-cache"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/Cargo.lock",
+     "supports": "celo/reth-v1.0.10 pins reth-execution-cache from celo-org/reth 74cc8bb and reth-optimism-payload-builder from celo-org/optimism b08a8d0, which depends on reth-execution-cache"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/builder/core/src/flashblocks/payload.rs",
+     "supports": "lines 260-295: build_payload takes execution_cache from BuildArguments and passes it to BuilderStateProvider"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/execution/payload/src/config.rs",
+     "supports": "lines 477-500: BuilderStateProvider wraps the state provider in CachedStateProvider when a cache is given"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/optimism/b08a8d0abda93536b105b0f013753d2f35c0d19e/rust/op-reth/crates/payload/src/builder.rs",
+     "supports": "lines 333-366: Celo's OP builder serves account, storage and bytecode reads from the engine's cache when it shares one"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/node/core/src/args/engine.rs",
+     "supports": "line 291 default false and lines 519-523 flag --engine.share-execution-cache-with-payload-builder"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/tree/src/tree/mod.rs",
+     "supports": "line 3250: the cache is handed to the builder only when share_execution_cache_with_payload_builder() is true; line 1547 InsertExecutedBlock path"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/tree/src/tree/payload_processor/mod.rs",
+     "supports": "lines 715-757: on_inserted_executed_block feeds locally built blocks into the cache with insert_state"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/tree/src/tree/payload_validator.rs",
+     "supports": "lines 1898-1908: payload_builder_resources hands over cache_for(parent) only when the flag is set"
+    },
+    {
+     "url": "https://mainnet.base.org/",
+     "supports": "web3_clientVersion returned reth/v2.5.2-9e380dd/x86_64-unknown-linux-gnu/base/v1.5.6 on 2026-11-24; base-rpc.publicnode.com the same"
+    },
+    {
+     "url": "https://forno.celo.org",
+     "supports": "web3_clientVersion returned reth/v2.2.0-74cc8bb/x86_64-unknown-linux-gnu on 2026-11-24; celo-rpc.publicnode.com the same"
+    },
+    {
+     "url": "src/PoolManager.sol:279-288",
+     "supports": "sync reads balanceOf of the named currency, the only storage read of another account the PoolManager makes on the settlement path"
+    }
+   ],
+   "evidence": "secondary"
+  },
+  {
+   "ref": "new",
+   "title": "Follower nodes on OP Mainnet, Base, Zora, World Chain, Celo, X Layer and reth-bsc validate blocks through an execution cache with the stale destroyed-account branch",
+   "chainIds": [
+    10,
+    8453,
+    7777777,
+    480,
+    42220,
+    196,
+    56
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A10",
+    "A14"
+   ],
+   "effect": "degrade",
+   "actor": "operator",
+   "severity": "info",
+   "difference": "The builds the public endpoints report pin reth revisions with the old branch: op-reth v2.8.1 (OP Mainnet), conduit-op-reth v2.5.1 (Zora) and world-chain v2.8.2 pin ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1, cached_state.rs lines 1286-1305); Base pins base/reth 9e380dd (lines 1278-1297); Celo pins celo-org/reth 74cc8bb (lines 863-882); X Layer v0.0.7 pins okx/reth 81573d2 (lines 904-923); reth-bsc v0.1.4-hotfix pins bnb-chain/reth 3b2bd02 (lines 863-882). Engine tree validation of newPayload reads through this cache by default on all of them.",
+   "mechanism": "On a follower, a stale word from the branch is read while the node re-executes a canonical block. A different read makes the state root, receipts root or gas used differ from the header, so the node rejects a valid block and stops following until restarted, because the cache is in memory. It does not commit wrong state. The same accounts as in the producing-path finding are the only ones that can be read stale, so no read made by the PoolManager, or by a token, hook, router, PositionManager or Permit2 that existed before the block, changes (src/PoolManager.sol:279-288, 349-364). The trigger needs a cached word for an address without code before the block that destroys and re-creates it; I could not trace how an ordinary block produces that word on these builds.",
+   "impact": "No PoolManager funds move. A stalled RPC node shows an old head to the users and integrations that read from it.",
+   "preconditions": "A node operator runs one of the listed builds as a validating follower, and the trigger condition above holds.",
+   "mitigations": "Operators upgrade to a base with reth pull request 28148. Integrations compare block heads across two endpoints before acting.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/reth/3c5f2f11c4e5a5647e6e911cd131ccf1bada4f25/crates/engine/execution-cache/src/cached_state.rs",
+     "supports": "lines 1286-1305: old branch in ethereum-optimism/reth op-v2.6.0-2"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/reth/81573d2c7d806d5df9ff2d512dd000c2bf542b1b/crates/engine/execution-cache/src/cached_state.rs",
+     "supports": "lines 904-923: old branch in okx/reth 81573d2"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/reth/3b2bd02006ef8970c862d2af5dbc98a92f58d57d/crates/engine/execution-cache/src/cached_state.rs",
+     "supports": "lines 863-882: old branch in bnb-chain/reth 3b2bd02, identical to reth v2.2.0"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/execution-cache/src/cached_state.rs",
+     "supports": "lines 1278-1297: old branch"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs",
+     "supports": "lines 863-882: old branch"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.8.1/rust/Cargo.lock",
+     "supports": "op-reth v2.8.1 pins reth-execution-cache from ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/conduitxyz/conduit-op-reth/v2.5.1/Cargo.lock",
+     "supports": "conduit-op-reth v2.5.1 pins op-v2.6.0-2"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/Cargo.lock",
+     "supports": "world-chain v2.8.2 pins op-v2.6.0-2"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7/Cargo.lock",
+     "supports": "xlayer-reth v0.0.7 pins okx/reth 81573d2"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/reth-bsc/v0.1.4-hotfix/Cargo.lock",
+     "supports": "reth-bsc v0.1.4-hotfix pins bnb-chain/reth v0.1.4 (3b2bd02)"
+    },
+    {
+     "url": "https://mainnet.optimism.io",
+     "supports": "web3_clientVersion on 2026-11-24 returned op-reth/v2.8.1-72207294 and, on other requests, op-reth/v0.0.0-dev-unknown"
+    },
+    {
+     "url": "https://rpc.zora.energy/",
+     "supports": "web3_clientVersion returned conduit-op-reth/v2.5.1-8f0ccac"
+    },
+    {
+     "url": "https://worldchain-mainnet.g.alchemy.com/public",
+     "supports": "web3_clientVersion returned world-chain/v2.8.2-9596311"
+    },
+    {
+     "url": "https://rpc.xlayer.tech",
+     "supports": "web3_clientVersion returned reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7"
+    }
+   ],
+   "evidence": "secondary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "Whether the PoolManager's own storage, its transient storage, or the balanceOf staticcall of sync can read a stale word from the reth execution cache branch for a destroyed account without code",
+   "result": "The branch is taken only for accounts whose info at the start of the block had the empty code hash and that the block destroyed. The PoolManager has had code since deployment and cannot be destroyed under EIP-6780, so its account is never on the branch and insert_storage replaces each of its written words after every block. Transient storage (src/libraries/CurrencyDelta.sol:21-39, src/libraries/CurrencyReserves.sol:17-36, src/libraries/NonzeroDeltaCount.sol:14) lives in the EVM journal and is not in the execution cache. The balanceOf read of sync and settle (src/PoolManager.sol:279-288, 349-364, src/types/Currency.sol:90-95) reads the token's storage, which can be stale only for a token created in the block that destroyed its address. The account cache entry of a branch account is removed, so its code hash and balance are read fresh, and code is looked up by code hash.",
+   "source": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs lines 863-882; src/PoolManager.sol:279-288"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "Which accounts can reach the stale branch, including EIP-7702 delegated accounts, accounts emptied under EIP-161, and the contracts a victim pool depends on",
+   "result": "Reachable: an address created and self-destructed in one transaction, an account without code that a creation landed on and that self-destructed in the same transaction, and an empty account removed under EIP-161, each re-created later in the same block. All of them carry code deployed in that block. An EIP-7702 delegated account has a non-empty code hash, so a destroyed one would take the clear-everything branch, and it cannot be destroyed because it was not created in the transaction and its nonce is above zero; after its delegation is cleared it keeps storage and a nonce and still cannot be destroyed or created over. Tokens, hooks, routers, PositionManager and Permit2 already used by a pool had code before any such block and cannot be destroyed; a proxy runs its implementation with the proxy's own storage. A victim pool can therefore depend on a branch account only by choosing a token or hook made in that pattern, which is an attacker-made contract (actor pool-creator).",
+   "source": "https://patch-diff.githubusercontent.com/raw/paradigmxyz/reth/pull/28148.patch"
+  },
+  {
+   "chainIds": [
+    1,
+    130,
+    57073,
+    1868,
+    4217,
+    5042
+   ],
+   "lens": "L2",
+   "check": "Is the old branch present at the reth revision the endpoint reports",
+   "result": "No. Ethereum reth v2.11.0, op-reth v2.10.0-rc.4 (65e80332, pins ethereum-optimism/reth op-v2.7.0-2 ce8cfb1; rc.1 pins op-v2.7.0-1 ed91041, also fixed), Tempo v1.19.1 (paradigmxyz/reth 167933d) and Arc v0.8.6-rc1 and v0.8.5 (circlefin/arc-reth 508cbdf) all remove the account only when its current info is None and otherwise write the re-created account's storage (cached_state.rs lines 1165-1185, Arc 864-884).",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/reth/ce8cfb1fd25c2da86004eda677dc55dfa0d5c0af/crates/engine/execution-cache/src/cached_state.rs; https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/engine/execution-cache/src/cached_state.rs; https://raw.githubusercontent.com/paradigmxyz/reth/167933d17ad47fe7354f5942ddd6f0d3e343bb41/crates/engine/execution-cache/src/cached_state.rs; https://raw.githubusercontent.com/circlefin/arc-reth/508cbdf7d6ba49b4ce735d678863897067fa381a/crates/engine/execution-cache/src/cached_state.rs; web3_clientVersion and arc_getVersion queried 2026-11-24"
+  },
+  {
+   "chainIds": [
+    10,
+    7777777,
+    480,
+    196,
+    56
+   ],
+   "lens": "L2",
+   "check": "Does the block producer of OP Mainnet, Zora, World Chain, X Layer or reth-bsc read through the execution cache",
+   "result": "No in the public code. The op-reth OP payload builder destructures BuildArguments with .. and reads state_by_block_hash directly (op-reth v2.8.1 rust/op-reth/crates/payload/src/builder.rs line 257, rc.4 line 193). conduit-op-reth v2.5.1 and world-chain v2.8.2 use an op-reth OP builder whose lock entry does not depend on reth-execution-cache, and World Chain's flashblocks builder discards the cache (crates/builder/src/payload_builder.rs line 125, execution_cache: _). xlayer-builder and the X Layer OP builder do not depend on reth-execution-cache. The reth-bsc miner sources (src/node/miner) do not reference it. On these networks the branch is on the validation path of followers only.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.8.1/rust/op-reth/crates/payload/src/builder.rs; https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/crates/builder/src/payload_builder.rs"
+  },
+  {
+   "chainIds": [
+    130,
+    57073,
+    1868,
+    10
+   ],
+   "lens": "L2",
+   "check": "Lead L-703: what changed between op-reth v2.10.0-rc.1 and rc.4 in the engine tree, execution cache, prewarming, state root task and op-revm handler",
+   "result": "The two Cargo.locks differ only in the reth fork tag (op-v2.7.0-1 ed91041 to op-v2.7.0-2 ce8cfb1, 106 crates), snap 1.1.1 to 1.1.2 and a removed example; revm 43.0.3, revm-interpreter 43.0.2 and alloy-evm 0.39.0 are unchanged. All files reachable from the module trees of reth's engine/tree (36 files, including prewarm, the block access list executor, txpool prewarm, precompile cache and state root strategy), engine/execution-cache, trie/sparse, revm, evm/evm, engine/primitives, payload/basic and storage/provider are byte-identical between the two fork commits. In the optimism repository, op-revm changes only test code in fast_lz.rs (the module after line 99 is cfg(test)); handler.rs is unchanged. op-reth's evm, consensus, payload and node changes remove type parameters (OpEvmConfig now fixed to OpChainSpec and OpReceipt), keep the same EVM factory OpEvmFactory with NullRefundPolicy, and add a test for the Isthmus withdrawals root. No change alters a storage, transient storage, balance or code read inside a transaction.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.10.0-rc.1/rust/Cargo.lock; https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.10.0-rc.4/rust/Cargo.lock; https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.10.0-rc.4/rust/op-revm/src/fast_lz.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    56,
+    4217,
+    5042
+   ],
+   "lens": "L2",
+   "check": "Other caches in front of state on reth based clients, looking for an index that is not the full content or address",
+   "result": "The execution cache indexes code by code hash, accounts by full address and storage by (full address, full slot); clear() keeps the code cache because its mapping cannot change. The precompile cache is per precompile address, indexed by the full input bytes, returns an entry only when the stored spec matches and the call has at least the recorded gas, stores only successful outputs that consumed no state gas, and is applied only through map_cacheable_precompiles, which skips precompiles marked stateful; Celo's transfer precompile is built with .stateful() (alloy-celo-evm lib.rs line 125). The payload builder's CachedReads is indexed by address and slot, is pre-filled from a committed block and used only for a job whose parent is that block hash, and falls through to the database for slots it lacks. Base's txpool prewarm keeps its own CachedReads and starts a fresh one for each head. The sparse trie cache feeds only state root computation. The src/ code calls no precompile.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/reth/ce8cfb1fd25c2da86004eda677dc55dfa0d5c0af/crates/engine/tree/src/tree/precompile_cache.rs; https://raw.githubusercontent.com/ethereum-optimism/reth/3c5f2f11c4e5a5647e6e911cd131ccf1bada4f25/crates/payload/basic/src/lib.rs lines 131-246; https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/crates/alloy-celo-evm/src/lib.rs"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "check": "HyperEVM nanoreth execution cache",
+   "result": "Blocks are produced by Hyperliquid's own node, which answers web3_clientVersion with hyperliquid evm Mainnet. The archive follower nanoreth pins hl-archive-node/reth 1450962, whose cache invalidates the whole storage of a destroyed account before continuing (crates/engine/tree/src/tree/cached_state.rs lines 381-387), so it has no stale words of that kind.",
+   "source": "https://raw.githubusercontent.com/hl-archive-node/reth/14509628ed37e9a9b7110ea855a67f427c4d61fc/crates/engine/tree/src/tree/cached_state.rs"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901,
+    137,
+    43114,
+    143
+   ],
+   "lens": "L2",
+   "check": "Exposure of non-reth networks to the reth execution cache fault",
+   "result": "Not applicable. Their endpoints report nitro v3.13.0-rc.9 and an unversioned nitro, bor v2.11.1, avalanchego 1.15.3 and Monad 0.16.7, none of which uses the reth engine tree. BNB Smart Chain's own endpoint runs geth v1.8.2; reth-bsc is covered in the follower finding.",
+   "source": "web3_clientVersion on the endpoints in state/networks.json, queried 2026-11-24"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "question": "Does mega-reth v2.2.3 (endpoint mega-reth/v2.2.3-72527bc) carry the reth execution cache branch that skips a re-created account's storage, and does MegaETH's sequencer read state through that cache?",
+   "why": "The node source is not public (megaeth-labs/mega-reth returns 404), its version suggests a reth v2.2 base where the branch exists, and a sequencer that reads stale storage would publish state the stateless validator rejects.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    8453,
+    42220
+   ],
+   "lens": "L2",
+   "question": "Do the Base and Celo sequencers run with --engine.share-execution-cache-with-payload-builder, and do their standby sequencers validate the active sequencer's blocks through newPayload before taking over?",
+   "why": "Both builders read through the cache with the old branch when the flag is set, which would put the fault on the producing path.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    10
+   ],
+   "lens": "L2",
+   "question": "Which reth revision is behind the op-reth/v0.0.0-dev-unknown build that most OP Mainnet endpoint requests reach, and does it have reth pull request 28148?",
+   "why": "The versioned build behind the same endpoint (v2.8.1) has the old branch; the unversioned one cannot be placed.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    8453,
+    42220,
+    10,
+    7777777,
+    480,
+    196,
+    56
+   ],
+   "lens": "L2",
+   "question": "Which read in an ordinary block puts a storage word for an address without code into the reth execution cache before the block that destroys and re-creates that address (prewarm of an EIP-2930 access list, block access list prefetch, or another path)?",
+   "why": "This is the one unconfirmed link between the old branch and a stale read on these builds.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-702",
+   "outcome": "finding",
+   "answer": "The old branch is present at the pinned reth revision for OP Mainnet's v2.8.1 build, Base, Zora, World Chain, Celo, X Layer and reth-bsc, and absent for Ethereum, Unichain, Ink, Soneium, Tempo and Arc; MegaETH is unknown. Base's and Celo's builders read through the cache when the non-default sharing flag is set, which puts the branch on the producing path there; elsewhere it is on follower validation only. No read by the PoolManager, or by a token, hook, router, PositionManager or Permit2 that predates the block, can reach the branch, so no PoolManager funds of other users can be taken or locked through it."
+  },
+  {
+   "leadId": "L-703",
+   "outcome": "cleared",
+   "answer": "Between op-reth v2.10.0-rc.1 and rc.4 the reth fork moves from op-v2.7.0-1 to op-v2.7.0-2 with byte-identical engine tree, execution cache, prewarm, state root, trie, revm and provider sources; op-revm changes only tests and op-reth's own crates change types, not reads."
+  }
+ ]
+}

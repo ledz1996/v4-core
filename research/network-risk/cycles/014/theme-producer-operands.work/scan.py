@@ -31,7 +31,7 @@ for l in L:
         c['6909:' + f] += 1; tx['6909:' + f].add(l['tx'])
     if k == 'Swap':
         d = l['data']; a0, a1, p, liq, tick = s256(w(d, 0)), s256(w(d, 1)), w(d, 2), w(d, 3), s256(w(d, 4))
-        for t in (tick, tick + 1):
+        for t in ((tick, tick + 1) if a0 and a1 else ()):
             if -887272 <= t <= 887272 and V.get_sqrt_price_at_tick(t) == p:
                 sp = spacing.get(l['topics'][1])
                 if sp is None or t % sp == 0:

@@ -1,6 +1,6 @@
 # All findings
 
-127 findings on record after cycle 13, in-scope ones first.
+133 findings on record after cycle 14, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -1349,6 +1349,45 @@ Sources:
 - rpc https://avalanche-c-chain-rpc.publicnode.com eth_call Quoter 0xf27e532878B622d6b916F524E8711880107D4eF0, 2026-11-24; research/network-risk/cycles/009/established-l1.work/raw/l565_43114.json (Avalanche gas per crossing and per empty word)
 - https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/params/protocol_params.go (Polygon MaxTxGas 1 << 25)
 - https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/protocol_params.go (BNB Smart Chain MaxTxGas 1 << 24 (read in cycle 8))
+
+## F-133. Follower nodes on OP Mainnet, Base, Zora, World Chain, Celo, X Layer and reth-bsc validate blocks through an execution cache with the stale destroyed-account branch
+
+Low severity, plausible. Effect: degrade. Who can trigger it: any account. Networks: Optimism, Base, Zora, Worldchain, Celo, X Layer, BNB Smart Chain.
+
+What differs on the network: The builds the public endpoints report pin reth revisions with the old branch: op-reth v2.8.1 (OP Mainnet), conduit-op-reth v2.5.1 (Zora) and world-chain v2.8.2 pin ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1, cached_state.rs lines 1286-1305); Base pins base/reth 9e380dd (lines 1278-1297); Celo pins celo-org/reth 74cc8bb (lines 863-882); X Layer v0.0.7 pins okx/reth 81573d2 (lines 904-923); reth-bsc v0.1.4-hotfix pins bnb-chain/reth 3b2bd02 (lines 863-882). Engine tree validation of newPayload reads through this cache by default on all of them.
+
+How it meets the code: On a follower, a stale word from the branch is read while the node re-executes a canonical block. A different read makes the state root, receipts root or gas used differ from the header, so the node rejects a valid block and stops following until restarted, because the cache is in memory. It does not commit wrong state. The same accounts as in the producing-path finding are the only ones that can be read stale, so no read made by the PoolManager, or by a token, hook, router, PositionManager or Permit2 that existed before the block, changes (src/PoolManager.sol:279-288, 349-364). The trigger needs a cached word for an address without code before the block that destroys and re-creates it; I could not trace how an ordinary block produces that word on these builds.
+
+What is at risk: No PoolManager funds move. A stalled RPC node shows an old head to the users and integrations that read from it.
+
+What it takes: A node operator runs one of the listed builds as a validating follower, and the trigger condition above holds.
+
+What can be done: Operators upgrade to a base with reth pull request 28148. Integrations compare block heads across two endpoints before acting.
+
+This entry adds to F-124.
+
+Rated low by the verifier. The verifier's reading: followers run default software and any account could send the trigger transactions if the seeding read exists. The effect is a follower stall with no path to PoolManager funds.
+
+Second reviewer's corrections: actor: unprivileged. The followers run default software, so any account could send the trigger transactions if the seeding link exists, and no operator needs to act. The effect is still an RPC follower stall with no path to PoolManager funds, so the finding stays out of scope for funds. Severity is low (an operational hazard) rather than info. The OP Mainnet endpoint returned only the v0.0.0-dev-unknown build on my query, so its pin to op-v2.6.0-2 is not confirmed for current requests.
+
+Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-364`.
+
+Sources:
+
+- https://raw.githubusercontent.com/ethereum-optimism/reth/3c5f2f11c4e5a5647e6e911cd131ccf1bada4f25/crates/engine/execution-cache/src/cached_state.rs (lines 1286-1305: old branch in ethereum-optimism/reth op-v2.6.0-2)
+- https://raw.githubusercontent.com/okx/reth/81573d2c7d806d5df9ff2d512dd000c2bf542b1b/crates/engine/execution-cache/src/cached_state.rs (lines 904-923: old branch in okx/reth 81573d2)
+- https://raw.githubusercontent.com/bnb-chain/reth/3b2bd02006ef8970c862d2af5dbc98a92f58d57d/crates/engine/execution-cache/src/cached_state.rs (lines 863-882: old branch in bnb-chain/reth 3b2bd02, identical to reth v2.2.0)
+- https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/execution-cache/src/cached_state.rs (lines 1278-1297: old branch)
+- https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs (lines 863-882: old branch)
+- https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.8.1/rust/Cargo.lock (op-reth v2.8.1 pins reth-execution-cache from ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1))
+- https://raw.githubusercontent.com/conduitxyz/conduit-op-reth/v2.5.1/Cargo.lock (conduit-op-reth v2.5.1 pins op-v2.6.0-2)
+- https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/Cargo.lock (world-chain v2.8.2 pins op-v2.6.0-2)
+- https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7/Cargo.lock (xlayer-reth v0.0.7 pins okx/reth 81573d2)
+- https://raw.githubusercontent.com/bnb-chain/reth-bsc/v0.1.4-hotfix/Cargo.lock (reth-bsc v0.1.4-hotfix pins bnb-chain/reth v0.1.4 (3b2bd02))
+- https://mainnet.optimism.io (web3_clientVersion on 2026-11-24 returned op-reth/v2.8.1-72207294 and, on other requests, op-reth/v0.0.0-dev-unknown)
+- https://rpc.zora.energy/ (web3_clientVersion returned conduit-op-reth/v2.5.1-8f0ccac)
+- https://worldchain-mainnet.g.alchemy.com/public (web3_clientVersion returned world-chain/v2.8.2-9596311)
+- https://rpc.xlayer.tech (web3_clientVersion returned reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7)
 
 ## F-006. Source disagrees with two interface comments and two test conditions, and none of the four changes who can move funds
 
@@ -2740,32 +2779,26 @@ Sources:
 
 ## F-020. HyperCore sends unsigned transfers in the name of addresses that never signed, including a contract, and the record that names such an address is outside the deployer's documented action
 
-Medium severity, plausible. Effect: siphon. Who can trigger it: sequencer, validator or bridge committee. Networks: HyperEVM.
+Medium severity, plausible. Effect: freeze. Who can trigger it: sequencer, validator or bridge committee. Networks: HyperEVM.
 
-What differs on the network: HyperCore places system transactions at the top of HyperEVM blocks. They carry no signature and gas price 0, and the node states the sender. Under AQAv2 the node sends token transfers in the name of the token's linked contract and of a treasury address, to hold their balances in a ratio of 1 to 9. The published block data gives a from field for each such transaction and the archive client takes the sender from that field. On Ethereum a balance leaves an address only through a transaction that the address signed or a call made by its own code.
+What differs on the network: HyperCore places unsigned system transactions with gas price 0 at the top of HyperEVM blocks and states their sender itself. Under AQAv2 it sends token transfers in the name of the token's linked contract and of a treasury address. On Ethereum a balance leaves an address only through a transaction that address signed or a call made by its own code.
 
-How it meets the code: 1. What is new in this cycle. The treasury deployer's own action cannot be the place where the treasury address is named. The HyperCore explorer lists 13 actions for Coinbase's staking account. Its AQAv2 action is authorizeAqav2Role with the fields token 0 and role treasury, sent on 2026-06-02, and none of the 13 actions contains the address 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00. The explorer lists no action for that address. The address was therefore recorded by a validator vote or by an action that the public docs and SDK do not describe. 2. The testnet shows the same mechanism with a contract as sender. Testnet USDC is linked to 0x0b80659a4076e9e93c7dbe0f10675a16a3e5c206, which has 2,175 bytes of code and an account nonce of 28,681, and the testnet node lists a system transaction with that contract in the from field. A contract cannot sign, so the node alone produced those 28,681 transactions. 3. On mainnet the newest 4,000 blocks hold 1,144 transfers sent in the name of the CoreDepositWallet contract and 673 in the name of the treasury address, all with 200,000 gas and all ahead of the signed transactions. 4. The archive client sets disable_eip3607 for every transaction, which is what lets a sender with code pass, and it treats the upstream from field as authoritative. The official replay client has no such field. 5. If HyperCore recorded the PoolManager as the treasury address of a token, or as the address a later rule of this kind names, the node would send transfer calls on that token with the PoolManager as msg.sender. The token would move the balance. Nothing in src compares pool accounting with a token balance outside the window between sync and settle (src/PoolManager.sol:279-288 and 349-365), so pools and claims would still record the tokens as owed and later takes would revert in the token transfer (src/types/Currency.sol:55-87). 6. Still unknown: which HyperCore record names the treasury address, whether the node tests that address in any way, and whether it can be changed after activation. The validator node is closed source. AQAv2 is announced as a requirement for quote assets of HIP-4 and validator-operated perp markets in a future network upgrade, so more tokens are likely to get such a record.
+How it meets the code: 1. Unchanged from cycle 7: if HyperCore recorded the PoolManager as the address to rebalance from, the node would send transfer calls on that token with the PoolManager as msg.sender. The token would move the balance while pool state, ERC-6909 balances and protocol fee counters keep recording the tokens as owed, because the PoolManager reads a balance only between sync and settle (src/PoolManager.sol:279-288 and 349-365). The last takes in that token would then revert inside the transfer (src/types/Currency.sol:55-87). 2. New in this cycle. The census of 3,000 recent blocks finds 1,030 system transactions, 435 sent in the name of the CoreDepositWallet contract and 195 in the name of the treasury address 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00, and none names the PoolManager; its nonce is still 1. HyperCore spot metadata links no token to the PoolManager and exposes no field that names an AQAv2 treasury, so the record behind step 1 still cannot be read. 3. An ordinary account cannot create that record: the documentation ties AQAv2 activation to two deployers that each stake 500,000 HYPE and to a validator vote, and the link of a spot token to a contract needs the contract's CREATE deployer or a finalizer stored in slot 0 or in the slot keccak256("HyperCore deployer"), which for the PoolManager only the owner contract could arrange (cleared in cycle 4).
 
-What is at risk: All pools and ERC-6909 claims in a token for which HyperCore recorded the PoolManager as the address to rebalance from. USDC is the one AQAv2 token today, its treasury address is Coinbase's, and no system transaction in the samples of this and earlier cycles names the PoolManager. An ordinary account cannot bring this about.
+What is at risk: All pools and ERC-6909 claims in a token for which HyperCore named the PoolManager as the rebalancing address. Nothing is exposed today: no system transaction has named the PoolManager and its nonce is 1.
 
-What it takes: A validator vote, or whatever privileged record names a treasury address, must name the PoolManager. The deployers must each stake 500,000 HYPE. The linked contract's balance must sit below its tenth for transfers to flow out of the named address.
+What it takes: The validator set, or whatever privileged record names an AQAv2 treasury, must name the PoolManager. An ordinary account cannot.
 
-What can be done: Ask the Hyperliquid team which record names an AQAv2 treasury address and whether the node refuses an address with code. Watch eth_getSystemTxsByBlockNumber, or the from field of the published block data, for a system transaction whose sender is the PoolManager. Treat every AQAv2 quote token as depending on the validator set in this respect.
-
-Second reviewer's corrections: The actor value operator is right. The documentation ties activation to a validator vote and to two deployers that each stake 500,000 HYPE, and an ordinary account can do neither. Verdict plausible and not confirmed for one reason: step 5 is an inference. The observed facts are that the node sends unsigned transfers in the name of an address that has no HyperCore action and in the name of contracts. Whether it would do so for an address with code in the treasury role, or for the PoolManager, has no source. The evidence field should therefore read inferred for step 5 and primary for steps 1 to 4. Smaller points. The testnet nonce was 28,692 at my query and rises with every system transaction. The effect is better described as loss or freeze for pools of that token than as a siphon by an attacker: the tokens would go to the token's linked contract, and the 9 to 1 rule can also send tokens into the named address, which the PoolManager credits to nobody. The amount exposed today is small, 997.75 USDC in the PoolManager. Severity medium stands: the loss is limited to pools of one token and needs a deliberate act of the validator set. A cheap detector that the mitigations omit is the PoolManager's own account nonce, which is 1 and would rise with the first transaction sent in its name.
+What can be done: Watch the PoolManager's account nonce, which rises with the first transaction sent in its name, and the from field of system transactions. Ask the Hyperliquid team whether the node refuses an address with code as AQAv2 treasury.
 
 Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-365`, `src/types/Currency.sol:55-87`.
 
 Sources:
 
-- https://rpc.hyperliquid.xyz/explorer userDetails for 0x4E5319dEb1072B01439EE674db5C321d11fd96F8 and 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00, queried 2026-11-23 (13 actions of the staking account, one authorizeAqav2Role with token 0 and role treasury on 2026-06-02 and none that contains the treasury address; no action for the treasury address)
-- https://rpc.hyperliquid-testnet.xyz/evm eth_getCode, eth_getTransactionCount and eth_getSystemTxsByBlockNumber 0x34dd397; https://api.hyperliquid-testnet.xyz/info spotMeta (Testnet USDC is linked to a contract of 2,175 bytes with nonce 28,681 that appears as the from address of an unsigned system transaction)
-- https://rpc.purroofgroup.com eth_getBlockByNumber for blocks 52,048,026 to 52,052,025 (1,144 system transfers in the name of the CoreDepositWallet contract and 673 in the name of the treasury address, 200,000 gas each, none after a signed transaction, none naming the PoolManager)
-- https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/types/reth_compat.rs (Lines 183 to 207: the sender of a system transaction is taken from the upstream from field when present)
-- https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/evm/config.rs (Lines 329 to 331: disable_eip3607 is set for every transaction, so a sender with code is accepted)
-- https://raw.githubusercontent.com/hyperliquid-dex/hyper-evm-sync/main/src/run.rs (Lines 217 to 238: the official replay client derives the sender from the target contract and has no from field)
-- https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md (The treasury deployer designates a treasury address, activation is by validator vote, balances are held 9 to 1, and AQAv2 will be required for quote assets of HIP-4 and validator-operated perp markets)
-- https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md (authorizeAqav2Role has the fields token and role and no address)
+- https://rpc.purroofgroup.com eth_getBlockByNumber 52,152,491 to 52,155,490 and eth_getTransactionCount, 2026-11-24 (1,030 system transactions, none naming the PoolManager; PoolManager nonce 1)
+- https://api.hyperliquid.xyz/info (spotMeta links no token to the PoolManager; tokenDetails for USDC has no treasury field)
+- https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md (Treasury deployer designates the treasury address, both deployers stake 500k HYPE, activation by validator vote (read in cycle 7))
+- https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers.md (Link finalization by the CREATE deployer or a finalizer stored in slot 0 or keccak256("HyperCore deployer"); system transactions call transfer as the system address (fetched 2026-11-24))
 
 ## F-105. A forced transaction from L1 may carry at most 1,000,000 gas on MegaETH, and any account can raise the storage gas of a chosen PoolManager slot above that for about 0.003 ETH, which closes the L1 exit of the position that must write the slot
 
@@ -3030,6 +3063,45 @@ Sources:
 - https://docs.optimism.io/op-stack/protocol/hardforks/karst (op-geth does not support Karst)
 - https://forno.celo.org web3_clientVersion batched with eth_call and eth_getBlockByNumber, 2026-11-24 (both backends answer on the public endpoint and agree today (research/network-risk/cycles/009/op-stack-custom-gas.work/out/forno-heads.json))
 
+## F-132. Base and Celo block builders read through the reth execution cache that still has the stale branch for a destroyed account without code, when the operator enables cache sharing
+
+Low severity, plausible. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Base, Celo.
+
+What differs on the network: Base v1.5.6 pins base/reth tag base-v2.5.2.11 (9e380dd) and Celo's endpoints report reth/v2.2.0-74cc8bb, which is celo-org/reth 74cc8bb pinned by celo-kona tag celo/reth-v1.0.10. In both, ExecutionCache::insert_state handles a destroyed account whose original info has no code by removing the account entry and continuing, so the storage the block wrote after re-creating that account is never put into the cache and any word cached for it earlier survives (base/reth cached_state.rs lines 1278-1297, celo-org/reth cached_state.rs lines 863-882). reth v2.9.0 and reth pull request 28148 replace this with a removal only when the current info is None. Unlike stock op-reth, both block builders read state through this cache when the engine hands it over: Base's flashblocks builder (crates/builder/core/src/flashblocks/payload.rs lines 260-295, through BuilderStateProvider in crates/execution/payload/src/config.rs lines 477-500) and Celo's fork of the OP payload builder (celo-org/optimism b08a8d0 rust/op-reth/crates/payload/src/builder.rs lines 333-366). The engine hands the cache over only when --engine.share-execution-cache-with-payload-builder is set; its default is false in both forks (crates/node/core/src/args/engine.rs line 291 for Base, line 289 for Celo; crates/engine/primitives/src/config.rs line 262 and 238). On a sequencer the cache is fed after each locally built block through InsertExecutedBlock and on_inserted_executed_block, which calls the same insert_state (base/reth tree/payload_processor/mod.rs lines 435-470, celo-org/reth tree/payload_processor/mod.rs lines 722-757, tree/mod.rs line 1547).
+
+How it meets the code: 1. The faulty branch is taken only for an account that the block destroyed and whose info at the start of the block had the empty code hash: an address that did not exist and was created and self-destructed in one transaction, a funded or empty account without code that a CREATE or CREATE2 landed on and that self-destructed in the same transaction, or an empty account removed under EIP-161. When a later transaction of the same block creates the address again, the bundle carries status DestroyedChanged, current info and the new storage, and the old code drops all of it. 2. A word for that address must already sit in the storage cache, indexed by (address, slot). Such an address had no code at the start of the block, so the cached word is its pre-block value, which is zero for every account that can be destroyed (accounts without code that keep storage, such as an EIP-7702 account whose delegation was cleared, have a nonce and cannot be destroyed). The reth fix's own test produces the cached zero through a prewarm read (reth pull request 28148, test_insert_state_recreated_account_updates_cached_storage). On a sequencer that only builds, the cache is filled by insert_state of built blocks and by prewarming of payloads it validated, for example while it was a standby in a high availability set. I could not trace which reads of an ordinary block would put a zero for a codeless address into the cache on these builds; this link is unconfirmed. 3. When both conditions hold and sharing is on, the builder executes a later block with the stale zero where the canonical value is what the re-created contract wrote. The produced block's state differs from what a node without the cache and the proof program compute from the same transactions. 4. The PoolManager's own slots are never on this branch: it has code from deployment and is never destroyed, so its words are replaced by insert_storage after every block, and transient storage (src/libraries/CurrencyDelta.sol:21-39, src/libraries/CurrencyReserves.sol:17-36) is not cached across transactions at all. The only accounts that can read stale words are contracts created in the block that destroyed their address, which are new contracts made by whoever made them. A token, hook, router, PositionManager or Permit2 that a victim pool already uses had code before that block and cannot be destroyed under EIP-6780, and a proxy's implementation is run with the proxy's storage. So a stale word can only change what an attacker-made token returns to sync and settle (src/PoolManager.sol:279-288, 349-364) or what an attacker-made hook decides, which such contracts can do without any cache fault.
+
+What is at risk: No funds held by the PoolManager for other users move. If the flag is on and the trigger works, an ordinary account can make the sequencer publish unsafe blocks whose state differs from the derived chain. Followers without the fault reject them and the sequencer's chain is rewritten when derivation reaches them, so swaps and liquidity changes in those blocks are re-executed under different state. Their slippage limits still bind. Parties that act on unsafe-head state (exchanges crediting deposits, fast bridges and intent fillers) bear the risk, and output proposals made by a node with the same fault can be disputed, which delays withdrawals.
+
+What it takes: The operator runs the Base or Celo sequencer with --engine.share-execution-cache-with-payload-builder (non-default; Base's and Celo's production flags are not public), and the cache holds a word for an address without code before the block that destroys and re-creates it. An ordinary account can send the destroy and re-create transactions.
+
+What can be done: Ask Base and Celo whether their sequencers set the sharing flag, and ask both to move to a base with reth pull request 28148 (reth v2.9.0 or later, or celo-org/reth 4e0169d, which celo-kona main already pins and which has the fix). Integrations should treat unsafe-head state on these chains as revocable.
+
+This entry adds to F-124.
+
+Second reviewer's corrections: forno.celo.org is load-balanced across reth/v2.2.0-74cc8bb and an op-geth build (Geth/v0.1.0-untagged-c7ed55b8-20260817), so not every Celo endpoint request reaches the cited reth. The actor operator stands because the hazard needs a non-default sequencer flag, though the trigger transactions can come from any account.
+
+Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-364`, `src/types/Currency.sol:90-95`, `src/libraries/CurrencyDelta.sol:21-39`.
+
+Sources:
+
+- https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/execution-cache/src/cached_state.rs (lines 1278-1297: destroyed account without original code is removed from the account cache and skipped with continue, storage not inserted)
+- https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs (lines 863-882: the same branch, byte-identical to reth v2.2.0 cached_state.rs)
+- https://raw.githubusercontent.com/paradigmxyz/reth/v2.9.0/crates/engine/execution-cache/src/cached_state.rs (the fixed branch first appears in a reth release at v2.9.0 (remove only when account.info is None); v2.8.1 still has the old one)
+- https://patch-diff.githubusercontent.com/raw/paradigmxyz/reth/pull/28148.patch (fix dated 25 October 2026; its test caches a zero through CachedStateProvider::new_prewarm and expects the written 7 after insert_state of a DestroyedChanged account)
+- https://raw.githubusercontent.com/base/base/v1.5.6/Cargo.lock (base v1.5.6 pins reth-execution-cache and reth-engine-tree from base/reth tag base-v2.5.2.11 (9e380dd); base-builder-core and base-execution-payload-builder depend on reth-execution-cache)
+- https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/Cargo.lock (celo/reth-v1.0.10 pins reth-execution-cache from celo-org/reth 74cc8bb and reth-optimism-payload-builder from celo-org/optimism b08a8d0, which depends on reth-execution-cache)
+- https://raw.githubusercontent.com/base/base/v1.5.6/crates/builder/core/src/flashblocks/payload.rs (lines 260-295: build_payload takes execution_cache from BuildArguments and passes it to BuilderStateProvider)
+- https://raw.githubusercontent.com/base/base/v1.5.6/crates/execution/payload/src/config.rs (lines 477-500: BuilderStateProvider wraps the state provider in CachedStateProvider when a cache is given)
+- https://raw.githubusercontent.com/celo-org/optimism/b08a8d0abda93536b105b0f013753d2f35c0d19e/rust/op-reth/crates/payload/src/builder.rs (lines 333-366: Celo's OP builder serves account, storage and bytecode reads from the engine's cache when it shares one)
+- https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/node/core/src/args/engine.rs (line 291 default false and lines 519-523 flag --engine.share-execution-cache-with-payload-builder)
+- https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/tree/src/tree/mod.rs (line 3250: the cache is handed to the builder only when share_execution_cache_with_payload_builder() is true; line 1547 InsertExecutedBlock path)
+- https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/tree/src/tree/payload_processor/mod.rs (lines 715-757: on_inserted_executed_block feeds locally built blocks into the cache with insert_state)
+- https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/tree/src/tree/payload_validator.rs (lines 1898-1908: payload_builder_resources hands over cache_for(parent) only when the flag is set)
+- https://mainnet.base.org/ (web3_clientVersion returned reth/v2.5.2-9e380dd/x86_64-unknown-linux-gnu/base/v1.5.6 on 2026-11-24; base-rpc.publicnode.com the same)
+- https://forno.celo.org (web3_clientVersion returned reth/v2.2.0-74cc8bb/x86_64-unknown-linux-gnu on 2026-11-24; celo-rpc.publicnode.com the same)
+- src/PoolManager.sol:279-288 (sync reads balanceOf of the named currency, the only storage read of another account the PoolManager makes on the settlement path)
+
 ## F-117. Five go-ethereum family nodes run a Go toolchain with a published silent dead store miscompile, and no function on the opcode or state path has the triggering shape
 
 Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Arbitrum One, Robinhood Chain, Polygon, BNB Smart Chain, Avalanche.
@@ -3247,6 +3319,64 @@ Sources:
 - https://raw.githubusercontent.com/circlefin/arc-reth/508cbdf7d6ba49b4ce735d678863897067fa381a/crates/engine/execution-cache/src/cached_state.rs (arc-reth 508cbdf, pinned by v0.8.5 and v0.8.6, carries the fixed code)
 - https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/CHANGELOG.md (v0.8.4 and v0.8.5 release notes naming both faults)
 - https://rpc.mainnet.arc.io (arc_getVersion returned v0.8.6-rc1 commit 37812c61 on 24 November 2026; arc-rpc.publicnode.com returned v0.8.5)
+
+## F-129. The released reth binary carries an LLVM compiler for EVM code that validates and builds Ethereum blocks when an operator enables it, and no simulated call can reach it
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Ethereum.
+
+What differs on the network: reth v2.11.0, the client behind the endpoint in networks.json, links the evm2 JIT and its LLVM backend by default. With --jit, a contract that has been looked up 8 times is compiled to native code with no size limit, and that native code then runs inside payload building and payload validation. eth_call, eth_estimateGas and debug_traceCall run the interpreter. On Ethereum a block is accepted only if the execution clients of a supermajority of validators agree, and reth is a small minority client on every published census.
+
+How it meets the code: The PoolManager is called in many blocks, so on a reth node with --jit it becomes resident compiled code within minutes. From then on every swap that node executes runs FullMath.mulDiv (MULMOD with modulus 2^256 - 1 and with the pool denominator), the SAR and SIGNEXTEND unpacking of Slot0 and BalanceDelta, the BYTE and shift lookups of BitMath and the signed division of TickBitmap.compress in code generated by LLVM. If that code computed one of these differently, the reth node would compute a different post-state root for the block. As a builder it would publish a block that geth, Nethermind, Besu and Erigon reject. As a validator it would reject the canonical block and fall off the chain. Neither outcome changes the balances that the canonical chain records for LPs, swappers or claim holders, because the majority clients decide the canonical state. An ordinary account cannot switch the compiler on, cannot choose which node builds its block, and gains nothing from a divergence on a minority client. The vectors, scripts and mined swap checks of this review never reach this path: simulated calls do not use it, and mined swaps are the output of whichever client built the block, which was rechecked here against the source on 30,321 swaps of blocks 26,485,859 to 26,487,858 without a mismatch.
+
+What is at risk: No loss to users of the canonical chain. A reth operator who enables --jit risks missed slots or rejected blocks if the compiler is wrong. Only if reth with --jit came to build and attest for a supermajority could a compiler fault reach canonical pool state.
+
+What it takes: A node operator starts reth v2.11.0 or later with --jit, and the generated code for one of the opcodes above differs from the specification for an input the pool math produces.
+
+What can be done: Track client share and the --jit flag in reth releases. Before relying on reth block production, read or test the JIT code generation for MULMOD, SAR, SIGNEXTEND, BYTE, SDIV and SMOD, as was done for Monad. The deployer needs no change to the PoolManager.
+
+Second reviewer's corrections: The JIT can be switched on at run time without the --jit flag: node.rs build_evm_config with jit.enabled false still builds a JitBackend and its comment says reth_jit enable starts it, and crates/rpc/rpc-api/src/reth.rs defines reth_jit with actions Enable, Disable, Pause, Unpause and Clear. The reth namespace is not exposed on the networks.json endpoint (rpc_modules). An operator who exposes the reth namespace publicly would let outside callers toggle the JIT on that node, which still affects only that node. The actor operator and severity info stand.
+
+Code: `src/libraries/FullMath.sol:14-117`, `src/libraries/TickBitmap.sol:16-64`, `src/libraries/BitMath.sol:12-49`.
+
+Sources:
+
+- https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/bin/reth/Cargo.toml (jit and gmp are default features of the reth binary (lines 89-104))
+- https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/node/core/src/args/jit.rs (--jit defaults to false, hot threshold 8, max bytecode length 0 meaning no limit)
+- https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/engine/tree/src/tree/payload_validator.rs (payload validation calls with_jit_support (line 1033) and can use resident compiled code (lines 233-238))
+- https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/ethereum/payload/src/lib.rs (the payload builder calls with_jit_support (line 205))
+- https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/ethereum/evm/src/factory.rs (the JIT runner is installed only when jit_support is set (lines 376-386, 456-470))
+- https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/ethereum/node/src/node.rs (the node logs the backend as experimental (line 565) and builds the executor through build_evm_config (lines 606-610))
+- https://clientdiversity.org/ (reth is listed at 3 to 7.67 percent of execution clients; the page marks its data as stale)
+- https://ethereum-rpc.publicnode.com (web3_clientVersion returns reth/v2.11.0-b9abbcc and rpc_modules lists no JIT namespace)
+
+## F-130. Monad nodes that serve call traces execute blocks with the interpreter only, so no public data shows compiled execution of the PoolManager
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Monad.
+
+What differs on the network: Monad v0.16.7 runs two execution engines. The execution daemon builds its VM as InterpreterOnly when it is started with --trace-calls and as Dual (interpreter plus native x86 compiler) otherwise (cmd/monad/main.cpp lines 146, 214 and 484-488). Call frames are recorded and committed only when tracing is enabled (runloop_monad.cpp lines 233-245 and 330-337). Every RPC method that executes code uses a second, InterpreterOnly VM (rpc/monad_executor.cpp lines 1306-1309, used at 1525, 1547, 1824 and 1969; monad-rpc debug_replay.rs lines 61-64 and 236-237). Ethereum has one execution semantics per client and every serving node runs it.
+
+How it meets the code: Every public Monad endpoint that answers debug_traceTransaction with the call tracer (rpc.monad.xyz, rpc1, rpc2 via eRPC, rpc-mainnet.monadinfra.com, monad-mainnet.gateway.tatum.io) returns stored frames, so those nodes ran their block execution with --trace-calls and therefore with the interpreter. Their receipts and logs, among them every Swap and ModifyLiquidity event earlier cycles and this unit checked, are interpreter output. The only link between those nodes and validators that may run compiled code is the delayed merkle root of the state, checked D = 3 blocks later. On chain this is visible: in blocks 125,115,001 to 125,118,000 all 689 out-of-gas frames of 1,582 failed transactions, 19 of them PoolManager frames (swap with 94,784 gas, take with 1,844 to 18,922 gas), carry status 3 "out of gas", which is what the interpreter writes (interpreter/stack.hpp line 44); compiled code would end a static gas shortfall through error_label_ with StatusCode::Error (emitter.cpp lines 636, 679, 1054-1069), which debug.rs lines 381-388 map to "error". A compiled-only fault in a PoolManager branch that no block has taken yet (the overflow fallback of src/libraries/SqrtPriceMath.sol:52, the amount above 2^160 branch at src/libraries/SqrtPriceMath.sol:97 and 105, the 512 bit branch of the Q128 mulDiv at src/libraries/Position.sol:94-96) could be triggered by an ordinary swap or removal, and nobody can test it in advance through RPC. If two thirds of validators ran such a build, the canonical PoolManager state would follow the compiled result and the tracing RPC fleet would fall out of consensus. No such fault was found: the compiled paths for MULMOD, shifts, comparisons, sign extension and jumps were transcribed in cycles 9 to 13 without a mismatch, and the state roots of the tracing nodes agree with consensus at the finalized tip (block 125,124,132 on 2026-11-24).
+
+What is at risk: No loss path was found. The finding corrects the evidence base: OPCODES.md says the Monad mined swaps "ran as compiled code", and cycle 11 says call frames are what block execution recorded. Both are true only of an interpreter run on the tracing node. Compiled execution is covered by reading and by state root agreement, not by any served receipt, log or frame.
+
+What it takes: A fault in the native compiler of the release that validators run, on an input that no mined block has produced yet. It needs no role from the attacker, but it needs a client defect that no reading has found.
+
+What can be done: Before liquidity arrives, run one non-tracing Dual mode node (a local monad build replaying mainnet blocks without --trace-calls) and compare its receipts with a tracing node for transactions that take each untaken branch. Ask Monad which execution mode validators run. Treat Monad state root agreement, not RPC answers, as the producer evidence.
+
+Second reviewer's corrections: Minor: the main.cpp VM selection is at line 488 with the comment at 485-487, inside the cited 484-488 range. The "all 689 out-of-gas frames report out of gas" observation is supporting evidence only, since an out-of-gas frame that a compiled run reported as "error" would not be counted among them; the source reading is the proof. Actor operator is right: a mismatch would only reach canonical state if a supermajority of validators ran a faulty compiled build.
+
+Code: `src/libraries/SqrtPriceMath.sol:42-52`, `src/libraries/SqrtPriceMath.sol:94-106`, `src/libraries/Position.sol:94-96`, `src/libraries/FullMath.sol:21-38`.
+
+Sources:
+
+- https://raw.githubusercontent.com/category-labs/monad/v0.16.7/cmd/monad/main.cpp (lines 146, 214, 484-488: --trace-calls selects vm::VM::InterpreterOnly for block execution, otherwise Dual, with the comment that the compiler does not expose the error exit codes call traces need)
+- https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/runloop/runloop_monad.cpp (lines 233-245: CallTracer only when enable_tracing; lines 330-337: call_frames committed with the receipts)
+- https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/rpc/monad_executor.cpp (lines 1306-1309 InterpreterOnly vm_ member, used by eth_call (1525, 1547), the trace replay (1824) and eth_simulateV1 (1969))
+- https://raw.githubusercontent.com/category-labs/monad-bft/v0.16.7/monad-rpc/src/handlers/debug.rs (lines 520-540 and 599-680: callTracer reads stored frames; lines 381-388 map status 3 to out of gas and other failures to error)
+- https://raw.githubusercontent.com/category-labs/monad-bft/v0.16.7/monad-rpc/src/handlers/debug_replay.rs (lines 61-64 and 236-237: prestateTracer requests replay through eth_trace_block_or_transaction of the eth_call executor)
+- https://docs.monad.xyz/monad-arch/consensus/asynchronous-execution.md (proposals carry the state merkle root of block N-3; nodes whose execution differs fall out of consensus (copy in cycles/013/high-throughput.work/raw/monad-async-exec.md lines 85-96))
+- rpc debug_traceTransaction callTracer at rpc.monad.xyz, rpc1.monad.xyz, rpc-mainnet.monadinfra.com (results: research/network-risk/cycles/014/theme-monad-native-path.work/oogscan.json) (debug_traceTransaction callTracer over 1,582 failed transactions in blocks 125,115,001-125,118,000 at the endpoints of oogscan.py: 689 out-of-gas frames all status out of gas, 19 on the PoolManager, none reported as error)
+- rpc https://rpc.monad.xyz web3_clientVersion and debug_traceTransaction 0xd5d7b9bf9dc21f66a1186a11f4637a0c0acff3bb859e0e698d01ed891a027ebd on 2026-11-24 (Monad/0.16.7; stored frames returned by rpc.monad.xyz, rpc1, rpc2, rpc-mainnet.monadinfra.com and monad-mainnet.gateway.tatum.io; rpc3 and rpc.ankr.com refuse the method)
 
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 
@@ -3476,3 +3606,61 @@ Sources:
 - https://storage.googleapis.com/oplabs-network-data/proofs/kona/cannon/0x03e5a54835d39c1d83b198314473e1f111c3539c04f65c3e8a9b8ccebe3737c9.bin.gz (The respected prestate state file (sha256 bf144319...3f73); its text segment was scanned by research/network-risk/cycles/013/theme-proof-builds-2.work/kona/scan_prestate.py.)
 - https://static.crates.io/crates/ruint/ruint-1.20.0.crate (ruint 1.20.0 source, checksum f5e99bff... equal to the kona-client 1.9.0 lock; shifts on u128 halves in bits.rs.)
 - file:research/network-risk/cycles/013/theme-proof-builds-2.work/kona/kona-mips64-vectors.json (0 mismatches on 85,544 targeted and 96,876 battery vectors on the MIPS64 build; planted faults movn_bit0, dsllv5 and dmultu_hi caught.)
+
+## F-128. Nitro's Stylus and JIT compilers use a Cranelift release inside the range of two October 2026 miscompile advisories, and no unprivileged account can reach either fault
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: owner, fee controller or chain governance. Networks: Arbitrum One, Robinhood Chain, Elysium.
+
+What differs on the network: Nitro runs Stylus programs as native code compiled on each node, and its JIT validator runs the WebAssembly replay machine through wasmer. Both compile with cranelift-codegen 0.129.1, which is the wasmtime 42 line. Wasmtime's advisories of October 2026 report that Cranelift before 43 can miscompile functions with more than 2^24 values (CVE-2026-115889, any architecture) and that aarch64 code with a br_table of more than about 256,000 targets jumps to the wrong place (CVE-2026-115893). The public Arbitrum One and Robinhood Chain endpoints run linux-arm64 builds.
+
+How it meets the code: The PoolManager is EVM bytecode and never runs through Cranelift: the interpreter loop of the fork sends only code with the Stylus prefix to ExecuteWASM (core/vm/interpreter.go lines 168-172 at 0e44603). A miscompile could only touch the PoolManager's funds indirectly, through a Stylus program that calls it, or through a validator that computes a different settled state. A Stylus program would need one function with more than 16.7 million SSA values or a branch table with more than about 262,144 targets. The 256 KB limit on a decompressed program rules out the first; it does not rule out the second, since a branch table with one byte targets can come within a few dozen entries of that count. What closes the hazard is that new programs cannot be activated at all: activationGas is 2^64-1 on all three chains. The replay machine that the JIT compiles is fixed by the consensus-v61 root, chosen by governance, and the one-step prover, which interprets WAVM without Cranelift, decides disputes.
+
+What is at risk: None today. If governance reopens activation with a larger size limit, or ships a consensus machine with a function large enough to hit the overflow, nodes compiling with different backends could disagree on a Stylus call's result, which halts or splits the chain without taking any PoolManager funds by itself.
+
+What it takes: Chain governance raising the Stylus size limit or reopening activation, and a crafted program; or a governance-chosen replay machine with an oversized function.
+
+What can be done: Offchain Labs can move wasmer's Cranelift to 0.130 or later (wasmtime 43 and up, or a 48.0.7, 49.0.4 or 50.0.0 line for the aarch64 issue) before Stylus activation reopens. The deployer needs no action.
+
+Second reviewer's corrections: The Robinhood Chain endpoint is load balanced: four web3_clientVersion queries returned linux-arm64 three times and linux-amd64 once, so not all of its nodes are arm64. The statement that the 256 KB limit bounds both faults far below the threshold holds for the 2^24 value overflow but not for the br_table fault: 256 KB is 262,144 bytes, and a br_table whose targets are one byte LEB128 labels can come within a few dozen entries of that count, which is the same order as the about 256,000 target reach limit of a 1 MiB branch with 4 byte table entries. The hazard is closed by activationGas = 2^64-1 and by governance control of MaxWasmSize, not by the size limit alone. The advisories are filed against the wasmtime crate, so the mapping to cranelift-codegen 0.129.1 rests on the wasmtime 42.0.1 dependency listing. The Red Hat CVE page was not fetched by either agent and adds nothing. Actor governance is correct.
+
+Code: `src/libraries/Hooks.sol:134`, `src/types/Currency.sol:73`.
+
+Sources:
+
+- https://crates.io/api/v1/crates/wasmtime/42.0.1/dependencies (wasmtime 42.0.1 depends on cranelift 0.129.1, so cranelift-codegen 0.129.1 belongs to the wasmtime 42 line)
+- https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/Cargo.lock (Nitro v3.12.4 locks cranelift-codegen 0.129.1 and wasmer 7.1.0 (the master lock pins the same cranelift))
+- https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/crates/jit/Cargo.toml (the JIT validator links wasmer-compiler-cranelift)
+- https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/arbos/programs/native.go (Stylus programs are compiled natively per node with singlepass or Cranelift, with a fallback to the other compiler on failure (lines 365-400) and a Cranelift retry after a native stack overflow (lines 55-60))
+- https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/arbos/programs/params.go (the decompressed Stylus program size limit is 256 KB from ArbOS 60 (line 43))
+- https://thehackernews.com/2026/10/two-critical-wasmtime-flaws-could-let.html (CVE-2026-115889 (24 bit value fields overflow, wrong value references, wasmtime before 36.0.19 and 37 to 42.x) and CVE-2026-115893 (aarch64 br_table with more than about 256,000 targets); secondary source)
+- https://access.redhat.com/security/cve/CVE-2026-115889 (CVE record for the Cranelift value index overflow (found by search, its text was not fetched))
+- https://rpc.mainnet.chain.robinhood.com (eth_call ArbWasm.activationGas() = 2^64-1 on all three chains, queried 2026-11-24)
+
+## F-131. The LLVM MIPS shift lowering fault does not reach any path of the respected kona prestate, which the control flow scan and a run of its own shift handlers both show
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: owner, fee controller or chain governance. Networks: Optimism, Unichain, Ink.
+
+What differs on the network: OP Mainnet, Unichain and Ink settle withdrawals on permissionless games of type 9 whose program is kona-client 1.9.0 for MIPS64. Its toolchain predates LLVM fix 0212d77 for issue 235261, in which MipsTargetLowering uses (shamt AND 64) as a select condition and a later fold can treat that 0-or-64 value as a 0-or-1 boolean. eth_call on Ethereum (kona/prestate_now.json, Ethereum block 26,488,182) shows all three portals' AnchorStateRegistry return respectedGameType 9, the factories return implementation 0x19af533c (version 0.8.0) whose gameArgs start with absolute prestate 0x03e5a548...37c9, and the newest game of each chain (indexes 21571, 17871 and 2655) returns the same absolutePrestate().
+
+How it meets the code: If a fold had turned the condition into arithmetic, an EVM SHL, SHR or SAR with an amount between 64 and 127 would give the proof program another word than the op-reth nodes. BitMath.mostSignificantBit shifts by amounts in that range, TickBitmap.position and flipTick shift by the low 8 bits of a tick, and TickMath.getTickAtSqrtPrice shifts by 127 and 128, so the post-state root of a swap would differ and an ordinary account could contest an honest root. Two new checks rule this out for the respected prestate. First, kona/cfg_scan.py follows every one of the 66 `andi rX, rY, 0x40` sites of the 4,928,204 byte text segment through fall-through, branch targets, delay slots, j and jal targets and returns, with copies and stack spills tracked, until the value is overwritten on every path (up to 11,034 instructions from one site, nested calls to depth 8, no budget exhausted). The value is read 136 times: 135 as the condition of MOVN or MOVZ or a branch compared with zero, and once by srl 6. No path reads it in xori, ori, addu, daddu, sltu, a multiply, a shift amount or a store. The paths still open end in three ways that read nothing: one return with the value left in $3 by a function that returns through memory, where all 8 jal callers overwrite $3 within 8 instructions (kona/ret_callers.json); 36 indirect calls where the value is a stale $8 to $11 and the caller writes only $4 to $6 for that call (kona/jalr_args.json); and direct calls past depth 8 with no read. Second, kona/run_real.py runs the SHL, SHR and SAR handlers of the prestate image itself, located at 0x12006b1a8, 0x12006b328 and 0x12006ad70 by their stack and spec-byte accesses and identified by their results, in the cycle 13 Cannon-semantics emulator. They return the specified word on all 11,316 targeted, 23,763 battery and 57,792 further vectors (every amount 0 to 300 on 64 values for each opcode). The same harness with a planted MOVN fault that tests bit 0 only (the effect of the bad fold) gives 636 mismatches in 1,132 sampled targeted vectors, and a 5 bit DSLLV mask gives 403.
+
+What is at risk: None with the prestate that all three chains respect today. A later prestate built with a toolchain older than LLVM 0212d77 needs the same two checks, since the fault depends on how the code is folded.
+
+What it takes: Governance adopts a new absolute prestate whose code folds the shift-parts condition into arithmetic. The present prestate does not, on any path.
+
+What can be done: Before a new kona prestate is adopted, run kona/cfg_scan.py and kona/run_real.py of the work directory on its state file, or build it with a toolchain that contains LLVM 0212d77.
+
+This entry adds to F-126.
+
+Second reviewer's corrections: The 36 indirect calls are 36 pairs of site and jalr spread over 13 distinct jalr instructions and 4 sites (jalr_args.json). src/libraries/TickBitmap.sol:38 is the AND that forms bitPos. The shift in position() is sar(8, ...) at line 37, and the shift by the low 8 bits of a tick is at line 73. The depth 8 limit left 142 call paths unfollowed. My rerun to depth 20 found no read on them, but the static scan is still bounded and assumes the n64 calling convention for jalr callees. The shift handlers were found by pattern and identified by their results, and the dispatch table entry that selects them was not read. The static scan of all 66 sites covers any other handler. Actor governance is correct: an ordinary account can drive the permissionless type 9 game, but the fault only reaches it if governance adopts a new prestate whose build folds the condition into arithmetic.
+
+Code: `src/libraries/BitMath.sol:16-22`, `src/libraries/TickBitmap.sol:38`, `src/libraries/TickBitmap.sol:73`, `src/libraries/TickMath.sol:142-151`.
+
+Sources:
+
+- https://storage.googleapis.com/oplabs-network-data/proofs/kona/cannon/0x03e5a54835d39c1d83b198314473e1f111c3539c04f65c3e8a9b8ccebe3737c9.bin.gz (Respected prestate state file, sha256 bf144319...3f73, version 8, 1,244 pages, text segment 0x120000000 of 4,928,204 bytes; scanned and executed by research/network-risk/cycles/014/theme-proof-images.work/kona/cfg_scan.py and run_real.py.)
+- rpc eth_call https://ethereum-rpc.publicnode.com, results in research/network-risk/cycles/014/theme-proof-images.work/kona/prestate_now.json (eth_call on Ethereum: respectedGameType 9 and absolute prestate 0x03e5a548...37c9 in gameArgs and in the newest game for chains 10, 130 and 57073.)
+- file:research/network-risk/cycles/014/theme-proof-images.work/kona/cfg_scan.json (66 sites, 136 reads (135 zero tests, 1 srl 6), no arithmetic, store or shift-amount read on any path.)
+- file:research/network-risk/cycles/014/theme-proof-images.work/kona/real_shift.json (Prestate SHL, SHR and SAR handlers match on 92,871 vectors; real_shift_movn_bit0.json and real_shift_dsllv5.json show planted faults are detected.)
+- https://github.com/llvm/llvm-project/issues/235261 (The MIPS shift-parts miscompile (recorded in cycle 13, F-126).)
+- src/libraries/BitMath.sol:16-22 (Shifts by running amounts that reach 64 to 127.)

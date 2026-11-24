@@ -1,0 +1,180 @@
+{
+ "unit": "theme-proof-images",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "F-126",
+   "title": "The LLVM MIPS shift lowering fault does not reach any path of the respected kona prestate, which the control flow scan and a run of its own shift handlers both show",
+   "chainIds": [
+    10,
+    130,
+    57073
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10",
+    "A14"
+   ],
+   "effect": "degrade",
+   "actor": "governance",
+   "severity": "info",
+   "difference": "OP Mainnet, Unichain and Ink settle withdrawals on permissionless games of type 9 whose program is kona-client 1.9.0 for MIPS64. Its toolchain predates LLVM fix 0212d77 for issue 235261, in which MipsTargetLowering uses (shamt AND 64) as a select condition and a later fold can treat that 0-or-64 value as a 0-or-1 boolean. eth_call on Ethereum (kona/prestate_now.json, Ethereum block 26,488,182) shows all three portals' AnchorStateRegistry return respectedGameType 9, the factories return implementation 0x19af533c (version 0.8.0) whose gameArgs start with absolute prestate 0x03e5a548...37c9, and the newest game of each chain (indexes 21571, 17871 and 2655) returns the same absolutePrestate().",
+   "mechanism": "If a fold had turned the condition into arithmetic, an EVM SHL, SHR or SAR with an amount between 64 and 127 would give the proof program another word than the op-reth nodes. BitMath.mostSignificantBit shifts by amounts in that range, TickBitmap.position and flipTick shift by the low 8 bits of a tick, and TickMath.getTickAtSqrtPrice shifts by 127 and 128, so the post-state root of a swap would differ and an ordinary account could contest an honest root. Two new checks rule this out for the respected prestate. First, kona/cfg_scan.py follows every one of the 66 `andi rX, rY, 0x40` sites of the 4,928,204 byte text segment through fall-through, branch targets, delay slots, j and jal targets and returns, with copies and stack spills tracked, until the value is overwritten on every path (up to 11,034 instructions from one site, nested calls to depth 8, no budget exhausted). The value is read 136 times: 135 as the condition of MOVN or MOVZ or a branch compared with zero, and once by srl 6. No path reads it in xori, ori, addu, daddu, sltu, a multiply, a shift amount or a store. The paths still open end in three ways that read nothing: one return with the value left in $3 by a function that returns through memory, where all 8 jal callers overwrite $3 within 8 instructions (kona/ret_callers.json); 36 indirect calls where the value is a stale $8 to $11 and the caller writes only $4 to $6 for that call (kona/jalr_args.json); and direct calls past depth 8 with no read. Second, kona/run_real.py runs the SHL, SHR and SAR handlers of the prestate image itself, located at 0x12006b1a8, 0x12006b328 and 0x12006ad70 by their stack and spec-byte accesses and identified by their results, in the cycle 13 Cannon-semantics emulator. They return the specified word on all 11,316 targeted, 23,763 battery and 57,792 further vectors (every amount 0 to 300 on 64 values for each opcode). The same harness with a planted MOVN fault that tests bit 0 only (the effect of the bad fold) gives 636 mismatches in 1,132 sampled targeted vectors, and a 5 bit DSLLV mask gives 403.",
+   "impact": "None with the prestate that all three chains respect today. A later prestate built with a toolchain older than LLVM 0212d77 needs the same two checks, since the fault depends on how the code is folded.",
+   "preconditions": "Governance adopts a new absolute prestate whose code folds the shift-parts condition into arithmetic. The present prestate does not, on any path.",
+   "mitigations": "Before a new kona prestate is adopted, run kona/cfg_scan.py and kona/run_real.py of the work directory on its state file, or build it with a toolchain that contains LLVM 0212d77.",
+   "coreRefs": [
+    "src/libraries/BitMath.sol:16-22",
+    "src/libraries/TickBitmap.sol:38",
+    "src/libraries/TickBitmap.sol:73",
+    "src/libraries/TickMath.sol:142-151"
+   ],
+   "sources": [
+    {
+     "url": "https://storage.googleapis.com/oplabs-network-data/proofs/kona/cannon/0x03e5a54835d39c1d83b198314473e1f111c3539c04f65c3e8a9b8ccebe3737c9.bin.gz",
+     "supports": "Respected prestate state file, sha256 bf144319...3f73, version 8, 1,244 pages, text segment 0x120000000 of 4,928,204 bytes; scanned and executed by research/network-risk/cycles/014/theme-proof-images.work/kona/cfg_scan.py and run_real.py."
+    },
+    {
+     "url": "rpc eth_call https://ethereum-rpc.publicnode.com, results in research/network-risk/cycles/014/theme-proof-images.work/kona/prestate_now.json",
+     "supports": "eth_call on Ethereum: respectedGameType 9 and absolute prestate 0x03e5a548...37c9 in gameArgs and in the newest game for chains 10, 130 and 57073."
+    },
+    {
+     "url": "file:research/network-risk/cycles/014/theme-proof-images.work/kona/cfg_scan.json",
+     "supports": "66 sites, 136 reads (135 zero tests, 1 srl 6), no arithmetic, store or shift-amount read on any path."
+    },
+    {
+     "url": "file:research/network-risk/cycles/014/theme-proof-images.work/kona/real_shift.json",
+     "supports": "Prestate SHL, SHR and SAR handlers match on 92,871 vectors; real_shift_movn_bit0.json and real_shift_dsllv5.json show planted faults are detected."
+    },
+    {
+     "url": "https://github.com/llvm/llvm-project/issues/235261",
+     "supports": "The MIPS shift-parts miscompile (recorded in cycle 13, F-126)."
+    },
+    {
+     "url": "src/libraries/BitMath.sol:16-22",
+     "supports": "Shifts by running amounts that reach 64 to 127."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    10,
+    130,
+    57073
+   ],
+   "lens": "L1",
+   "check": "Lead L-709: does any path from the 66 andi 0x40 sites of the respected kona prestate read the 0-or-64 value as a number (xori, ori, addu, daddu, sltu, multiply, store)?",
+   "result": "No. The control flow scan follows branches, delay slots, jumps, calls and returns with spill and copy tracking. All 136 reads are MOVN or MOVZ conditions, branch zero tests or srl 6. Open paths end at a return whose 8 callers overwrite $3, at 36 indirect calls where the value is a stale argument register above the ones the caller sets, or past call depth 8 with no read.",
+   "source": "research/network-risk/cycles/014/theme-proof-images.work/kona/cfg_scan.py ; research/network-risk/cycles/014/theme-proof-images.work/kona/cfg_scan.json ; research/network-risk/cycles/014/theme-proof-images.work/kona/ret_callers.json ; research/network-risk/cycles/014/theme-proof-images.work/kona/jalr_args.json ; https://storage.googleapis.com/oplabs-network-data/proofs/kona/cannon/0x03e5a54835d39c1d83b198314473e1f111c3539c04f65c3e8a9b8ccebe3737c9.bin.gz"
+  },
+  {
+   "chainIds": [
+    10,
+    130,
+    57073
+   ],
+   "lens": "L1",
+   "check": "Lead L-695: the real kona-client 1.9.0 SHL, SHR and SAR handlers from the respected prestate, run on the shift vectors of targeted.py and battery.py.",
+   "result": "All 92,871 runs (11,316 targeted, 23,763 battery, 57,792 amounts 0 to 300) return the specified word and pop one stack item. A planted MOVN bit 0 fault and a 5 bit DSLLV mask are caught (636 of 1,132 and 403 of 1,132 targeted samples).",
+   "source": "research/network-risk/cycles/014/theme-proof-images.work/kona/run_real.py ; research/network-risk/cycles/014/theme-proof-images.work/kona/real_shift.json ; https://storage.googleapis.com/oplabs-network-data/proofs/kona/cannon/0x03e5a54835d39c1d83b198314473e1f111c3539c04f65c3e8a9b8ccebe3737c9.bin.gz"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "check": "Lead L-704: the wasm module root the three Arbitrum-family rollups enforce, the go-ethereum commit of its replay binary, and that commit's opcode, jump analysis, memory and transient storage code compared with 0e44603.",
+   "result": "eth_call today: wasmModuleRoot() is 0xc10cd7ec...dc97 on 0x4DCeB440 (Arbitrum One, Ethereum block 26,488,219), on 0x23a19d23 (Robinhood Chain, same block) and on Elysium's rollup 0x508C173d on HyperEVM (block 52,159,885). That is the consensus-v61 machine. The consensus-v61 tag of nitro pins OffchainLabs/go-ethereum f1c5f02 (GitHub tree page), with holiman/uint256 v1.3.2 as in 0e44603. In f1c5f02 analysis_legacy.go and jumpdests.go are byte-identical to 0e44603, and interpreter.go and contract.go are byte-identical to 461e517. instructions.go equals 461e517 except for an address filter record in SELFDESTRUCT. Its arithmetic, shift, comparison and KECCAK256 handlers differ from 0e44603 only in taking stack operands by value instead of by pointer, which gives the same words. Memory differs in that 0e44603 reuses pooled capacity; Free clears the used bytes first and growth past capacity zero-fills, so unused bytes are always zero in both. Transient storage is a nested map in f1c5f02 and a flat map keyed by address and slot in 0e44603, and both delete the entry on a zero write and return zero for a missing one. No opcode the PoolManager runs computes differently. Robinhood Chain and Elysium rollups also whitelist validators (cycle 11 critic).",
+   "source": "research/network-risk/cycles/014/theme-proof-images.work/nitro/roots.json ; https://github.com/OffchainLabs/nitro/tree/consensus-v61 ; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f1c5f02b29e7c499232ecbd17bc0e32801f8181c/core/vm/instructions.go ; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/memory.go ; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f1c5f02b29e7c499232ecbd17bc0e32801f8181c/core/state/transient_storage.go"
+  },
+  {
+   "chainIds": [
+    8453,
+    42220,
+    196
+   ],
+   "lens": "L1",
+   "check": "Lead L-694, toolchain part: does the Succinct toolchain behind Base's range program carry the 128 bit shift-parts fault of LLVM 235261 or a like one in RISC-V lowering?",
+   "result": "The range workspace at base/base 6efa7566 names toolchain succinct-1.96.0-64bit-v2 and target riscv64im-succinct-zkvm-elf (Cargo.toml comment, read in cycle 13). That tag of succinctlabs/rust is rustc 1.96.0, its target spec is generic-rv64 with +m and LP64, and it pins rust-lang/llvm-project 1cb4e38 on branch rustc/22.1-2026-01-27. In that LLVM, RISCVTargetLowering::lowerShiftLeftParts and lowerShiftRightParts build the select condition with getSetCC(ShamtMinusXLen, 0, SETLT), which is a true 0-or-1 boolean, so the MIPS fault shape cannot arise. With +m, MUL and MULHU on i64 are native and i128 MUL is custom-lowered. Cycle 13's RV64IM rebuild of the same crates matched all vectors. No RISC-V scalar i128 miscompile was found in a search of the 2026 LLVM bug lists; the one 2026 RISC-V wrong-code report read (issue 176001) concerns vector register spills, which an RV64IM target without V does not use.",
+   "source": "https://raw.githubusercontent.com/succinctlabs/rust/succinct-1.96.0-64bit-v2/compiler/rustc_target/src/spec/targets/riscv64im_succinct_zkvm_elf.rs ; https://raw.githubusercontent.com/succinctlabs/rust/succinct-1.96.0-64bit-v2/.gitmodules ; https://github.com/succinctlabs/rust/tree/succinct-1.96.0-64bit-v2/src ; https://raw.githubusercontent.com/rust-lang/llvm-project/1cb4e3833c1919c2e6fb579a23ac0e2b22587b7e/llvm/lib/Target/RISCV/RISCVISelLowering.cpp ; https://github.com/llvm/llvm-project/issues/176001"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Per network: after this unit, is there a proof or settlement build that an ordinary account can drive to a result that differs from the node on an opcode the PoolManager runs?",
+   "result": "No on every network as far as tested. OP Mainnet, Unichain, Ink: no, the respected kona prestate is scanned on every path and its own shift handlers run (this unit). Base: no known divergence. The toolchain lowering is sound, the rebuild matched, and the published ELF itself was not run. Celo, X Layer: unknown program, but the challengers are allowlisted, so an ordinary account cannot use it. Arbitrum One: no, the replay go-ethereum f1c5f02 computes the same words as 0e44603. Robinhood Chain, Elysium: no, same replay and whitelisted validators. World Chain, Zora, Soneium: operator or permissioned games (cycle 12). Ethereum, Polygon, BNB Smart Chain, Avalanche, Monad, MegaETH, Tempo, Arc, HyperEVM: no separate proof build, covered by OPCODES.md.",
+   "source": "research/network-risk/cycles/014/theme-proof-images.work ; research/network-risk/OPCODES.md ; research/network-risk/cycles/013/theme-proof-builds-2.research.json"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L1",
+   "question": "Obtain the Base range program ELF whose SP1 vkey hashes to ZK_RANGE_HASH 0x3d3713d3...5fdb (no ELF is committed at base/base 6efa7566 under the paths tried) and run its U256 handlers on the targeted vectors in the RV64IM emulator.",
+   "why": "Base lets any account with an SP1 proof challenge or nullify. The toolchain lowering was read and a rebuild matched, but the published binary was not executed.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    10,
+    130,
+    57073
+   ],
+   "lens": "L1",
+   "question": "Run the SIGNEXTEND, BYTE, MULMOD, ADDMOD, DIV and EXP handlers of the respected kona prestate itself through kona/run_real.py, located the same way as the shift handlers.",
+   "why": "This unit ran the three shift handlers of the real image. The other arithmetic handlers of the image are covered only by the cycle 13 rebuild.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-709",
+   "outcome": "cleared",
+   "answer": "The three chains respect prestate 0x03e5a548...37c9 today (eth_call). A control flow scan from all 66 andi 0x40 sites finds only zero tests and one srl 6 on every path. No xori, ori, addu, daddu, sltu, multiply, shift amount or store reads the value."
+  },
+  {
+   "leadId": "L-695",
+   "outcome": "cleared",
+   "answer": "The SHL, SHR and SAR handlers of the real prestate image, found at 0x12006b1a8, 0x12006b328 and 0x12006ad70, match 92,871 vectors in the Cannon-semantics emulator, and planted faults are caught."
+  },
+  {
+   "leadId": "L-704",
+   "outcome": "cleared",
+   "answer": "All three rollups enforce root 0xc10cd7ec...dc97 (consensus-v61), whose nitro tag pins go-ethereum f1c5f02. Its jump analysis is identical to 0e44603. Its opcode handlers differ from 0e44603 only in passing operands by value, and its memory and transient storage differ in structure, not in results."
+  },
+  {
+   "leadId": "L-694",
+   "outcome": "inconclusive",
+   "answer": "Base's toolchain succinct-1.96.0-64bit-v2 pins rust-lang/llvm-project 1cb4e38 (22.1 branch), whose RISC-V shift-parts lowering uses a SETLT setcc and so lacks the MIPS fault shape. No published range ELF could be downloaded, and the releases behind the Celo and X Layer vkeys stay unidentified. Those two chains allowlist challengers."
+  }
+ ]
+}

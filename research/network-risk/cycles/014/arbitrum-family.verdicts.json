@@ -1,0 +1,52 @@
+{
+  "unit": "arbitrum-family",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "RustSec RUSTSEC-2026-0380 (alias CVE-2026-115889, wasmtime, patched >= 36.0.19 < 37 and >= 43.0.0) describes a bit-packing overflow in Cranelift that miscompiles, and RUSTSEC-2026-0379 (alias CVE-2026-115893, patched >= 36.0.19 < 37, >= 48.0.7 < 49, >= 49.0.4) describes an aarch64 br_table jump to a wrong target. The Hacker News article of 26 October 2026 gives the same version table, 24 bit value fields before 43, and a br_table limit of about 256,000 targets. crates.io lists wasmtime 42.0.1 with cranelift-native ^0.129.1 and wasmtime-internal-cranelift =42.0.1. Nitro v3.12.4 Cargo.lock line 1276 locks cranelift-codegen 0.129.1 and line 5498 wasmer 7.1.0; crates/jit/Cargo.toml line 28 links wasmer-compiler-cranelift; arbos/programs/native.go lines 360-400 compile Stylus natively with a fallback between singlepass and Cranelift; params.go lines 20 and 43 set the decompressed limit to 128 KB, and 256 KB from ArbOS 60. precompiles/ArbWasm.go lines 41-48 burn programs.ActivationGas() before any activation work. I queried ArbWasm (0x71) activationGas() (selector 0x2278c278, recomputed) on all three endpoints on 2026-11-24 and got 0xffffffffffffffff on each, and stylusVersion() returned 3. A burn of 2^64-1 gas cannot fit any block, so no new program can be activated. The fork's core/vm/interpreter.go at 0e44603 lines 168-172 sends only code with the Stylus prefix to ExecuteWASM. eth_getCode of the PoolManager on 42161, 4663 and 99901 returns 24,009 bytes starting 0x60a08060, which is EVM code, and on 42161 it differs from research/network-risk/build/PoolManager.json only in the 20 immutable address bytes at offset 13618.",
+      "codeCheck": "The PoolManager never executes through Cranelift. Stylus code could only be reached as a callee: the hook call at src/libraries/Hooks.sol:134 and the token transfer at src/types/Currency.sol:73 are the external calls the finding names, and both go to hook or token addresses the pool creator chose, so a pool with no Stylus hook or token is not touched by a Stylus miscompile. A validator divergence would affect chain liveness or state agreement, not a PoolManager code path an ordinary account controls.",
+      "corrections": "The Robinhood Chain endpoint is load balanced: four web3_clientVersion queries returned linux-arm64 three times and linux-amd64 once, so not all of its nodes are arm64. The statement that the 256 KB limit bounds both faults far below the threshold holds for the 2^24 value overflow but not for the br_table fault: 256 KB is 262,144 bytes, and a br_table whose targets are one byte LEB128 labels can come within a few dozen entries of that count, which is the same order as the about 256,000 target reach limit of a 1 MiB branch with 4 byte table entries. The hazard is closed by activationGas = 2^64-1 and by governance control of MaxWasmSize, not by the size limit alone. The advisories are filed against the wasmtime crate, so the mapping to cranelift-codegen 0.129.1 rests on the wasmtime 42.0.1 dependency listing. The Red Hat CVE page was not fetched by either agent and adds nothing. Actor governance is correct.",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/wasmtime/RUSTSEC-2026-0380.md", "supports": "CVE-2026-115889, Cranelift bit-packing miscompile, patched >= 36.0.19 < 37 and >= 43.0.0"},
+        {"url": "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/wasmtime/RUSTSEC-2026-0379.md", "supports": "CVE-2026-115893, aarch64 br_table wrong target, patched 36.0.19, 48.0.7, 49.0.4"},
+        {"url": "https://thehackernews.com/2026/10/two-critical-wasmtime-flaws-could-let.html", "supports": "version table, 24 bit fields before 43, br_table of about 256,000 targets; secondary"},
+        {"url": "https://crates.io/api/v1/crates/wasmtime/42.0.1/dependencies", "supports": "wasmtime 42.0.1 depends on cranelift-native ^0.129.1"},
+        {"url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/Cargo.lock", "supports": "cranelift-codegen 0.129.1 (line 1276) and wasmer 7.1.0 (line 5498)"},
+        {"url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/precompiles/ArbWasm.go", "supports": "ActivateProgram burns activationGas first (lines 41-48)"},
+        {"url": "https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.4/arbos/programs/params.go", "supports": "decompressed wasm limit 128 KB initially and 256 KB from ArbOS 60 (lines 20, 43), stored as a parameter"},
+        {"url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/vm/interpreter.go", "supports": "Stylus dispatch only for code with the Stylus prefix (lines 168-172)"},
+        {"url": "https://arb1.arbitrum.io/rpc", "supports": "eth_call 0x71 activationGas() = 0xffffffffffffffff, stylusVersion() = 3, PoolManager code starts 0x60a08060, queried 2026-11-24"},
+        {"url": "https://rpc.mainnet.chain.robinhood.com", "supports": "activationGas() = 0xffffffffffffffff; clientVersion nitro/v3.13.0-rc.9+b72783f on linux-arm64 and linux-amd64, queried 2026-11-24"},
+        {"url": "https://rpc.elysium.kinetiq.xyz", "supports": "activationGas() = 0xffffffffffffffff, queried 2026-11-24"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "holiman/uint256 v1.3.2 MulMod with a four limb modulus and udivrem for smaller divisors, serving src/libraries/FullMath.sol:24, FullMath.sol:48 and src/libraries/SqrtPriceMath.sol:252: no edge input differs.",
+      "agrees": true,
+      "note": "reduce4.log reports 21,712 of 21,712 with no mismatch on all three chains and the planted fault run caught 116 of 116. I ran my own sample independently: bytecode MULMOD(calldata a, b, m) through an eth_call state override, with moduli whose top limb is 1, 2^63, 2^63+1 or 2^64-1 and operands m-1, m-2, 2^256-1 and 2^255, plus m = 2^256-1, 2^192+1, 1 and 0. 12 of 12 matched Python on 42161, 10 of 10 that answered matched on 4663 (2 rate limited) and 7 of 7 that answered matched on 99901."
+    },
+    {
+      "check": "Transient storage boundary (A1, src/libraries/Lock.sol:13-25, src/libraries/CurrencyDelta.sol:21-39): a TSTORE is not visible to the next transaction of a block.",
+      "agrees": true,
+      "note": "The simulation evidence shows 0, 7, 0 on all three chains. The simulation path is not the block production path, so I read the latter. The fork's core/state_transition.go line 950 calls StateDB.Prepare for every transaction that reaches EVM execution, and core/state/statedb.go line 1650 replaces transientStorage there. Nitro arbos/block_processor.go runs user transactions and scheduled retryable redeems through core.ApplyTransactionWithResultFilter (line 566). The StartTxHook early exits (deposits, retryable submission, internal transactions, state_transition.go lines 837-841) run no user code. Sync state left by a transaction that never settles therefore does not reach the next transaction."
+    },
+    {
+      "check": "Opcodes from later instruction sets (CLZ 0x1e, DUPN, SWAPN, EXCHANGE 0xe6 to 0xe8, and 0x49 to 0x4b) do not appear at an instruction position in the PoolManager runtime.",
+      "agrees": true,
+      "note": "I disassembled the code eth_getCode returned on 42161, skipping push data. It contains none of 0x1e, 0x49, 0x4a, 0x4b, 0xe6, 0xe7 or 0xe8 at an instruction position. The only 0xfe is at 23,996. It also contains 20 TLOAD, 9 TSTORE and 2 MCOPY. The deployed code equals the build except for the 20 immutable address bytes at offset 13618."
+    }
+  ],
+  "leads": [
+    {
+      "chainIds": [42161, 4663, 99901],
+      "lens": "L1",
+      "question": "If Stylus activation reopens with the 256 KB decompressed limit while Nitro still links cranelift-codegen 0.129.1, can a single br_table with one byte targets reach the aarch64 branch reach limit of CVE-2026-115893, and which native target (singlepass or Cranelift) do arm64 nodes compile with by default?",
+      "why": "The size limit leaves only a small margin against the br_table threshold, so it is activationGas and governance that close the path. It would only touch the PoolManager through a Stylus hook or token the pool creator chose, or through chain divergence.",
+      "priority": "low"
+    }
+  ]
+}

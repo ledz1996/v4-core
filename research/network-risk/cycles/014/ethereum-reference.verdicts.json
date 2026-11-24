@@ -1,0 +1,51 @@
+{
+ "unit": "ethereum-reference",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "I fetched reth v2.11.0 source from raw.githubusercontent.com. bin/reth/Cargo.toml lists jit, gmp, asm-keccak and keccak-cache-global among the default features. crates/node/core/src/args/jit.rs sets --jit to default false, DEFAULT_HOT_THRESHOLD 8 and DEFAULT_MAX_BYTECODE_LEN 0, which the doc comment defines as no limit. crates/engine/tree/src/tree/payload_validator.rs line 1033 calls with_jit_support before executing an imported block, and lines 233-238 say validation can use resident compiled code. crates/ethereum/payload/src/lib.rs line 205 calls with_jit_support in the payload builder. crates/ethereum/evm/src/factory.rs installs JitInterpreterRunner only when jit_support is set. crates/rpc/rpc-eth-api/src/helpers/call.rs has no occurrence of jit, so eth_call runs the interpreter. crates/ethereum/node/src/node.rs build_evm_config passes enabled: jit.enabled into the backend RuntimeConfig and logs the backend as experimental. I queried web3_clientVersion myself: ethereum-rpc.publicnode.com returns reth/v2.11.0-b9abbcc, eth.rpc.blxrbdn.com returns Geth/v1.16.7-stable-d62ed61f with go1.25.14, and eth-mainnet.public.blastapi.io returns reth/v2.10.0-f5192ac. rpc_modules on publicnode returns txpool, web3, trace, rpc, debug, net and eth, with no reth namespace. clientdiversity.org lists reth at 7.67 percent and 3 percent. EIP-7773 lists Sepolia activation 2026-10-06 and leaves Hoodi and Mainnet empty. No primary source contradicts the finding.",
+   "codeCheck": "src/libraries/FullMath.sol:24-26 computes mulmod(a, b, not(0)) and line 49 mulmod(a, b, denominator). src/libraries/TickBitmap.sol:19-28 uses signextend, sdiv, smod and slt in compress, and lines 35-39 use sar and signextend in position. These are the opcodes the finding names. The code would compute a different result only if the opcode implementation did, and the JIT path is reached only in block import and block building on a reth node whose operator enabled it. Canonical state is what the majority of validators' clients compute, so a divergence on a minority reth node forks that node off and does not rewrite pool balances. My own eth_call of MULMOD(2^256-2, 2^256-2, 2^256-1) on the networks.json endpoint returned 1, the specified value, which says nothing about the JIT because eth_call does not use it.",
+   "corrections": "The JIT can be switched on at run time without the --jit flag: node.rs build_evm_config with jit.enabled false still builds a JitBackend and its comment says reth_jit enable starts it, and crates/rpc/rpc-api/src/reth.rs defines reth_jit with actions Enable, Disable, Pause, Unpause and Clear. The reth namespace is not exposed on the networks.json endpoint (rpc_modules). An operator who exposes the reth namespace publicly would let outside callers toggle the JIT on that node, which still affects only that node. The actor operator and severity info stand.",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/bin/reth/Cargo.toml", "supports": "jit and gmp are default features"},
+    {"url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/node/core/src/args/jit.rs", "supports": "--jit default false, hot threshold 8, max bytecode length 0 meaning no limit"},
+    {"url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/engine/tree/src/tree/payload_validator.rs", "supports": "with_jit_support at line 1033 during block execution in validation"},
+    {"url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/ethereum/payload/src/lib.rs", "supports": "with_jit_support at line 205 in the payload builder"},
+    {"url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/ethereum/evm/src/factory.rs", "supports": "JIT runner installed only when jit_support is set"},
+    {"url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/rpc/rpc-eth-api/src/helpers/call.rs", "supports": "no JIT reference in the eth_call helper"},
+    {"url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/rpc/rpc-api/src/reth.rs", "supports": "reth_jit RPC method with Enable and Disable actions"},
+    {"url": "https://ethereum-rpc.publicnode.com", "supports": "web3_clientVersion reth/v2.11.0-b9abbcc; rpc_modules without a reth namespace; eth_call MULMOD edge returned 1"},
+    {"url": "https://clientdiversity.org/", "supports": "reth listed at 7.67 percent and 3 percent of execution clients"},
+    {"url": "https://eips.ethereum.org/EIPS/eip-7773", "supports": "Glamsterdam has no Mainnet activation"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Rerun of battery.py (99,985 vectors) and targeted.py (85,544 vectors) on the reth v2.11.0 endpoint in networks.json on 2026-11-24.",
+   "agrees": true,
+   "note": "battery.json and targeted.json in the work directory record chainId 1, rpc ethereum-rpc.publicnode.com, ran equal to vectors, mismatchCount 0 and no errors. I confirmed the endpoint reports reth/v2.11.0-b9abbcc and ran one MULMOD edge myself, MULMOD(2^256-2, 2^256-2, 2^256-1), which returned 1 as specified. The clearance covers the interpreter only; the JIT path stays open as the finding and its lead say."
+  },
+  {
+   "check": "Do the opcodes that Glamsterdam defines (SLOTNUM 0x4b, DUPN 0xe6, SWAPN 0xe7, EXCHANGE 0xe8) change how the existing PoolManager bytecode decodes or where it may jump?",
+   "agrees": true,
+   "note": "I fetched the deployed code of 0x000000000004444c5dc75cB358380D2e3dE08A90 with eth_getCode (24,009 bytes) and decoded it linearly with PUSH immediates skipped. None of 0x4b, 0xe6, 0xe7, 0xe8, 0x1e, 0x49 or 0x4a occurs at an instruction boundary, and there are 610 JUMPDEST bytes at boundaries. EIP-8024 states that JUMPDEST analysis is unchanged and that immediates of 0x5b and 0x60 to 0x7f are invalid, so no jump target is created or removed."
+  },
+  {
+   "check": "EIP-8246 stops SELFDESTRUCT from burning ETH in the same-transaction self-beneficiary case. Could forced or retained ETH become a credit at the PoolManager?",
+   "agrees": true,
+   "note": "src/PoolManager.sol:353-354 credits paid = msg.value when the synced currency is zero, and line 356 reverts on msg.value with a synced ERC-20. src/PoolManager.sol:280-283 resets only the synced currency for native sync. A native balance that arrives without a call is never added to any delta. EIP-8246 text fetched from eips.ethereum.org keeps behaviour unchanged for contracts not created in the same transaction, and the PoolManager is not one."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [1],
+   "lens": "L1",
+   "question": "Does any public Ethereum endpoint running reth v2.10 or later expose the reth RPC namespace, and with it reth_jit Enable, to outside callers?",
+   "why": "reth_jit lets a caller switch the evm2 JIT on for block import on that node. It cannot change canonical state while reth is a minority client, but it would let an outside party move a node onto untested code paths.",
+   "priority": "low"
+  }
+ ]
+}

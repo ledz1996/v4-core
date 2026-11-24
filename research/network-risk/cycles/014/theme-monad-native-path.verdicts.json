@@ -1,0 +1,39 @@
+{
+ "unit": "theme-monad-native-path",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "Fetched the v0.16.7 sources. cmd/monad/main.cpp declares trace_calls at line 146, registers --trace-calls at line 214, and at line 488 builds vm::VM vm{trace_calls ? vm::VM::InterpreterOnly : vm::VM::Dual} under a comment (lines 485-487) that the compiler does not expose the error exit codes call traces need; trace_calls is passed on at lines 512, 525, 543 and 559. runloop_monad.cpp lines 233-245 make a CallTracer only when enable_tracing is set and lines 330-337 commit call_frames with the receipts. monad_executor.cpp line 1309 declares vm_ as InterpreterOnly with a comment that the compiler misreports out of gas, and vm_ is used at 1525, 1547, 1824 and 1969. monad-bft debug.rs lines 381-388 map status 0, 2, 3 and 18 and send every other status to \"error\"; debug_replay.rs lines 61-63 send only the prestate tracer to replay. interpreter/stack.hpp lines 40-45 exit with OutOfGas on a static gas shortfall. On chain at https://rpc.monad.xyz on 2026-11-24: web3_clientVersion returned Monad/0.16.7; debug_traceTransaction callTracer on 0x90dad9c6...ad77 returned stored frames with a PoolManager swap frame (selector 0xf3cd914c, gas 94,784) marked \"out of gas\", as oogscan.json lists; the finalized block was 125,132,202. oogscan.json also holds 2 frames marked \"error\" among the failed transactions; the finding does not claim these are out-of-gas frames, and the interpreter also writes generic error codes for other faults, so they do not contradict it. The out-of-gas observation is consistent with interpreter output; the source code is what proves the tracing node interprets. The state root agreement with validators was not independently tested here beyond the node serving finalized blocks.",
+   "codeCheck": "The untaken branches the finding names exist as described. src/libraries/SqrtPriceMath.sol:42-49 takes the mulDivRoundingUp path only when amount * sqrtPX96 does not overflow and the denominator does not wrap, and :52 is the divRoundingUp fallback otherwise. src/libraries/SqrtPriceMath.sol:94-98 and :103-106 switch to FullMath.mulDiv and mulDivRoundingUp only when amount exceeds type(uint160).max. src/libraries/Position.sol:94-97 computes fees owed with FullMath.mulDiv(..., liquidity, Q128), whose 512 bit branch (src/libraries/FullMath.sol:40-99) runs only when prod1, built from MULMOD at :25-28, is nonzero. A compiled-only fault in those branches would change the swap price, the amounts settled, or fees owed. Nothing in the code depends on which engine runs; the effect needs a client defect that no reading found.",
+   "corrections": "Minor: the main.cpp VM selection is at line 488 with the comment at 485-487, inside the cited 484-488 range. The \"all 689 out-of-gas frames report out of gas\" observation is supporting evidence only, since an out-of-gas frame that a compiled run reported as \"error\" would not be counted among them; the source reading is the proof. Actor operator is right: a mismatch would only reach canonical state if a supermajority of validators ran a faulty compiled build.",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/cmd/monad/main.cpp", "supports": "line 488 selects InterpreterOnly when --trace-calls is set (line 214), Dual otherwise"},
+    {"url": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/runloop/runloop_monad.cpp", "supports": "lines 233-245 CallTracer only when enable_tracing; lines 330-337 call_frames committed"},
+    {"url": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/rpc/monad_executor.cpp", "supports": "line 1309 vm_ InterpreterOnly, used at 1525, 1547, 1824 and 1969"},
+    {"url": "https://raw.githubusercontent.com/category-labs/monad-bft/v0.16.7/monad-rpc/src/handlers/debug.rs", "supports": "lines 381-388 status 3 maps to out of gas, unknown codes to error"},
+    {"url": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/interpreter/stack.hpp", "supports": "lines 40-45 interpreter exits with OutOfGas on static gas shortfall"},
+    {"url": "rpc https://rpc.monad.xyz web3_clientVersion, debug_traceTransaction callTracer 0x90dad9c6229b6554dee4d72475e671473f0399a0357cdd8fb4e741b61af4ad77, eth_getBlockByNumber finalized (2026-11-24)", "supports": "Monad/0.16.7; PoolManager swap frame 0xf3cd914c with gas 94,784 marked out of gas; finalized block 125,132,202"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Step 1 (lead L-700): does any Monad RPC method execute on the block execution VM instead of the InterpreterOnly VM, at Monad/0.16.7.",
+   "agrees": true,
+   "note": "monad_executor.cpp line 1309 declares vm_ InterpreterOnly and every execution site I found (1525, 1547, 1824, 1969) passes vm_; grep found no other VM in that file. debug_replay.rs 61-63 routes only the prestate tracer to replay. The clearing is a negative about RPC coverage, so an error here would only overstate coverage."
+  },
+  {
+   "check": "Step 2 planted fault: MULMOD(a, b, 2^256 - 1) off by one is caught only for even denominators.",
+   "agrees": true,
+   "note": "src/libraries/FullMath.sol:59 gives twos = 1 for an odd denominator, :73 turns it into add(div(2^256-1, 1), 1) = 0, and :75 makes prod1 * twos zero, so prod1 drops out and the result is prod0 times the inverse, exact for an exact division whose quotient fits. prod1 still matters through require(denominator > prod1) at :30 and the prod1 == 0 shortcut at :33-38, which the item names. This is a limit on what the mined-swap battery can detect: odd liquidity denominators are common, so a high-word fault would mostly hide in mined data and the clearing correctly does not claim otherwise."
+  },
+  {
+   "check": "Step 2: every mined v4 swap on Monad in blocks 124,719,001 to 125,119,000 against SwapMath.computeSwapStep; overflow fallback and amount above 2^160 branches taken 0 times.",
+   "agrees": true,
+   "note": "big.json shows 4,000 windows with 0 missing, 629,293 swaps, 614,687 pairs, 2,414 unmatched, 129,567 swaps with a 512 bit product, and site counters for amount0_fallback (295,043) and amount1_over_160 (294,879) that count calls; replay2-v4.json shows 53,503 swaps with 0 unmatched. The item states these are interpreter output of tracing nodes, so it does not overclaim compiled coverage. The 2,414 unmatched pairs are explained only by tolerance, not individually replayed, which is a residual gap but not a wrong clearing."
+  }
+ ],
+ "leads": []
+}

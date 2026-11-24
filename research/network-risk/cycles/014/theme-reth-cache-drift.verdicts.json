@@ -1,0 +1,67 @@
+{
+  "unit": "theme-reth-cache-drift",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "plausible",
+      "severity": "low",
+      "factCheck": "I fetched base/reth 9e380dd cached_state.rs and celo-org/reth 74cc8bb cached_state.rs. At base lines 1278-1297 and celo lines 863-882, a destroyed account whose original info has the empty code hash is removed from the account cache and skipped with continue, so its post-block storage is never written to the storage cache. reth v2.9.0 (lines 1182-1185) and the reth pull request 28148 patch (dated 25 October 2026) remove the account only when account.info is None. The patch's test seeds the zero through CachedStateProvider::new_prewarm and expects 7 after insert_state of a DestroyedChanged account. base/reth engine.rs line 291 sets share_execution_cache_with_payload_builder to false, and lines 522-523 define the flag. base/reth payload_validator.rs lines 1902-1905 hand over cache_for(parent) only when the flag is set. Base v1.5.6 flashblocks payload.rs lines 260-295 passes execution_cache to BuilderStateProvider, and config.rs lines 488-494 wraps the provider in CachedStateProvider. celo-org/optimism b08a8d0 builder.rs lines 356-363 do the same for Celo. web3_clientVersion on mainnet.base.org returned reth/v2.5.2-9e380dd/x86_64-unknown-linux-gnu/base/v1.5.6. celo-rpc.publicnode.com returned reth/v2.2.0-74cc8bb on every try. forno.celo.org returned reth/v2.2.0-74cc8bb on most tries and Geth/v0.1.0-untagged-c7ed55b8-20260817 on two of them. One link is not confirmed: the finding cannot show which read puts a storage word for an address that has no code into the shared cache before the block that destroys and re-creates the address. CachedStateProvider fills the cache on a miss only in prewarm mode (base cached_state.rs lines 899-922). In prewarm, a constructor's SSTORE on a newly created account is answered by the EVM journal without a database read, so the obvious path does not seed the word. Whether the sequencers set the flag is also not public.",
+      "codeCheck": "I traced the reads the PoolManager makes on the settlement path. sync (src/PoolManager.sol:279-288) and _settle (src/PoolManager.sol:349-364) read the token's balanceOf through src/types/Currency.sol:90-95, or the PoolManager's own balance for native currency. Deltas and reserves use tload and tstore (src/libraries/CurrencyDelta.sol:21-39), and the execution cache does not hold transient storage. The PoolManager has had code since deployment, and EIP-6780 means it cannot be destroyed, so its words never reach the branch. A stale word can only exist for a contract the block destroyed and re-created, which means a contract made in that block. A token or hook like that is attacker-made, so the code path reaches no pool that uses only existing tokens and hooks. The finding's conclusion that no PoolManager funds move holds.",
+      "corrections": "forno.celo.org is load-balanced across reth/v2.2.0-74cc8bb and an op-geth build (Geth/v0.1.0-untagged-c7ed55b8-20260817), so not every Celo endpoint request reaches the cited reth. The actor operator stands because the hazard needs a non-default sequencer flag, though the trigger transactions can come from any account.",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/execution-cache/src/cached_state.rs", "supports": "lines 1278-1297 old branch; lines 899-922 cache is filled on miss only in prewarm mode"},
+        {"url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs", "supports": "lines 863-882 old branch"},
+        {"url": "https://patch-diff.githubusercontent.com/raw/paradigmxyz/reth/pull/28148.patch", "supports": "fix that removes the account only when info is None, with a test that seeds the cache through new_prewarm"},
+        {"url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.9.0/crates/engine/execution-cache/src/cached_state.rs", "supports": "lines 1182-1185 fixed branch"},
+        {"url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/node/core/src/args/engine.rs", "supports": "line 291 default false, lines 522-523 flag"},
+        {"url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/tree/src/tree/payload_validator.rs", "supports": "lines 1898-1905 the cache is handed to the builder only when the flag is set"},
+        {"url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/builder/core/src/flashblocks/payload.rs", "supports": "lines 260-295 builder passes the execution cache to BuilderStateProvider"},
+        {"url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/execution/payload/src/config.rs", "supports": "lines 477-500 CachedStateProvider wrap"},
+        {"url": "https://raw.githubusercontent.com/celo-org/optimism/b08a8d0abda93536b105b0f013753d2f35c0d19e/rust/op-reth/crates/payload/src/builder.rs", "supports": "lines 356-363 Celo builder reads through the shared cache"},
+        {"url": "https://mainnet.base.org", "supports": "web3_clientVersion reth/v2.5.2-9e380dd/x86_64-unknown-linux-gnu/base/v1.5.6, queried 2026-11-24"},
+        {"url": "https://forno.celo.org", "supports": "web3_clientVersion alternated between reth/v2.2.0-74cc8bb and Geth/v0.1.0-untagged-c7ed55b8-20260817, queried 2026-11-24"}
+      ]
+    },
+    {
+      "findingIndex": 1,
+      "verdict": "plausible",
+      "severity": "low",
+      "factCheck": "I fetched ethereum-optimism/reth 3c5f2f1 cached_state.rs. Lines 1303-1304 hold the old remove-and-continue branch without an info check, and lines 1286-1305 match the finding. The Base and Celo revisions were checked under finding 0. I queried web3_clientVersion on 2026-11-24. rpc.zora.energy returned conduit-op-reth/v2.5.1-8f0ccac. worldchain-mainnet.g.alchemy.com/public returned world-chain/v2.8.2-9596311. rpc.xlayer.tech returned reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7. mainnet.optimism.io returned op-reth/v0.0.0-dev-unknown/x86_64-linux, a build that cannot be placed. I did not re-fetch the okx/reth, bnb-chain/reth or downstream Cargo.lock files. The trigger link is unconfirmed for the same reason as in finding 0: no ordinary read is shown to seed a word for an address with no code before the destroy and re-create block.",
+      "codeCheck": "The code side is the same as in finding 0. A follower that reads a stale word computes a different state root and rejects the block. It does not commit wrong state, and none of the PoolManager's reads (src/PoolManager.sol:279-288, 349-364; src/types/Currency.sol:90-95; transient storage in src/libraries/CurrencyDelta.sol:21-39) can reach the branch. A stalled follower does not lock PoolManager funds, because the canonical chain and other endpoints keep running.",
+      "corrections": "actor: unprivileged. The followers run default software, so any account could send the trigger transactions if the seeding link exists, and no operator needs to act. The effect is still an RPC follower stall with no path to PoolManager funds, so the finding stays out of scope for funds. Severity is low (an operational hazard) rather than info. The OP Mainnet endpoint returned only the v0.0.0-dev-unknown build on my query, so its pin to op-v2.6.0-2 is not confirmed for current requests.",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/ethereum-optimism/reth/3c5f2f11c4e5a5647e6e911cd131ccf1bada4f25/crates/engine/execution-cache/src/cached_state.rs", "supports": "lines 1303-1304 old branch"},
+        {"url": "https://rpc.zora.energy/", "supports": "conduit-op-reth/v2.5.1-8f0ccac"},
+        {"url": "https://worldchain-mainnet.g.alchemy.com/public", "supports": "world-chain/v2.8.2-9596311"},
+        {"url": "https://rpc.xlayer.tech", "supports": "reth/v2.3.0-f60420a xlayer/v0.0.7"},
+        {"url": "https://mainnet.optimism.io", "supports": "op-reth/v0.0.0-dev-unknown/x86_64-linux on 2026-11-24"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Whether the PoolManager's own storage, its transient storage, or the balanceOf staticcall of sync can read a stale word from the reth execution cache branch for a destroyed account without code",
+      "agrees": true,
+      "note": "The branch requires original_info with the empty code hash and was_destroyed (base cached_state.rs lines 1278-1297). The PoolManager has code and cannot be destroyed under EIP-6780. Deltas are tload and tstore (src/libraries/CurrencyDelta.sol:21-39). sync and _settle read only the token's balanceOf or the PoolManager's own balance (src/PoolManager.sol:279-288, 349-364; src/types/Currency.sol:90-95)."
+    },
+    {
+      "check": "Is the old branch present at the reth revision the endpoint reports (Ethereum, Unichain, Ink, Soneium, Tempo, Arc)",
+      "agrees": true,
+      "note": "paradigmxyz/reth v2.11.0 and ethereum-optimism/reth ce8cfb1 both gate the removal on account.info.is_none() (lines 1182-1185). ethereum-rpc.publicnode.com returned reth/v2.11.0-b9abbcc. mainnet.unichain.org, rpc-gel.inkonchain.com and rpc.soneium.org returned op-reth/v2.10.0-rc.4-65e80332. I did not re-check Tempo or Arc."
+    },
+    {
+      "check": "Does the block producer of OP Mainnet, Zora, World Chain, X Layer or reth-bsc read through the execution cache",
+      "agrees": true,
+      "note": "The op-reth v2.8.1 builder.rs at line 257 destructures BuildArguments with .. and drops execution_cache, and lines 369, 397 and 415 only pass the field along or set it to None. The production builders of those networks are not public, so this holds for the public code only."
+    }
+  ],
+  "leads": [
+    {
+      "chainIds": [42220],
+      "lens": "L2",
+      "question": "Which client and revision is the Geth/v0.1.0-untagged-c7ed55b8-20260817 build that forno.celo.org serves on some requests, and does it differ from celo reth in any state read or opcode result the PoolManager depends on?",
+      "why": "The Celo RPC in networks.json is load-balanced across two execution clients, and the opcode battery may have hit only one of them.",
+      "priority": "low"
+    }
+  ]
+}
