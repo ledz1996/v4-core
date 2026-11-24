@@ -11,6 +11,7 @@ The review runs in cycles. Each cycle reads the state left by the one before it,
 | File | What it is |
 |---|---|
 | `REPORT.md` | The report for people. Findings by severity, then by network. |
+| `OPCODES.md` | Opcode behaviour per network against the pool math: test battery, same-bytecode differential, mined swaps, node source. Results in `opcodes/`, scripts in `tools/opdiff/`. |
 | `STATUS.md` | Generated dashboard: findings index, coverage matrix, open leads, cycle history. |
 | `ASSUMPTIONS.md` | What the code in `src/` assumes about the chain, with line numbers. Every agent starts here. |
 | `SCHEMA.md` | File formats, the severity scale, verdict definitions, prose style. |

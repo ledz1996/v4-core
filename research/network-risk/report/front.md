@@ -2,6 +2,17 @@
 
 State on 2026-11-23: cycles 1 to 7 are merged. The ledger holds 110 findings, 917 checks that came out safe, and 440 open leads across the 21 networks. One hundred and eighteen agents have worked on it so far, about half of them as independent verifiers.
 
+## Opcodes and the pool math
+
+On 24 November the review turned to one narrower question: does any network compute an opcode, or run control flow, differently from Ethereum in a way that changes the PoolManager's arithmetic or logic? The full account is in `OPCODES.md`. No difference was found.
+
+- 185,529 opcode test vectors gave the specified result on all 21 networks. They include 8,908 inputs built to hit a wrong `MULMOD` result that one release of the integer library under reth based nodes shipped in October 2026.
+- The deployed PoolManager bytecode, placed with the same empty state on every network, answered 250 scripts of swaps and liquidity changes byte for byte the same on 17 networks. On Polygon, Monad and Tempo the only differences are swaps that ran out of gas.
+- 99,903 mined swaps satisfy the tick relation of `TickMath`, and 85,278 match the single-step formulas of `SwapMath` to the unit. Of 229 multi-step swaps that were replayed step by step from chain storage, 228 match to the unit and one could not be read.
+- The node source of Monad, BNB Smart Chain, Polygon, Avalanche, Tempo, MegaETH and Arc shows no opcode that departs from the specification. BNB Smart Chain carried a bytecode fusion feature with real faults until v1.7.8 and removed it in v1.8.0.
+
+The faulty library release (ruint 1.21.0) runs on none of the 21 networks. Ethereum's reth nodes and Tempo run the first fixed release, which is a month old, and Tempo has no second client. A build of this checkout was not tested, because no compiler is installed.
+
 ## The question
 
 Can an ordinary account take funds that other users hold in this repository's PoolManager, or stop them from withdrawing, on any of the 21 networks where Uniswap v4 is officially deployed? The attacker has no role: no owner or fee controller key, no token admin key, no sequencer or validator power, no governance vote. The victims are liquidity providers, swappers and holders of ERC-6909 claims who use pools in the normal way.

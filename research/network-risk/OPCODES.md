@@ -1,0 +1,166 @@
+# Opcode behaviour on the 21 networks and what it means for the pool math
+
+State on 2026-11-24. This part of the review asks one question: does any of the 21 networks compute an opcode, or run control flow, differently from Ethereum in a way that changes the arithmetic or the logic of this repository's PoolManager?
+
+## Answer
+
+No difference was found. Four independent checks agree, and each covers a weakness of the others.
+
+1. A battery of 185,529 opcode test vectors gave the specified result on every one of the 21 networks, with no mismatch.
+2. The deployed PoolManager bytecode, placed at the same address with the same empty state on every network, answered 250 scripts of about 12,000 calls identically on 17 networks. On Polygon, Monad and Tempo the only differences are calls that ran out of gas.
+3. 99,903 swaps that the networks have already mined satisfy the exact relations the source's math fixes. All 99,903 pass the tick relation. Of the 88,576 that could be paired with the swap before them, 85,278 match the single-step formulas to the unit, and 228 of the 229 sampled multi-step swaps replay to the unit.
+4. A reading of the node source for the networks whose interpreter is not go-ethereum or stock revm found no opcode that departs from the specification.
+
+One thing came out of the reading that deserves a place in the deployment checklist. The big integer library behind reth based nodes shipped a release on 20 October 2026 that returned wrong `MULMOD` results in one edge case. It was withdrawn three days later. No network on the list runs it or ran it, and the vectors built to hit it pass everywhere. Ethereum's reth nodes and Tempo run the first fixed release, whose arithmetic paths are one month old, and Tempo has no second client to disagree with it.
+
+Nothing here tests a build of this checkout. No compiler is installed, so the checks run the source's math as a transcription and the bytecode that is deployed today.
+
+## What the source asks of the EVM
+
+The assembly blocks in `src/` use 37 opcodes. The table lists the ones whose edge behaviour the math or the logic depends on, with the place that depends on it.
+
+| Opcode | Where the source relies on it | Edge that must hold |
+|---|---|---|
+| `MULMOD` | `FullMath.mulDiv` and `mulDivRoundingUp` (`src/libraries/FullMath.sol`), `SqrtPriceMath.getAmount1Delta` | Exact remainder of a 512 bit product. The modulus `2^256 - 1` is used on every call to rebuild the high half of the product. |
+| `SAR` | `TickMath.getSqrtPriceAtTick` and `SqrtPriceMath.absDiff` (shift by 255 to make a sign mask), `getTickAtSqrtPrice` (shift by 128 of a signed value), `TickBitmap.position`, `BalanceDelta`, `StateLibrary` | Sign fill for negative values. |
+| `SIGNEXTEND` | Tick and tick spacing inputs (`TickMath`, `TickBitmap`, `Pool`), `Slot0.tick`, `BalanceDelta.amount1`, `LiquidityMath.addDelta` | Extension from byte 2 and byte 15. |
+| `SDIV`, `SMOD`, `SLT` | `TickBitmap.compress` and `flipTick`, `Pool.tickSpacingToMaxLiquidityPerTick` | Truncation toward zero and a remainder with the sign of the dividend. Negative ticks round the wrong way otherwise. |
+| `BYTE`, `SHL`, `SHR`, `DIV` | `BitMath.mostSignificantBit` and `leastSignificantBit` (table lookups), all of `TickMath` | Zero for a byte index above 31 and for a shift of 256 or more. |
+| `DIV`, `MOD`, `GT` | `UnsafeMath.divRoundingUp`, `TickMath` (`div(not(0), price)`) | Division by a full width divisor. |
+| `MUL`, `ADD`, `SUB` | Everywhere, mostly inside `unchecked` | Wrap at 2^256. `FullMath` and `BitMath` depend on the wrap. |
+| `KECCAK256` | Pool id, position key, mapping slots, transient delta slots | Standard hash. |
+| `TLOAD`, `TSTORE` | Lock, delta count, deltas, synced currency | Covered in `REPORT.md`. |
+| `JUMPI` | Every branch. `TickBitmap.flipTick` branches on a signed remainder | Any nonzero bit in the condition word takes the branch. |
+
+`python3 tools/opdiff/v4math.py` runs a transcription of the math libraries, written operation by operation from the text in `src/`, against plain integer arithmetic. `mulDiv` and `mulDivRoundingUp` agree with floor and ceiling division on 200,000 random inputs, the bit scans agree on 100,000, and over the whole tick range the price is strictly increasing and `getTickAtSqrtPrice` returns the tick it was given, and the tick below for a price one unit lower. The source's math is therefore right under the specification, which leaves the question of whether each network follows the specification.
+
+## Check 1: opcode battery
+
+`tools/opdiff/battery.py` and `tools/opdiff/targeted.py`. A dispatcher of 1,287 bytes is placed at an unused address by state override. Its calldata is a list of records, each naming an opcode and up to three operands, and it returns one word per record. The words are compared with the reference semantics in `tools/opdiff/evm.py`. Nothing is deployed and no transaction is sent.
+
+The general battery has 99,985 vectors: 25 arithmetic, bitwise and comparison opcodes on edge values (limb boundaries, the sign bit, the tick and price limits of the source, the constants of `TickMath` and `BitMath`) and on random values, plus `JUMPI` with 209 condition words, `KECCAK256` over 120 offset and length pairs up to 1,023 bytes, `MCOPY` with overlapping ranges, `CALLDATALOAD` past the end of calldata, and three short sequences copied from the source (`divRoundingUp`, the `signextend` and `sar` unpacking of `BalanceDelta` and `Slot0`, and the 512 bit product of `FullMath`).
+
+The targeted set has 85,544 vectors aimed at places where big integer libraries have gone wrong: 8,908 `MULMOD` and `mulDiv` inputs that meet the exact condition of the library bug described below, products that are exact multiples of `2^256 - 1` or one off, `ADDMOD` around overflow, division by powers of two and by full width divisors, and shifts at every limb boundary with both sign patterns.
+
+Result: 21 of 21 networks returned the expected word for all 185,529 vectors. Results are in `opcodes/battery.json` and `opcodes/targeted.json`.
+
+## Check 2: one bytecode, one state, 21 interpreters
+
+`tools/opdiff/pmdiff.py`. The runtime bytecode of the PoolManager deployed on Ethereum (24,009 bytes) is placed at one fixed fresh address on every network by state override, with its single immutable rewritten to that address. A 189 byte driver calls `unlock` and, inside the callback, runs a script of calls: `initialize`, `modifyLiquidity`, `swap`, `donate`, `mint`, `burn`, `clear`, `take`, `settle`, and `extsload` and `exttload` reads of the pool state and the caller's deltas after each step. It records the success flag and the return data of every call and reverts with the record, so nothing settles and nothing persists.
+
+The 250 scripts cover 9 fees, 8 tick spacings, starting prices over the whole range, up to five positions per pool, swaps in both directions with exact input and exact output, amounts from 1 to 2^126 and the extreme values of `int256`, open and tight price limits, removals, donations and claims. At 25 million gas, 243 scripts return a full record on Ethereum: 11,892 calls, of which 11,225 succeed and 667 revert, so error paths are compared as well. The other seven run out of gas as a whole and return nothing, there and on every other network, so they compare nothing.
+
+The same script must give the same bytes everywhere, because code, state and input are the same.
+
+| Result | Networks |
+|---|---|
+| All 250 scripts identical to Ethereum | OP Mainnet, Base, Unichain, Zora, World Chain, Ink, Soneium, Celo, X Layer, Arbitrum One, Robinhood Chain, Elysium, BNB Smart Chain, Avalanche, MegaETH, Arc, HyperEVM |
+| Identical except where a call ran out of gas | Polygon (231 at 25 million gas), Monad (229), Tempo (240) |
+
+The exceptions are a gas matter. Read with the `GAS` opcode, the Ethereum, Polygon and Tempo endpoints give a simulated call at most 50 million gas and Monad gives 150 million. The scripts that differ contain a swap at tick spacing 1 across most of the price range, which needs 36 to 50 million gas on Ethereum and more on the three networks, where storage reads or new storage slots cost more. Run again with the largest gas each endpoint grants, all but six script and network pairs become identical. In those six the first differing call is the heavy swap, which fails with empty return data on the side that has less gas (Polygon twice, Tempo once, and Ethereum three times against Monad), and every call before it is identical. Details are in `opcodes/pmdiff-gas.json`. That swaps across many ticks cost more gas on some networks is already recorded in `REPORT.md` as a delay without loss.
+
+## Check 3: swaps the networks have already mined
+
+`tools/opdiff/swaps.py` and `tools/opdiff/replay.py`. A simulated call can run on a different code path than block production. On Monad the RPC always uses the interpreter, while blocks run frequently used contracts as compiled native code. This check therefore reads results that blocks already contain: the `Swap` events of the deployed PoolManager, most recent first, until about 6,000 logs per network or the endpoint's limit.
+
+Two relations are tested. The tick in the event must equal `getTickAtSqrtPrice` of the price in the event, or sit one below it with the price exactly on the tick boundary, which is what `Pool.swap` leaves after a swap that stops on a tick going down (`src/libraries/Pool.sol:430-431`). And for two consecutive swaps of one pool with no liquidity change between them, the amounts and the end price must follow from the start price, the liquidity and the fee by one of the three single-step outcomes of `SwapMath.computeSwapStep`.
+
+| Network | Swaps read | Tick relation holds | Paired with the swap before | Single step, exact to the unit | Several steps | Crossed liquidity |
+|---|---|---|---|---|---|---|
+| Ethereum | 38,629 | 38,629 | 35,310 | 32,996 | 2,302 | 12 |
+| OP Mainnet | 4,045 | 4,045 | 2,539 | 2,536 | 3 | 0 |
+| Base | 3,590 | 3,590 | 2,597 | 2,342 | 215 | 40 |
+| Unichain | 6,019 | 6,019 | 5,661 | 5,605 | 56 | 0 |
+| Zora | 454 | 454 | 323 | 306 | 9 | 8 |
+| World Chain | 221 | 221 | 160 | 159 | 1 | 0 |
+| Ink | 4,008 | 4,008 | 3,614 | 3,590 | 24 | 0 |
+| Soneium | 840 | 840 | 763 | 761 | 2 | 0 |
+| Celo | 79 | 79 | 65 | 60 | 5 | 0 |
+| X Layer | 365 | 365 | 324 | 324 | 0 | 0 |
+| Arbitrum One | 6,527 | 6,527 | 5,779 | 5,770 | 9 | 0 |
+| Robinhood Chain | 5,821 | 5,821 | 4,977 | 4,712 | 264 | 1 |
+| Elysium | 4,679 | 4,679 | 4,388 | 4,386 | 2 | 0 |
+| Polygon | 937 | 937 | 801 | 799 | 2 | 0 |
+| BNB Smart Chain | 8,326 | 8,326 | 7,326 | 7,141 | 185 | 0 |
+| Avalanche | 59 | 59 | 29 | 28 | 1 | 0 |
+| Monad | 2,176 | 2,176 | 2,085 | 2,072 | 13 | 0 |
+| MegaETH | 5,839 | 5,839 | 5,524 | 5,384 | 106 | 34 |
+| Tempo | 950 | 950 | 212 | 212 | 0 | 0 |
+| Arc | 6,325 | 6,325 | 6,094 | 6,090 | 4 | 0 |
+| HyperEVM | 14 | 14 | 5 | 5 | 0 | 0 |
+| Total | 99,903 | 99,903 | 88,576 | 85,278 | 3,203 | 95 |
+
+The tick relation exercises the whole of `getTickAtSqrtPrice`: the bit scan, fourteen rounds of squaring, a signed multiplication, two arithmetic shifts and `getSqrtPriceAtTick`. The single-step relation exercises `mulDiv`, `mulDivRoundingUp`, `divRoundingUp` and the price and amount functions of `SqrtPriceMath`.
+
+The last two columns are swaps that took more than one step. A swap rounds once per step, so its amounts land a few units from the single-step values ("several steps"), or far from them when it crossed a position whose liquidity entered and left again ("crossed liquidity"). `replay.py` reruns `Pool.swap` step by step for the newest 25 and 60 of each kind per network, reading the tick bitmap and the net liquidity of every crossed tick from the PoolManager's storage at the block of the swap. Of 229 swaps sampled on Ethereum, Base, Unichain, Zora, Robinhood Chain and MegaETH, 228 reproduce price, tick, liquidity and both amounts to the unit, the longest with 201 steps. The one that does not is on Robinhood Chain, where the endpoint no longer serves the state of that block. Results are in `opcodes/swaps.json` and `opcodes/replay.json`.
+
+HyperEVM has only 14 recent swaps and Avalanche 59, so this check says little about those two.
+
+## Check 4: the node source
+
+Three readers went through the interpreters that are not go-ethereum or stock revm, and a fourth traced the big integer library through every reth based client. Each ran its own smaller test set against the live endpoints as well, about 25,000 cases on Monad, 20,000 each on BNB Smart Chain, Polygon and Avalanche, and 4,270 each on Tempo, MegaETH, HyperEVM and Arc, all without a mismatch.
+
+| Network | What runs | What the reading found |
+|---|---|---|
+| Monad | Own client, v0.16.5, with an interpreter and a compiler that emits x86 code | One 256 bit library serves the interpreter and the compiler's constant folding. Its division, `MULMOD`, signed operations, shifts, `SIGNEXTEND` and `BYTE` match the specification as read, and so do the compiler's special cases for literal operands. Simulated calls always use the interpreter (`rpc/monad_executor.cpp:1296-1300`), so the compiled path was checked by reading and by the mined swaps above. The vector register paths for shifts and the emitted `JUMPI` were not read. |
+| BNB Smart Chain | Fork of go-ethereum, v1.8.2 | The interpreter differs from go-ethereum v1.17.3 in three places, none of them arithmetic or jumps. The client carried a feature from v1.6.2 to v1.7.8 that rewrote bytecode into fused instructions. It was off by default and had real faults: a fused comparison that always returned 0 (fixed in v1.7.3), lost write protection inside a static call, which produced a bad block (v1.7.1), and loose stack bounds (v1.7.1). v1.8.0 removed the feature. The PoolManager bytecode would have hit 20 of the 31 fused patterns and does not contain the one behind the comparison fault. |
+| Polygon | bor v2.11.1, go-ethereum v1.16.8 with additions | An optional fast dispatch loop, off by default, makes the same library calls as upstream. A cache for 64 byte hash inputs is keyed by the full input. Storage reads and writes are repriced, which changes gas only. |
+| Avalanche | avalanchego 1.15.3 | The interpreter files equal go-ethereum's. The C-Chain clears bit 248 of every storage slot index, confirmed on the live node and already recorded as F-040. Transient slots are not folded. |
+| Tempo | evm2, a new interpreter, with ruint 1.21.1 | Arithmetic goes through ruint. Signed division and remainder are hand written and correct as read, shift and byte indices are clamped on the whole word, and `JUMPI` tests the whole word. The release build has no compiler stage. The scan for jump destinations uses vector instructions chosen by the CPU at run time, so validators on different hardware run different code for it. Only the endpoint's CPU was tested, with 3,026 jumps into and around push data. |
+| MegaETH | mega-evm on revm 40.0.3, ruint 1.19.0 | Every arithmetic and jump instruction is the stock one inside a wrapper that adds gas accounting. The node itself is not public. |
+| HyperEVM | Validator closed source | The public replay clients pin stock revm. Nothing about the validator can be read. |
+| Arc | reth based, revm 38.0.0, ruint 1.20.0 | The only replaced instruction is `SELFDESTRUCT`. |
+
+### The library fault of October 2026
+
+ruint is the 256 bit integer library under revm and evm2. Release 1.21.0 of 20 October 2026 rewrote `mul_mod`, `add_mod`, division, multiplication and the shifts for speed, and added a fast path for the modulus `2^256 - 1`, which is the modulus `FullMath.mulDiv` uses. The rewritten `mul_mod` skipped the top digit of the quotient when the top two limbs of the normalised product were less than or equal to those of the modulus. With equal limbs the skipped digit can be 1 and the remainder comes out wrong. Release 1.21.1 of 23 October changed the test to strictly less, and 1.21.0 was withdrawn.
+
+| Network | Client | ruint | Has the fault | Runs the rewritten paths |
+|---|---|---|---|---|
+| Ethereum (reth nodes) | reth v2.11.0 on evm2 | 1.21.1 | no | yes |
+| Tempo | v1.19.0 on evm2 | 1.21.1 | no | yes |
+| OP Mainnet, Unichain, Ink, Soneium | op-reth v2.8.1 and v2.9.0-rc.1 | 1.20.0 | no | no |
+| Zora, World Chain, Celo, Arc | conduit-op-reth v2.5.1, world-chain v2.8.2, celo reth, arc-node | 1.20.0 | no | no |
+| Base | base v1.5.6 | 1.19.0 | no | no |
+| MegaETH | mega-evm (node closed) | 1.19.0 | no | no |
+| X Layer | xlayer v0.0.7 | 1.18.0 | no | no |
+
+No release of these clients published between 20 October and today pinned 1.21.0. Tempo went from 1.20.1 in v1.17.0 straight to 1.21.1 in v1.18.2. The reader built a harness that links 1.19.0, 1.21.0 and 1.21.1 and compared them with Python integers on 1.2 million inputs per operation: 1.21.1 had no failure, and 1.21.0 gave about 4,300 wrong `mul_mod` results per 300,000 on inputs of the right shape, which shows the tests can see the fault.
+
+For the pool math the fault would have been hard to reach even on an affected node. `mulDiv` calls `mulmod(a, b, denominator)` only when the product needs more than 256 bits, and the fault then needs a denominator of four limbs whose top 128 bits equal those of the high half of the product, which means a quotient within 2^129 of 2^256. The prices, amounts and fee growth values that `mulDiv` returns in a pool are far below that. It still matters for deployment, for two reasons. A node operator who built from source in those three days may be running the withdrawn release without knowing. And the fixed release is new code on a path every swap takes, on one network with a single client.
+
+## What this does not cover
+
+- This build. Everything above runs the source as a transcription or the bytecode deployed today. Compiling the checkout would let the second check run on its own bytecode. That needs a compiler, which is not installed here.
+- Compiled code on Monad beyond the 2,176 mined swaps, and the parts of its emitter that were not read.
+- Validators that run other hardware or other builds than the public endpoints: the vector code for jump destinations in evm2, the optional dispatch loop in bor, and any operator on the withdrawn ruint release.
+- The HyperEVM validator and the MegaETH node, which are closed, and the Arc commit behind `arc/v1`.
+- Liquidity changes in mined blocks. `ModifyLiquidity` events do not carry the amounts, so only the simulated scripts of the second check cover them.
+
+## How to run it again
+
+```bash
+python3 research/network-risk/tools/opdiff/v4math.py
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/battery.py research/network-risk/opcodes/battery.json
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/targeted.py research/network-risk/opcodes/targeted.json
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/pmdiff.py research/network-risk/opcodes/pmdiff.json 250
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/swaps.py research/network-risk/opcodes/swaps.json
+```
+
+```bash
+python3 research/network-risk/tools/opdiff/replay.py research/network-risk/opcodes/swaps.json research/network-risk/opcodes/replay.json
+```
+
+Each takes a list of chain ids as further arguments to run on some networks only. The battery and the scripts use fixed seeds, so a rerun after a network upgrade tests the same inputs. A rerun is worth doing after every client release on the single-client networks (Monad, MegaETH, Tempo, HyperEVM, Arc, Robinhood Chain, Elysium) and after any ruint, revm or evm2 upgrade.
