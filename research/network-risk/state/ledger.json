@@ -13900,7 +13900,14 @@
    "question": "Tempo mainnet now runs tempo/v1.19.1-a9d6748 with evm2 35aa3280 (was 66687c18) and reth 167933d1. Read the evm2 diff 66687c18..35aa3280 in the instruction handlers (arithmetic, MULMOD/ADDMOD, shifts, SIGNEXTEND, BYTE, EXP, comparisons), jump destination analysis, memory and MCOPY, call input and output borrowing, return data, and the TSTORE/TLOAD journal and rollback. Say whether Host::execute_call (commit 2bc0eebb, L-632) lets any precompile or system path start a frame from outside a running call. Then rerun battery.py, targeted.py, callsem.py, statekeys.py, pmdiff.py and pmdiff2.py on the v1.19.1 endpoint. Also check whether the release image is built with the opt-in jit feature: bin/tempo/Cargo.toml line 155 lists default features without jit, and line 268 defines jit = tempo-evm/jit; read the Dockerfile and the release workflow at the tag.",
    "why": "A live network changed its interpreter after the cycle's checks. A wrong handler or journal result would change FullMath.mulDiv, TickMath or the transient delta rollback (src/libraries/CurrencyDelta.sol:21-39) in every Tempo pool, and any user could trigger it.",
    "priority": "high",
-   "status": "open"
+   "status": "open",
+   "attempts": [
+    {
+     "cycle": 13,
+     "outcome": "partial",
+     "answer": "Own check after the cycle. The evm2 change 66687c18..35aa3280 was read file by file: no arithmetic, comparison, shift, jump analysis, memory, MCOPY, return data or transient storage handler changed. Host::execute_call (interpreter/instructions/system.rs) lets a precompile start a call with the opcode's charges and goes through the same execute_message as CALL. InterpreterPool::trim (interpreter/runtime.rs) clears the memory of idle pooled frames when no frame is running (evm/mod.rs execute_message, current_frame is None); a running frame is popped out of the pool, the last pooled frame is spared, and a returned frame's output is copied in finish_call_message_run before anything else runs. The SSTORE skip of a cold load now compares with the full cold cost, which gives the same out-of-gas outcome. Release binaries and the Docker image are built with features asm-keccak, jemalloc, otlp (plus default keccak-cache-global), without jit. Reruns on the v1.19.1 endpoint: battery 99,985 of 99,985, targeted 85,544 of 85,544, callsem 50 of 50, statekeys no alias in 12,198 reads, pmdiff 240 of 250 and pmdiff2 294 of 300 with the same differing ids as recorded, pmdiff3 300 of 300. Still open in this lead: the reth change 31d05e14..167933d1 was not read."
+    }
+   ]
   },
   {
    "id": "L-700",
@@ -14124,6 +14131,19 @@
    "question": "Extend the Celo (428 swaps) and Worldchain (944 swaps) mined-swap windows to at least 3,000 swaps each with replay2.py.",
    "why": "These two windows are the thinnest of the 21.",
    "priority": "low",
+   "status": "open"
+  },
+  {
+   "id": "L-716",
+   "cycle": 13,
+   "origin": "own-check",
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "question": "Tempo v1.19.1 carries code for hardfork T15 under which a TIP-20 transfer to a reserved zone deposit address (bytes 4 to 12 of the address equal a 9 byte magic value, crates/contracts/src/zones/address_registry.rs) does not credit the recipient: the token precompile makes a nested call to the zone portal contract and queues a deposit (StorageCtx::call, changelog precompile-nested-calls; test tip20_transfer_to_zone_deposit_address_queues_virtual_deposit in crates/evm/src/evm.rs). When is T15 scheduled on mainnet? Walk take, settle, sync, mint and burn of the PoolManager with such an address as recipient, payer or hook, say whether balanceOf(PoolManager) can change without a transfer to or from it, whether a zero-amount take to such an address reverts inside another user's flow, and whether the nested call gives any contract a callback during a TIP-20 transfer that it does not get on v1.19.0.",
+   "why": "A precompile that calls contract code during a token transfer is a new execution path on a single-client network. If it gave a third party a callback inside a transfer, or let the PoolManager's token balance move without a transfer, sync and settle (src/PoolManager.sol:279-288, 349-364) would book a wrong amount.",
+   "priority": "medium",
    "status": "open"
   }
  ],

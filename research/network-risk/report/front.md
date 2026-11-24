@@ -1,6 +1,6 @@
 # PoolManager network risk report
 
-State on 2026-11-24: cycles 1 to 12 are merged. The ledger holds 123 findings, 1,198 checks that came out safe, and 508 open leads across the 21 networks. About 205 agents have worked on it so far, roughly half of them as independent verifiers.
+State on 2026-11-24: cycles 1 to 13 are merged. The ledger holds 127 findings, 1,265 checks that came out safe, and 512 open leads across the 21 networks. About 218 agents have worked on it so far, roughly half of them as independent verifiers.
 
 ## Opcodes and the pool math
 
@@ -19,7 +19,9 @@ On 24 November the review turned to one narrower question: does any network comp
 
 - Cycle 12 closed the Polygon question that cycle 11 had raised. bor keeps the first read of each address's code for the whole attempt at a transaction, so a parallel worker cannot store one contract's jump destination map under the PoolManager's code hash, and no jump in the PoolManager could be redirected by a wrong map in any case. The same holds for the code caches of BNB Smart Chain, Avalanche, Nitro, the reth based clients and Monad. A sixth script set took 83 conditional jumps to the side no script had taken before, and all 21 networks answer as the reference does. 3,083 more mined liquidity removals on eight networks, including removals inside transactions that also swap, paid what the source owes to the unit. The arithmetic of the builds that settle the Arbitrum family and World Chain was transcribed and matches every vector.
 
-What is still untested is listed in `OPCODES.md`. No item on that list is known to be within an ordinary account's reach. The largest are whether Monad's block producers compile a contract of this size at all, mined evidence for the newly covered branches on Monad, MegaETH and HyperEVM, about 3,300 mined swaps that were attributed to tick crossings without being replayed, and the proof systems of Base, Celo and X Layer. Cycle 13 is working on these.
+- Cycle 13 replayed every mined swap it collected, with no sampling: 70,053 swaps on all 21 networks, 63,848 as a single step and 6,205 through the whole swap loop from the state of the parent block. All match to the unit, and the 869 unexplained samples kept from earlier cycles replay as well. 7,837 mined transactions on Monad, MegaETH and HyperEVM were rerun in the reference interpreter and equal the block's call frames, receipts and storage, apart from the two deployments of the PoolManager itself. The Rust arithmetic that proves state for OP Mainnet, Unichain, Ink and Base was compiled for its real machine (MIPS64 and RISC-V), run in emulators, and matches every vector. The PoolManager calls out at four places only, and at each the target is chosen by the party whose own action fails if the target burns gas. Tempo moved to a new build during the cycle; the change to its interpreter was read and the checks were rerun on it.
+
+What is still untested is listed in `OPCODES.md`. No item on that list is known to be within an ordinary account's reach. The largest is Monad's compiled code: a simulated call there always runs the interpreter, so no test vector has reached the native code its block producers may use, and it is not known whether a contract of this size is compiled at all. Next are the branches that no mined transaction on Monad, MegaETH or HyperEVM has taken yet, client releases that appeared since the last full rerun, and two forks scheduled for 8 December 2026 on Tempo and BNB Chain. Cycle 14 is working on these.
 
 The faulty library release (ruint 1.21.0) runs on none of the 21 networks. Ethereum's reth nodes and Tempo run the first fixed release, which is a month old, and Tempo has no second client. As a by-product of running both, the built bytecode turned out to be the same bytes as the PoolManager deployed on Ethereum, so the on-chain measurements apply to this build directly.
 
@@ -29,7 +31,7 @@ Can an ordinary account take funds that other users hold in this repository's Po
 
 ## Answer so far
 
-No critical or high finding exists for an ordinary attacker, and the planted weakness has not been identified. Twelve cycles have found no property of any of the 21 networks that lets an ordinary account reach funds in pools of ordinary tokens. Every finding that an ordinary account can trigger depends on a particular token or a particular third-party hook, and the amounts at stake today are small.
+No critical or high finding exists for an ordinary attacker, and the planted weakness has not been identified. Thirteen cycles have found no property of any of the 21 networks that lets an ordinary account reach funds in pools of ordinary tokens. Every finding that an ordinary account can trigger depends on a particular token or a particular third-party hook, and the amounts at stake today are small.
 
 Cycle 7 went back to the OP Stack chains, Tempo and Arc, HyperEVM, Monad and MegaETH, walked the five audit reports in `docs/security/audits` against `src/` finding by finding, and swept every priced currency for transfers that cost the sender more than the amount. The network units found nothing an ordinary account can use. The audit walk found every reported hazard closed in the source or left open by a recorded decision of the team, and two guards that the reports list as fixes and the source does not have, neither of which moves funds. The sweep raised the amount behind one earlier finding: the Arc PoolManager holds about 107,000 USD of a token that charges the sender on top.
 
@@ -67,7 +69,7 @@ Limits of the design that the audits recorded and the team accepted (F-102, F-10
 
 The remaining six (F-006, F-014, F-054, F-055, F-100, F-101) record places where the source disagrees with its own comments, tests, test doubles or audit record, with no funds involved. The two new ones come from the audit walk. The Trail of Bits and Spearbit reports list a lock on `sync` and on fee collection as a fix, and the source has a check on the synced currency in their place, which skips `address(0)`. Where the native asset has an ERC-20 face, a native fee collection can therefore run between a `sync` of the face and its `settle`, and the account that holds the sync is the only one that pays. The OpenZeppelin report says `noDelegateCall` was added to all relevant external functions, and the source carries it on the four pool functions only. The reports do not say whether the guards were dropped on purpose later.
 
-The other 69 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end. Five issuer blocks are in force today and an ordinary account can neither set nor lift them.
+The other 71 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end. Five issuer blocks are in force today and an ordinary account can neither set nor lift them.
 
 - On Ethereum the issuers of yUSD, yETH and xSolvBTC have blocked the PoolManager address, and KITE and NTX are paused. About 1.67 million USD held for pools cannot leave (F-080).
 - On Celo the GoodDollar owner block-listed the PoolManager on 11 September 2026, which holds about 60,000 USD of G$ (F-056).
