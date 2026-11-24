@@ -165,8 +165,13 @@ def fetch_code():
         assert len(refs) == 1 and refs[0]['length'] == 32
         code[refs[0]['start']:refs[0]['start'] + 32] = bytes.fromhex(PM[2:]).rjust(32, b'\0')
         return bytes(code)
-    code = bytes.fromhex(rpc(ETH, 'eth_getCode', [REAL_PM, 'latest'])[2:])
-    real = bytes.fromhex(REAL_PM[2:])
+    # PM_FROM=<chain id> runs the PoolManager bytecode deployed on that network (Unichain's predeploy has its own bytes)
+    src, addr = ETH, REAL_PM
+    if os.environ.get('PM_FROM'):
+        nw = [x for x in json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'state', 'networks.json')))['networks'] if x['chainId'] == int(os.environ['PM_FROM'])][0]
+        src, addr = nw['rpc'], nw['poolManager']
+    code = bytes.fromhex(rpc(src, 'eth_getCode', [addr, 'latest'])[2:])
+    real = bytes.fromhex(addr[2:])
     assert code.count(real) == 1
     return code.replace(real, bytes.fromhex(PM[2:]))
 

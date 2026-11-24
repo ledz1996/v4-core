@@ -203,6 +203,8 @@ Cycle 10 took the three questions cycle 9 left open and reran the checks on elev
 | OP Stack chains with ETH gas | 185,529 vectors, 250 scripts on the deployed bytecode, 137 extreme-price scripts on this build and 19,431 mined swaps match on all seven chains. OP Mainnet's endpoint is served by two op-reth builds, one without a version; both match. Base builds the stock instruction table and replaces no instruction. |
 | HyperEVM | 185,529 vectors, 21,759 jump targets and 549 of 550 scripts match on the official node; the last one matches with 30 million gas. The whole mined history of 2,284 swaps fits the source math. The official `eth_call` ignores the block tag and reports a timestamp one second off, and the PoolManager reads neither. |
 
+After the cycle, the one deployment with different bytes was run as well. Unichain's PoolManager is a genesis predeploy of 24,050 bytes whose trailer differs. With `PM_FROM=130` the script tools load its bytecode in place of Ethereum's. All 250 and 300 scripts of the first two sets give the same records as the Ethereum bytecode, on the Ethereum node and on the Unichain node, and 400 scripts of the third set equal the reference interpreter on both nodes, the first 300 with the same records as this build (`opcodes/unichain-predeploy.json`).
+
 ## What this does not cover
 
 Simulated calls and source reading cover the interpreter of every network. The open part is block production on the networks where blocks are made by code a simulated call does not run.
@@ -213,7 +215,6 @@ Simulated calls and source reading cover the interpreter of every network. The o
 - Polygon's parallel block execution, which rests on a reading from cycle 3.
 - Amounts paid on liquidity removal and fee collection in mined blocks, on every network. `ModifyLiquidity` events do not carry amounts, so only the simulated scripts cover them.
 - The key cache in front of `KECCAK256`, which was read for Tempo and Arc only. The op-reth and Base lock files pin the same cache library.
-- Unichain's own PoolManager, a genesis predeploy of 24,050 bytes. Its executable part equals the other deployments apart from the address, but it has not run the scripts.
 - The Nitro release that Arbitrum One and Robinhood Chain report, which is not public, and Elysium's unnamed build.
 - The 4.4 percent of the bytecode the scripts do not execute, and the 129 conditional jumps taken only one way. The bytecode map of cycle 9 explains each unexecuted range.
 - The repository's own test suite. It needs forge, which is not installed.
