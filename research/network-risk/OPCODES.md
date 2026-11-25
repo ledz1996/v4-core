@@ -348,7 +348,7 @@ Cycle 17 went after the items cycle 16 left open: the exact sites of Monad's nat
 
 Three things from the critic need saying plainly.
 
-The seven HyperEVM swaps. HyperEVM's validator is closed, so its arithmetic is tested through the v3 style swaps it produced, rerun from the parent-block state with the formulas of `src/libraries`. In cycle 15 all four swaps that did not reproduce were traced to a Mint event variant the collector does not read. Cycle 17 counted seven more and kept no record of them, so its "explained" line was withdrawn from the list of safe checks. An own rerun of the same 7,000 groups with every mismatch saved was started after the cycle, and cycle 18 finishes the remaining groups.
+The seven HyperEVM swaps. HyperEVM's validator is closed, so its arithmetic is tested through the v3 style swaps it produced, rerun from the parent-block state with the formulas of `src/libraries`. In cycle 15 all four swaps that did not reproduce were traced to a Mint event variant the collector does not read. Cycle 17 counted seven more and kept no record of them, so its "explained" line was withdrawn from the list of safe checks. An own rerun of the same 7,000 groups with every mismatch saved gave the same counts (7,282 swaps reproduced, 7 not). All seven blocks hold that Mint variant before the swap, and with it read as a mint all seven reproduce price, tick, liquidity and both amounts to the unit, two of them through the 512-bit branch of `mulDiv`. None is left unexplained (`cycles/017/own-check.work/NOTES.md`). Cycle 18 runs the groups no cycle has reached.
 
 A silent gap in log answers. An endpoint that answers `eth_getLogs` with an empty list for an old window makes a census look complete when it is not. Earlier log scans on BNB Chain and on six other networks are being checked against receipts in cycle 18.
 
@@ -358,7 +358,7 @@ One reported rule breach did not happen. The critic wrote that the HyperEVM unit
 
 What is still open after cycle 17:
 
-- Seven v3 style swaps of HyperEVM's closed validator that did not reproduce and were not saved, and about 57,000 multi-step groups of such swaps that no cycle has rerun.
+- About 57,000 multi-step groups of v3 style swaps produced by HyperEVM's closed validator that no cycle has rerun. The seven that did not reproduce in cycle 17 are explained.
 - The native code Monad v0.16.5 emits depends on heap layout. Equal results were shown on four layouts by test; nobody has argued from the source that every order of the block-exit writer gives the same stack. Which release mainnet validators run (0.16.5 or 0.16.7) is not settled.
 - A systematic search of the Go clients (bor, BNB Chain geth, avalanchego, Celo op-geth, Nitro, geth) for the code shapes of Go issues 81863 and 82839. The searches so far covered Nitro's fork at one commit and geth v1.17.9 for the first issue, and nothing for the second.
 - The full-range swaps of the script sets never finish on Polygon, Monad and Tempo because the endpoints cap simulated gas, so the swaps that cross the most ticks have not been compared there.
