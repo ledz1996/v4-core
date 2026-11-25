@@ -1,0 +1,22 @@
+{
+  "unit": "theme-tempo-nested-exec",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Where evm2 creates, clears and copies the transient map: clear_transaction_state, ExecutedTx resolution, committed_copy, take_transient_storage, rollback.",
+      "agrees": true,
+      "note": "I fetched crates/evm2/src/evm/state/mod.rs, tx.rs and mod.rs at evm2 35aa3280. transient_storage is a State field (state/mod.rs:58-59) and clear_transaction_state empties it (state/mod.rs:555-569). tstore journals every change (state/mod.rs:837-866) and rollback restores the previous value or removes the slot (state/mod.rs:911-918). A grep of mod.rs, tx.rs and ethereum/mod.rs for clear_transaction_state finds tx.rs:225, 234, 243, mod.rs:1003 (finish_executed_tx when finalize fails), mod.rs:1224 (ScopedInspector drop when the transaction did not complete), mod.rs:1319, mod.rs:1346 and mod.rs:2524 (a test). The cleared item did not name mod.rs:1003 or mod.rs:1224, but both run only after the whole transaction has returned or unwound, so neither clears the map inside a running unlock. ethereum/mod.rs contains no call to clear_transaction_state and no transient reference."
+    },
+    {
+      "check": "Nested calls made by precompiles (TIP-20 zone deposit forwarding) and T14 batch calls: map shared, emptied or cleared?",
+      "agrees": true,
+      "note": "I fetched crates/evm/src/handler.rs at tempo a9d6748. execute_batch takes one checkpoint before the first call (handler.rs:1296) and rolls back to it when any call fails (handler.rs:1342-1344), so the batch is atomic and keeps one transient map across calls. Each call is a top-level frame from the same caller. PoolManager.unlock reverts unless NonzeroDeltaCount is zero and then relocks before it returns (src/PoolManager.sol:103-113), so a later call in the batch starts with the lock closed and no open deltas. A sync left open by one call is visible to the next call of the same sender, as in a multicall on Ethereum, and is not visible to another user. I did not re-read the TIP-20 deposit_virtual path."
+    },
+    {
+      "check": "Storage credit settlement drains transient slots at the end of a transaction (take_transient_storage).",
+      "agrees": true,
+      "note": "config.rs:444-490 calls take_transient_storage only with STORAGE_CREDITS_ADDRESS, and take_transient_storage filters by key.address() == address (state/mod.rs:873-878). settle_transaction calls it first (config.rs:251-256), after execution. The PoolManager's slots are keyed by its own address and are never selected. web3_clientVersion on https://rpc.mainnet.tempo.xyz returned tempo/v1.19.1-a9d6748 and eth_chainId returned 0x1079 (4217), so the revision read matches the deployed node."
+    }
+  ],
+  "leads": []
+}

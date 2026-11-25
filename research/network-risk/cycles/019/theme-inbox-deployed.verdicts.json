@@ -1,0 +1,37 @@
+{
+ "unit": "theme-inbox-deployed",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "eth_getTransactionReceipt of 0xd80476b3ec56283723804cf7bc2d96f800c81d3ebd0fea843555396ffe94f28f on https://eth.drpc.org returns status 1, block 0x19171d2 (26,309,074), to the Safe 0x5a0aae59d09fccbddb6c6cceb07b7279367c3d2a, and logs on the OP Mainnet portal proxy 0xbeb5fc57 in this order: Upgraded to 0x6d971b07, TransactionDeposited with from 0x5227f603c1ee34ce3c06efe6477003bdfccb2f8c and to 0x4200000000000000000000000000000000000042 whose opaque data carries selector a9059cbb and recipient 0x6b1bae59d09fccbddb6c6cceb07b7279367c4e3b, then Upgraded back to 0x1005217a. eth_getStorageAt of the EIP-1967 admin slot of the portal gives ProxyAdmin 0x543ba4aa, whose owner() is 0x5a0aae59, and the implementation slot reads 0xb20b23af today. op-geth core/state_transition.go preCheck (lines 346-360 as fetched) returns for IsDepositTx before any nonce or EOA check, with the comment that L1 already verified it. op-revm handler.rs validate_against_state_and_deduct_caller returns for DEPOSIT_TRANSACTION_TYPE after crediting mint and bumping the nonce, before validate_account_nonce_and_code_with_components. So a deposit whose from is a contract address runs as a call from that contract. I did not re-read the owner() of the eight other ProxyAdmins; the OP Mainnet one matches.",
+   "codeCheck": "Nothing in src/ runs when an outer call originates from the PoolManager address. unlock (src/PoolManager.sol:104-113) and the NonzeroDeltaCount check at line 111 apply only to calls into the PoolManager. take (src/PoolManager.sol:290-296) is never reached; a forged deposit calls the token directly, and the token sees msg.sender equal to the PoolManager. After such a transfer the reserves and pool liquidity in storage no longer match balanceOfSelf, and later takes by LPs and claim holders fail in Currency.transfer. A forged native transfer would lower the PoolManager native balance the same way, since _settle credits msg.value and never reconciles the balance (src/PoolManager.sol:349-355).",
+   "corrections": "",
+   "sources": [
+    {"url": "https://eth.drpc.org eth_getTransactionReceipt 0xd80476b3ec56283723804cf7bc2d96f800c81d3ebd0fea843555396ffe94f28f", "supports": "Upgrade, forged TransactionDeposited from 0x5227f603 to the OP token with transfer calldata, and restore, all in block 26,309,074 from Safe 0x5a0aae59."},
+    {"url": "https://eth.drpc.org eth_getStorageAt 0xbEb5Fc579115071764c7423A4f12eDde41f106Ed admin and implementation slots, eth_call owner() on 0x543ba4aa", "supports": "ProxyAdmin 0x543ba4aa owned by 0x5a0aae59; implementation 0xb20b23af at latest."},
+    {"url": "https://raw.githubusercontent.com/ethereum-optimism/op-geth/optimism/core/state_transition.go", "supports": "preCheck returns early for deposits with no nonce or EOA check."},
+    {"url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/rust/op-revm/src/handler.rs", "supports": "Deposit branch returns before validate_account_nonce_and_code_with_components."}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Lead L-878 and task 5: how the deployed OptimismPortal on each of the nine chains computes the from field of a deposit, and whether an ordinary account can make it equal the PoolManager.",
+   "agrees": true,
+   "note": "For the unverified 0xb20b23af I ran debug_traceCall on https://eth.drpc.org of L1StandardBridge 0x99C9fc46 bridgeETH from an ordinary address: the TransactionDeposited log from 0xb20b23af has from 0x36bde71c97b33cc4729cf772ae268934f7ab70b2, which is L1CrossDomainMessenger 0x25ace71c...5fa1 plus 0x1111...1111, so a contract caller is aliased. The saved bytescan.json shows one TransactionDeposited site in 0xb20b23af next to the alias constant. The medium lead on verified source for 0xb20b23af and 0x2c431080 stays open."
+  },
+  {
+   "check": "Lead L-873, tasks 1 and 2: the Inbox implementation each Arbitrum-family rollup uses today and how every externally callable function computes the sender passed to the Bridge.",
+   "agrees": true,
+   "note": "eth_getStorageAt of the Arbitrum One Inbox proxy 0x4dbd4fc5 implementation slot on https://eth.drpc.org returns 0x7c058ad1 at latest, the verified implementation the item names. The saved inbox_state.txt shows sendUnsignedTransactionToFork reverting with 0xa301bb06 on all three parent chains, consistent with the claim that the unaliased path is closed while the chain id is unchanged."
+  },
+  {
+   "check": "Task 2, last part: whether the Arbitrum One Inbox implementation after the Security Council action of 2026-10-30 is the one in place before it, and whether the temporary implementation is still reachable.",
+   "agrees": true,
+   "note": "The implementation slot reads 0x7c058ad1 now, matching the pre-action implementation. A temporary implementation called directly runs in its own storage and is not an allowed delayed inbox of the Bridge, so it cannot enqueue; that matches how the Bridge restricts enqueueDelayedMessage to allowed inboxes. I did not re-run the Upgraded log scan."
+  }
+ ],
+ "leads": []
+}

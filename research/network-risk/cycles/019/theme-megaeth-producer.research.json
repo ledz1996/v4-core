@@ -1,0 +1,89 @@
+{
+  "unit": "theme-megaeth-producer",
+  "profiles": [],
+  "findings": [],
+  "cleared": [
+    {
+      "chainIds": [4326],
+      "lens": "L1",
+      "check": "Task 1. Tie the build mega-reth/v2.3.1-4499c42 that https://mainnet.megaeth.com/rpc answered on 2026-11-25 (web3_clientVersion at 16:17 and 16:18 UTC, before and after every batch; the answer came from the gateway cache, header x-cache-status HIT) to source, and say what changed in mega-evm since v1.7.3.",
+      "result": "No public source carries 4499c42. raw.githubusercontent.com returns 404 for megaeth-labs/mega-reth (the node stays closed), and the MegaETH docs cite a different private revision, mega-reth ab60376631228edab3a6df180f295280bad26e93 (40 citations in llms-full.txt, captures of 2026-07-24). The public megaeth-labs/reth fork is archived and empty. Provider changelogs found reach v2.2.2 only. So the build is not tied to a revision, and its mega-evm pin is unknown. What is public: stateless-validator main is now version 2.2.0 and pins mega-evm tag v1.7.4 with revm 40.0.3 (Cargo.toml lines 15, 44, 64); mega-evm v1.7.4 pins revm =40.0.3 and alloy-evm =0.36.0 and has no [patch] redirect (Cargo.toml lines 141, 147). Of the 58 source files of crates/mega-evm/src that exist in both tags, 55 are byte-identical between v1.7.3 and v1.7.4 and the other 3 (evm/instructions.rs, evm/precompiles.rs, limit/limit.rs) differ in comments only (tagdiff/*.diff). The v1.7.4 release notes list tooling, docs, tests and CI changes only. A new public repository, megaeth-labs/revm, forks revm v112 (revm 40.0.3) with gas-accounting and code-deposit hooks whose defaults keep upstream behaviour; it says the node and validator move their pins to it together, and neither mega-evm v1.7.4 nor the validator uses it yet. None of this changes an arithmetic, jump, memory or storage handler that the PoolManager reaches.",
+      "source": "https://raw.githubusercontent.com/megaeth-labs/stateless-validator/main/Cargo.toml; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/Cargo.toml; https://github.com/megaeth-labs/mega-evm/releases; https://raw.githubusercontent.com/megaeth-labs/revm/main/MEGAETH-FORK.md; https://docs.megaeth.com/llms-full.txt; research/network-risk/cycles/019/theme-megaeth-producer.work/dl/tagdiff"
+    },
+    {
+      "chainIds": [4326],
+      "lens": "L1",
+      "check": "Task 2. Which executor answers each public method: eth_call, eth_estimateGas, eth_callMany, eth_createAccessList, eth_simulateV1, the realtime methods and the mega_ namespace.",
+      "result": "No documented read-only method is run by the sequencer. The gateway sends eth_call to its compute pool and rewrites it to the node method mega_callWithBlock. It sends eth_estimateGas there too, rewritten to eth_estimateGasWithCpuLimit, and sends eth_callMany and eth_createAccessList to the same pool. Each page says the node simulates the call. The architecture page says RPC nodes are replicas that apply the sequencer's results without running them again, and that replicas are the default. Called directly, mega_callWithBlock and eth_simulateV1 return -32601 'is not supported', and debug_traceCall and trace_call are listed as unavailable. The mega_ methods that remain (getBlockWitness, getWithdrawalProof, outputAtBlock) read data and execute nothing. eth_sendRawTransactionSync and realtime_sendRawTransaction return the sequencer's own receipt for a submitted transaction. That is the producer's result, but only for a real transaction, which this review may not send. No response field names the executor. The battery and the targeted vectors therefore cannot reach the producer through a read-only call. This rests on the published docs. The gateway source (mega-rpc) is private, so it is unconfirmed that the compute pool holds replicas only.",
+      "source": "https://docs.megaeth.com/developer-docs/rpc/reference.md; https://docs.megaeth.com/developer-docs/rpc/reference/eth_call.md; https://docs.megaeth.com/developer-docs/rpc/reference/eth_estimategas.md; https://docs.megaeth.com/developer-docs/rpc/reference/eth_callmany.md; https://docs.megaeth.com/developer-docs/rpc/reference/eth_sendrawtransactionsync.md; https://docs.megaeth.com/architecture.md; eth_call/mega_callWithBlock/eth_simulateV1 on https://mainnet.megaeth.com/rpc 2026-11-25 (raw-headers.txt)"
+    },
+    {
+      "chainIds": [4326],
+      "lens": "L1",
+      "check": "Task 3. What the docs and public source say about the producer's compiler, and what the only public MegaETH compiler computes for MULMOD, SAR, SHL, SIGNEXTEND, SDIV, SMOD and CALLDATALOAD, with constant operands at pcs 22378, 22639, 15519, 16642 and 12232.",
+      "result": "The docs never mention a compiler or JIT. llms-full.txt (752,661 bytes) has no match for jit, AOT, ahead-of-time, evmone or revmc. Only the stateless-validator README (line 26) calls the sequencer's executor parallel and JIT-compiled. The one public compiler is megaeth-labs/evmone-compiler, which is archived (default branch aot-compiler). It specialises nothing on constant operands. compiler.cpp passes immediates only to PUSH and fuses only PUSH followed by JUMP or JUMPI (lines 136-139, 175-180), so MULMOD by 2^128 or 2^96, SAR 128, SHL 3 and CALLDATALOAD run the generic handler. Several of its handlers break the specification. A transcription compiled with clang 18 (build/proto_handlers.cpp and .out) confirms four of them: (1) sar computes is_neg as x < 0 on an unsigned _BitInt(256) (aot_instructions.hpp:297-305 with aot_execution_state.hpp:18), so SAR(128, -5) gives 2^128-1 where the specification gives all ones; (2) signextend builds its mask as 1u << (b-1) in 32 bits (aot_instructions.hpp:207-218), so SIGNEXTEND(15, 2^127+7) gives no sign fill; (3) byte shifts by a byte count where a bit count is needed (lines 275-285); (4) mulmod writes stack[2] and never pops (lines 184-190). sdiv and smod divide _BitInt values, which is undefined at INT_MIN / -1. Dynamic JUMP lands on the next JUMPDEST at or above the target, because get_jumpdest never checks the key it found (aot_execution_state.hpp:53-58). The README says the prototype supports opcodes up to Shanghai. The PoolManager build hits those handlers at 19 SAR, 114 SIGNEXTEND (40 of them SIGNEXTEND 15) and 13 MULMOD sites, and every swap unpacks a BalanceDelta with sar(128) and signextend(15) (src/types/BalanceDelta.sol:63, :69). Under those handlers mined swap amounts would be wrong in nearly every block. The validator reproduces every block's state root, and mined swaps replay to the unit (OPCODES.md cycles 10 to 18). So the production executor does not use these handlers, and the prototype says nothing about the code that writes blocks. Its source is not public, and the five sites can be read only through mined results.",
+      "source": "https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/aot-compiler/lib/compiler/aot_instructions.hpp; https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/aot-compiler/lib/compiler/compiler.cpp; https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/aot-compiler/lib/compiler/aot_execution_state.hpp; https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/aot-compiler/lib/compiler/README.md; https://raw.githubusercontent.com/megaeth-labs/stateless-validator/main/README.md; research/network-risk/cycles/019/theme-megaeth-producer.work/build/proto_handlers.out"
+    },
+    {
+      "chainIds": [4326],
+      "lens": "L1",
+      "check": "Task 4. Mined executions at the five sites and re-execution of their blocks with the pre-state anchored to the parent root. 212 PoolManager transactions were traced with debug_traceTransaction (struct logger): all 116 transactions with a PoolManager log in blocks 32,814,963 to 32,826,734 (123 logs in 100 blocks), all 82 transactions with a Swap in the 51 pools whose hook has BEFORE_SWAP_RETURNS_DELTA (from the 143 Initialize events of the full history), and the 14 census transactions that call extsload(bytes32[]). The selection is complete, not sampled, so there is no seed. The first pass hit HTTP 429 on 107 transactions; those were rerun on one thread with 1.5 s pauses on the same endpoint. No other endpoint was used. Each block was then run with the stateless validator build of cycle 16 (e1618ed7, mega-evm v1.7.3), anchored at the parent block's hash.",
+      "result": "Executions inside PoolManager code frames: pc 15519 (SAR of a hook's BeforeSwapDelta, src/types/BeforeSwapDelta.sol:27 via src/libraries/Hooks.sol:266-270) ran 87 times in 82 transactions and 79 blocks; pc 12232 (CALLDATALOAD of the array length, src/Extsload.sol:42) ran 14 times in 14 transactions; pcs 22378, 22639 and 16642 never ran. Every replica result equals Python. All 87 SAR inputs have the top bit clear and 17 are zero words, so no mined hook returned a negative specified delta. None of the 116 new transactions reaches any site. All 193 blocks (93 site blocks and 100 new blocks) were reproduced, state root and receipts root included, with the witness pre-state checked against the parent's state root. The cycle 16 build with a planted MULMOD fault fails 32 of 45 of these blocks: 29 of 30 new blocks and 3 of 15 returns-delta blocks. So the comparison can see a wrong product in ordinary swaps. Cycle 17 showed that a whole-output comparison cannot see a faulty word at pcs 15519, 22378 or 22639, because SIGNEXTEND 15 at pc 15522 and the quotient at FullMath.sol:66-75 drop the bits concerned. The same property means a fault at those sites changes no amount. pc 22378 runs only in calls that revert at Pool.sol:192, and pc 16642 has no caller. This raises the mined coverage of pc 15519 and pc 12232 from zero to the counts above. It cannot raise coverage of the other three sites, because no mined transaction reaches them.",
+      "source": "research/network-risk/cycles/019/theme-megaeth-producer.work/raw/sites-pass1.jsonl, sites-pass2.jsonl, sites-pass3.jsonl, validate.txt, validate-plant.txt, anch/, anch-plant/, summary.json; debug_traceTransaction and mega_getBlockWitness on https://mainnet.megaeth.com/rpc (mega-reth/v2.3.1-4499c42@mnet-ash-rpc-2 at start and end); src/types/BeforeSwapDelta.sol:27; src/libraries/Hooks.sol:266-279; src/Extsload.sol:42"
+    },
+    {
+      "chainIds": [4326],
+      "lens": "L2",
+      "check": "Task 5 (lead L-883). Find a mined block whose state growth reached the 1,000 entry block limit. Headers of blocks 32,806,000 to 32,826,000 were read in batches of 50 (20,001 headers). The 21 blocks above 20 million gas were traced with prestateTracer in diffMode, and each transaction's new nonzero slots and new accounts were counted.",
+      "result": "No block in the window comes near the limit. The largest estimate is 58 entries (block 32,823,122, 86 transactions), and the blocks of 107 million to 260 million gas grow state by 1 or 2 entries because their gas is compute. The count is an estimate from the trace and leaves out mega-evm's own fee-recipient and clearing rules, but the margin to 1,000 is large. The docs confirm both limits at 1,000 and say the transaction that crosses the block limit is still included and later candidates are skipped. Without a capped block the question of where skipped transactions are placed afterwards stays open. F-062 is unchanged (plausible, low, no funds move).",
+      "source": "https://docs.megaeth.com/spec/megaevm/resource-limits.md; https://docs.megaeth.com/spec/megaevm/resource-accounting.md; research/network-risk/cycles/019/theme-megaeth-producer.work/raw/gasscan.json, growth-top.json"
+    },
+    {
+      "chainIds": [4326],
+      "lens": "L2",
+      "check": "mega-evm v1.7.3 added discard_tx and discard_transaction for a transaction whose execution panicked. Without them, an embedder that catches the panic and reuses the EVM keeps the panicked transaction's state writes, logs, transient storage, memory and frames.",
+      "result": "No evidence of a leak on chain. If transient storage survived into the next transaction, the PoolManager's lock flag and deltas (src/libraries/Lock.sol:10-27, src/PoolManager.sol:104-114) could carry over. Cycle 18's census found no transaction that ended with a currency still synced, and no settle credited from another transaction's sync, in 72,184 MegaETH transactions. All 193 blocks here are reproduced by a validator that starts each transaction fresh. Whether the closed producer catches panics and whether its pin includes v1.7.3 is unknown (see leads).",
+      "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/evm/mod.rs (lines 395-440); https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/block/executor.rs (lines 762-782); https://github.com/megaeth-labs/mega-evm/releases"
+    }
+  ],
+  "leads": [
+    {
+      "chainIds": [4326],
+      "lens": "L2",
+      "question": "Before mega-evm v1.7.3, did the closed producer catch a panic inside transaction execution and keep using the same EVM, and does mega-reth v2.3.1-4499c42 pin v1.7.3 or later? Is any input an ordinary account can send known to panic mega-evm or revm 40.0.3?",
+      "why": "MegaEvm::discard_tx says a caught panic leaves transient storage and state writes behind for the next transaction. On the PoolManager that would carry the unlock flag and open deltas (src/libraries/Lock.sol:10-27, src/PoolManager.sol:104-114) into another sender's transaction. The validator would reject such a block, but replicas would already have applied it.",
+      "priority": "medium"
+    },
+    {
+      "chainIds": [4326],
+      "lens": "L1",
+      "question": "Which mega-evm and revm revision does mega-reth v2.3.1-4499c42 pin? The docs cite ab60376 and nothing public names 4499c42. Ask the release notes of the providers (QuickNode, Validation Cloud, Alchemy) when they adopt v2.3.x.",
+      "why": "Every MegaETH opcode result speaks for the replica interpreter or the public validator. Only the pin ties the replica to the validator's mega-evm v1.7.3/1.7.4 reading.",
+      "priority": "low"
+    },
+    {
+      "chainIds": [4326],
+      "lens": "L2",
+      "question": "Rerun the state growth estimate over a longer history, for example the 50 busiest days by transaction count, to find a block that reached 1,000 entries for F-062.",
+      "why": "In 20,001 recent blocks the largest estimate is 58, so finding a capped block needs a wider search.",
+      "priority": "low"
+    }
+  ],
+  "leadResults": [
+    {
+      "leadId": "L-875",
+      "outcome": "inconclusive",
+      "answer": "The docs route eth_call (rewritten to mega_callWithBlock), eth_estimateGas (eth_estimateGasWithCpuLimit), eth_callMany and eth_createAccessList to the gateway's compute pool, where the node simulates them. They name no read-only method that the sequencer runs. mega_callWithBlock and eth_simulateV1 are refused when called directly, and debug_traceCall and trace_call are unavailable. No response field names the executor. Only eth_sendRawTransactionSync and realtime_sendRawTransaction return producer results, and only for submitted transactions. The constant-operand question cannot be read: the only public compiler, the archived evmone-compiler, has no constant-operand specialisation and gets SAR, SIGNEXTEND, BYTE and MULMOD wrong. That would break nearly every mined swap, so the producer is not that code. The gateway source is private."
+    },
+    {
+      "leadId": "L-606",
+      "outcome": "inconclusive",
+      "answer": "Still closed. Its PUSHnJUMPI, JUMPDEST map and MULMOD cannot be read. Mined evidence has grown: pc 15519 ran 87 times and pc 12232 14 times in mined transactions, and 193 blocks, including every PoolManager block from 32,814,963 to 32,826,734, are reproduced with the pre-state anchored to the parent root. A planted MULMOD fault fails 32 of 45 of them."
+    },
+    {
+      "leadId": "L-883",
+      "outcome": "inconclusive",
+      "answer": "No block reached 1,000 state growth entries in blocks 32,806,000 to 32,826,000. The largest estimate is 58. Where skipped transactions are placed afterwards stays unobserved."
+    }
+  ]
+}

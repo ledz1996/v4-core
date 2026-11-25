@@ -1,0 +1,39 @@
+{
+ "unit": "high-throughput",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "On 2026-11-25 I fetched block/limit.rs, constants.rs, block/executor.rs and block/chain.rs from mega-evm main and from tag v1.7.4; cmp reports all four pairs byte identical. limit.rs: pre_execution_check returns MegaBlockLimitExceededError::StateGrowthLimit for any candidate once block_state_growth_used is at or above block_state_growth_limit (about lines 880 to 890), and is_deposit gates only the two data availability tests (lines 821 to 845). post_execution_update_raw adds the executed transaction's state growth without a test, so the transaction that reaches the limit is kept. constants.rs: rex::TX_STATE_GROWTH_LIMIT and rex::BLOCK_STATE_GROWTH_LIMIT are 1000, SSTORE_SET_STORAGE_GAS_BASE is 20,000 scaled by (bucket_capacity / MIN_BUCKET_SIZE - 1), and TX_INTRINSIC_STORAGE_GAS is 39,000. executor.rs lines 592 to 593: the caller decides what to do with a rejected transaction, typically dropping it from the block and putting it back in the pool. chain.rs line 46: mainnet Rex6 at timestamp 1787626800, with no later fork listed. On https://mainnet.megaeth.com/rpc I ran web3_clientVersion (mega-reth/v2.3.1-4499c42@mnet-ash-rpc-2) and eth_getBlockByNumber latest (block 32,832,912, baseFeePerGas 0xf4240 = 1,000,000 wei, gasLimit 10,000,000,000). I ran eth_estimateGas from 0x...dEaD for my own init code that writes n fresh slots in a loop: n = 1 gives 0x1d8e0 (120,032), n = 999 gives 0x1583b25 (22,559,525) and n = 1,000 reverts. So one transaction costing about 0.0000226 ETH at the floor base fee reaches the block budget of 1,000 entries, as the finding states. No primary source contradicts the base claim. The queue rule of the closed sequencer, which the amplified form needs, has no public source; the finding states that itself.",
+   "codeCheck": "unlock (src/PoolManager.sol:103-113) sets the lock, calls back, checks NonzeroDeltaCount and relocks, all inside one transaction. modifyLiquidity (src/PoolManager.sol:145-150 onward) and take (src/PoolManager.sol:290-296) require onlyWhenUnlocked, so a victim's exit is a whole transaction that the block limiter can skip. _settle (src/PoolManager.sol:349-365) credits msg.value or the balance difference only. No line in src/ reads a block number, timestamp or transaction position, so a delayed call later runs with the same checks and amounts. The only exposure is slippage or deadline checks in the victim's own router, which revert without loss. No guard in src/ bears on this and none can.",
+   "corrections": "The finding restates the confirmed base claim of F-042 under the ref of F-062; its new content is only the refreshed build string, block and file comparison, so it should be merged into F-042 and F-062 should keep its plausible status for the amplified multi-block form, which is still unconfirmed. The mechanism says one transaction writes 1,000 fresh slots; a contract creation can write only 999 because the new account counts as one entry (my eth_estimateGas: 999 passes, 1,000 reverts), while a call to an existing contract can write 1,000. coreRefs src/PoolManager.sol:104-114 should read 103-113 and 291-297 should read 290-296. The mitigation that exits can use an L1 deposit is incomplete as stated: deposits are not exempt from the state growth test in pre_execution_check, so a deposit is safe only because it is placed before sequencer transactions in the block, which was not confirmed in the MegaETH node source.",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs", "supports": "pre_execution_check rejects every candidate once block_state_growth_used reaches the limit; deposits exempt only from data availability tests; byte identical to v1.7.4"},
+    {"url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/block/limit.rs", "supports": "byte identical to main"},
+    {"url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/constants.rs", "supports": "TX and BLOCK state growth limits 1000; SSTORE storage gas base 20,000 times (bucket_capacity / MIN_BUCKET_SIZE - 1)"},
+    {"url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/executor.rs", "supports": "lines 592-593: a rejected transaction is typically put back in the pool by the caller"},
+    {"url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/chain.rs", "supports": "line 46: mainnet Rex6 at timestamp 1787626800, no later fork"},
+    {"url": "https://mainnet.megaeth.com/rpc", "supports": "2026-11-25: web3_clientVersion mega-reth/v2.3.1-4499c42@mnet-ash-rpc-2; latest block 32,832,912, base fee 1,000,000 wei, gas limit 10,000,000,000; eth_estimateGas 22,559,525 for a creation writing 999 slots, revert for 1,000"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Rerun of the opcode battery (99,985 vectors) and the targeted set (85,544 vectors) on Monad/0.16.7 and mega-reth/v2.3.1-4499c42: 0 mismatches on both.",
+   "agrees": true,
+   "note": "battery.json and targeted.json in high-throughput.work report ran equal to vectors (99,985 and 85,544) with mismatchCount 0 and empty errors for chain ids 143 and 4326. I confirmed the MegaETH build string mega-reth/v2.3.1-4499c42 myself. The battery runs through eth_call, which on Monad uses the interpreter only (OPCODES.md line 111), so the compiled path still rests on the transcriptions of cycles 9 and 10; the clearance does not claim more."
+  },
+  {
+   "check": "Stateless validator (stateless-validator e1618ed7, mega-evm v1.7.3) validated all 61 PoolManager blocks 32,815,141 to 32,821,396 in anchored mode and 2,000 consecutive blocks 32,818,000 to 32,819,999 with no warning or error.",
+   "agrees": true,
+   "note": "anch-results.txt lists 61 blocks, each exit=0. The count of 1 in its third column is the word error_restart_delay in the startup line, not a failure: grep of anch/32815141.log for error or mismatch returns only that INFO line, and every anchored log contains 'Validated blocks this session ... count=1' (no log lacks it). anch/32821396.log shows the anchor check against parent hash 0x23dd1335 at block 32,821,395. range-32818000-32819999.log ends with 'Validated blocks this session start=32818000 end=32819999 count=2000' and its only error or warn match is the same startup line. The evidence covers these blocks only, as the clearance says."
+  },
+  {
+   "check": "Monad main: the Barrett reduction module of uint256.hpp has no caller on the interpreter or compiler path of MULMOD, ADDMOD, DIV or MOD.",
+   "agrees": true,
+   "note": "Fetched category/vm/runtime/math.hpp, category/core/runtime/uint256.hpp and category/vm/compiler/ir/x86/emitter.cpp from main. math.hpp addmod and mulmod (lines 74 to 96) call the unqualified addmod and mulmod; barrett is a separate namespace (uint256.hpp line 1383) with no using directive for it in uint256.hpp, math.hpp or emitter.cpp, and its functions take a barrett::reciprocal argument (lines 2058 to 2133), so overload resolution cannot pick them for three uint256 arguments. emitter.cpp has no reference to barrett or reciprocal. It does have its own constant-modulus path (addmod_opt and mulmod_opt at lines 7896 to 8198, add_mod2 and mul_mod2 for power-of-two moduli), which is not Barrett and which cycle 10 transcribed for v0.16.5 to v0.16.7 (OPCODES.md line 215). Whether mul_mod2 on main differs from v0.16.7 was not compared here; no release carries main."
+  }
+ ],
+ "leads": []
+}

@@ -1,0 +1,46 @@
+{
+ "unit": "established-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "bsc params/config.go at tag v1.8.2 line 256 sets mainnet JennerTime to 1796697000, which is 2026-12-08 02:30 UTC. core/vm/contracts.go at v1.8.2 lines 426-458 builds PrecompiledContractsJenner with milliTimestamp at 0x70 (BEP-706). core/vm/evm.go lines 46-67 routes addresses to resolveCAS20 only when IsJenner holds, and core/vm/cas20.go defines the token space as byte[0:2] == 0xCA52 and byte[2:10] zero (lines 30-60); runCAS20Token reverts when the address does not hold the marker code (lines 188-200). I ran eth_call on bsc-dataseed1.bnbchain.org from the PoolManager 0x28e2...e9df on 2026-11-25. Without an override, transfer(0xdead,0) to 0xca52000000000000000000000000000000000001 and to 0x70 returned 0x. With blockOverrides time 0x6b176e00 the CAS20 address reverted with empty data and 0x70 returned 0x1a25385b000. balanceOf to 0xca52 addresses with bytes 2..9 zero reverted under the override (low 10 bytes 0x...01, 0x..ffffffff, 0x..ffffffffffffffff, and byte 10 set to 0x01, 0x02 or 0xff), while 0xca52000000000000ffff..., 0xca520000ffff..., 0xca52000100... and 0xca53000... answered 0x, so the range is the one cas20.go defines. I could not fetch https://github.com/bnb-chain/bsc/releases myself (the session proxy refused github.com with 403), so the release page wording is unconfirmed by me; the fork time and precompile set are confirmed from the tagged source instead.",
+   "codeCheck": "Currency.transfer accepts success with empty return data or a word equal to 1 (src/types/Currency.sol:64-74) and otherwise reverts with ERC20TransferFailed (src/types/Currency.sol:82-86), so take(X,to,0) on an empty CAS20 address passes today and reverts after the fork, and a take on 0x70 reverts because its word is not 1. sync calls balanceOfSelf, a high level IERC20Minimal.balanceOf call (src/types/Currency.sol:90-96, src/PoolManager.sol:279-288); with solc 0.8.26 (src/PoolManager.sol:2) empty return data fails ABI decoding, so sync reverts before and after for an empty CAS20 address, and for 0x70 after the fork it records the millisecond time. Reserves and the synced currency are transient (src/libraries/CurrencyReserves.sol:17-36), so a settle can only follow a sync in the same transaction, where block time is fixed, and paid = reservesNow - reservesBefore is 0 (src/PoolManager.sol:349-364). Without a credited settle no account gets a positive delta in X, so mint of claims and liquidity in X need a debt that cannot be paid, and the delta count check at the end of unlock rejects it. 0x70 as a hook has bits 6, 5 and 4 set, which are AFTER_SWAP, BEFORE_DONATE and AFTER_DONATE (src/libraries/Hooks.sol:39-42); callHook rejects empty data and a word whose selector differs (src/libraries/Hooks.sol:131-155), so those calls fail before and after the fork.",
+   "corrections": "The range written as 0xCA52... is narrower in the client: only addresses whose bytes 2 to 9 are zero are routed (core/vm/cas20.go IsCAS20Address). On chain, addresses in that space with byte 10 equal to 0x02 or 0xff also reverted under the override, although resolveCAS20Token at v1.8.2 maps only ordinals 0x00 and 0x01; the deployed dataseed build may differ from the tag, which does not change the conclusion. The release page citation was not reachable from this session.",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/config.go", "supports": "mainnet JennerTime 1796697000 (2026-12-08 02:30 UTC), line 256; IsJenner gated on BSC, lines 1471-1480"},
+    {"url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/contracts.go", "supports": "PrecompiledContractsJenner adds milliTimestamp at 0x70, lines 426-458"},
+    {"url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/evm.go", "supports": "precompile() routes the CAS20 space through resolveCAS20 only when IsJenner, lines 46-67"},
+    {"url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/cas20.go", "supports": "IsCAS20Address definition and revert for an address without marker code in runCAS20Token"},
+    {"url": "rpc: eth_call on https://bsc-dataseed1.bnbchain.org from 0x28e2ea090877bf75740558f6bfb36a5ffee9e9df, latest, with and without blockOverrides time 0x6b176e00, 2026-11-25", "supports": "CAS20 space returns 0x today and reverts with empty data under the override; 0x70 returns 0x today and 0x000...01a25385b000 under the override; addresses outside bytes 2..9 zero still return 0x"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "bor v2.12.0-beta and develop widened keccak cache: can a hit return the hash of a different input?",
+   "agrees": true,
+   "note": "core/vm/shared_cache.go at v2.12.0-beta keys keccakResultCache on string(data), a copy made in Store via LoadOrStore(string(data), h), and Load looks up the full byte string, so inputs of different length or content never share an entry. instructions.go keccakLoadOrCompute (line 313) stores the hash computed from the same data, and cacheableKeccakLen limits it to 1..8192 bytes. The always-on 64 byte path keys on a [64]byte copy, and the shared jump destination cache (jumpdests.go) keys on code hash. The widened store exists only when NewSharedResultCaches is called with enableExtended, and ApplyTo wires it only then. A wrong hash would move PoolManager slots, so this was worth checking; it holds."
+  },
+  {
+   "check": "Battery and targeted set under the Jenner rules (block time override 1796697600) on dataseed1, 48 Club and reth-bsc.",
+   "agrees": true,
+   "note": "run_jenner.py applies the time override to every eth_call (lines 23-30), and my own eth_call with the same override on dataseed1 shows the rules switch (0x70 answers and the CAS20 space reverts). battery-jenner.log and targeted-jenner.log record 99985/99985 and 85544/85544 with no mismatch or error for all three builds. I did not rerun the battery."
+  },
+  {
+   "check": "callsem.py and statekeys.py rerun: slot reads alias only on Avalanche by bit 248 and the known top-bit patterns of F-040; transient keys never alias.",
+   "agrees": true,
+   "note": "statekeys.log shows no alias on 137 and 56 and, on 43114, 8 aliases by xor of bit 248 plus single top-bits-cleared patterns, all of which clear bit 248 and so match the rule recorded in F-040. Transient reads show no alias on any network. F-040 already traces why PoolManager slots (fixed slots 0 to 6 and keccak-derived slots) cannot be steered into a collision, so the clearance for pools without an attacker hook stands."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [56],
+   "lens": "L4",
+   "question": "Why do CAS20-space addresses whose byte 10 is not a known variant ordinal (0x02, 0xff) revert under the Jenner override on dataseed1 when resolveCAS20Token at v1.8.2 maps only 0x00 and 0x01? Read the deployed build 4e1c8247 dispatch and IsCAS20Routed users in the state transition.",
+   "why": "The routing rule the client applies decides which addresses become native code at the fork; a mismatch between tag and deployed build should be understood before pools in such addresses are judged.",
+   "priority": "low"
+  }
+ ]
+}
