@@ -1,0 +1,39 @@
+{
+ "unit": "hyperevm",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "plausible",
+   "severity": "high",
+   "factCheck": "The cited sources say what the finding says. The aligned quote assets page (fetched 2026-11-25) states that the treasury deployer designates a treasury address, that activation is by validator vote after both deployers have staked and sent the authorization transactions from the staking accounts, and that the linked HyperEVM contract rebalances with the treasury address at 9:1. The exchange endpoint page (fetched with curl) shows authorizeAqav2Role with only token and role fields, so no published action names the treasury address or proves control of it. nanoreth pull request 169 (fetched, merged 2026-11-25T02:59:23Z) states that system transaction receipts are not covered by the header receipts root and that blocks without a commitment run unchecked. My own queries on 2026-11-25: eth_getTransactionCount of the PoolManager is 0x1 on rpc.hyperliquid.xyz/evm and on rpc.purroofgroup.com (reth/v0.1.0-f0cad31) at block about 52,236,610. A scan of 300 recent blocks on the archive client found unsigned system transactions (gas price 0) from 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24, which has 2,175 bytes of code and is the evmContract of USDC (token 0) in HyperCore spotMeta, and from the treasury address 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00, both calling the USDC token 0xb88339cb7199b77e23db6e890353e22632ba630f. Their tx nonces are sequential and the senders' account nonces rise with them (0x6b9e...: tx nonce 2,392,497, account nonce 2,392,500), so the nonce watch in the mitigations works. spotMeta lists 521 tokens and none names the PoolManager. The unconfirmed link is the premise of the finding: no source says whether HyperCore accepts a treasury address that the treasury deployer does not control, or one with code. The official node hides system transactions, so the scan used the archive client only.",
+   "codeCheck": "sync reads balanceOf only when called and stores it in transient storage (src/PoolManager.sol:279-288). _settle credits the rise since that sync within the same transaction and checks msg.value (src/PoolManager.sol:349-365). Nothing in src/ reconciles pool state, ERC-6909 balances or protocol fee counters against the token balance across transactions, so a balance removed by an outside transfer from the PoolManager is not noticed. take debits the caller and calls currency.transfer (src/PoolManager.sol:290-297), and Currency.transfer reverts with ERC20TransferFailed when the token call fails (src/types/Currency.sol:40-88), so the last takers in that token would be unable to withdraw. unlock still requires a zero delta count (src/PoolManager.sol:104-114), which does not help here because the shortfall is in the token balance, not in deltas. The code path holds as described.",
+   "corrections": "severity: high. SCHEMA.md rates a loss or freeze that needs a privileged chain-level actor (validator set) as high; the effect here is a freeze or loss of all pools and claims in the named token, so medium understates it by the scale, although nothing is exposed today. actor: operator is correct, since activation needs a validator vote in addition to a staked treasury deployer. The Telegram announcement of the 200,000 gas cap (t.me/hyperliquid_api/401) returned only the channel header when fetched, so its text was not confirmed here; it is not needed for this finding.",
+   "sources": [
+    {"url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md", "supports": "Treasury deployer designates the treasury address; activation by validator vote; linked contract rebalances with the treasury address at 9:1"},
+    {"url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md", "supports": "authorizeAqav2Role carries token and role only"},
+    {"url": "https://github.com/hl-archive-node/nanoreth/pull/169", "supports": "System transaction receipts are not covered by the header receipts root; blocks without a commitment run unchecked"},
+    {"url": "https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest = 0x1, 2026-11-25", "supports": "No system transaction has used the PoolManager as sender"},
+    {"url": "https://rpc.purroofgroup.com eth_getBlockByNumber over 300 blocks before about 52,236,684 and eth_getTransactionCount/eth_getCode of the senders, 2026-11-25", "supports": "System transactions are sent in the name of a contract (USDC linked contract 0x6b9e...0a24) and of the treasury address 0xc206...3c00, and raise the sender's account nonce"},
+    {"url": "https://api.hyperliquid.xyz/info spotMeta, 2026-11-25", "supports": "USDC evmContract is 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24; no token names the PoolManager"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Rerun of battery.py (99,985 vectors) and targeted.py (85,544 vectors) for chain 999 on the official node at head about 52,231,000.",
+   "agrees": true,
+   "note": "out/battery.json records 99,985 vectors run on https://rpc.hyperliquid.xyz/evm with mismatchCount 0 and no errors; out/targeted.json records 85,544 run, 0 mismatches, 0 errors, per op counts covering MULMOD, MULDIV512, ADDMOD, DIV, MOD, SDIV, SMOD, DIVUP, SAR, SHL, SHR and MUL. This matches the earlier record in OPCODES.md line 220. The official node is the only public endpoint of the closed validator build, so this check covers what the validator returns to eth_call, not what it mines; mined behaviour rests on the swaps.py and replay records."
+  },
+  {
+   "check": "Rerun of pmdiff.py and pmdiff2.py for chain 999 against Ethereum; one pmdiff2 script (index 189) differs because a swap runs out of the 30 million gas the endpoint grants.",
+   "agrees": true,
+   "note": "out/pmdiff.json shows 250 identical, none different, 0 errors; out/pmdiff2.json shows 299 identical, different [189], differentWithNative 1, 0 errors. OPCODES.md lines 64 and 220 record that the HyperEVM difference is a full-range swap limited by gas and that it matches with 30 million gas. The script carries native payouts, so the gas explanation was taken from the earlier explained run (pmdiff_explain.py) rather than rerun this cycle; I did not rerun it either. The mined block gas limit of 3,000,000 on small blocks makes such a swap unminable as one transaction, which is the known delay without loss."
+  },
+  {
+   "check": "sendToEvmWithData and its 200,000 gas cap: can an ordinary account make HyperCore move PoolManager funds or bracket its own sync and settle with the delivery?",
+   "agrees": true,
+   "note": "The saved exchange endpoint page (docs/exchange-endpoint.md lines 425-453) says coreReceiveWithData is called on the linked contract instead of transfer. The call is a system transaction of its own; the PoolManager keeps sync state in transient storage (src/PoolManager.sol:279-288), which the archive client clears between transactions (out/tsim.json), so it cannot fall between another user's sync and settle. Any call the linked contract then makes to the PoolManager is one an ordinary account could make directly. Moving PoolManager balances would need the linked contract's own code to do so, which is an issuer hazard. The 200,000 gas text from t.me/hyperliquid_api/401 could not be read in this session."
+  }
+ ],
+ "leads": []
+}

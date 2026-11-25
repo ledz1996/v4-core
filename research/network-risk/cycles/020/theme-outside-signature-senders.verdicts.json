@@ -1,0 +1,69 @@
+{
+ "unit": "theme-outside-signature-senders",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "MegaETH docs list OptimismPortalProxy 0x7f82f57F0Dd546519324392e408b01fcC7D709e8 and SystemConfigProxy 0x1ED92E1bc9A2735216540EDdD0191144681cb77E on Ethereum. I queried rpc.flashbots.net and eth.drpc.org: the EIP-1967 implementation slot holds 0x55400445e384393f9c1be23e7e734e8d44ed9fd9 and the admin slot holds 0x15fcb0120d414f246ead019ca4bdf97447cd8d90 (publicnode returned a Cloudflare challenge). On publicnode, owner() of the ProxyAdmin returned 0x92e0e0b15e3e99b32c9ed9ad284f939553c7b7d6 and getThreshold() of that Safe returned 6. The PoolManager address 0xacb7e78fa05d562e0a5d3089ec896d57d057d38e has code 0x and nonce 0 on Ethereum (drpc). Sourcify returns a full match for OptimismPortal2. Lines 481-484 alias msg.sender unless EOA.isSenderEOA(), line 487 refuses only MEGA_SYSTEM_ADDRESS, and line 496 emits TransactionDeposited with that from. EOA.sol lines 9-24 accept tx.origin or 23 bytes of code that start with 0xEF0100. The alias preimage computes to 0x9ba6e78fa05d562e0a5d3089ec896d57d057c27d. In op-revm at f67d87cd, handler.rs lines 113-143 handle a deposit by loading the caller, adding the mint, bumping the nonce and returning before validate_account_nonce_and_code_with_components (line 154). mega-evm v1.7.4 Cargo.toml line 140 pins that revision. execution.rs lines 581-593 delegate validate_against_state_and_deduct_caller to op, and before_run (lines 87-157) changes only transactions from the system address. On MegaETH (mega-reth/v2.3.1-4499c42, block 0x1f51b9b), the PoolManager's nonce is 0x1 and its native balance is 0x1d9bf504962090ec wei, about 2.13 ETH. I did not check the claim that OP Mainnet governance installed a temporary implementation on 2026-10-31. It comes from F-140 and the finding does not depend on it.",
+   "codeCheck": "A deposit whose from is the PoolManager runs as a top level call with msg.sender equal to the PoolManager, to any target. When the target is a token, the token executes an ordinary transfer of the PoolManager's balance. No PoolManager code runs, so neither the lock (src/PoolManager.sol:95-98), the delta accounting in take (src/PoolManager.sol:291-297) nor the NonzeroDeltaCount check in unlock (src/PoolManager.sol:103-113) applies. A deposit with value and to set to an attacker can also move native ETH out of the PoolManager's balance. Only the transfer helper in src/types/Currency.sol:40-80 moves funds on the normal path, and the forged path does not use it. protocolFeesAccrued, reserves and ERC-6909 balances stay as they were. The forged sender cannot be produced by an ordinary account. On Ethereum the PoolManager address has no code and nonce 0, a contract caller is aliased, and hitting the fixed alias preimage would take a 160 bit search. I found no guard in src/ that the finding missed. None is possible, because the path never enters src/.",
+   "corrections": "The line ranges are off by one. onlyWhenUnlocked is at src/PoolManager.sol:95-98 and unlock at src/PoolManager.sol:103-113 in this checkout. The same trust model covers every OP Stack network in the set (OP Mainnet, Base, Unichain and others) through its own portal admin. The MegaETH case is one instance of F-140 and not a MegaETH-only difference. actor governance and severity high are correct under SCHEMA.md.",
+   "sources": [
+    {
+     "url": "https://docs.megaeth.com/developer-docs/overview-1/contracts.md",
+     "supports": "OptimismPortalProxy 0x7f82f57F0Dd546519324392e408b01fcC7D709e8 is MegaETH's deposit entry point on Ethereum."
+    },
+    {
+     "url": "https://rpc.flashbots.net",
+     "supports": "eth_getStorageAt on the portal returned implementation 0x55400445... and admin 0x15fcb012...."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "ProxyAdmin owner() is 0x92e0e0b1...; the Safe's getThreshold() is 6."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "On Ethereum, eth_getCode of 0xacb7e78f... returns 0x and eth_getTransactionCount returns 0x0."
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x55400445e384393f9c1be23e7e734e8d44ed9fd9?fields=sources,compilation",
+     "supports": "Verified OptimismPortal2 lines 481-496 and EOA.sol lines 9-24."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/f67d87cd5c9992b62d215c043917b94e3f019629/rust/op-revm/src/handler.rs",
+     "supports": "Lines 113-143: the deposit branch skips nonce and code validation and returns early."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/evm/execution.rs",
+     "supports": "Lines 87-157 (before_run) and 581-593 (delegation to op-revm)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/Cargo.toml",
+     "supports": "Line 140 pins op-revm to rev f67d87cd."
+    },
+    {
+     "url": "https://mainnet.megaeth.com/rpc",
+     "supports": "PoolManager nonce 0x1 and balance 0x1d9bf504962090ec at block 0x1f51b9b on mega-reth/v2.3.1-4499c42."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Tempo: system transactions, sub-blocks, fee payers, type 0x76 batches with keychain signatures, and TIP-1107 configurable accounts.",
+   "agrees": true,
+   "note": "I read the Tempo source at a9d6748. In crates/evm/src/block.rs, validate_system_tx (lines 617-660) accepts only target address zero with valid sub-block metadata and returns 'invalid system transaction' for any other target. The committee call uses caller Address::ZERO and the fixed CURRENT_COMMITTEE_ADDRESS (lines 589-591). The protocol fee controller is address zero on Tempo, but sender zero never reaches the PoolManager. Even if it did, collectProtocolFees subtracts from protocolFeesAccrued with checked 0.8 arithmetic (src/ProtocolFees.sol:48-56), and fees can accrue only after the controller sets a protocol fee."
+  },
+  {
+   "check": "Arc: who may name the sender of a CallFrom subcall, checked in source and on chain.",
+   "agrees": true,
+   "note": "arc-node main crates/evm/src/evm.rs lines 661-669 refuse callers of a subcall precompile that are not on the allow list. Lines 946-955 revert when the child caller is neither the calling frame nor tx.origin. A pool whose currency is Memo or Multicall3From would make the PoolManager call the helper. The helper would then pass the PoolManager as sender, which is neither the helper frame nor tx.origin, so the call reverts. The cleared item holds. I did not rerun its on-chain calls."
+  },
+  {
+   "check": "What the code does when a call reaches it with msg.sender equal to the PoolManager itself.",
+   "agrees": true,
+   "note": "src/PoolManager.sol:103-113 calls unlockCallback on msg.sender, and the PoolManager has no such function. Lock-gated functions revert outside unlock (src/PoolManager.sol:95-98). collectProtocolFees checks protocolFeeController (src/ProtocolFees.sol:48). The only real exposure is a forged sender calling tokens directly. That is the governance-level F-140 path, not an unprivileged one."
+  }
+ ],
+ "leads": []
+}

@@ -1,0 +1,87 @@
+{
+ "unit": "op-stack-custom-gas",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "Fetched both node_iter.rs revisions. okx/reth 81573d2c crates/trie/trie/src/node_iter.rs line 284 reads key.starts_with(&seek_prefix); f60420aa line 282 reads key == &seek_prefix, and the file grows from 539 to 611 lines with the added test. The xlayer-reth Cargo.lock at tag v0.0.7.3 pins okx/reth rev 81573d2c (lines 8171, 8212, 8239) and the lock at v0.0.7.3-rc.1 pins f60420aa at the same lines. web3_clientVersion on https://rpc.xlayer.tech returned reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7 on 2026-11-25. The release dates and the mandatory-patch wording on the GitHub releases page could not be read in this session because github.com HTML is blocked by the proxy; that link stays unconfirmed by me. The revision difference itself is confirmed from the lock files.",
+   "codeCheck": "The change is in the node's state root walk. The cited src/PoolManager.sol:104-114 is unlock and is not affected by a trie walk: the EVM results, storage writes and settlement do not depend on how the node hashes the trie. A node on the final tag would compute a different state root for an affected layout and stop following, so readers of that node see stale state. No PoolManager line computes a different value.",
+   "corrections": "severity: low. The finding describes an operational hazard (a follower node that may stall or fork and serve stale pool state) with no loss path, which SCHEMA.md places at low rather than info. Actor operator is correct.",
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/okx/reth/81573d2c7d806d5df9ff2d512dd000c2bf542b1b/crates/trie/trie/src/node_iter.rs",
+     "supports": "line 284 uses key.starts_with(&seek_prefix)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/reth/f60420aaac6457295a38b66bd544bab28ab6ec5d/crates/trie/trie/src/node_iter.rs",
+     "supports": "line 282 uses key == &seek_prefix"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3/Cargo.lock",
+     "supports": "pins okx/reth 81573d2c"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3-rc.1/Cargo.lock",
+     "supports": "pins okx/reth f60420aa"
+    },
+    {
+     "url": "web3_clientVersion on https://rpc.xlayer.tech, 2026-11-25",
+     "supports": "endpoint reports reth/v2.3.0-f60420a"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "high",
+   "factCheck": "Blockscout returns verified OptimismPortal2 source for 0x2c431080 compiled with v0.8.15+commit.e14f2714, version() returns 5.1.1 (line 234-236). TransactionDeposited is emitted at line 757 in _depositTransaction with from = msg.sender or its L1 to L2 alias (lines 745-748) and at line 771 in setGasPayingToken, which reverts unless msg.sender is systemConfig (line 763) and uses Constants.DEPOSITOR_ACCOUNT. The Safe transaction service returns for 0x4092A77b threshold 2, owners 0xC0317226 and 0x9Eb44Da2, modules [] and guard zero, nonce 33, and no unexecuted multisig transaction. Both inner Safes return threshold 6 with 8 owners, no modules, guard zero. For 0xC290bE56 it returns threshold 2 with 3 owners, modules [], guard zero, nonce 3, and no unexecuted transaction. eth_getStorageAt of the guard slot 0x4a204f62...34c8 on https://ethereum-rpc.publicnode.com returned zero for 0xC290bE56, 0xC0317226 and 0x9Eb44Da2; the calls for 0x4092A77b were refused by a Cloudflare challenge, so that slot rests on the Safe service reading. eth_getCode returned 0x for X Layer owners 0x6eE7BDa7 and 0xD3C6821D; the call for 0x11CAA37c was refused by the same challenge. That these Safes own the portal ProxyAdmins rests on F-140 and was not re-queried here.",
+   "codeCheck": "A deposit with the PoolManager as from runs as an outer call by the PoolManager into a token, so no PoolManager code runs: unlock at src/PoolManager.sol:103-114 with the NonzeroDeltaCount check at line 112 and take at src/PoolManager.sol:291-297 are not entered. No guard in src/ can observe a transfer the token executes for its holder. The path needs the portal upgrade, which only the Safe signers can make.",
+   "corrections": "",
+   "sources": [
+    {
+     "url": "https://eth.blockscout.com/api/v2/smart-contracts/0x2c431080fc733e259654f3b91e39468d9a85ac9b",
+     "supports": "OptimismPortal2 5.1.1 source, emits at lines 757 and 771 only, sender rule at 745-748, SystemConfig check at 763"
+    },
+    {
+     "url": "https://safe-transaction-mainnet.safe.global/api/v1/safes/0x4092A77bAF58fef0309452cEaCb09221e556E112/",
+     "supports": "threshold 2 of 2, modules empty, guard zero"
+    },
+    {
+     "url": "https://safe-transaction-mainnet.safe.global/api/v1/safes/0xC290bE56089BCC83c6993583ce2cF51a7951D45A/",
+     "supports": "threshold 2 of 3, modules empty, guard zero"
+    },
+    {
+     "url": "https://safe-transaction-mainnet.safe.global/api/v1/safes/0xC03172263409584f7860C25B6eB4985f0f6F4636/",
+     "supports": "threshold 6 of 8, no modules, guard zero"
+    },
+    {
+     "url": "https://safe-transaction-mainnet.safe.global/api/v1/safes/0x4092A77bAF58fef0309452cEaCb09221e556E112/multisig-transactions/?executed=false",
+     "supports": "count 0"
+    },
+    {
+     "url": "eth_getStorageAt and eth_getCode on https://ethereum-rpc.publicnode.com, latest, 2026-11-25",
+     "supports": "guard slot zero on 0xC290bE56, 0xC0317226, 0x9Eb44Da2; 0x6eE7BDa7 and 0xD3C6821D hold no code"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "ruint 1.18.0 (X Layer) shift and SAR code against RUSTSEC-2026-0220",
+   "agrees": true,
+   "note": "The advisory text says the affected wrapping_shl and wrapping_shr truncate shift amounts modulo 2^32 and that the wrong overflow flags concern checked and saturating variants. revm-interpreter 37.0.3 src/instructions/bitwise.rs lines 120-158 (read from the crate) saturates the shift to usize and only calls the library when shift < 256, returning zero or the sign fill otherwise. On chain I ran SHL, SHR and SAR for 6 words and 19 shift amounts including 2^32, 2^32+1, 2^32+255, 2^64, 2^128 and 2^256-1 through eth_call on forno.celo.org and rpc.xlayer.tech: 342 checks per chain, 0 mismatches."
+  },
+  {
+   "check": "The u256 fast paths of ruint 1.20.0 together with the revm-interpreter SHL, SHR, SAR and SIGNEXTEND handlers (Celo)",
+   "agrees": true,
+   "note": "The same on-chain shift vectors on forno.celo.org matched the EVM definition with 0 mismatches, including amounts at 63, 64, 127, 128, 129, 191, 192 and 255 where the u128 half split acts. Forno load-balances two backends and I did not pin, so only one backend may have been hit by my calls; the cycle's pinned battery covers both."
+  },
+  {
+   "check": "Jump destination analysis of revm-bytecode for code the PoolManager calls, and absence of CLZ, DUPN, SWAPN, EXCHANGE and SELFDESTRUCT in the deployed code",
+   "agrees": true,
+   "note": "My own linear scan of eth_getCode for 0x288dc841 (Celo) and 0x360e68fa (X Layer), both 24,009 bytes, found no 0x1e, 0xe6, 0xe7, 0xe8 or 0xff outside PUSH data and the code does not end inside PUSH data. TLOAD, TSTORE and MCOPY appear as expected (20, 9 and 2 times)."
+  }
+ ],
+ "leads": []
+}

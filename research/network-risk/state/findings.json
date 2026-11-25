@@ -6192,7 +6192,7 @@
    ]
   },
   {
-   "title": "Under Jenner an address in BNB Chain's CAS20 token space answers every call with a revert, and no pool can hold funds in such a currency",
+   "title": "Under Jenner BNB Chain routes two CAS20 token ranges and three fixed addresses to native code, an address there with no token reverts every call, and no pool can hold funds in such a currency",
    "chainIds": [
     56
    ],
@@ -6202,18 +6202,16 @@
     "A7"
    ],
    "effect": "degrade",
-   "difference": "From 2026-12-08 02:30 UTC BNB Smart Chain runs native code behind the CAS20 address range (0xCA52...) and the time precompile 0x70. An address in that range with no token reverts every call, with any calldata, and 0x70 returns the block time in milliseconds as one 32 byte word. Before the fork both behave as empty accounts and return success with no data. Ethereum has neither. The routed space is narrower than the 0xCA52 prefix: the client routes only addresses whose bytes 2 to 9 are zero (core/vm/cas20.go at v1.8.2). Under the override, addresses in that space with byte 10 equal to 0x02 or 0xff also reverted on bsc-dataseed1, although the tagged source maps only the ordinals 0x00 and 0x01. That mismatch between tag and probe is open as lead L-907.",
-   "mechanism": "The change was measured with a block time override of 1796697600 on dataseed1, 48 Club and reth-bsc, calling from the PoolManager address. For a currency X in the CAS20 range: today take(X, to, 0) succeeds and moves nothing, because the PoolManager accepts empty return data (src/types/Currency.sol:64-74), and after the fork it reverts with ERC20TransferFailed (src/types/Currency.sol:82-86). sync(X) reverts before and after, because balanceOfSelf is a high level call that cannot decode empty data or a revert (src/types/Currency.sol:90-96, src/PoolManager.sol:279-288). Without a sync no settle can credit X (src/PoolManager.sol:349-364), so no account can hold a positive delta or an ERC-6909 claim of X, and no pool can hold liquidity in X. A hook address in the range that has any callback flag already failed before the fork, because an empty answer fails the length check (src/libraries/Hooks.sol:131-155), and it fails after the fork by revert. For 0x70 as a currency, sync records the millisecond time and a settle in the same transaction reads the same value, so it credits 0; a take reverts because the returned word is not 1. As a hook, 0x70 carries the afterSwap, beforeDonate and afterDonate flags and its word does not start with the callback selector, so those calls revert both before and after.",
-   "impact": "None for existing pools. A pool created before the fork with a CAS20-range or 0x70 currency could never be funded in that currency, and one created with such a hook could never swap or donate, so the fork moves no value and freezes nothing that was usable.",
-   "preconditions": "The Jenner fork activates as scheduled. Token creation in the range stays closed until a governance appointed administrator enables it (F-076).",
-   "mitigations": "None needed. Integrators that cache pools by currency should not assume a CAS20-range address that answered as empty before the fork keeps doing so.",
+   "difference": "From 2026-12-08 02:30 UTC (JennerTime 1796697000 in params/config.go line 256 at v1.8.2) BNB Smart Chain routes an address to native CAS20 code when bytes 0 and 1 are 0xCA52, bytes 2 to 9 are zero and byte 10 is 0x00 (Asset) or 0x01 (Stablecoin), and also routes the factory 0xCA5F00..00 and the registries 0x7020..01 and 0x7020..02. A token address whose code is not the one byte marker 0xEF reverts every call. Addresses in the same space with byte 10 from 0x02 to 0xff are ordinary accounts. The time precompile 0x70 answers any call with the block time in milliseconds. Ethereum has none of these. The cycle 19 text of this finding said every address in the CAS20 space reverts; that holds only for the two ordinals and the fixed addresses.",
+   "mechanism": "core/vm/evm.go lines 46-59 (v1.8.2) first consults the static precompile map and, when IsJenner holds, calls resolveCAS20. resolveCAS20 (core/vm/cas20.go lines 122-135) returns the three singletons by exact address and otherwise, for an address that passes IsCAS20Address (bytes 2 to 9 zero, lines 50-60), looks up cas20Variants[addr[10]] (lines 107-119), which has entries only for 0x00 and 0x01. For any other ordinal the lookup returns ok = false and EVM.Call treats the address as an ordinary account (evm.go lines 318-360). For a routed token address runCAS20Token reverts unless the code hash equals keccak256(0xEF) (cas20.go lines 62-70 and 189-200; cas20_factory.go line 35). The cycle 19 probe that F-139 and lead L-907 rest on called 0xca52...0001, 0xca52...0000 and 0xca52...00ff, and all three have byte 10 equal to 0x00, so the reverts it saw for 'byte 10 = 0x02 or 0xff' were in fact ordinal 0x00 addresses. This cycle called byte 10 in {0x00, 0x01, 0x02, 0xff} on four endpoints with web3_clientVersion before and after each batch: ordinals 0x00 and 0x01 revert under the block time override 0x6b176e00 and ordinals 0x02 and 0xff return empty success, as the tag says, on Geth v1.8.2-4e1c8247 (dataseed and dataseed1), Geth v1.8.2-9b93ce23 and v1.8.2-132104cd (48 Club answered both builds in one batch) and reth-bsc v0.1.4-hotfix-23b510f on every cell it answered. For the PoolManager the effect is the one F-139 describes: for a routed address X with no token, take(X, to, 0) succeeds and moves nothing today and reverts after the fork (src/types/Currency.sol:64-86); sync(X) reverts before and after because the high level balanceOf call needs 32 bytes of return data (src/types/Currency.sol:90-96, src/PoolManager.sol:279-288). For an unrouted ordinal nothing changes at the fork: take succeeds and moves nothing, sync reverts. With no sync there is no settle credit (src/PoolManager.sol:349-364), so no delta, claim or liquidity in such an X can exist.",
+   "impact": "None. No pool can be funded in a CAS20 space currency that has no token, before or after the fork, and the fork changes nothing for the unrouted ordinals.",
+   "preconditions": "Jenner activates as scheduled. Token creation stays closed until a governance appointed administrator enables it (F-076). A token address can only become a token through the factory, because the marker code 0xEF cannot be deployed by CREATE or CREATE2 (EIP-3541) and bytes 0 to 9 fix 80 bits of the address.",
+   "mitigations": "None needed. Integrators that cache pools by currency should not assume that a routed address which answered as an empty account before the fork keeps doing so.",
    "coreRefs": [
-    "src/types/Currency.sol:64-74",
-    "src/types/Currency.sol:82-86",
+    "src/types/Currency.sol:64-86",
     "src/types/Currency.sol:90-96",
     "src/PoolManager.sol:279-288",
-    "src/PoolManager.sol:349-364",
-    "src/libraries/Hooks.sol:131-155"
+    "src/PoolManager.sol:349-364"
    ],
    "sources": [
     {
@@ -6223,6 +6221,30 @@
     {
      "url": "rpc: eth_call with blockOverrides time 0x6b176e00 on bsc-dataseed1.bnbchain.org, rpc-bsc.48.club and bsc-rpc.publicnode.com, 2026-11-25, research/network-risk/cycles/019/established-l1.work/raw/cas20_probe.json",
      "supports": "CAS20-range addresses revert every call shape under Jenner rules and answer empty success today; 0x70 returns 0x1a25385b000"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/cas20.go",
+     "supports": "IsCAS20Address checks bytes 0-1 = 0xCA52 and bytes 2-9 zero (lines 50-60); resolveCAS20Token indexes cas20Variants by byte 10 with entries only for 0x00 and 0x01 (lines 107-119); resolveCAS20 adds the three singletons (lines 122-135); runCAS20Token reverts unless the code hash is that of the marker (lines 62-70, 189-200); DisabledPrecompile makes dispatch treat the address as an ordinary account (lines 38-48)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/evm.go",
+     "supports": "EVM.precompile consults the map, returns not-a-precompile for DisabledPrecompile, and routes CAS20 only when IsJenner holds (lines 46-67); EVM.Call runs a precompile or the account's code (lines 299-360)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/cas20_factory.go",
+     "supports": "CAS20MarkerCode is the single byte 0xEF (line 35) and the factory writes it at token creation (lines 161-164)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/config.go",
+     "supports": "BSC mainnet JennerTime 1796697000, 2026-12-08 02:30 UTC (line 256)"
+    },
+    {
+     "url": "rpc: eth_call and eth_estimateGas from the PoolManager to CAS20 space addresses with byte 10 in {0x00,0x01,0x02,0xff}, singletons and 0x70, with and without blockOverrides time 0x6b176e00 and with and without a code override, on bsc-dataseed1.bnbchain.org, bsc-dataseed.bnbchain.org, rpc-bsc.48.club and bsc-rpc.publicnode.com, 2026-11-25, research/network-risk/cycles/020/theme-reserved-address-routing.work/raw/cas20_probe.json and raw/cas20_reth_retry.json",
+     "supports": "ordinals 0x00 and 0x01 and the singletons revert under the override, ordinals 0x02 and 0xff answer empty success with gas 21000, all four builds agree on every answered cell; publicnode refused part of the calls with a Cloudflare challenge (HTTP 403), recorded as refusals"
+    },
+    {
+     "url": "rpc: eth_call on https://bsc-dataseed1.bnbchain.org, 2026-11-25, from 0x28e2ea090877bf75740558f6bfb36a5ffee9e9df, balanceOf calldata, blockOverrides time 0x6b176e00 and none",
+     "supports": "byte 10 = 0x00, 0x01 and the factory revert under the override; byte 10 = 0x02 and 0xff return empty success; all return empty success without the override"
     }
    ],
    "evidence": "primary",
@@ -6231,34 +6253,34 @@
    "proposedSeverity": "info",
    "status": "confirmed",
    "verification": {
-    "cycle": 19,
-    "factCheck": "bsc params/config.go at tag v1.8.2 line 256 sets mainnet JennerTime to 1796697000, which is 2026-12-08 02:30 UTC. core/vm/contracts.go at v1.8.2 lines 426-458 builds PrecompiledContractsJenner with milliTimestamp at 0x70 (BEP-706). core/vm/evm.go lines 46-67 routes addresses to resolveCAS20 only when IsJenner holds, and core/vm/cas20.go defines the token space as byte[0:2] == 0xCA52 and byte[2:10] zero (lines 30-60); runCAS20Token reverts when the address does not hold the marker code (lines 188-200). I ran eth_call on bsc-dataseed1.bnbchain.org from the PoolManager 0x28e2...e9df on 2026-11-25. Without an override, transfer(0xdead,0) to 0xca52000000000000000000000000000000000001 and to 0x70 returned 0x. With blockOverrides time 0x6b176e00 the CAS20 address reverted with empty data and 0x70 returned 0x1a25385b000. balanceOf to 0xca52 addresses with bytes 2..9 zero reverted under the override (low 10 bytes 0x...01, 0x..ffffffff, 0x..ffffffffffffffff, and byte 10 set to 0x01, 0x02 or 0xff), while 0xca52000000000000ffff..., 0xca520000ffff..., 0xca52000100... and 0xca53000... answered 0x, so the range is the one cas20.go defines. I could not fetch https://github.com/bnb-chain/bsc/releases myself (the session proxy refused github.com with 403), so the release page wording is unconfirmed by me; the fork time and precompile set are confirmed from the tagged source instead.",
-    "codeCheck": "Currency.transfer accepts success with empty return data or a word equal to 1 (src/types/Currency.sol:64-74) and otherwise reverts with ERC20TransferFailed (src/types/Currency.sol:82-86), so take(X,to,0) on an empty CAS20 address passes today and reverts after the fork, and a take on 0x70 reverts because its word is not 1. sync calls balanceOfSelf, a high level IERC20Minimal.balanceOf call (src/types/Currency.sol:90-96, src/PoolManager.sol:279-288); with solc 0.8.26 (src/PoolManager.sol:2) empty return data fails ABI decoding, so sync reverts before and after for an empty CAS20 address, and for 0x70 after the fork it records the millisecond time. Reserves and the synced currency are transient (src/libraries/CurrencyReserves.sol:17-36), so a settle can only follow a sync in the same transaction, where block time is fixed, and paid = reservesNow - reservesBefore is 0 (src/PoolManager.sol:349-364). Without a credited settle no account gets a positive delta in X, so mint of claims and liquidity in X need a debt that cannot be paid, and the delta count check at the end of unlock rejects it. 0x70 as a hook has bits 6, 5 and 4 set, which are AFTER_SWAP, BEFORE_DONATE and AFTER_DONATE (src/libraries/Hooks.sol:39-42); callHook rejects empty data and a word whose selector differs (src/libraries/Hooks.sol:131-155), so those calls fail before and after the fork.",
-    "corrections": "The range written as 0xCA52... is narrower in the client: only addresses whose bytes 2 to 9 are zero are routed (core/vm/cas20.go IsCAS20Address). On chain, addresses in that space with byte 10 equal to 0x02 or 0xff also reverted under the override, although resolveCAS20Token at v1.8.2 maps only ordinals 0x00 and 0x01; the deployed dataseed build may differ from the tag, which does not change the conclusion. The release page citation was not reachable from this session.",
+    "cycle": 20,
+    "factCheck": "Fetched bsc v1.8.2 core/vm/cas20.go, evm.go, cas20_factory.go, params/config.go and internal/ethapi/override/override.go from raw.githubusercontent.com. cas20.go defines cas20VariantAsset = 0x00 and cas20VariantStablecoin = 0x01, IsCAS20Address checks bytes 0 and 1 against 0xca52 and bytes 2 to 9 for zero, resolveCAS20Token looks up cas20Variants[addr[10]] which holds only those two ordinals, and resolveCAS20 adds the factory 0xCA5F00..00 and the two registries. runCAS20Token reverts unless the code hash equals keccak256(CAS20MarkerCode), and cas20_factory.go line 35 sets CAS20MarkerCode to the single byte 0xEF. evm.go EVM.precompile consults the static map, treats DisabledPrecompile as not a precompile, and calls resolveCAS20 only when chainRules.IsJenner holds. config.go line 256 sets the BSC mainnet JennerTime to 1796697000, 2026-12-08 02:30 UTC, so the fork is not active on 2026-11-25. I ran eth_call from the PoolManager 0x28e2ea09...e9df with balanceOf(PoolManager) calldata on bsc-dataseed1.bnbchain.org (web3_clientVersion Geth/v1.8.2/linux-amd64/go1.26.10): with blockOverrides time 0x6b176e00, 0xca52000000000000000000000000000000000001 (byte 10 = 0x00), 0xca52000000000000000001000000000000000001 (byte 10 = 0x01) and the factory 0xca5f00..00 revert with empty data, while byte 10 = 0x02 and byte 10 = 0xff return 0x; without the override all five return 0x. This matches the finding.",
+    "codeCheck": "src/types/Currency.sol:54-86: transfer to a currency with no code succeeds because iszero(returndatasize()) holds, and reverts with ERC20TransferFailed after the fork at a routed ordinal because the call fails. src/types/Currency.sol:90-96: balanceOfSelf is a high level IERC20Minimal.balanceOf call, which reverts on empty return data both before and after the fork. src/PoolManager.sol:279-288: sync calls balanceOfSelf for a non zero currency, so it reverts. src/PoolManager.sol:349-364: _settle credits only reservesNow - reservesBefore for the synced currency, so with no sync no positive delta in such a currency arises. Every other route to a positive delta in X (swap output, liquidity removal, ERC-6909 burn) needs X to have been settled into the pool or into a claim first, and modifyLiquidity, swap with X as input, donate and mint all create negative X deltas that need settlement. The delta count check in unlock then reverts any transaction that leaves such a debt. No pool can hold X before or after the fork.",
+    "corrections": "",
     "sources": [
      {
-      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/config.go",
-      "supports": "mainnet JennerTime 1796697000 (2026-12-08 02:30 UTC), line 256; IsJenner gated on BSC, lines 1471-1480"
-     },
-     {
-      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/contracts.go",
-      "supports": "PrecompiledContractsJenner adds milliTimestamp at 0x70, lines 426-458"
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/cas20.go",
+      "supports": "ordinal constants 0x00 and 0x01, IsCAS20Address, resolveCAS20Token and resolveCAS20 routing, runCAS20Token marker hash check"
      },
      {
       "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/evm.go",
-      "supports": "precompile() routes the CAS20 space through resolveCAS20 only when IsJenner, lines 46-67"
+      "supports": "EVM.precompile routes CAS20 only when IsJenner holds and treats DisabledPrecompile as an ordinary account"
      },
      {
-      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/cas20.go",
-      "supports": "IsCAS20Address definition and revert for an address without marker code in runCAS20Token"
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/cas20_factory.go",
+      "supports": "CAS20MarkerCode is 0xEF (line 35), written by the factory at lines 161-164"
      },
      {
-      "url": "rpc: eth_call on https://bsc-dataseed1.bnbchain.org from 0x28e2ea090877bf75740558f6bfb36a5ffee9e9df, latest, with and without blockOverrides time 0x6b176e00, 2026-11-25",
-      "supports": "CAS20 space returns 0x today and reverts with empty data under the override; 0x70 returns 0x today and 0x000...01a25385b000 under the override; addresses outside bytes 2..9 zero still return 0x"
+      "url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/config.go",
+      "supports": "BSC mainnet JennerTime 1796697000 at line 256"
+     },
+     {
+      "url": "rpc: eth_call on https://bsc-dataseed1.bnbchain.org, 2026-11-25, from 0x28e2ea090877bf75740558f6bfb36a5ffee9e9df, balanceOf calldata, blockOverrides time 0x6b176e00 and none",
+      "supports": "byte 10 = 0x00, 0x01 and the factory revert under the override; byte 10 = 0x02 and 0xff return empty success; all return empty success without the override"
      }
     ]
    },
-   "lastVerifiedCycle": 19,
+   "lastVerifiedCycle": 20,
    "extends": "F-076",
    "id": "F-139",
    "firstCycle": 19,
@@ -6268,6 +6290,13 @@
      "unit": "established-l1",
      "status": "confirmed",
      "severity": "info"
+    },
+    {
+     "cycle": 20,
+     "unit": "theme-reserved-address-routing",
+     "status": "confirmed",
+     "severity": "info",
+     "note": "Routing narrowed to ordinals 0x00 and 0x01 and three fixed addresses; the cycle 19 probe had been misread."
     }
    ]
   },
@@ -6716,6 +6745,124 @@
      "cycle": 1,
      "unit": "hyperevm",
      "status": "confirmed",
+     "severity": "high"
+    }
+   ]
+  },
+  {
+   "title": "HyperCore sends unsigned transfers in the name of addresses that never signed, including a contract, and the record that names such an address is outside the deployer's documented action",
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A2",
+    "A8"
+   ],
+   "effect": "freeze",
+   "difference": "HyperCore places unsigned system transactions at the top of HyperEVM blocks and states their sender itself. Under AQAv2 it sends token transfers in the name of the linked contract and of a treasury address. The receipts of these transactions are not covered by the header receipts root. On Ethereum a balance leaves an address only through a transaction that address signed or a call made by its own code.",
+   "mechanism": "If HyperCore recorded the PoolManager as the treasury address of an aligned quote asset, the node would send transfer calls on that token with the PoolManager as msg.sender. The token balance would fall while pool state, ERC-6909 balances and protocol fee counters keep counting it as owed, because the PoolManager reads a balance only between sync and settle inside one transaction (src/PoolManager.sol:279-288, src/PoolManager.sol:349-365). The last takes in that token would then revert inside the transfer (src/types/Currency.sol:40-88). New in this cycle: the authorizeAqav2Role action has only a token index and a role, and the documentation says the authorization transactions come from the deployers' staking accounts, so the action that binds a role names no address and the rule by which the treasury address is chosen is still unpublished. nanoreth pull request 169 states that system transaction receipts are outside the header receipts root, so before release nb-20261125-2 no public client compared them. The PoolManager nonce is still 1 on the official and archive endpoints, so no system transaction has used it as sender. An ordinary account cannot create the record: it needs two staked deployers of 500,000 HYPE each and a validator vote.",
+   "impact": "All pools and ERC-6909 claims in a token for which HyperCore named the PoolManager as the rebalancing address. Nothing is exposed today.",
+   "preconditions": "The validator set, or whatever privileged record names an AQAv2 treasury, must name the PoolManager. An ordinary account cannot.",
+   "mitigations": "Watch the PoolManager nonce, which rises with any system transaction sent in its name, and run nanoreth nb-20261125-2 or later, which checks system transaction receipts against the block source. Ask the Hyperliquid team whether the node refuses an address with code as AQAv2 treasury.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-365",
+    "src/types/Currency.sol:40-88"
+   ],
+   "sources": [
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md",
+     "supports": "authorizeAqav2Role carries token and role only"
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md",
+     "supports": "Treasury deployer designates the treasury address; activation by validator vote after authorization transactions from the staking accounts; 9:1 rebalance between treasury and linked contract"
+    },
+    {
+     "url": "https://github.com/hl-archive-node/nanoreth/pull/169",
+     "supports": "System transaction receipts are not covered by the header receipts root"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest = 0x1, 2026-11-25",
+     "supports": "No system transaction has been sent in the PoolManager name"
+    }
+   ],
+   "evidence": "inferred",
+   "actor": "operator",
+   "severity": "high",
+   "proposedSeverity": "medium",
+   "status": "plausible",
+   "verification": {
+    "cycle": 20,
+    "factCheck": "The cited sources say what the finding says. The aligned quote assets page (fetched 2026-11-25) states that the treasury deployer designates a treasury address, that activation is by validator vote after both deployers have staked and sent the authorization transactions from the staking accounts, and that the linked HyperEVM contract rebalances with the treasury address at 9:1. The exchange endpoint page (fetched with curl) shows authorizeAqav2Role with only token and role fields, so no published action names the treasury address or proves control of it. nanoreth pull request 169 (fetched, merged 2026-11-25T02:59:23Z) states that system transaction receipts are not covered by the header receipts root and that blocks without a commitment run unchecked. My own queries on 2026-11-25: eth_getTransactionCount of the PoolManager is 0x1 on rpc.hyperliquid.xyz/evm and on rpc.purroofgroup.com (reth/v0.1.0-f0cad31) at block about 52,236,610. A scan of 300 recent blocks on the archive client found unsigned system transactions (gas price 0) from 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24, which has 2,175 bytes of code and is the evmContract of USDC (token 0) in HyperCore spotMeta, and from the treasury address 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00, both calling the USDC token 0xb88339cb7199b77e23db6e890353e22632ba630f. Their tx nonces are sequential and the senders' account nonces rise with them (0x6b9e...: tx nonce 2,392,497, account nonce 2,392,500), so the nonce watch in the mitigations works. spotMeta lists 521 tokens and none names the PoolManager. The unconfirmed link is the premise of the finding: no source says whether HyperCore accepts a treasury address that the treasury deployer does not control, or one with code. The official node hides system transactions, so the scan used the archive client only.",
+    "codeCheck": "sync reads balanceOf only when called and stores it in transient storage (src/PoolManager.sol:279-288). _settle credits the rise since that sync within the same transaction and checks msg.value (src/PoolManager.sol:349-365). Nothing in src/ reconciles pool state, ERC-6909 balances or protocol fee counters against the token balance across transactions, so a balance removed by an outside transfer from the PoolManager is not noticed. take debits the caller and calls currency.transfer (src/PoolManager.sol:290-297), and Currency.transfer reverts with ERC20TransferFailed when the token call fails (src/types/Currency.sol:40-88), so the last takers in that token would be unable to withdraw. unlock still requires a zero delta count (src/PoolManager.sol:104-114), which does not help here because the shortfall is in the token balance, not in deltas. The code path holds as described.",
+    "corrections": "severity: high. SCHEMA.md rates a loss or freeze that needs a privileged chain-level actor (validator set) as high; the effect here is a freeze or loss of all pools and claims in the named token, so medium understates it by the scale, although nothing is exposed today. actor: operator is correct, since activation needs a validator vote in addition to a staked treasury deployer. The Telegram announcement of the 200,000 gas cap (t.me/hyperliquid_api/401) returned only the channel header when fetched, so its text was not confirmed here; it is not needed for this finding.",
+    "sources": [
+     {
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md",
+      "supports": "Treasury deployer designates the treasury address; activation by validator vote; linked contract rebalances with the treasury address at 9:1"
+     },
+     {
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md",
+      "supports": "authorizeAqav2Role carries token and role only"
+     },
+     {
+      "url": "https://github.com/hl-archive-node/nanoreth/pull/169",
+      "supports": "System transaction receipts are not covered by the header receipts root; blocks without a commitment run unchecked"
+     },
+     {
+      "url": "https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest = 0x1, 2026-11-25",
+      "supports": "No system transaction has used the PoolManager as sender"
+     },
+     {
+      "url": "https://rpc.purroofgroup.com eth_getBlockByNumber over 300 blocks before about 52,236,684 and eth_getTransactionCount/eth_getCode of the senders, 2026-11-25",
+      "supports": "System transactions are sent in the name of a contract (USDC linked contract 0x6b9e...0a24) and of the treasury address 0xc206...3c00, and raise the sender's account nonce"
+     },
+     {
+      "url": "https://api.hyperliquid.xyz/info spotMeta, 2026-11-25",
+      "supports": "USDC evmContract is 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24; no token names the PoolManager"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 20,
+   "id": "F-020",
+   "firstCycle": 1,
+   "history": [
+    {
+     "cycle": 1,
+     "unit": "hyperevm",
+     "status": "plausible",
+     "severity": "low"
+    },
+    {
+     "cycle": 2,
+     "unit": "hyperevm",
+     "status": "plausible",
+     "severity": "medium"
+    },
+    {
+     "cycle": 4,
+     "unit": "hyperevm",
+     "status": "plausible",
+     "severity": "medium"
+    },
+    {
+     "cycle": 7,
+     "unit": "hyperevm",
+     "status": "plausible",
+     "severity": "medium"
+    },
+    {
+     "cycle": 14,
+     "unit": "hyperevm",
+     "status": "plausible",
+     "severity": "medium"
+    },
+    {
+     "cycle": 20,
+     "unit": "hyperevm",
+     "status": "plausible",
      "severity": "high"
     }
    ]
@@ -8321,7 +8468,7 @@
    ]
   },
   {
-   "title": "OP Stack portal upgraders can emit a deposit whose sender is the PoolManager, and op-geth and op-revm run it without nonce or code checks, as OP Mainnet governance did for another address on 2026-10-31",
+   "title": "OP Stack portal upgraders can emit a deposit whose sender is the PoolManager, and the clients run it without nonce or code checks, as OP Mainnet governance did for another address on 2026-10-31",
    "chainIds": [
     10,
     8453,
@@ -8331,7 +8478,8 @@
     57073,
     1868,
     42220,
-    196
+    196,
+    4326
    ],
    "lens": "L2",
    "assumptions": [
@@ -8340,10 +8488,10 @@
     "A12"
    ],
    "effect": "both",
-   "difference": "On Ethereum only a key or the contract's own code can move what a contract holds. On OP Stack chains the from field of a deposit transaction (type 0x7e) is whatever the OptimismPortal on Ethereum writes into the TransactionDeposited event, and the portal is an upgradeable proxy. op-geth skips the nonce check and the sender-has-code check for deposits (core/state_transition.go preCheck, the IsDepositTx branch returns before both checks), and op-revm handles a deposit in validate_against_state_and_deduct_caller without calling validate_account_nonce_and_code (handler.rs lines 130 to 161). A deposit from an address that holds code therefore runs as an outer call from that address. On Ethereum block 26,309,074 (2026-10-31 00:10:59 UTC) the OP Mainnet ProxyAdmin owner Safe 0x5a0aae59d09fccbddb6c6cceb07b7279367c3d2a, in transaction 0xd80476b3ec56283723804cf7bc2d96f800c81d3ebd0fea843555396ffe94f28f, upgraded the OP Mainnet portal to the unverified implementation 0x6d971b07cea5febaea8aefb827032f6a0538c9bb, emitted TransactionDeposited with from 0x5227f603c1ee34ce3c06efe6477003bdfccb2f8c, to the OP token predeploy 0x4200000000000000000000000000000000000042, and calldata transfer(0x6b1bae59d09fccbddb6c6cceb07b7279367c4e3b, 44,231,858.7 OP), and restored implementation 0x1005217ad392dc64cef501fa1777a27d42166748 in the same transaction. The recipient is the L1-to-L2 alias of the Safe. The temporary implementation hardcodes SENDER, RECIPIENT and AMOUNT and checks CALLER.",
-   "mechanism": "An upgrade of the same kind with the PoolManager address as SENDER, a pooled token as target and transfer(recipient, balance) as calldata, or a native value transfer with a mint, would make the L2 execute a call whose msg.sender is the PoolManager. The token sees a transfer by its holder. Nothing in the PoolManager runs: unlock (src/PoolManager.sol:103-113), the delta accounting of take (src/PoolManager.sol:291-297) and the NonzeroDeltaCount check are bypassed, so pools, positions and ERC-6909 claims keep records of balances that are gone. On every one of the nine chains the stock portal sets from to msg.sender only when msg.sender equals tx.origin or carries a 23-byte EIP-7702 delegation, and to msg.sender plus 0x1111000000000000000000000000000000001111 otherwise, so an ordinary account cannot produce the PoolManager address: the PoolManager address on Ethereum has no code and nonce 0 on all nine chains, it is a CREATE-derived or predeploy address with no known key, and its alias preimage has no code and nonce 0.",
-   "impact": "Every balance the PoolManager holds on the nine chains. Liquidity providers and claim holders would hold records that cannot be paid out. The OP Mainnet action shows the path is operational and was used within a day of the Arbitrum Security Council action recorded in F-138.",
-   "preconditions": "The owner of the portal's ProxyAdmin on Ethereum: 0x5a0aae59d09fccbddb6c6cceb07b7279367c3d2a for OP Mainnet, Unichain, Ink and Soneium; 0x7bb41c3008b3f03fe483b28b8db90e19cf07595c for Base; 0x4a4962275df8c60a80d3a25faec5aa7de116a746 for Zora; 0xa4fb12d15eb85dc9284a7df0adbc8b696edbbf1d for World Chain; 0x4092a77baf58fef0309452ceacb09221e556e112 for Celo; 0xc290be56089bcc83c6993583ce2cf51a7951d45a for X Layer (eth_call owner() on each ProxyAdmin read from the EIP-1967 admin slot). No ordinary account can reach it.",
+   "difference": "On Ethereum only a key or the contract's own code can move what a contract holds. On OP Stack chains the from field of a deposit transaction (type 0x7e) is whatever the OptimismPortal on Ethereum writes into the TransactionDeposited event, and the portal is an upgradeable proxy. op-geth skips the nonce check and the sender-has-code check for deposits (core/state_transition.go preCheck, the IsDepositTx branch returns before both checks), and op-revm handles a deposit in validate_against_state_and_deduct_caller without calling validate_account_nonce_and_code (handler.rs lines 130 to 161). A deposit from an address that holds code therefore runs as an outer call from that address. On Ethereum block 26,309,074 (2026-10-31 00:10:59 UTC) the OP Mainnet ProxyAdmin owner Safe 0x5a0aae59d09fccbddb6c6cceb07b7279367c3d2a, in transaction 0xd80476b3ec56283723804cf7bc2d96f800c81d3ebd0fea843555396ffe94f28f, upgraded the OP Mainnet portal to the unverified implementation 0x6d971b07cea5febaea8aefb827032f6a0538c9bb, emitted TransactionDeposited with from 0x5227f603c1ee34ce3c06efe6477003bdfccb2f8c, to the OP token predeploy 0x4200000000000000000000000000000000000042, and calldata transfer(0x6b1bae59d09fccbddb6c6cceb07b7279367c4e3b, 44,231,858.7 OP), and restored implementation 0x1005217ad392dc64cef501fa1777a27d42166748 in the same transaction. The recipient is the L1-to-L2 alias of the Safe. The temporary implementation hardcodes SENDER, RECIPIENT and AMOUNT and checks CALLER. Cycle 20 addition, MegaETH: the same holds there. The OptimismPortal2 proxy 0x7f82f57F0Dd546519324392e408b01fcC7D709e8 on Ethereum is upgradeable through ProxyAdmin 0x15fcb0120d414f246ead019ca4bdf97447cd8d90, whose owner is the Safe 0x92e0e0b15e3e99b32c9ed9ad284f939553c7b7d6 with a threshold of 6 of 10. mega-evm v1.7.4 hands deposits to op-revm at revision f67d87cd, which returns from the deposit branch before the nonce and code validation. Cycle 20 addition, warning time: the portal ProxyAdmin owners of Celo and X Layer are plain Safes with no module and no guard. Celo's is a 2 of 2 Safe whose owners are two 6 of 8 Safes, and X Layer's is a 2 of 3 Safe of EOAs, so an upgrade executes as soon as it is signed.",
+   "mechanism": "An upgrade of the same kind with the PoolManager address as SENDER, a pooled token as target and transfer(recipient, balance) as calldata, or a native value transfer with a mint, would make the L2 execute a call whose msg.sender is the PoolManager. The token sees a transfer by its holder. Nothing in the PoolManager runs: unlock (src/PoolManager.sol:103-113), the delta accounting of take (src/PoolManager.sol:291-297) and the NonzeroDeltaCount check are bypassed, so pools, positions and ERC-6909 claims keep records of balances that are gone. On every one of the nine chains the stock portal sets from to msg.sender only when msg.sender equals tx.origin or carries a 23-byte EIP-7702 delegation, and to msg.sender plus 0x1111000000000000000000000000000000001111 otherwise, so an ordinary account cannot produce the PoolManager address: the PoolManager address on Ethereum has no code and nonce 0 on all nine chains, it is a CREATE-derived or predeploy address with no known key, and its alias preimage has no code and nonce 0. Cycle 20 addition: on MegaETH the verified implementation 0x55400445e384393f9c1be23e7e734e8d44ed9fd9 (version 3.15.2) sets from to msg.sender, or to its alias unless msg.sender equals tx.origin or carries an EIP-7702 delegation, so an ordinary account cannot produce the PoolManager 0xacb7e78fa05d562e0a5d3089ec896d57d057d38e: that address and its alias preimage 0x9ba6e78fa05d562e0a5d3089ec896d57d057c27d have no code and nonce 0 on Ethereum. The PoolManager's nonce on MegaETH is 1, so no deposit has been sent in its name. On Celo the verified source of implementation 0x2c431080 (version 5.1.1) emits the event only in _depositTransaction and in setGasPayingToken, which only SystemConfig may call. The Safe transaction service listed no pending upgrade for the Celo or X Layer owner Safe on 2026-11-25.",
+   "impact": "Every balance the PoolManager holds on the nine chains. Liquidity providers and claim holders would hold records that cannot be paid out. The OP Mainnet action shows the path is operational and was used within a day of the Arbitrum Security Council action recorded in F-138. Cycle 20 addition: the same on MegaETH, which brings the count to ten networks. On Celo and X Layer nothing on chain gives liquidity providers time to withdraw after an upgrade is signed.",
+   "preconditions": "The owner of the portal's ProxyAdmin on Ethereum: 0x5a0aae59d09fccbddb6c6cceb07b7279367c3d2a for OP Mainnet, Unichain, Ink and Soneium; 0x7bb41c3008b3f03fe483b28b8db90e19cf07595c for Base; 0x4a4962275df8c60a80d3a25faec5aa7de116a746 for Zora; 0xa4fb12d15eb85dc9284a7df0adbc8b696edbbf1d for World Chain; 0x4092a77baf58fef0309452ceacb09221e556e112 for Celo; 0xc290be56089bcc83c6993583ce2cf51a7951d45a for X Layer (eth_call owner() on each ProxyAdmin read from the EIP-1967 admin slot). No ordinary account can reach it. On MegaETH: six of the ten owners of Safe 0x92e0e0b15e3e99b32c9ed9ad284f939553c7b7d6.",
    "mitigations": "None in core. Integrators and LPs should treat the portal upgrade path of these chains as able to spend any L2 contract's balance. Monitors can watch Upgraded events on the nine portal proxies and TransactionDeposited events whose from equals the PoolManager address.",
    "coreRefs": [
     "src/PoolManager.sol:103-113",
@@ -8374,6 +8522,70 @@
     {
      "url": "https://api.openchain.xyz/signature-database/v1/lookup (selectors of 0x6d971b07)",
      "supports": "The temporary implementation exposes forceDeposit(), SENDER(), RECIPIENT(), AMOUNT(), OP_TOKEN(), PORTAL_PROXY() and PROXY_ADMIN()."
+    },
+    {
+     "url": "https://eth.blockscout.com/api/v2/smart-contracts/0x2c431080fc733e259654f3b91e39468d9a85ac9b",
+     "supports": "Celo portal 5.1.1 emits TransactionDeposited only at lines 757 and 771; sender rule at lines 745-748; setGasPayingToken restricted to SystemConfig at line 763"
+    },
+    {
+     "url": "https://safe-transaction-mainnet.safe.global/api/v1/safes/0x4092A77bAF58fef0309452cEaCb09221e556E112/",
+     "supports": "Celo owner Safe: threshold 2, owners 0xC031... and 0x9Eb4..., modules empty"
+    },
+    {
+     "url": "https://safe-transaction-mainnet.safe.global/api/v1/safes/0xC290bE56089BCC83c6993583ce2cF51a7951D45A/",
+     "supports": "X Layer owner Safe: threshold 2 of 3, modules empty"
+    },
+    {
+     "url": "https://safe-transaction-mainnet.safe.global/api/v1/safes/0x4092A77bAF58fef0309452cEaCb09221e556E112/multisig-transactions/?executed=false",
+     "supports": "no pending multisig transaction for the Celo owner Safe"
+    },
+    {
+     "url": "eth_call and eth_getStorageAt on https://ethereum-rpc.publicnode.com at block 26,494,156 (0x19444cc), 2026-11-25",
+     "supports": "guard slot 0x4a204f62... is zero on all four Safes; getModulesPaginated returns an empty list"
+    },
+    {
+     "url": "https://safe-transaction-mainnet.safe.global/api/v1/safes/0xC03172263409584f7860C25B6eB4985f0f6F4636/",
+     "supports": "threshold 6 of 8, no modules, guard zero"
+    },
+    {
+     "url": "eth_getStorageAt and eth_getCode on https://ethereum-rpc.publicnode.com, latest, 2026-11-25",
+     "supports": "guard slot zero on 0xC290bE56, 0xC0317226, 0x9Eb44Da2; 0x6eE7BDa7 and 0xD3C6821D hold no code"
+    },
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x55400445e384393f9c1be23e7e734e8d44ed9fd9?fields=sources,compilation",
+     "supports": "Verified OptimismPortal2 source of implementation 0x55400445e384393f9c1be23e7e734e8d44ed9fd9: from is msg.sender, aliased unless EOA.isSenderEOA() (lines 481-484); MEGA_SYSTEM_ADDRESS refused as from (lines 84 and 487); TransactionDeposited emitted with that from (line 496). EOA.sol lines 9-24 accept msg.sender == tx.origin or a 23 byte 0xEF0100 delegation."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "Saved in research/network-risk/cycles/020/theme-outside-signature-senders.work/raw/megaportal.json. eth_getStorageAt and eth_call on Ethereum via reth/v2.11.0-b9abbcc at block 0x19444c0: implementation slot 0x55400445..., admin slot 0x15fcb012..., ProxyAdmin owner 0x92e0e0b1... with getThreshold 6 and ten owners, version 3.15.2, paused false; PoolManager address and its alias preimage have no code and nonce 0 on Ethereum; implementation bytecode contains the alias offset and the 0xEF0100 constant."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/evm/execution.rs",
+     "supports": "Lines 87-157: before_run promotes only transactions from the system address and whitelists their callee. Lines 581-593: validate_against_state_and_deduct_caller is delegated to op-revm."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/Cargo.toml",
+     "supports": "op-revm pinned to ethereum-optimism/optimism rev f67d87cd5c9992b62d215c043917b94e3f019629 (line 140)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/f67d87cd5c9992b62d215c043917b94e3f019629/rust/op-revm/src/handler.rs",
+     "supports": "Lines 113-143: the deposit branch adds the mint, bumps the nonce and returns before validate_account_nonce_and_code_with_components, which only non-deposit transactions reach (line 154)."
+    },
+    {
+     "url": "https://mainnet.megaeth.com/rpc",
+     "supports": "Saved in research/network-risk/cycles/020/theme-outside-signature-senders.work/raw/pm_nonces.json. eth_getTransactionCount of the PoolManager on MegaETH (mega-reth/v2.3.1-4499c42) at block 0x1f50bdd is 1."
+    },
+    {
+     "url": "https://docs.megaeth.com/developer-docs/overview-1/contracts.md",
+     "supports": "OptimismPortalProxy 0x7f82f57F0Dd546519324392e408b01fcC7D709e8 is MegaETH's deposit entry point on Ethereum."
+    },
+    {
+     "url": "https://rpc.flashbots.net",
+     "supports": "eth_getStorageAt on the portal returned implementation 0x55400445... and admin 0x15fcb012...."
+    },
+    {
+     "url": "https://eth.drpc.org",
+     "supports": "On Ethereum, eth_getCode of 0xacb7e78f... returns 0x and eth_getTransactionCount returns 0x0."
     }
    ],
    "evidence": "primary",
@@ -8405,7 +8617,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 19,
+   "lastVerifiedCycle": 20,
    "id": "F-140",
    "firstCycle": 19,
    "history": [
@@ -8414,6 +8626,20 @@
      "unit": "theme-inbox-deployed",
      "status": "confirmed",
      "severity": "high"
+    },
+    {
+     "cycle": 20,
+     "unit": "op-stack-custom-gas",
+     "status": "confirmed",
+     "severity": "high",
+     "note": "No module, guard or delay on the Celo and X Layer upgrade Safes."
+    },
+    {
+     "cycle": 20,
+     "unit": "theme-outside-signature-senders",
+     "status": "confirmed",
+     "severity": "high",
+     "note": "MegaETH added (chain 4326)."
     }
    ]
   },
@@ -8961,118 +9187,6 @@
      "cycle": 1,
      "unit": "ethereum-reference",
      "status": "confirmed",
-     "severity": "medium"
-    }
-   ]
-  },
-  {
-   "title": "HyperCore sends unsigned transfers in the name of addresses that never signed, including a contract, and the record that names such an address is outside the deployer's documented action",
-   "chainIds": [
-    999
-   ],
-   "lens": "L2",
-   "assumptions": [
-    "A2",
-    "A8"
-   ],
-   "effect": "freeze",
-   "difference": "HyperCore places unsigned system transactions with gas price 0 at the top of HyperEVM blocks and states their sender itself. Under AQAv2 it sends token transfers in the name of the token's linked contract and of a treasury address. On Ethereum a balance leaves an address only through a transaction that address signed or a call made by its own code.",
-   "mechanism": "1. Unchanged from cycle 7: if HyperCore recorded the PoolManager as the address to rebalance from, the node would send transfer calls on that token with the PoolManager as msg.sender. The token would move the balance while pool state, ERC-6909 balances and protocol fee counters keep recording the tokens as owed, because the PoolManager reads a balance only between sync and settle (src/PoolManager.sol:279-288 and 349-365). The last takes in that token would then revert inside the transfer (src/types/Currency.sol:55-87). 2. New in this cycle. The census of 3,000 recent blocks finds 1,030 system transactions, 435 sent in the name of the CoreDepositWallet contract and 195 in the name of the treasury address 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00, and none names the PoolManager; its nonce is still 1. HyperCore spot metadata links no token to the PoolManager and exposes no field that names an AQAv2 treasury, so the record behind step 1 still cannot be read. 3. An ordinary account cannot create that record: the documentation ties AQAv2 activation to two deployers that each stake 500,000 HYPE and to a validator vote, and the link of a spot token to a contract needs the contract's CREATE deployer or a finalizer stored in slot 0 or in the slot keccak256(\"HyperCore deployer\"), which for the PoolManager only the owner contract could arrange (cleared in cycle 4).",
-   "impact": "All pools and ERC-6909 claims in a token for which HyperCore named the PoolManager as the rebalancing address. Nothing is exposed today: no system transaction has named the PoolManager and its nonce is 1.",
-   "preconditions": "The validator set, or whatever privileged record names an AQAv2 treasury, must name the PoolManager. An ordinary account cannot.",
-   "mitigations": "Watch the PoolManager's account nonce, which rises with the first transaction sent in its name, and the from field of system transactions. Ask the Hyperliquid team whether the node refuses an address with code as AQAv2 treasury.",
-   "coreRefs": [
-    "src/PoolManager.sol:279-288",
-    "src/PoolManager.sol:349-365",
-    "src/types/Currency.sol:55-87"
-   ],
-   "sources": [
-    {
-     "url": "https://rpc.purroofgroup.com eth_getBlockByNumber 52,152,491 to 52,155,490 and eth_getTransactionCount, 2026-11-24",
-     "supports": "1,030 system transactions, none naming the PoolManager; PoolManager nonce 1"
-    },
-    {
-     "url": "https://api.hyperliquid.xyz/info",
-     "supports": "spotMeta links no token to the PoolManager; tokenDetails for USDC has no treasury field"
-    },
-    {
-     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md",
-     "supports": "Treasury deployer designates the treasury address, both deployers stake 500k HYPE, activation by validator vote (read in cycle 7)"
-    },
-    {
-     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers.md",
-     "supports": "Link finalization by the CREATE deployer or a finalizer stored in slot 0 or keccak256(\"HyperCore deployer\"); system transactions call transfer as the system address (fetched 2026-11-24)"
-    }
-   ],
-   "evidence": "inferred",
-   "actor": "operator",
-   "severity": "medium",
-   "proposedSeverity": "medium",
-   "status": "plausible",
-   "verification": {
-    "cycle": 14,
-    "factCheck": "The chain facts that can be read hold. I scanned blocks 52,159,808 to 52,160,020 on https://rpc.purroofgroup.com and found gas price 0 transactions with r = 0x1 (no signature). Examples: 0xf5c76b47... at block 52,160,008 sent from 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24 to USDC 0xb88339cb7199b77e23db6e890353e22632ba630f with transfer(0xc20699185c15d0a2fd65779bb5d69f5b0b113c00, ...), and 0x4d4f2710... at block 52,160,019 sent from the treasury 0xc206... to USDC with transfer(0x6b9e77..., ...). eth_getCode on https://rpc.hyperliquid.xyz/evm returns 2,175 bytes of proxy code at 0x6b9e77..., so HyperCore makes a contract with code the msg.sender of a token transfer, and that contract's nonce (0x2439c4) and the nonce field of these transactions rise with each one, so the nonce watch in the mitigations works. eth_getTransactionCount for the PoolManager is 0x1 on both endpoints at head 0x31be6b3. The saved spotMeta (520 tokens) has no evmContract equal to the PoolManager. The aligned-quote-assets page, fetched now, says the treasury deployer designates the treasury address, both deployers stake 500k HYPE, activation is by validator vote, and the linked contract rebalances with the treasury address in a 9:1 ratio. The transfers page, fetched now, gives the three finalize routes (create nonce, slot 0, keccak256(\"HyperCore deployer\")). On the PoolManager, slot 0 holds the owner 0x2d09d0c2f82c59b19b3c65a48ce2c550bf0921f9 and slot 0x8c306a6a12fff1951878e8621be6674add1102cd359dd968efbbe797629ef84f (keccak256 of \"HyperCore deployer\", computed locally) is zero. The unconfirmed link is whether HyperCore would accept a contract it did not create, such as the PoolManager, as an AQAv2 treasury address and send transfers from it. The validator source is closed and no document or record says, so the verdict stays plausible.",
-    "codeCheck": "sync reads balanceOfSelf only inside the caller's transaction (src/PoolManager.sol:279-288) and _settle reads it again and takes the difference (src/PoolManager.sol:349-365). Transient storage is cleared between transactions, so a system transaction that moves the PoolManager's balance cannot be credited to anyone through settle. Pool state, ERC-6909 balances and protocolFeesAccrued keep counting the moved tokens as owed. take and collectProtocolFees then call Currency.transfer, which reverts with ERC20TransferFailed when the token refuses (src/types/Currency.sol:55-87). The last claimants in that token cannot withdraw. A balance moved into the PoolManager by the 9:1 rebalance would sit outside every account and help no one, so the effect is freeze only, as the finding says. I found no guard in src/ that would stop the freeze, and no path by which an ordinary account gains.",
-    "corrections": "",
-    "sources": [
-     {
-      "url": "https://rpc.purroofgroup.com eth_getBlockByNumber 52,159,808 to 52,160,020, 2026-11-24",
-      "supports": "Unsigned system transactions (r = 0x1, gas price 0) sent from the contract 0x6b9e77... and from the treasury 0xc206... calling USDC transfer, with nonces rising"
-     },
-     {
-      "url": "https://rpc.hyperliquid.xyz/evm eth_getCode and eth_getTransactionCount 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24, 2026-11-24",
-      "supports": "The sender has proxy code and nonce 0x2439c4"
-     },
-     {
-      "url": "https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F, 2026-11-24",
-      "supports": "PoolManager nonce 0x1"
-     },
-     {
-      "url": "https://rpc.hyperliquid.xyz/evm eth_getStorageAt PoolManager slots 0x0 and 0x8c306a6a12fff1951878e8621be6674add1102cd359dd968efbbe797629ef84f, 2026-11-24",
-      "supports": "Slot 0 holds the owner contract and the HyperCore deployer slot is zero"
-     },
-     {
-      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md",
-      "supports": "Treasury deployer designates the treasury, 500k HYPE stake each, activation by validator vote, linked contract rebalances with the treasury"
-     },
-     {
-      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers.md",
-      "supports": "Finalize routes for a link and system transactions that call transfer as the system address"
-     }
-    ]
-   },
-   "lastVerifiedCycle": 14,
-   "id": "F-020",
-   "firstCycle": 1,
-   "history": [
-    {
-     "cycle": 1,
-     "unit": "hyperevm",
-     "status": "plausible",
-     "severity": "low"
-    },
-    {
-     "cycle": 2,
-     "unit": "hyperevm",
-     "status": "plausible",
-     "severity": "medium"
-    },
-    {
-     "cycle": 4,
-     "unit": "hyperevm",
-     "status": "plausible",
-     "severity": "medium"
-    },
-    {
-     "cycle": 7,
-     "unit": "hyperevm",
-     "status": "plausible",
-     "severity": "medium"
-    },
-    {
-     "cycle": 14,
-     "unit": "hyperevm",
-     "status": "plausible",
      "severity": "medium"
     }
    ]
@@ -12295,6 +12409,87 @@
    ]
   },
   {
+   "title": "X Layer final release tag v0.0.7.3 lacks the trie seek fix that the public endpoint and the later rc.1 tag carry",
+   "chainIds": [
+    196
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A14"
+   ],
+   "effect": "degrade",
+   "difference": "X Layer published the trie correctness fix as v0.0.7.3-rc.1, five days after the final v0.0.7.3. The final tag pins okx/reth 81573d2c, whose node_iter.rs skips a seek whenever the walker key starts with the seek prefix; rc.1 pins f60420aa, which skips only at the exact prefix.",
+   "mechanism": "The change sits in the state root walk, not in the EVM. A node built from the final tag may skip hashed entries between a seek prefix and a deeper stored branch, compute a different state root for a block that touches such a storage layout, and reject or fork from the canonical chain. The PoolManager's arithmetic, storage writes and settlement are computed by the same revm 40.0.3 and ruint 1.18.0 in both builds, so balances and pool state come out the same. The endpoint runs f60420aa. Which revision the sequencer runs is not public.",
+   "impact": "No PoolManager funds move. A follower or RPC node on the final tag could stall or serve a fork, so users reading it would see stale pool state.",
+   "preconditions": "An operator runs v0.0.7.3 instead of v0.0.7.3-rc.1.",
+   "mitigations": "Integrators that read X Layer pool state should use nodes that report f60420a in web3_clientVersion.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114"
+   ],
+   "sources": [
+    {
+     "url": "https://github.com/okx/xlayer-reth/releases",
+     "supports": "v0.0.7.3 (30 October) is synced to okx/reth 81573d2; v0.0.7.3-rc.1 (5 November) is a mandatory patch that integrates the trie correctness fix"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/reth/81573d2c7d806d5df9ff2d512dd000c2bf542b1b/crates/trie/trie/src/node_iter.rs",
+     "supports": "81573d2c node_iter.rs line 284 uses key.starts_with(&seek_prefix)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/reth/f60420aaac6457295a38b66bd544bab28ab6ec5d/crates/trie/trie/src/node_iter.rs",
+     "supports": "f60420aa node_iter.rs line 282 uses key == &seek_prefix and adds a regression test for an inserted leaf before a deeper stored branch"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3/Cargo.lock",
+     "supports": "lock file of v0.0.7.3 pins okx/reth 81573d2c7d806d5df9ff2d512dd000c2bf542b1b; all other packages equal those of rc.1"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "low",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 20,
+    "factCheck": "Fetched both node_iter.rs revisions. okx/reth 81573d2c crates/trie/trie/src/node_iter.rs line 284 reads key.starts_with(&seek_prefix); f60420aa line 282 reads key == &seek_prefix, and the file grows from 539 to 611 lines with the added test. The xlayer-reth Cargo.lock at tag v0.0.7.3 pins okx/reth rev 81573d2c (lines 8171, 8212, 8239) and the lock at v0.0.7.3-rc.1 pins f60420aa at the same lines. web3_clientVersion on https://rpc.xlayer.tech returned reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7 on 2026-11-25. The release dates and the mandatory-patch wording on the GitHub releases page could not be read in this session because github.com HTML is blocked by the proxy; that link stays unconfirmed by me. The revision difference itself is confirmed from the lock files.",
+    "codeCheck": "The change is in the node's state root walk. The cited src/PoolManager.sol:104-114 is unlock and is not affected by a trie walk: the EVM results, storage writes and settlement do not depend on how the node hashes the trie. A node on the final tag would compute a different state root for an affected layout and stop following, so readers of that node see stale state. No PoolManager line computes a different value.",
+    "corrections": "severity: low. The finding describes an operational hazard (a follower node that may stall or fork and serve stale pool state) with no loss path, which SCHEMA.md places at low rather than info. Actor operator is correct.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/okx/reth/81573d2c7d806d5df9ff2d512dd000c2bf542b1b/crates/trie/trie/src/node_iter.rs",
+      "supports": "line 284 uses key.starts_with(&seek_prefix)"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/okx/reth/f60420aaac6457295a38b66bd544bab28ab6ec5d/crates/trie/trie/src/node_iter.rs",
+      "supports": "line 282 uses key == &seek_prefix"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3/Cargo.lock",
+      "supports": "pins okx/reth 81573d2c"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3-rc.1/Cargo.lock",
+      "supports": "pins okx/reth f60420aa"
+     },
+     {
+      "url": "web3_clientVersion on https://rpc.xlayer.tech, 2026-11-25",
+      "supports": "endpoint reports reth/v2.3.0-f60420a"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 20,
+   "id": "F-141",
+   "firstCycle": 20,
+   "history": [
+    {
+     "cycle": 20,
+     "unit": "op-stack-custom-gas",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
    "title": "BNB Smart Chain runs a call from the system address with its stated value and moves no balance, and no ordinary sender can be that address",
    "chainIds": [
     56
@@ -14195,8 +14390,8 @@
     "A10"
    ],
    "effect": "degrade",
-   "difference": "The Elysium endpoint reports nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12. Go 1.25 left support when go1.27.0 shipped on 2026-08-19. go1.25.13 fixed, among others, issue 79874, where the prove pass emits a 32 bit slice mask for a 64 bit slice operation on targets that sign-extend 32 bit constants (amd64 named), so a slice with a start index of 2^32 or more advances too little, and issue 80517, where prove applies a fact before the point where it holds and drops a bounds check, shown on amd64 as a call through an out-of-range function table entry. Arbitrum One and Robinhood Chain run go1.27.3, which is inside the range of the separate F-117 fault. Cycle 17 additions. (1) BNB Chain: 48 Club, a validator group and block builder, answers at rpc-bsc.48.club from two unpublished geth commits (132104cd and 9b93ce23), both built on 2026-11-16 with go1.25.5, a release line out of support since 2026-08-19 and missing the compiler fixes of go1.25.6 to go1.25.13. (2) Go issue 82839, opened 2026-11-03 and still open: the prove pass carries a fact through a sign extension of a narrow integer compared with a constant that does not fit the narrow type, and takes a branch that cannot be taken. The report names go1.26.6 to go1.26.10, go1.27.3 and master, and a variant from go1.24.13. Inside that range: bor v2.11.1 (go1.26.10), BNB Chain geth v1.8.2 (go1.26.10), avalanchego 1.15.3 (go1.26.10), Celo's op-geth backend (go1.24.13), Nitro on Arbitrum One and Robinhood Chain (go1.27.3) and Elysium (go1.25.12). Cycle 18 addition: the fix for issue 82839 (CL 858581) is still unmerged, so no Go release holds it. The faulty step is in factsTable.update of the prove pass (go1.26.10 prove.go lines 1101-1117 and 1147-1157) and reads the same in go1.24.7. Whether go1.25.12, which Elysium reports, lies inside the range of issue 82839 was not established (lead L-876), and Elysium's build names no source commit, so the tree search below does not speak for it.",
-   "mechanism": "Both faults change behaviour only on unusual shapes. Issue 79874 needs a slice start of 2^32 or more that the compiler has proved in bounds. The interpreter never slices calldata, code, memory or return data with such an index: a copy or load with a larger offset is clamped to the data length or charged for memory expansion first, and a zero-length copy or hash at a large offset touches no slice. The new offsets.py vectors aim at exactly that region (offsets from 2^31 to 2^256-1 for CALLDATALOAD, CALLDATACOPY, CODECOPY, KECCAK256, MCOPY and RETURNDATACOPY) and Elysium returns the specified word or failure on every one. Issue 80517 removes a bounds check whose failure would otherwise panic; on a correct program the check never fires, so it can only turn an existing out-of-range bug of the node into a silent read. The PoolManager paths that depend on these copies are the hook result copy (src/libraries/Hooks.sol:148), the revert bubbling copy (src/libraries/CustomRevert.sol:109), and the arithmetic in src/libraries/FullMath.sol:21-54; all match on the battery, the targeted set, the script sets and 3,515 mined swaps. The settled state is computed by the consensus-v61 WebAssembly machine built with go1.25.9 (F-119), which predates both fixes as well but runs on a different target. Cycle 17 additions: the EVM paths the PoolManager depends on work on 64 bit words in holiman/uint256 and the interpreter, and no comparison of the issue 82839 shape was located there, though the source was not searched systematically (lead L-839) and no binary was decompiled. The answers were tested instead on 2026-11-25: the battery (99,985 vectors), the targeted set (85,544) and the large-offset vectors match the specification on Polygon, BNB Chain, Avalanche and Celo (Celo pinned to its op-geth backend), and on the 48 Club endpoint the battery, the targeted set, the call semantics words, the slot reads and the script sets match too. Which of the two 48 Club builds answered each batch is not known (lead L-844). bor, BNB Chain geth and avalanchego at go1.26.10 already contain the fixes for issues 79874 and 80517. Cycle 18 addition: the systematic search that lead L-839 asked for was done over the same 849 files and 73 packages as F-117. The trigger is a signed ordered comparison where one side is a sign extension of an int8, int16 or int32 value of the form x plus or minus a constant and the other side is a constant outside the narrow type. The search found no such comparison, no widened narrow signed value compared with anything, and one narrow signed widening in total: uint256 v1.3.2 ExtendSign (uint256.go:1275), the SIGNEXTEND handler. That value is shifted and or-ed into the result and never compared; the branches of the function test uint64 values. uint256 v1.2.4 (Avalanche) builds the mask without a narrow conversion. 122 conversions whose operand type could not be resolved were read by hand and none has a narrow operand. 2,340 vectors per network aimed at SIGNEXTEND, sign extension chains and ADDMOD returned the specified word on the six Go client networks.",
+   "difference": "The Elysium endpoint reports nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12. Go 1.25 left support when go1.27.0 shipped on 2026-08-19. go1.25.13 fixed, among others, issue 79874, where the prove pass emits a 32 bit slice mask for a 64 bit slice operation on targets that sign-extend 32 bit constants (amd64 named), so a slice with a start index of 2^32 or more advances too little, and issue 80517, where prove applies a fact before the point where it holds and drops a bounds check, shown on amd64 as a call through an out-of-range function table entry. Arbitrum One and Robinhood Chain run go1.27.3, which is inside the range of the separate F-117 fault. Cycle 17 additions. (1) BNB Chain: 48 Club, a validator group and block builder, answers at rpc-bsc.48.club from two unpublished geth commits (132104cd and 9b93ce23), both built on 2026-11-16 with go1.25.5, a release line out of support since 2026-08-19 and missing the compiler fixes of go1.25.6 to go1.25.13. (2) Go issue 82839, opened 2026-11-03 and still open: the prove pass carries a fact through a sign extension of a narrow integer compared with a constant that does not fit the narrow type, and takes a branch that cannot be taken. The report names go1.26.6 to go1.26.10, go1.27.3 and master, and a variant from go1.24.13. Inside that range: bor v2.11.1 (go1.26.10), BNB Chain geth v1.8.2 (go1.26.10), avalanchego 1.15.3 (go1.26.10), Celo's op-geth backend (go1.24.13), Nitro on Arbitrum One and Robinhood Chain (go1.27.3) and Elysium (go1.25.12). Cycle 18 addition: the fix for issue 82839 (CL 858581) is still unmerged, so no Go release holds it. The faulty step is in factsTable.update of the prove pass (go1.26.10 prove.go lines 1101-1117 and 1147-1157) and reads the same in go1.24.7. Whether go1.25.12, which Elysium reports, lies inside the range of issue 82839 was not established (lead L-876), and Elysium's build names no source commit, so the tree search below does not speak for it. Cycle 20 addition: Elysium's go1.25.12 and the go1.25.9 build of the consensus replay binary that all three Arbitrum chains use contain the prove pass code that Go issue 82839 reports (prove.go lines 1000 to 1120 read the same in go1.25.9, go1.25.12 and go1.26.10, and the fix CL 858581 is unmerged). Both are outside the range of issue 81863, whose trigger arrived in go1.26. The release branch logs for go1.25.6 to go1.26.11 were read: the go1.26.10 builds of bor, BNB Chain geth and avalanchego lack only the fixes for issues 81863, 81868 and 82839.",
+   "mechanism": "Both faults change behaviour only on unusual shapes. Issue 79874 needs a slice start of 2^32 or more that the compiler has proved in bounds. The interpreter never slices calldata, code, memory or return data with such an index: a copy or load with a larger offset is clamped to the data length or charged for memory expansion first, and a zero-length copy or hash at a large offset touches no slice. The new offsets.py vectors aim at exactly that region (offsets from 2^31 to 2^256-1 for CALLDATALOAD, CALLDATACOPY, CODECOPY, KECCAK256, MCOPY and RETURNDATACOPY) and Elysium returns the specified word or failure on every one. Issue 80517 removes a bounds check whose failure would otherwise panic; on a correct program the check never fires, so it can only turn an existing out-of-range bug of the node into a silent read. The PoolManager paths that depend on these copies are the hook result copy (src/libraries/Hooks.sol:148), the revert bubbling copy (src/libraries/CustomRevert.sol:109), and the arithmetic in src/libraries/FullMath.sol:21-54; all match on the battery, the targeted set, the script sets and 3,515 mined swaps. The settled state is computed by the consensus-v61 WebAssembly machine built with go1.25.9 (F-119), which predates both fixes as well but runs on a different target. Cycle 17 additions: the EVM paths the PoolManager depends on work on 64 bit words in holiman/uint256 and the interpreter, and no comparison of the issue 82839 shape was located there, though the source was not searched systematically (lead L-839) and no binary was decompiled. The answers were tested instead on 2026-11-25: the battery (99,985 vectors), the targeted set (85,544) and the large-offset vectors match the specification on Polygon, BNB Chain, Avalanche and Celo (Celo pinned to its op-geth backend), and on the 48 Club endpoint the battery, the targeted set, the call semantics words, the slot reads and the script sets match too. Which of the two 48 Club builds answered each batch is not known (lead L-844). bor, BNB Chain geth and avalanchego at go1.26.10 already contain the fixes for issues 79874 and 80517. Cycle 18 addition: the systematic search that lead L-839 asked for was done over the same 849 files and 73 packages as F-117. The trigger is a signed ordered comparison where one side is a sign extension of an int8, int16 or int32 value of the form x plus or minus a constant and the other side is a constant outside the narrow type. The search found no such comparison, no widened narrow signed value compared with anything, and one narrow signed widening in total: uint256 v1.3.2 ExtendSign (uint256.go:1275), the SIGNEXTEND handler. That value is shifted and or-ed into the result and never compared; the branches of the function test uint64 values. uint256 v1.2.4 (Avalanche) builds the mask without a narrow conversion. 122 conversions whose operand type could not be resolved were read by hand and none has a narrow operand. 2,340 vectors per network aimed at SIGNEXTEND, sign extension chains and ADDMOD returned the specified word on the six Go client networks. Cycle 20 addition: the shape search was run over OffchainLabs/go-ethereum f1c5f02, the fork the replay binary pins, with its six Arbitrum-specific files in core/vm and core/state. It found 16 lower-tier candidates and no site of the faulty shape. The shape of issue 81868 appears in core/vm only in BitVec.setN, which passes 1,620 jump destination cases on Polygon, BNB Chain and Avalanche. Nitro's own arbos and precompiles packages, Elysium's unpublished tree and the go1.27 fix list for the Arbitrum One and Robinhood Chain builds were not read.",
    "impact": "None found. A miscompiled routine in one operator's build would make that node disagree with the others, which shows up as a missed or reorganised block. On Elysium, with one whitelisted validator, the operator would be agreeing with itself.",
    "preconditions": "An operator keeps building from an affected or unsupported Go release, and some function on the interpreter or state path has one of the faulty shapes. No such shape was found. The Elysium, 48 Club and Nitro rc.9 builds are private, so those checks are by their answers.",
    "mitigations": "The deployer can ask the operators (Kinetiq for Elysium, 48 Club, and the client teams of bor, BNB Chain geth, avalanchego, Celo op-geth and Nitro) to build with a supported Go release that holds the fixes, and to publish the version and commit of each build. LPs need do nothing.",
@@ -14346,6 +14541,50 @@
     {
      "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/shapevec-137.json",
      "supports": "vector results per network with seed 20261125 and the build that answered each batch (files shapevec-<chainId>.json)"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.25.12/src/cmd/compile/internal/ssa/prove.go",
+     "supports": "go1.25.12 has the unguarded x+delta constant derivation and the extension look-through (lines 1034-1060 and 1097-1115)"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.25.9/src/cmd/compile/internal/ssa/prove.go",
+     "supports": "go1.25.9, the replay build's compiler, has the same text"
+    },
+    {
+     "url": "https://go-review.googlesource.com/c/go/+/858581",
+     "supports": "the 82839 fix guards exactly that derivation and is still NEW on master (updated 2026-11-16)"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.25.12/src/cmd/compile/internal/ssa/compile.go",
+     "supports": "branchelim runs after dead auto elim in go1.25.12"
+    },
+    {
+     "url": "https://go-review.googlesource.com/c/go/+/841425",
+     "supports": "the 81863 fix names CL 685676 and CL 715044 as the cause; both merged on master after the go1.25 branch"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/f1c5f02/core/vm/interpreter.go",
+     "supports": "source of the replay machine's go-ethereum fork that was searched"
+    },
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz",
+     "supports": "web3_clientVersion nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12 on 2026-11-25 (raw/clientVersions.log)"
+    },
+    {
+     "url": "https://go-review.googlesource.com/changes/go~858581",
+     "supports": "status NEW, Fixes #82839, adds fitsSigned guard"
+    },
+    {
+     "url": "https://go-review.googlesource.com/changes/go~841425",
+     "supports": "MERGED 2026-09-30"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/go.mod",
+     "supports": "toolchain go1.25.12 and holiman/uint256 v1.3.2"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go",
+     "supports": "ExtendSign int8 conversion at line 1275, never compared"
     }
    ],
    "evidence": "primary",
@@ -14397,7 +14636,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 18,
+   "lastVerifiedCycle": 20,
    "id": "F-136",
    "firstCycle": 16,
    "history": [
@@ -14420,6 +14659,13 @@
      "status": "confirmed",
      "severity": "info",
      "note": "Finding 1 of the unit (ref F-136) folded in by hand: no comparison of the issue 82839 shape on the opcode or state path of seven client trees. Verifier: Elysium's go1.25.12 not placed in or out of the range (L-876)."
+    },
+    {
+     "cycle": 20,
+     "unit": "arbitrum-family",
+     "status": "confirmed",
+     "severity": "info",
+     "note": "Elysium go1.25.12 and the go1.25.9 replay build are inside the range of issue 82839; no EVM path has the shape."
     }
    ]
   }

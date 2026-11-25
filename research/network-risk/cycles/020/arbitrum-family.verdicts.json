@@ -1,0 +1,42 @@
+{
+ "unit": "arbitrum-family",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "web3_clientVersion on https://rpc.elysium.kinetiq.xyz returned nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12 on 2026-11-25, and Arbitrum One and Robinhood Chain returned nitro/v3.13.0-rc.9+b72783f on go1.27.3. arbOSVersion on 0x64 returns 0x74 (116, ArbOS 61) on Elysium. Nitro master go.mod has toolchain go1.25.12 and pins holiman/uint256 v1.3.2. I fetched prove.go at go1.25.9, go1.25.12 and go1.26.10 from go.googlesource.com: lines 1000 to 1120 are byte identical between go1.25.9 and go1.25.12, and the x+delta constant block (lines 1005 to 1075 of go1.25.12, which truncates w with int32(w.AuxInt), int16(w.AuxInt) and int8(w.AuxInt) at 1057 to 1064) occurs verbatim in go1.26.10 at other line numbers. The extension look-through that repeats the update on v.Args[0] with the same w is at go1.25.12 lines 1097 to 1106. The Gerrit API reports CL 858581 status NEW on master, updated 2026-11-16, subject do not truncate a wider constant in prove's x+delta case, Fixes #82839, and its patch adds a fitsSigned guard on exactly that branch. CL 841425 (teach deadstore about CondSelect) is MERGED on 2026-09-30. In go1.25.12 compile.go the pass list has dead auto elim at line 477 before branchelim at 480. My own eth_call with a code override computing the TickBitmap.compress sequence (SIGNEXTEND, SMOD, SLT, SDIV, SUB) for tick -887272 and spacing 60 returned -14788 on all three endpoints, the specified value. uint256 v1.3.2 ExtendSign has its only narrow signed conversion at uint256.go:1275 and does not compare it, as F-119 says.",
+   "codeCheck": "src/libraries/FullMath.sol:24 is mulmod(a, b, not(0)) and :48 is mulmod(a, b, denominator); the power of two divisions are at :62, :67 and :73. src/libraries/TickBitmap.sol:20-21 sign extend tick and tickSpacing, :25 is sdiv and :27 is slt(smod(...), 0). src/libraries/TickMath.sol:61-63 is signextend(2, tick) and sar(255, tick). src/libraries/Hooks.sol:148 is the returndatacopy, followed by the length and selector check at :152. These are the instructions whose node results would change under a Go miscompile, and the battery, targeted set and my own query give the specified results. The finding claims no loss path, which matches the code: a divergence between sequencer and replay binary affects block confirmation, not any PoolManager guard.",
+   "corrections": "The SMOD and SLT of TickBitmap.compress are at src/libraries/TickBitmap.sol:27, outside the cited range 24-26. The search of Nitro's arbos and precompiles packages is not done, as the finding states.",
+   "sources": [
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.25.12/src/cmd/compile/internal/ssa/prove.go", "supports": "x+delta constant derivation with truncation at lines 1054-1064 and extension look-through at 1097-1106"},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.25.9/src/cmd/compile/internal/ssa/prove.go", "supports": "lines 1000-1120 identical to go1.25.12"},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.26.10/src/cmd/compile/internal/ssa/prove.go", "supports": "same block present verbatim"},
+    {"url": "https://go-review.googlesource.com/changes/go~858581", "supports": "status NEW, Fixes #82839, adds fitsSigned guard"},
+    {"url": "https://go-review.googlesource.com/changes/go~841425", "supports": "MERGED 2026-09-30"},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.25.12/src/cmd/compile/internal/ssa/compile.go", "supports": "dead auto elim at line 477 runs before branchelim at line 480"},
+    {"url": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/go.mod", "supports": "toolchain go1.25.12 and holiman/uint256 v1.3.2"},
+    {"url": "https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go", "supports": "ExtendSign int8 conversion at line 1275, never compared"},
+    {"url": "https://rpc.elysium.kinetiq.xyz", "supports": "web3_clientVersion go1.25.12, arbOSVersion 116, and the compress sequence returns -14788"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Differential test of holiman/uint256 v1.3.2 and the unreleased master de2a0381 against math/big for the 21 operations the interpreter calls.",
+   "agrees": true,
+   "note": "I read scripts/u256diff/main.go and raw/u256diff.txt. The reference functions match the EVM definitions (division by zero gives zero, SDIV and SMOD truncate toward zero, SIGNEXTEND for index 31 or more returns the value), operands are aliased the way the go-ethereum handlers alias them, and both versions report zero mismatches. The edge list has 1,043 values (256 times four plus 15 constants plus 4 price values), not 1,053; 1,043 squared plus 200,000 gives the 1,287,849 vectors per operation in the log. ADDMOD, MULMOD, MULDIV and EXP get only the 200,000 random triples. I did not rerun the fault injection. No running node uses master, so the item clears nothing that is live today beyond v1.3.2."
+  },
+  {
+   "check": "Cycle 20 reruns of battery.py, targeted.py, pmdiff.py, pmdiff2.py, callsem.py and the precompile scan on 42161, 4663 and 99901.",
+   "agrees": true,
+   "note": "battery.json, targeted.json, pmdiff.json and callsem.json show zero mismatches and zero errors on all three chains, and pmdiff 249 identical per chain. pmdiff2.json does record the index of Elysium's different script: it is 189 (results[2].different = [189]), so the statement that the index was not re-identified is wrong. Script 189 is the gas-limited native swap cleared in cycle 9 (identical at 50 million gas). My GAS probe returns about 49.97 million on Elysium with or without a 50 million gas field, so the endpoint grants that much by default."
+  },
+  {
+   "check": "Opcodes that the forks Nitro tracks would add (CLZ 0x1e, SLOTNUM 0x4b, DUPN, SWAPN, EXCHANGE 0xe6-0xe8) against the PoolManager runtime.",
+   "agrees": true,
+   "note": "My own linear disassembly of the runtime in research/network-risk/build/PoolManager.json (24,009 bytes) finds none of 0x1e, 0x4b, 0xe6, 0xe7 or 0xe8 outside push data."
+  }
+ ],
+ "leads": []
+}

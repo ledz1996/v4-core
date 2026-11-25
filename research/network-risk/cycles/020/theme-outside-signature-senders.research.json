@@ -1,0 +1,248 @@
+{
+ "unit": "theme-outside-signature-senders",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "F-140",
+   "title": "MegaETH portal upgraders can emit a deposit whose sender is the PoolManager, and mega-evm runs deposits through op-revm without nonce or code checks",
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A8",
+    "A6"
+   ],
+   "effect": "siphon",
+   "actor": "governance",
+   "severity": "high",
+   "difference": "On Ethereum only a key or the contract's own code can move what a contract holds. On MegaETH the from field of a deposit transaction is whatever the OptimismPortal2 proxy 0x7f82f57F0Dd546519324392e408b01fcC7D709e8 on Ethereum writes into TransactionDeposited. The proxy is upgradeable: its EIP-1967 admin slot holds the ProxyAdmin 0x15fcb0120d414f246ead019ca4bdf97447cd8d90, whose owner is the Safe 0x92e0e0b15e3e99b32c9ed9ad284f939553c7b7d6 with threshold 6 of 10 owners. mega-evm v1.7.4 delegates validate_against_state_and_deduct_caller to op-revm at revision f67d87cd, and op-revm returns from the deposit branch after adding the mint and bumping the nonce, without the nonce and code validation that every other transaction gets.",
+   "mechanism": "The verified implementation 0x55400445e384393f9c1be23e7e734e8d44ed9fd9 (OptimismPortal2, version 3.15.2, Sourcify full match) sets from to msg.sender and replaces it with msg.sender plus 0x1111000000000000000000000000000000001111 unless msg.sender equals tx.origin or carries a 23 byte EIP-7702 delegation (OptimismPortal2.sol lines 481 to 484, EOA.sol lines 9 to 24). It only refuses the MegaETH system address 0xA887dCB9D5f39Ef79272801d05Abdf707CFBbD1d as from (line 487). An ordinary account cannot make from equal the PoolManager 0xacb7e78fa05d562e0a5d3089ec896d57d057d38e: on Ethereum that address has no code and nonce 0, and its alias preimage 0x9ba6e78fa05d562e0a5d3089ec896d57d057c27d has no code and nonce 0, so producing either would need a key or a CREATE2 preimage for a fixed 160 bit target. The proxy admin can install another implementation, as OP Mainnet governance did on 2026-10-31 (F-140), and emit TransactionDeposited with from set to the PoolManager, to set to a pooled token and calldata transfer(recipient, balance). mega-evm would run it as an outer call from the PoolManager: op-revm loads the caller, adds the mint, bumps the nonce and returns at handler.rs lines 113 to 143, and mega-evm's own before_run hook treats only transactions from the system address specially (execution.rs lines 87 to 157). The token sees an ordinary transfer by its holder. Nothing in the PoolManager runs: unlock (src/PoolManager.sol:104-114), the debit in take (src/PoolManager.sol:291-297) and the NonzeroDeltaCount check never execute, so pool state and ERC-6909 claims (src/ERC6909.sol:17) keep balances that are gone. A forged call that targets the PoolManager itself gains nothing: unlock calls unlockCallback on the PoolManager, which has no such function, and every entry point other than unlock, sync, the ERC-6909 functions and the owner functions requires the lock (src/PoolManager.sol:96-99).",
+   "impact": "Every balance the PoolManager holds on MegaETH, in native ETH and in every ERC-20. Liquidity providers and claim holders would keep records that cannot be paid out. No such deposit has happened: the PoolManager's nonce on MegaETH is 1 at block 0x1f50bdd, and a deposit from it would have bumped the nonce.",
+   "preconditions": "Six of the ten owners of Safe 0x92e0e0b15e3e99b32c9ed9ad284f939553c7b7d6 on Ethereum sign an upgrade of the portal through ProxyAdmin 0x15fcb0120d414f246ead019ca4bdf97447cd8d90. No ordinary account can do this.",
+   "mitigations": "Treat the MegaETH portal upgrade key as custodian of every pooled balance. Liquidity providers can watch Upgraded events on 0x7f82f57F0Dd546519324392e408b01fcC7D709e8 and TransactionDeposited events whose from topic is the PoolManager. The deployer cannot close it in src: a call from the PoolManager address to a token bypasses all PoolManager code.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114",
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:40-80"
+   ],
+   "sources": [
+    {
+     "url": "https://sourcify.dev/server/v2/contract/1/0x55400445e384393f9c1be23e7e734e8d44ed9fd9?fields=sources,compilation",
+     "supports": "Verified OptimismPortal2 source of implementation 0x55400445e384393f9c1be23e7e734e8d44ed9fd9: from is msg.sender, aliased unless EOA.isSenderEOA() (lines 481-484); MEGA_SYSTEM_ADDRESS refused as from (lines 84 and 487); TransactionDeposited emitted with that from (line 496). EOA.sol lines 9-24 accept msg.sender == tx.origin or a 23 byte 0xEF0100 delegation."
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "Saved in research/network-risk/cycles/020/theme-outside-signature-senders.work/raw/megaportal.json. eth_getStorageAt and eth_call on Ethereum via reth/v2.11.0-b9abbcc at block 0x19444c0: implementation slot 0x55400445..., admin slot 0x15fcb012..., ProxyAdmin owner 0x92e0e0b1... with getThreshold 6 and ten owners, version 3.15.2, paused false; PoolManager address and its alias preimage have no code and nonce 0 on Ethereum; implementation bytecode contains the alias offset and the 0xEF0100 constant."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/evm/execution.rs",
+     "supports": "Lines 87-157: before_run promotes only transactions from the system address and whitelists their callee. Lines 581-593: validate_against_state_and_deduct_caller is delegated to op-revm."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/Cargo.toml",
+     "supports": "op-revm pinned to ethereum-optimism/optimism rev f67d87cd5c9992b62d215c043917b94e3f019629 (line 140)."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/f67d87cd5c9992b62d215c043917b94e3f019629/rust/op-revm/src/handler.rs",
+     "supports": "Lines 113-143: the deposit branch adds the mint, bumps the nonce and returns before validate_account_nonce_and_code_with_components, which only non-deposit transactions reach (line 154)."
+    },
+    {
+     "url": "https://mainnet.megaeth.com/rpc",
+     "supports": "Saved in research/network-risk/cycles/020/theme-outside-signature-senders.work/raw/pm_nonces.json. eth_getTransactionCount of the PoolManager on MegaETH (mega-reth/v2.3.1-4499c42) at block 0x1f50bdd is 1."
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L2",
+   "check": "Ethereum: every path that starts a call whose sender is not set by a signature or by the calling frame, and whether an ordinary account can make that sender the PoolManager.",
+   "result": "None can. The only such calls are the EIP-4788, EIP-2935 and request queue system calls (including the builder deposit and exit queues in go-ethereum master), each with From params.SystemAddress 0xfffffffffffffffffffffffffffffffffffffffe and a fixed target (core/state_processor.go lines 379-395, 411-425, 465-480; params/protocol_params.go line 246). Signed transactions must come from an account without code other than a delegation (core/state_transition.go preCheck, line 602). An EIP-7702 authority is recovered from its signature (core/types/tx_setcode.go lines 145-165) and is rejected if it holds code that is not a delegation (core/state_transition.go lines 1144-1146), so the PoolManager, with 24,009 bytes of code and nonce 1, can never be an authority.",
+   "source": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/core/state_processor.go; https://raw.githubusercontent.com/ethereum/go-ethereum/master/core/state_transition.go; https://raw.githubusercontent.com/ethereum/go-ethereum/master/core/types/tx_setcode.go; research/network-risk/cycles/020/theme-outside-signature-senders.work/raw/pm_nonces.json"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "check": "Polygon: bor state sync (commitState), span commits and any other system message, and whether their sender can be the PoolManager.",
+   "result": "No. Every system message is built by GetSystemMessage with From params.BorSystemAddress 0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE and Value 0 (consensus/bor/statefull/processor.go lines 71-80, params/config.go line 271), and CommitState sends it to the StateReceiver (consensus/bor/contract/client.go line 73). The StateReceiver accepts only that system address (System.sol lines 4-7) and forwards each record to its receiver as onStateReceive(uint256,bytes) with itself as msg.sender (StateReceiver.sol lines 42-57). No path names a sender chosen by Ethereum or Heimdall. The PoolManager has no fallback and no onStateReceive, so a record naming it as receiver reverts. Its nonce on Polygon is 1.",
+   "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/consensus/bor/statefull/processor.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/params/config.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/consensus/bor/contract/client.go; https://raw.githubusercontent.com/0xPolygon/genesis-contracts/master/contracts/StateReceiver.sol; https://raw.githubusercontent.com/0xPolygon/genesis-contracts/master/contracts/System.sol"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L2",
+   "check": "BNB Smart Chain: Parlia system transactions, who signs them and where they may go.",
+   "result": "Every system message is built with From header.Coinbase (parlia.go lines 1389, 2069, 2096, 2110, 2131, 2137-2146), the coinbase must equal the address recovered from the header seal (lines 996-998), and a transaction counts as a system transaction only if its target is one of the fourteen system contracts, its gas price is zero and its recovered sender is the coinbase (lines 323-335, 106-121). The sender is therefore a validator key and the target a fixed system contract. Even a validator cannot make it the PoolManager, because that would need the PoolManager's private key. The PoolManager's nonce is 1.",
+   "source": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/consensus/parlia/parlia.go"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Avalanche C-Chain: atomic import and export, the native asset precompiles, and any other path whose sender is not a signer or calling frame.",
+   "result": "None reaches the EVM with a chosen sender. An import is an operation that mints to the named addresses and runs no EVM code (vms/saevm/cchain/tx/import.go lines 206-225, hooks.go lines 228-243). An export debits a C-Chain address only when a secp256k1 signature recovers to that address (export.go lines 175-197). nativeAssetCall used the precompile's caller as sender when it was active and is now DeprecatedContract, which reverts (graft/coreth/nativeasset/contract.go lines 176-180); an eth_call to 0x0100000000000000000000000000000000000002 and 0x0100000000000000000000000000000000000001 on avalanchego/1.15.3 reverted with empty data.",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/tx/export.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/tx/import.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/graft/coreth/nativeasset/contract.go; research/network-risk/cycles/020/theme-outside-signature-senders.work/raw/onchain_tests.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "check": "Monad: system transactions and staking syscalls.",
+   "result": "A system transaction is accepted only when its recovered sender is SYSTEM_SENDER 0x6f49a8F621353f12378d0046E7d7e4b9B249DC9e, it is a legacy transaction, and its target is the staking precompile (validate_system_transaction.cpp lines 47, 51, 59); it then runs the native staking syscall, not EVM code at a chosen address (execute_system_transaction.cpp lines 178-182, 205-232). SYSTEM_SENDER cannot be an EIP-7702 authority (validate_monad_transaction.cpp line 53). The header comment calls it a key known to consensus (system_sender.hpp lines 22-25); I did not establish whether the key is public. In neither case can the sender be the PoolManager, whose nonce is 1.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/monad/validate_system_transaction.cpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/monad/execute_system_transaction.cpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/monad/system_sender.hpp; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/monad/validate_monad_transaction.cpp"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "MegaETH: deposits, mega system transactions, keyless deploys and pre-block system calls, for an ordinary account.",
+   "result": "An ordinary account cannot make any of them carry the PoolManager as sender. Deposits take from from the portal, which aliases contract callers (see the MegaETH finding of this unit for the governance path). Mega system transactions must be legacy transactions recovered to 0xA887dCB9D5f39Ef79272801d05Abdf707CFBbD1d and calling the Oracle contract (system/tx.rs lines 22-25, 40-70; execution.rs lines 104-110). Pre-block system calls use 0xff..fe (system/tx.rs lines 129-133). The keyless deploy signer is recovered from its signature (cleared in earlier cycles).",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/system/tx.rs; https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/evm/execution.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Tempo: system transactions, sub-blocks, fee payers, type 0x76 batches with keychain signatures, and TIP-1107 configurable accounts (T14, scheduled for 8 December 2026).",
+   "result": "None lets an ordinary account act as the PoolManager. A system transaction is a legacy transaction with signature (0,0) and sender Address::ZERO (envelope.rs lines 26-29, 234-236, 379-384), and the block executor accepts one only with target address zero carrying sub-block metadata, refusing every other target (block.rs lines 617-660); the committee system call uses caller zero and a fixed target (lines 589-591). Sub-block transactions are refused (lines 671-676; handler.rs line 1400). A fee payer signs separately and does not change the sender. A keychain signature names user_address, which must equal the recovered signer (handler.rs lines 667-676); a key authorization must be signed by that account or, from T6, by an admin key of it (handler.rs lines 566-573, 775-792); and the keychain precompile accepts authorizeKey only when msg.sender is tx.origin and the transaction is signed by the root key or an admin key (account_keychain/mod.rs lines 1193-1209). The PoolManager is never tx.origin, so no key can be registered for it. A configurable account address is the last 20 bytes of a keccak256 of its configuration (tip-1107.md lines 84-99) and must have empty code or the 0xef marker (line 171); the PoolManager has code, and matching its address would need a 160 bit preimage. Address zero, the protocol fee controller on Tempo, reaches only the sub-block metadata target and the committee contract.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/primitives/src/transaction/envelope.rs; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/evm/src/block.rs; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/evm/src/handler.rs; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/account_keychain/mod.rs; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/tips/tip-1107.md"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L2",
+   "check": "Arc: who may name the sender of a CallFrom subcall, checked in source and on chain.",
+   "result": "Only Memo 0x5294E9927c3306DcBaDb03fe70b92e01cCede505 and Multicall3From 0x522fAf9A91c41c443c66765030741e4AaCe147D0 may call CallFrom (evm.rs lines 661-669, 1665-1680; execution-config call_from.rs), both pass their own msg.sender (Memo.sol line 43, Multicall3From.sol lines 43, 58, 81), and the EVM rejects a child caller that is neither the calling helper nor tx.origin (evm.rs lines 946-955). On arc/v1: an EOA calling CallFrom directly with the PoolManager as sender reverted with 'unauthorized caller'; an EOA calling Memo with a USDC transfer ran it as the EOA (reverted 'transfer amount exceeds balance'); a contract placed by state override calling Memo reverted with 'sender spoofing requires tx.origin as sender'. The PoolManager is never tx.origin.",
+   "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/crates/evm/src/evm.rs; https://raw.githubusercontent.com/circlefin/arc-node/main/contracts/src/memo/Memo.sol; research/network-risk/cycles/020/theme-outside-signature-senders.work/raw/onchain_tests.json; research/network-risk/cycles/020/theme-outside-signature-senders.work/raw/arc_stub_memo.json"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L2",
+   "check": "HyperEVM: senders of system transactions in a fresh census, and whether an ordinary account can make HyperCore name the PoolManager.",
+   "result": "In blocks 52231708 to 52233207 (1500 blocks, eth_getSystemTxsByBlockNumber on 'hyperliquid evm Mainnet') there were 1031 system transactions from 28 senders: the HYPE bridge 0x2222222222222222222222222222222222222222, 25 token system addresses 0x20..., the CoreDepositWallet 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24 (2,175 bytes of code) and the treasury 0xc20699185c15d0a2fd65779bb5d69f5b0b113c00. None names the PoolManager or its owner as sender, target or argument, HyperCore spotMeta links none of 195 linked tokens to either, and the PoolManager's nonce is 1. The archive client takes the sender from the upstream from field, falling back to 0x2222... for empty input and the token system address otherwise (nanoreth src/node/types/reth_compat.rs lines 236-249), and treats any zero gas price transaction as a system transaction (executor.rs lines 44-49), so the sender is whatever HyperCore states. That choice stays with HyperCore at operator level, recorded as F-020; an ordinary account cannot link a token to the PoolManager (cleared in cycle 4).",
+   "source": "research/network-risk/cycles/020/theme-outside-signature-senders.work/raw/hl_systx_census.json; research/network-risk/cycles/020/theme-outside-signature-senders.work/raw/hl_spotMeta.json; https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/types/reth_compat.rs; https://raw.githubusercontent.com/hl-archive-node/nanoreth/master/src/node/evm/executor.rs"
+  },
+  {
+   "chainIds": [
+    4326,
+    137,
+    56,
+    43114,
+    143,
+    4217,
+    5042,
+    999,
+    1
+   ],
+   "lens": "L2",
+   "check": "Has any path that writes a sender outside a signature ever acted as the PoolManager on the nine networks?",
+   "result": "No evidence of it. eth_getTransactionCount of the PoolManager is 1 on all nine endpoints (Ethereum, Polygon, BNB Smart Chain, Avalanche, Monad, MegaETH, Tempo, Arc, HyperEVM), the value set at creation. Deposits, Parlia system transactions, Monad system transactions and HyperEVM system transactions bump the sender's nonce, so none of them has been sent in its name. Bor system messages and Tempo system transactions do not bump a nonce, but their senders are fixed constants.",
+   "source": "research/network-risk/cycles/020/theme-outside-signature-senders.work/raw/pm_nonces.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Signature checks that tokens or Permit2 could run on behalf of the PoolManager (EIP-2612 permit, ERC-1271).",
+   "result": "None can succeed. src/ has no isValidSignature function (no match for isValidSignature or 1271 in src/), so an ERC-1271 check against the PoolManager reverts or returns no magic value, and an ecrecover check would need its private key. The PoolManager also never approves a spender: its only outgoing calls are transfer, balanceOf, the hook selectors, unlockCallback and empty value calls (src/types/Currency.sol:40-80, src/PoolManager.sol:104-114).",
+   "source": "src/types/Currency.sol:40-80"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "What the code does when a call reaches it with msg.sender equal to the PoolManager itself.",
+   "result": "Nothing useful to an attacker. unlock calls IUnlockCallback(msg.sender).unlockCallback, and the PoolManager has no such function, so the call reverts (src/PoolManager.sol:104-114). take, settle, mint, burn, clear, swap, modifyLiquidity and donate require the lock (src/PoolManager.sol:96-99). The owner functions check msg.sender against the stored owner (lib/solmate/src/auth/Owned.sol:19-23) and fee collection against protocolFeeController (src/ProtocolFees.sol:44-57). The danger of a forged PoolManager sender lies in calls to tokens, which bypass all of this code.",
+   "source": "src/PoolManager.sol:104-114"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "question": "Has the MegaETH OptimismPortal2 proxy 0x7f82f57F0Dd546519324392e408b01fcC7D709e8 ever pointed at an implementation other than 0x55400445e384393f9c1be23e7e734e8d44ed9fd9? Scan its Upgraded events from deployment.",
+   "why": "The public endpoints I tried refused archive or wide eth_getLogs ranges (publicnode needs a token, drpc allows 100 blocks, flashbots 2,000) and the Blockscout API timed out. A temporary implementation like the one OP Mainnet used on 2026-10-31 would show there.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "question": "Is the private key of Monad SYSTEM_SENDER 0x6f49a8F621353f12378d0046E7d7e4b9B249DC9e public, and can an ordinary signed transaction from it call the staking precompile's reward, snapshot or epoch change functions?",
+   "why": "system_sender.hpp calls it a known key. It cannot be the PoolManager, but a public key would let anyone act as the address consensus uses for staking syscalls.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-900",
+   "outcome": "cleared",
+   "answer": "For all nine networks the paths whose sender is not set by a signature or a calling frame were read in client source: Ethereum and Polygon system calls from 0xff..fe, BNB Smart Chain Parlia system transactions from the sealing validator, Avalanche atomic operations that run no EVM code, Monad system transactions to the staking precompile, MegaETH deposits and mega system transactions, Tempo system transactions from address zero to address zero, Arc CallFrom limited to tx.origin, and HyperEVM system transactions whose sender HyperCore writes. None lets an ordinary account act as the PoolManager. The only path where a privileged party can name the PoolManager as sender is the MegaETH portal upgrade (governance, high, extends F-140); HyperEVM stays at operator level under F-020. The PoolManager's nonce is 1 on all nine."
+  },
+  {
+   "leadId": "L-910",
+   "outcome": "finding",
+   "answer": "MegaETH uses an OptimismPortal2 proxy 0x7f82f57F0Dd546519324392e408b01fcC7D709e8 (implementation 0x55400445..., version 3.15.2, verified) that aliases contract callers unless they are tx.origin or 7702 delegated EOAs. Its ProxyAdmin 0x15fcb012... is owned by a 6 of 10 Safe 0x92e0e0b1.... mega-evm v1.7.4 runs deposits through op-revm rev f67d87cd, whose deposit branch skips nonce and code checks. Recorded as a governance finding extending F-140."
+  }
+ ]
+}

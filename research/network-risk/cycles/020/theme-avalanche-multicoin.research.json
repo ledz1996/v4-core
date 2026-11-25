@@ -1,0 +1,107 @@
+{
+ "unit": "theme-avalanche-multicoin",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Task 1, the code the C-Chain runs and every writer of the asset partition. The public endpoint answered web3_clientVersion avalanchego/1.15.3 commit 983815fd, go 1.26.10, before and after every batch. At v1.15.3 the node registers the SAE C-Chain VM for the EVM chain id (node/node.go:1240, saevm.Factory from vms/saevm/cchain), and graft/coreth holds only params, nativeasset, customtypes and precompile packages. A search of the whole avalanchego v1.15.3 tree and of the libevm revision it pins (d398bc4dbe41, go.mod:30) lists every caller of AddAssetBalance, SubAssetBalance, GetAssetBalance, SetState with SkipStateKeyTransformation and MarkHeldXChainAsset.",
+   "result": "There are four writers and none is open to an ordinary account today. (1) Import.transferNonAVAX calls AddAssetBalance for each non-AVAX output (vms/saevm/cchain/tx/import.go:237-246), run from FinishExecutingBlock (vms/saevm/cchain/hooks.go:257-269). Import.sanityCheck rejects any non-AVAX input or output with no fork gate (tx/import.go:117-128). The txpool runs it on every gossiped transaction (txpool/txpool.go:163) and PotentialEndOfBlockOps runs it on every atomic transaction, also when VerifyBlock rebuilds a peer's block and compares hashes (hooks.go:464, sae/blocks.go:77-90, sae/block_builder.go:77-127). A block carrying a non-AVAX import is therefore rebuilt without it and rejected. (2) Export.transferNonAVAX calls SubAssetBalance (tx/export.go:267-281); export inputs are rejected the same way (export.go:136-138) and each input needs a secp256k1 signature that recovers to the debited address (export.go:174-196), which the PoolManager, a contract, cannot give. (3) NativeAssetCall (graft/coreth/nativeasset/contract.go:142-157) is mapped to DeprecatedContract, which reverts, from Banff on (graft/coreth/params/hooks_libevm.go:113-124, 133-147). (4) AddAssetBalance with a zero amount only touches the account (extstate/statedb.go:139-143). The validators that still run the older full coreth tree check the same thing behind rules.IsBanff (coreth plugin/evm/atomic/import_tx.go:106-117 on ava-labs/coreth master and at avalanchego v1.14.2). The SAE end of block ops only move native AVAX and nonces (vms/saevm/hook/hook.go:186-212, saexec/execution.go:416-436).",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/tx/import.go"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "check": "Task 2, whether a write into the asset partition of the PoolManager account could land on a key the EVM later reads as a PoolManager slot.",
+   "result": "No, by construction and independent of who writes. libevm applies TransformStateKey in GetState, GetCommittedState and SetState unless the caller passes SkipStateKeyTransformation (libevm core/state/statedb.go:346-363, 419-425, statedb.libevm.go:115-121). The C-Chain hook clears bit 0 of byte 0 of every EVM key (extstate/statedb.go:48-56), so SLOAD and SSTORE (core/vm/instructions.go:517, 528) only reach keys with that bit clear. Asset keys always have it set (assetBalanceKey, extstate/statedb.go:59-62). The two key sets are disjoint, so no asset balance can equal any PoolManager slot, including the half of the keccak derived pool, tick, position and bitmap slots whose own bit 248 is set: those are stored at the key with the bit cleared. The fold of F-040 is the price of this separation and is already covered there. The only raw EVM read is GetCommittedState before Apricot Phase 1 (extstate/statedb.go:102-113), which sets SSTORE refunds of blocks from 2020 and does not run today.",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/libevm/extstate/statedb.go"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Task 3, the precompiles and the PoolManager storage read by RPC (scripts/probe.py, probe2.py, oldops.py, outputs raw/probe.json, raw/probe2.json, raw/oldops.json, block 101,376,238 and later).",
+   "result": "eth_call to 0x0100000000000000000000000000000000000001 (NativeAssetBalance) and ...0002 (NativeAssetCall) and to the genesis contract ...0000 reverts with empty data, both from the PoolManager address and from 0x...0a11ce. The old multicoin opcodes 0xcd and 0xcf are undefined ('invalid opcode: opcode 0xcd not defined'). For 52 pool state words of 13 pools seen in recent Swap logs (32 of them with bit 248 set in the slot), eth_getStorageAt of the slot, eth_getStorageAt of the slot with bit 248 flipped, extsload of both all return the same non-zero word. The raw asset partition could not be read: eth_getProof answers 'the method eth_getProof is not available' on api.avax.network (the SAE RPC does not register it), debug_storageRangeAt, debug_dumpBlock and debug_accountRange do not exist, and the other public endpoints tried (publicnode, ankr, 1rpc, drpc, meowrpc, omniatech) returned a challenge page, an API key demand, a quota error or no answer. So the absence of asset keys in the PoolManager's trie rests on the source reading above, not on a proof.",
+   "source": "eth_getStorageAt, eth_call and eth_getProof on https://api.avax.network/ext/bc/C/rpc, recorded in research/network-risk/cycles/020/theme-avalanche-multicoin.work/raw/probe2.json"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "check": "Task 4, whether the held X-chain asset flag (the former IsMultiCoin) on an account changes SLOAD, SSTORE, BALANCE, SELFBALANCE or EXTCODEHASH.",
+   "result": "The flag is a bool account extra (customtypes/state_account_ext.go:11-25), set only by AddAssetBalance and read only there. TransformStateKey ignores the address (extstate/statedb.go:48), so SLOAD and SSTORE are the same with or without it. BALANCE and SELFBALANCE read the native balance, which the flag does not touch. The flag enters stateObject.empty() (libevm core/state/state_object.go:95-97), so it only matters for an account with nonce 0, zero balance and no code: EXTCODEHASH of such an account returns keccak256 of empty code instead of zero (instructions.go:417-426), it escapes EIP-161 deletion, and a value call to it skips the new account surcharge. The PoolManager has code and nonce 1, so none of this applies to it, and src/ does not use EXTCODEHASH or code size checks (no match for extcodehash, extcodesize or .code.length in src/). The CREATE collision check reads nonce and code hash only (core/vm/evm.go:456-459), so a pre-Banff asset balance at a future address cannot block a deployment.",
+   "source": "https://raw.githubusercontent.com/ava-labs/libevm/d398bc4dbe41/core/state/state_object.go"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "check": "Native AVAX that an ordinary account can push into the PoolManager outside the EVM: an atomic import whose output address is the PoolManager mints AVAX to it at the end of a block (hook.go:209-211, tx/import.go:206-224), and export cannot debit it without its key.",
+   "result": "Harmless. Native settle credits msg.value and never reads the native balance (src/PoolManager.sol:349-355), and sync of the native currency only resets the synced currency (src/PoolManager.sol:279-283). Minted AVAX is a surplus nobody can claim through the PoolManager, the same as a forced send by SELFDESTRUCT on Ethereum, and it arrives between transactions, never inside an unlock.",
+   "source": "src/PoolManager.sol:349-355"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "State overrides used as evidence on Avalanche. libevm applies `state` overrides through SetStorage, which writes raw keys, and `stateDiff` overrides through SetState, which transforms them (libevm internal/ethapi/api.go:985-997, core/state/statedb.go:427-445).",
+   "result": "Measured on the endpoint: a `state` override of key 2^248+0x1234 is invisible to extsload of either 2^248+0x1234 or 0x1234 and also wipes the real storage (owner slot reads zero), while the same key under `stateDiff` is read under both indexes. The shared scripts in research/network-risk/tools/opdiff use only `code`, `balance` and `stateDiff` overrides (pmdiff3.py:104, pmdiff6.py:145), so their Avalanche results are not affected. A script that seeds keccak derived slots with a `state` override on the C-Chain would put half of them into the asset partition.",
+   "source": "eth_call with state overrides on https://api.avax.network/ext/bc/C/rpc, recorded in research/network-risk/cycles/020/theme-avalanche-multicoin.work/raw/probe2.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "The theme across networks: does any other of the 21 networks keep a non-EVM namespace inside a contract's own storage trie that public transactions can write?",
+   "result": "No such namespace is known on the other 20. The multicoin partition is a C-Chain feature of coreth and of the SAE C-Chain VM. The cycle 19 storage key test (statekeys.py and extsload over the deployed PoolManagers) found that no other network folds a bit of a storage or transient index, which a partition with a key hook would show. A partition without a key hook would collide with EVM slots and be visible to SLOAD; none was seen. This covers only what an EVM read can see. The closed clients (HyperEVM's validator, MegaETH's producer) were not read.",
+   "source": "research/network-risk/state/cleared.json (cycle 19 established-l1 statekeys rerun and the 21 network fold test)"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "question": "Which earlier Avalanche results, outside the shared opdiff scripts, seeded PoolManager or token storage with a full `state` override instead of `stateDiff`?",
+   "why": "On the C-Chain a `state` override writes raw keys, so every seeded slot with bit 248 set lands in the asset partition and reads zero, and the rest of the account storage is wiped. Such a run would test different state from what the script assumed.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-909",
+   "outcome": "cleared",
+   "answer": "No transaction an ordinary account can send today writes an asset balance into the PoolManager account. At avalanchego 1.15.3 (endpoint commit 983815fd) the only writers are non-AVAX import and export outputs, which sanityCheck rejects with no fork gate in the txpool and in block re-verification, and NativeAssetCall, which reverts from Banff on; the precompiles at 0x01..01 and 0x01..02 revert by eth_call from the PoolManager and from a plain address, and the old opcodes 0xcd and 0xcf are undefined. Even a write would be harmless, because the EVM key set (bit 0 of byte 0 cleared) and the asset key set (bit set) are disjoint. The held X-chain asset flag changes only the emptiness test, which does not apply to an account with code. eth_getProof is not served by any reachable public endpoint, so the PoolManager trie itself was not inspected. F-040 should say that the fold comes from the key hook that keeps EVM keys out of the asset partition, that the partition has had no writer open to the public since Banff (October 2022), and that the fold, not the asset partition, is the only part with any effect on contracts."
+  }
+ ]
+}

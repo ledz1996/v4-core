@@ -1,0 +1,38 @@
+{
+  "unit": "theme-reserved-address-routing",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "Fetched bsc v1.8.2 core/vm/cas20.go, evm.go, cas20_factory.go, params/config.go and internal/ethapi/override/override.go from raw.githubusercontent.com. cas20.go defines cas20VariantAsset = 0x00 and cas20VariantStablecoin = 0x01, IsCAS20Address checks bytes 0 and 1 against 0xca52 and bytes 2 to 9 for zero, resolveCAS20Token looks up cas20Variants[addr[10]] which holds only those two ordinals, and resolveCAS20 adds the factory 0xCA5F00..00 and the two registries. runCAS20Token reverts unless the code hash equals keccak256(CAS20MarkerCode), and cas20_factory.go line 35 sets CAS20MarkerCode to the single byte 0xEF. evm.go EVM.precompile consults the static map, treats DisabledPrecompile as not a precompile, and calls resolveCAS20 only when chainRules.IsJenner holds. config.go line 256 sets the BSC mainnet JennerTime to 1796697000, 2026-12-08 02:30 UTC, so the fork is not active on 2026-11-25. I ran eth_call from the PoolManager 0x28e2ea09...e9df with balanceOf(PoolManager) calldata on bsc-dataseed1.bnbchain.org (web3_clientVersion Geth/v1.8.2/linux-amd64/go1.26.10): with blockOverrides time 0x6b176e00, 0xca52000000000000000000000000000000000001 (byte 10 = 0x00), 0xca52000000000000000001000000000000000001 (byte 10 = 0x01) and the factory 0xca5f00..00 revert with empty data, while byte 10 = 0x02 and byte 10 = 0xff return 0x; without the override all five return 0x. This matches the finding.",
+      "codeCheck": "src/types/Currency.sol:54-86: transfer to a currency with no code succeeds because iszero(returndatasize()) holds, and reverts with ERC20TransferFailed after the fork at a routed ordinal because the call fails. src/types/Currency.sol:90-96: balanceOfSelf is a high level IERC20Minimal.balanceOf call, which reverts on empty return data both before and after the fork. src/PoolManager.sol:279-288: sync calls balanceOfSelf for a non zero currency, so it reverts. src/PoolManager.sol:349-364: _settle credits only reservesNow - reservesBefore for the synced currency, so with no sync no positive delta in such a currency arises. Every other route to a positive delta in X (swap output, liquidity removal, ERC-6909 burn) needs X to have been settled into the pool or into a claim first, and modifyLiquidity, swap with X as input, donate and mint all create negative X deltas that need settlement. The delta count check in unlock then reverts any transaction that leaves such a debt. No pool can hold X before or after the fork.",
+      "corrections": "",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/cas20.go", "supports": "ordinal constants 0x00 and 0x01, IsCAS20Address, resolveCAS20Token and resolveCAS20 routing, runCAS20Token marker hash check"},
+        {"url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/evm.go", "supports": "EVM.precompile routes CAS20 only when IsJenner holds and treats DisabledPrecompile as an ordinary account"},
+        {"url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/cas20_factory.go", "supports": "CAS20MarkerCode is 0xEF (line 35), written by the factory at lines 161-164"},
+        {"url": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/config.go", "supports": "BSC mainnet JennerTime 1796697000 at line 256"},
+        {"url": "rpc: eth_call on https://bsc-dataseed1.bnbchain.org, 2026-11-25, from 0x28e2ea090877bf75740558f6bfb36a5ffee9e9df, balanceOf calldata, blockOverrides time 0x6b176e00 and none", "supports": "byte 10 = 0x00, 0x01 and the factory revert under the override; byte 10 = 0x02 and 0xff return empty success; all return empty success without the override"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "L-908: every CAS20 function at v1.8.2 that changes a holder's balanceOf without a transfer signed or sent by that holder, who may call it, and whether an account with no role can move the PoolManager's balance between its own sync and settle.",
+      "agrees": true,
+      "note": "Fetched cas20_token.go, cas20_admin.go, cas20_asset.go, cas20_stablecoin.go and cas20_permit.go at v1.8.2. Balance slots are written only in move (cas20_token.go:240-270, which reads and writes the from slot before reading the to slot, so a self transfer leaves the balance unchanged), mint (cas20_admin.go:443 ensureRole(roleMint)), burn (cas20_admin.go:485 ensureRole(roleBurn)) and seize (cas20_admin.go:514 ensureRole(roleSeize)). ensureRole passes only for a role holder or a privileged token, and privileged is set only by newCAS20TokenBootstrap, which is called only from the factory's creation frame (cas20_factory.go:167-168). transferFrom checks the allowance before move (cas20_token.go:206-223). No role free path moves the PoolManager's balance."
+    },
+    {
+      "check": "L-917: on the five networks with protocol tokens or system code at reserved addresses, does an eth_call code override at such an address take effect, or does the node keep routing to native code.",
+      "agrees": true,
+      "note": "For BSC, override.go lines 78-82 at v1.8.2 put DisabledPrecompile in the map for any IsCAS20Routed address with a code override, and evm.go then treats it as an ordinary account, as the item says. This is RPC simulation behaviour only, not consensus. I did not re-measure Base, Tempo, Arc or HyperEVM; the item rests on the unit's raw sweep files there. The second half of L-917 also holds on my reading: the 40 byte hex literals in tools/opdiff/*.py are fresh addresses of the listed forms or the real PoolManager, and the 0x5555.., 0xaaaa.. and 0x8000.. literals in battery.py:136-139 are 256 bit operand values, not override keys."
+    },
+    {
+      "check": "Whether an ordinary account can make an unused address in a native token range look like a token (B20 and TIP-20 treat any code as an initialized token; CAS20 needs the marker 0xEF), and so open or close a currency that pools could use.",
+      "agrees": true,
+      "note": "For CAS20 the marker hash check in cas20.go (cas20InitializedMetered compares the code hash to keccak256(0xEF)) and EIP-3541's ban on deploying code starting with 0xEF mean only the factory can initialise a token, and the factory bootstrap is the only privileged frame. For Base and Tempo the 80 to 96 fixed address bits make a CREATE2 or key grind infeasible for any ordinary account. I did not re-fetch the Tempo TIP-20 spec in this session."
+    }
+  ],
+  "leads": []
+}
