@@ -1,0 +1,189 @@
+// Copyright (C) 2025 Category Labs, Inc.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+#pragma once
+
+// NOLINTBEGIN(bugprone-macro-parentheses)
+
+#include <category/core/concat.h>
+#include <category/vm/evm/traits.hpp>
+
+#include <evmc/evmc.h>
+
+// Template free functions
+
+#define EXPLICIT_EVM_TRAITS(f)                                                 \
+    template decltype(f<::monad::EvmTraits<MONAD_ETH_BERLIN>>)                 \
+        f<::monad::EvmTraits<MONAD_ETH_BERLIN>>;                               \
+    template decltype(f<::monad::EvmTraits<MONAD_ETH_LONDON>>)                 \
+        f<::monad::EvmTraits<MONAD_ETH_LONDON>>;                               \
+    template decltype(f<::monad::EvmTraits<MONAD_ETH_PARIS>>)                  \
+        f<::monad::EvmTraits<MONAD_ETH_PARIS>>;                                \
+    template decltype(f<::monad::EvmTraits<MONAD_ETH_SHANGHAI>>)               \
+        f<::monad::EvmTraits<MONAD_ETH_SHANGHAI>>;                             \
+    template decltype(f<::monad::EvmTraits<MONAD_ETH_CANCUN>>)                 \
+        f<::monad::EvmTraits<MONAD_ETH_CANCUN>>;                               \
+    template decltype(f<::monad::EvmTraits<MONAD_ETH_PRAGUE>>)                 \
+        f<::monad::EvmTraits<MONAD_ETH_PRAGUE>>;                               \
+    template decltype(f<::monad::EvmTraits<MONAD_ETH_OSAKA>>)                  \
+        f<::monad::EvmTraits<MONAD_ETH_OSAKA>>;                                \
+    template decltype(f<::monad::EvmTraits<MONAD_ETH_AMSTERDAM>>)              \
+        f<::monad::EvmTraits<MONAD_ETH_AMSTERDAM>>;
+
+#define EXPLICIT_MONAD_TRAITS(f)                                               \
+    template decltype(f<::monad::MonadTraits<MONAD_ZERO>>)                     \
+        f<::monad::MonadTraits<MONAD_ZERO>>;                                   \
+    template decltype(f<::monad::MonadTraits<MONAD_ONE>>)                      \
+        f<::monad::MonadTraits<MONAD_ONE>>;                                    \
+    template decltype(f<::monad::MonadTraits<MONAD_TWO>>)                      \
+        f<::monad::MonadTraits<MONAD_TWO>>;                                    \
+    template decltype(f<::monad::MonadTraits<MONAD_THREE>>)                    \
+        f<::monad::MonadTraits<MONAD_THREE>>;                                  \
+    template decltype(f<::monad::MonadTraits<MONAD_FOUR>>)                     \
+        f<::monad::MonadTraits<MONAD_FOUR>>;                                   \
+    template decltype(f<::monad::MonadTraits<MONAD_FIVE>>)                     \
+        f<::monad::MonadTraits<MONAD_FIVE>>;                                   \
+    template decltype(f<::monad::MonadTraits<MONAD_SIX>>)                      \
+        f<::monad::MonadTraits<MONAD_SIX>>;                                    \
+    template decltype(f<::monad::MonadTraits<MONAD_SEVEN>>)                    \
+        f<::monad::MonadTraits<MONAD_SEVEN>>;                                  \
+    template decltype(f<::monad::MonadTraits<MONAD_EIGHT>>)                    \
+        f<::monad::MonadTraits<MONAD_EIGHT>>;                                  \
+    template decltype(f<::monad::MonadTraits<MONAD_NINE>>)                     \
+        f<::monad::MonadTraits<MONAD_NINE>>;                                   \
+    template decltype(f<::monad::MonadTraits<MONAD_TEN>>)                      \
+        f<::monad::MonadTraits<MONAD_TEN>>;                                    \
+    template decltype(f<::monad::MonadTraits<MONAD_NEXT>>)                     \
+        f<::monad::MonadTraits<MONAD_NEXT>>;
+
+#define EXPLICIT_TRAITS(f)                                                     \
+    EXPLICIT_EVM_TRAITS(f)                                                     \
+    EXPLICIT_MONAD_TRAITS(f)
+
+// Template classes
+
+#define EXPLICIT_EVM_TRAITS_CLASS(c)                                           \
+    template class c<::monad::EvmTraits<MONAD_ETH_BERLIN>>;                    \
+    template class c<::monad::EvmTraits<MONAD_ETH_LONDON>>;                    \
+    template class c<::monad::EvmTraits<MONAD_ETH_PARIS>>;                     \
+    template class c<::monad::EvmTraits<MONAD_ETH_SHANGHAI>>;                  \
+    template class c<::monad::EvmTraits<MONAD_ETH_CANCUN>>;                    \
+    template class c<::monad::EvmTraits<MONAD_ETH_PRAGUE>>;                    \
+    template class c<::monad::EvmTraits<MONAD_ETH_OSAKA>>;                     \
+    template class c<::monad::EvmTraits<MONAD_ETH_AMSTERDAM>>;
+
+#define EXPLICIT_MONAD_TRAITS_CLASS(c)                                         \
+    template class c<::monad::MonadTraits<MONAD_ZERO>>;                        \
+    template class c<::monad::MonadTraits<MONAD_ONE>>;                         \
+    template class c<::monad::MonadTraits<MONAD_TWO>>;                         \
+    template class c<::monad::MonadTraits<MONAD_THREE>>;                       \
+    template class c<::monad::MonadTraits<MONAD_FOUR>>;                        \
+    template class c<::monad::MonadTraits<MONAD_FIVE>>;                        \
+    template class c<::monad::MonadTraits<MONAD_SIX>>;                         \
+    template class c<::monad::MonadTraits<MONAD_SEVEN>>;                       \
+    template class c<::monad::MonadTraits<MONAD_EIGHT>>;                       \
+    template class c<::monad::MonadTraits<MONAD_NINE>>;                        \
+    template class c<::monad::MonadTraits<MONAD_TEN>>;                         \
+    template class c<::monad::MonadTraits<MONAD_NEXT>>;
+
+#define EXPLICIT_TRAITS_CLASS(c)                                               \
+    EXPLICIT_EVM_TRAITS_CLASS(c)                                               \
+    EXPLICIT_MONAD_TRAITS_CLASS(c)
+
+#define EXPLICIT_MONAD_TRAITS_STRUCT(c)                                        \
+    template struct c<::monad::MonadTraits<MONAD_ZERO>>;                       \
+    template struct c<::monad::MonadTraits<MONAD_ONE>>;                        \
+    template struct c<::monad::MonadTraits<MONAD_TWO>>;                        \
+    template struct c<::monad::MonadTraits<MONAD_THREE>>;                      \
+    template struct c<::monad::MonadTraits<MONAD_FOUR>>;                       \
+    template struct c<::monad::MonadTraits<MONAD_FIVE>>;                       \
+    template struct c<::monad::MonadTraits<MONAD_SIX>>;                        \
+    template struct c<::monad::MonadTraits<MONAD_SEVEN>>;                      \
+    template struct c<::monad::MonadTraits<MONAD_EIGHT>>;                      \
+    template struct c<::monad::MonadTraits<MONAD_NINE>>;                       \
+    template struct c<::monad::MonadTraits<MONAD_TEN>>;                        \
+    template struct c<::monad::MonadTraits<MONAD_NEXT>>;
+
+// Template member functions
+//
+// The old approach used a namespace-scope variable template whose initializer
+// took &Class::member<traits>. clang-21 rejects this because the initializer
+// is access-checked at namespace scope ([temp.spec.general]/6 exempts most
+// names in explicit instantiation declarations, but NOT variable template
+// initializers).
+//
+// The new approach explicitly instantiates a helper function template with the
+// member pointer as an NTTP. The helper template is declared at namespace
+// scope by the macro expansion, and the NTTP appears in the explicit
+// instantiation declaration itself (not in a function body or initializer),
+// so access checking is relaxed per the standard.
+
+#define EXPLICIT_TRAITS_MEMBER_FN(id)                                          \
+    template <auto Ptr>                                                        \
+    void id()                                                                  \
+    {                                                                          \
+        [[gnu::used]] static constexpr auto ptr_ = Ptr;                        \
+    }
+
+#define EXPLICIT_EVM_TRAITS_MEMBER_LIST(f, id)                                 \
+    template void id<&f<::monad::EvmTraits<MONAD_ETH_BERLIN>>>();              \
+    template void id<&f<::monad::EvmTraits<MONAD_ETH_LONDON>>>();              \
+    template void id<&f<::monad::EvmTraits<MONAD_ETH_PARIS>>>();               \
+    template void id<&f<::monad::EvmTraits<MONAD_ETH_SHANGHAI>>>();            \
+    template void id<&f<::monad::EvmTraits<MONAD_ETH_CANCUN>>>();              \
+    template void id<&f<::monad::EvmTraits<MONAD_ETH_PRAGUE>>>();              \
+    template void id<&f<::monad::EvmTraits<MONAD_ETH_OSAKA>>>();               \
+    template void id<&f<::monad::EvmTraits<MONAD_ETH_AMSTERDAM>>>();
+
+#define EXPLICIT_EVM_TRAITS_MEMBER_HELPER(f, id)                               \
+    EXPLICIT_TRAITS_MEMBER_FN(id)                                              \
+    EXPLICIT_EVM_TRAITS_MEMBER_LIST(f, id)
+
+#define EXPLICIT_EVM_TRAITS_MEMBER(f)                                          \
+    EXPLICIT_EVM_TRAITS_MEMBER_HELPER(                                         \
+        f, MONAD_CORE_CONCAT(_member_fn_ptr_, __COUNTER__))
+
+#define EXPLICIT_MONAD_TRAITS_MEMBER_LIST(f, id)                               \
+    template void id<&f<::monad::MonadTraits<MONAD_ZERO>>>();                  \
+    template void id<&f<::monad::MonadTraits<MONAD_ONE>>>();                   \
+    template void id<&f<::monad::MonadTraits<MONAD_TWO>>>();                   \
+    template void id<&f<::monad::MonadTraits<MONAD_THREE>>>();                 \
+    template void id<&f<::monad::MonadTraits<MONAD_FOUR>>>();                  \
+    template void id<&f<::monad::MonadTraits<MONAD_FIVE>>>();                  \
+    template void id<&f<::monad::MonadTraits<MONAD_SIX>>>();                   \
+    template void id<&f<::monad::MonadTraits<MONAD_SEVEN>>>();                 \
+    template void id<&f<::monad::MonadTraits<MONAD_EIGHT>>>();                 \
+    template void id<&f<::monad::MonadTraits<MONAD_NINE>>>();                  \
+    template void id<&f<::monad::MonadTraits<MONAD_TEN>>>();                   \
+    template void id<&f<::monad::MonadTraits<MONAD_NEXT>>>();
+
+#define EXPLICIT_MONAD_TRAITS_MEMBER_HELPER(f, id)                             \
+    EXPLICIT_TRAITS_MEMBER_FN(id)                                              \
+    EXPLICIT_MONAD_TRAITS_MEMBER_LIST(f, id)
+
+#define EXPLICIT_MONAD_TRAITS_MEMBER(f)                                        \
+    EXPLICIT_MONAD_TRAITS_MEMBER_HELPER(                                       \
+        f, MONAD_CORE_CONCAT(_member_fn_ptr_, __COUNTER__))
+
+#define EXPLICIT_TRAITS_MEMBER_HELPER(f, id)                                   \
+    EXPLICIT_TRAITS_MEMBER_FN(id)                                              \
+    EXPLICIT_EVM_TRAITS_MEMBER_LIST(f, id)                                     \
+    EXPLICIT_MONAD_TRAITS_MEMBER_LIST(f, id)
+
+#define EXPLICIT_TRAITS_MEMBER(f)                                              \
+    EXPLICIT_TRAITS_MEMBER_HELPER(                                             \
+        f, MONAD_CORE_CONCAT(_member_fn_ptr_, __COUNTER__))
+
+// NOLINTEND(bugprone-macro-parentheses)

@@ -1,0 +1,81 @@
+// Copyright (C) 2025 Category Labs, Inc.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+#pragma once
+
+#include <category/core/config.hpp>
+
+#include <cstddef>
+#include <memory>
+#include <span>
+
+MONAD_NAMESPACE_BEGIN
+
+/*! \brief An async signal safe stack backtracer.
+ */
+class stack_backtrace
+{
+protected:
+    stack_backtrace() = default;
+
+    struct deleter_
+    {
+        void operator()(stack_backtrace *const p)
+        {
+            p->~stack_backtrace();
+            // no deallocation needed
+        }
+    };
+
+public:
+    virtual ~stack_backtrace() = default;
+    stack_backtrace(stack_backtrace const &) = delete;
+    stack_backtrace(stack_backtrace &&) = delete;
+    stack_backtrace &operator=(stack_backtrace const &) = delete;
+    stack_backtrace &operator=(stack_backtrace &&) = delete;
+
+    using ptr = std::unique_ptr<stack_backtrace, deleter_>;
+
+    /*! \brief Capture a stack backtrace using the storage supplied. ASYNC
+    SIGNAL SAFE.
+
+    The buffer MUST remain within lifetime until the returned
+    unique ptr is destructed. The buffer may have any byte alignment;
+    alignment padding consumes part of its capacity. If the input buffer
+    cannot hold the backtrace object with remaining scratch storage, the
+    process will be terminated. Capture retains the innermost frames that
+    fit, reserving one address slot for a null terminator. If no frames fit,
+    an empty trace is returned.
+    */
+    static ptr capture(std::span<std::byte> storage) noexcept;
+
+    /*! \brief Print this stack backtrace in a human readable format to
+    the specified file descriptor. ASYNC SIGNAL SAFE (probably).
+
+    This call will be async signal safe if your platform's `snprintf()`
+    is async signal safe for the very simple uses we use it for. This
+    is not guaranteed, `snprintf()` is allowed to call `malloc()` or
+    use locale functions, both of which are highly async signal unsafe.
+    However for printing integers it is usually async signal safe.
+
+    You have an option of printing function name, source file and line
+    number, however these are highly async signal unsafe.
+    */
+    virtual void print(
+        int fd, unsigned indent,
+        bool print_async_signal_unsafe_info) const noexcept = 0;
+};
+
+MONAD_NAMESPACE_END

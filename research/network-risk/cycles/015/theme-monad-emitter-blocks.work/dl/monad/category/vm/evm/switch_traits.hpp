@@ -1,0 +1,74 @@
+// Copyright (C) 2025 Category Labs, Inc.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+#pragma once
+
+// NOLINTBEGIN(bugprone-macro-parentheses)
+
+#include <category/vm/evm/traits.hpp>
+
+#include <evmc/evmc.h>
+
+#define SWITCH_EVM_TRAITS(f, ...)                                              \
+    switch (rev) {                                                             \
+    case MONAD_ETH_AMSTERDAM:                                                  \
+        return f<::monad::EvmTraits<MONAD_ETH_AMSTERDAM>>(__VA_ARGS__);        \
+    case MONAD_ETH_OSAKA:                                                      \
+        return f<::monad::EvmTraits<MONAD_ETH_OSAKA>>(__VA_ARGS__);            \
+    case MONAD_ETH_PRAGUE:                                                     \
+        return f<::monad::EvmTraits<MONAD_ETH_PRAGUE>>(__VA_ARGS__);           \
+    case MONAD_ETH_CANCUN:                                                     \
+        return f<::monad::EvmTraits<MONAD_ETH_CANCUN>>(__VA_ARGS__);           \
+    case MONAD_ETH_SHANGHAI:                                                   \
+        return f<::monad::EvmTraits<MONAD_ETH_SHANGHAI>>(__VA_ARGS__);         \
+    case MONAD_ETH_PARIS:                                                      \
+        return f<::monad::EvmTraits<MONAD_ETH_PARIS>>(__VA_ARGS__);            \
+    case MONAD_ETH_LONDON:                                                     \
+        return f<::monad::EvmTraits<MONAD_ETH_LONDON>>(__VA_ARGS__);           \
+    case MONAD_ETH_BERLIN:                                                     \
+        return f<::monad::EvmTraits<MONAD_ETH_BERLIN>>(__VA_ARGS__);           \
+    default:                                                                   \
+        break;                                                                 \
+    }
+
+#define SWITCH_MONAD_TRAITS(f, ...)                                            \
+    switch (rev) {                                                             \
+    case MONAD_ZERO:                                                           \
+        return f<::monad::MonadTraits<MONAD_ZERO>>(__VA_ARGS__);               \
+    case MONAD_ONE:                                                            \
+        return f<::monad::MonadTraits<MONAD_ONE>>(__VA_ARGS__);                \
+    case MONAD_TWO:                                                            \
+        return f<::monad::MonadTraits<MONAD_TWO>>(__VA_ARGS__);                \
+    case MONAD_THREE:                                                          \
+        return f<::monad::MonadTraits<MONAD_THREE>>(__VA_ARGS__);              \
+    case MONAD_FOUR:                                                           \
+        return f<::monad::MonadTraits<MONAD_FOUR>>(__VA_ARGS__);               \
+    case MONAD_FIVE:                                                           \
+        return f<::monad::MonadTraits<MONAD_FIVE>>(__VA_ARGS__);               \
+    case MONAD_SIX:                                                            \
+        return f<::monad::MonadTraits<MONAD_SIX>>(__VA_ARGS__);                \
+    case MONAD_SEVEN:                                                          \
+        return f<::monad::MonadTraits<MONAD_SEVEN>>(__VA_ARGS__);              \
+    case MONAD_EIGHT:                                                          \
+        return f<::monad::MonadTraits<MONAD_EIGHT>>(__VA_ARGS__);              \
+    case MONAD_NINE:                                                           \
+        return f<::monad::MonadTraits<MONAD_NINE>>(__VA_ARGS__);               \
+    case MONAD_TEN:                                                            \
+        return f<::monad::MonadTraits<MONAD_TEN>>(__VA_ARGS__);                \
+    case MONAD_NEXT:                                                           \
+        return f<::monad::MonadTraits<MONAD_NEXT>>(__VA_ARGS__);               \
+    }
+
+// NOLINTEND(bugprone-macro-parentheses)

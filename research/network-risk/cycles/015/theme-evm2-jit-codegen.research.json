@@ -1,0 +1,185 @@
+{
+ "unit": "theme-evm2-jit-codegen",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Can the evm2 JIT crates be built here so that their own differential tests run on the PoolManager runtime?",
+   "result": "No. The LLVM backend needs LLVM 23 (crates/jit/README.md), and the machine has LLVM 18.1.3 (llvm-config --version). The workspace Cargo.toml patches the ark crates from a git repository on github.com, which this environment cannot clone, and codeload.github.com returned 403 for source archives of both revisions. The review therefore worked from source: 58 files of crates/jit (codegen, builtins, backend, llvm, runtime, context) were fetched from raw.githubusercontent.com at 66687c18 and at 35aa3280 by following module declarations (research/network-risk/cycles/015/theme-evm2-jit-codegen.work/crawl.py, copies in research/network-risk/cycles/015/theme-evm2-jit-codegen.work/r66 and r35), plus crates/evm2 at 66687c18. Between the two revisions 8 of the 58 files differ. In codegen the only change is block_analysis.rs lines 2249-2250, which gives opcodes flagged UNKNOWN no stack inputs, and a test. peephole.rs, const_fold.rs, translate/mod.rs, memory_sections.rs and sections.rs are byte-identical.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/jit/README.md"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Which PoolManager opcodes the JIT sends to builtins that wrap the interpreter's own arithmetic, and whether those builtins match the interpreter.",
+   "result": "The runtime (24,009 bytes, no metadata trailer) contains 112 distinct opcodes (research/network-risk/cycles/015/theme-evm2-jit-codegen.work/census.json). DIV, SDIV, MOD, SMOD, ADDMOD, MULMOD and EXP with an unknown exponent are calls to builtins (translate/mod.rs 776-803). The builtins call ruint wrapping_div, wrapping_rem, add_mod, mul_mod and pow, and evm2's i256_div and i256_mod (builtins/src/lib.rs 112-160). These are the same functions the interpreter uses, linked natively into the same binary at the same ruint version (builtins are resolved by address, builtins/src/ir.rs 1-40). The rev! macro reads the operands top first and writes the result into the lowest slot, which is the specified order. So MULMOD with modulus 2^256-1 at FullMath.sol:24 and with a pool denominator at FullMath.sol:48, SqrtPriceMath.sol:252 and FullMath.sol:112 runs the code that the 185,529 vectors already tested through the interpreter. KECCAK256, CALLDATALOAD, CALLDATACOPY, RETURNDATACOPY, MCOPY, SLOAD, SSTORE, TLOAD, TSTORE, LOG and the calls are builtins as well (lib.rs 162-575, 762-875) and were read: CALLDATALOAD past the end pads with zeros through evm2 read_word_padded, RETURNDATACOPY fails before charging gas when offset plus length exceeds the return data, MCOPY expands memory to max(dst, src) plus length, KECCAK256 of length 0 touches no memory, TSTORE fails in a static frame and TLOAD does not.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/jit/builtins/src/lib.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Inline lowering of SIGNEXTEND, BYTE, SHL, SHR, SAR, LT, GT, SLT, SGT, EQ, ISZERO and the JUMPI condition, transcribed with LLVM poison semantics.",
+   "result": "No mismatch. SIGNEXTEND is select(ext < 31, (x << (248 - 8ext)) >>s (248 - 8ext), x), BYTE is select(i < 32, (v >> (248 - 8i)) & 0xff, 0), and the shifts select 0, or for SAR the sign fill, when the count exceeds 255; the poisoned shift result is only in the unselected arm (translate/mod.rs 685-691, 804-875). Comparisons are i256 icmp, ISZERO is icmp eq 0, and JUMPI branches on icmp ne of the whole word (line 1050). jitmodel.py runs these on 631,353 vectors (the battery and targeted sets, every pair of 196 edge values for every index and count, all 256 powers of two and their negations as divisors and moduli) and makes 1,068,620 checks against the specification without a mismatch or undefined operation. Planted faults are caught: BYTE guard < 33 (367 mismatches), shift guard > 256 (1,659), SAR default without the sign (2,746), SIGNEXTEND guard < 30 (31). A SIGNEXTEND guard of < 32 gives no mismatch because index 31 shifts by 0, so that mutation is equivalent. This covers the SIGNEXTEND, SAR, SDIV and SMOD of TickBitmap.compress and position (TickBitmap.sol:20-38, 54-67).",
+   "source": "research/network-risk/cycles/015/theme-evm2-jit-codegen.work/jitmodel.py"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Every peephole rule in peephole.rs, with most care for MULMOD with the constant moduli 2^96, 2^128 and 2^256-1, SDIV and SMOD by -1 and -2^255, EXP with a constant base or exponent, and the inline EXP gas.",
+   "result": "No mismatch. A power of two modulus 2^k lowers MULMOD to (a*b mod 2^256) & (2^k - 1) and ADDMOD to (a+b mod 2^256) & (2^k - 1), which is exact because 2^k divides 2^256 (peephole.rs 161-213). This is the path for MULMOD by 2^128 at pc 22378 and by 2^96 at pc 22639, which a PUSH in the same block supplies (census.json). 2^256-1 and 1,000,000 are not powers of two and go to the ruint builtin. SDIV by -1 negates, by -2^255 returns x == -2^255, and by other signed powers of two uses LLVM sdiv, whose only undefined case is excluded; SMOD by 0, 1 or -1 is 0 and by other signed powers of two uses srem, which keeps the dividend's sign (53-160). EXP with a power of two base 2^k is select(e < ceil(256/k), 1 << ke, 0) and charges (263 - clz(e)) / 8 bytes of gas, which equals the specified byte length for every exponent tested (215-305). The PoolManager's own constant operands are a dividend of -887272 or 887272 for SDIV and SMOD (pc 7400-7443) and a dividend of 0xd76453e0 for DIV (BitMath.sol:45), which no rule matches, so they use the builtins. Planting a mask of 2^k instead of 2^k - 1 gives 14,252 mismatches.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/jit/codegen/src/compiler/translate/peephole.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Constant folding and range folding in the bytecode analysis (const_fold.rs), including folded constants that are stored in place of an executed instruction (translate/mod.rs 633-656).",
+   "result": "No unsound rule. try_const_fold calls ruint and evm2 i256 for the arithmetic and writes its own rules only for DIV and MOD by zero, SIGNEXTEND, BYTE and the three shifts (const_fold.rs 113-168); these were transcribed and match on all vectors. try_range_fold (213-389) gives a range below 2^31 that must hold every result when at least one input is a range or an unknown value. 60,000 random abstract inputs (ranges, inline constants, large constants including the BitMath byte table words, and unknown values) were each tested on sampled concrete values: 657,425 cases, none outside the range. Planting a range one smaller for MOD gives 30 failures. EXP folds only when its exponent is constant, so its gas stays static (bytecode/mod.rs 751-767).",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/jit/codegen/src/bytecode/passes/const_fold.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Edge refinement after a JUMPI in block_analysis.rs: the DUP, LT and GT patterns with ISZERO chains that bound a stack value on one edge, and at_most.",
+   "result": "Sound. branch() (block_analysis.rs 1943-2017) recognises PUSH-target JUMPI after a DUP or a DUP and PUSH compared with LT or GT in either order, with any number of ISZEROs, and bounds the original value by c - 1 or c on the edge where the test says so. 38,465 random stacks, depths, constants and patterns were executed concretely and the bound held on every taken edge; a planted bound of c - 2 fails 20 times. at_most (160-168) keeps an infeasible edge's value unchanged and never widens a constant. Ranges only hold values below 2^31.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/jit/codegen/src/bytecode/passes/block_analysis.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Dynamic JUMP and JUMPI through the dispatch table, jump target conversion, and multi-target jumps that switch on the low 64 bits.",
+   "result": "No mismatch. A dynamic target saturates to 2^64-1 when it does not fit in 64 bits (u256_to_u64_saturating, translate/mod.rs 2269-2277), and the table holds every valid JUMPDEST of the code (2102-2172). jumptable.py transcribes the rank table and finds that each of the 24,030 tested pcs (0 to max_pc + 64, 2^40 and 2^64-1) dispatches to its own JUMPDEST when it is one of the 610 valid ones and to the invalid jump block otherwise; shifting the bitmap by one plants 1,220 errors. A multi-target jump truncates to 64 bits only when the analysis committed every value: constant sets hold only valid targets, ranges are below 2^31, an enumerated invalid constant must fit in 64 bits (fits_switch_case, 1938-1941), and an unknown operand marks the state failed (1686-1742), so no value of 2^64 or more can alias a valid pc.",
+   "source": "research/network-risk/cycles/015/theme-evm2-jit-codegen.work/jumptable.py"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Memory expansion in compiled code: MLOAD and MSTORE inline checks, the per-section cache of checked ranges, the memory section analysis that skips checks, and mresize.",
+   "result": "Correct as read. build_ensure_memory (translate/mod.rs 1858-1920) saturates offsets at 2^63-1, and mresize calls resize_evm with length 0, which still grows memory to the offset (evm2 memory.rs 101-114). A later access is exempt only if its base equals an earlier checked base and its constant addend is at least the earlier one, so its offset cannot exceed 2^64 and its end lies below memory already allocated. memory_sections.rs propagates a lower bound on memory size that is the minimum over predecessors (join_state 285-297) and only counts constant accesses that always expand memory; MCOPY counts max(dst, src) (bytecode/mod.rs 790-806). Checks are skipped only where that bound covers the exact required size.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/jit/codegen/src/bytecode/passes/memory_sections.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Gas charged per section against per-instruction charging, and stack checks at section entry: can compiled code return a different result from a call or decide a branch differently?",
+   "result": "No. Gas sections end at every branching instruction and at every instruction whose host effect depends on the remaining gas: calls, creates, SLOAD, SSTORE, BALANCE, EXTCODE*, SELFDESTRUCT and host-table opcodes (sections.rs 229-256, bytecode/mod.rs 1214-1240). The static gas of the section is charged at its head, so a frame that runs out of gas inside a section halts at its head instead of a few instructions later, with the same exceptional halt, all frame gas consumed and every effect reverted. GAS returns the remaining gas plus the gas owed by later instructions of its section (translate/mod.rs 1143-1153, sections.rs 109-141), which is the specified value. Sections without a check carry the deficit as negative remaining gas until a signed check before any builtin that charges or reads gas. Stack bounds are checked at the head of a stack section and never ahead of a host-effect instruction. At 35aa3280 the SSTORE builtin skips a cold load when the remaining gas is below the full cold cost, as the interpreter at that revision does; the SLOAD builtin is unchanged and uses the additional cold cost like the interpreter (evm2 host.rs 14-31 at both revisions).",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/jit/codegen/src/bytecode/passes/sections.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "How a node decides to compile a contract, whether compiled and interpreted frames mix in one transaction, and what happens to a block when they disagree.",
+   "result": "evm2 compiles a code hash after 8 lookups (jit_hot_threshold) when the code is at most 24 KiB, 24,576 bytes (runtime/config.rs 17, 280-290, 368-377). The PoolManager's deployed code is 24,009 bytes on Ethereum and on Tempo (eth_getCode, queried 2026-11-25), so it is eligible even under evm2's default, and reth v2.11.0 removes the limit (max-bytecode-len default 0) and keeps the threshold of 8. The decision is per frame: run_supported looks up the code hash and spec, runs the compiled function if it is resident and otherwise returns None so that the interpreter runs the frame (runtime/src/evm2_evm.rs 59-104). Compilation runs in background workers, so one transaction can run the PoolManager frame compiled and a hook or token frame interpreted, or the reverse. On Ethereum, a reth node whose compiled code disagreed with the specification would compute a different state root and fork itself off, while geth and the other clients decide the canonical chain (F-129). Tempo has one client; its release binary is built without the JIT feature (cleared in cycle 14), so no Tempo validator runs this code.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/jit/runtime/src/runtime/config.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Whether an ordinary account can reach compiled code on the networks.json endpoints through eth_call or switch it on.",
+   "result": "No. The Ethereum endpoint reports reth/v2.11.0-b9abbcc, rpc_modules lists rpc, net, web3, txpool, debug, eth and trace, and reth_jit returns Method not found (queried 2026-11-25). Tempo reports tempo/v1.19.1-a9d6748 and refuses rpc_modules. Only an operator can enable the JIT, so the actor for any JIT fault is operator.",
+   "source": "https://ethereum-rpc.publicnode.com"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Does any of the other 19 networks run the evm2 JIT?",
+   "result": "No. web3_clientVersion on 2026-11-25 (research/network-risk/cycles/015/theme-evm2-jit-codegen.work/clientversions.json): OP Mainnet op-reth v2.8.1, Unichain, Ink and Soneium op-reth v2.10.0-rc.4, Base reth v2.5.2 base v1.5.6, Zora conduit-op-reth v2.5.1, Worldchain world-chain v2.8.2, Celo reth v2.2.0, X Layer reth v2.3.0. op-reth v2.10.0-rc.4 and v2.8.1 build on revm 43 and op-revm with no evm2 dependency (rust/Cargo.toml of those tags), and reth v2.2.0, v2.3.0, v2.5.2 and v2.8.2 have no evm2 entry in their manifests. Arbitrum One and Elysium run Nitro, Polygon bor, BNB Smart Chain geth, Avalanche avalanchego, Arc its revm based node, and Monad, MegaETH and HyperEVM their own executors, which earlier cycles read separately. Robinhood Chain answered 429 to this query and runs Nitro by earlier cycles.",
+   "source": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.10.0-rc.4/rust/Cargo.toml"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "question": "The Monad endpoint now reports Monad/0.16.7, while cycle 10 transcribed the compiled MULMOD, SIGNEXTEND, CALLDATALOAD and related paths of v0.16.5. Did the emitter change between v0.16.5 and v0.16.7?",
+   "why": "Monad validators may execute compiled native code that no simulated call reaches, so an emitter change would void the earlier transcriptions.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "question": "reth v2.10.0, which another Ethereum endpoint ran in cycle 14, ships evm2 and its JIT at revision 592bf18c. Do its peephole, constant folding and memory section passes match those read at 66687c18?",
+   "why": "An operator on v2.10 with --jit would run that revision's code generation, which this cycle did not read.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "question": "With LLVM 23 available, does the evm2 JIT compile the PoolManager runtime, and do its compiled results equal the interpreter on the battery, the targeted set and the pmdiff scripts?",
+   "why": "The LLVM optimiser and instruction selection for i256 were taken on trust here; only the IR builders were transcribed.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-720",
+   "outcome": "cleared",
+   "answer": "At 66687c18 MULMOD and ADDMOD with an unknown or non power of two modulus, including 2^256-1, call the ruint builtins the interpreter uses. Power of two moduli such as 2^96 and 2^128 lower to a wrapping product or sum masked by 2^k - 1, which is exact. SDIV and SMOD call evm2 i256 unless the divisor is a constant 0, 1, -1, -2^255 or a signed power of two, and those cases are exact. SAR, SIGNEXTEND and BYTE are inline selects guarded on the whole word. The transcription matched the specification on 1,068,620 checks and caught each planted fault."
+  },
+  {
+   "leadId": "L-744",
+   "outcome": "cleared",
+   "answer": "peephole.rs, const_fold.rs and translate/mod.rs are byte-identical at 66687c18 and 35aa3280, and the transcription of their rules matched on SDIV and SMOD at -2^255 and -1, SAR by 255 and 256, SIGNEXTEND from bytes 2 and 15 and every other index, and MULMOD by 2^96, 2^128 and 2^256-1. Tempo's release binary does not contain the JIT, so the question applies only to an operator who builds Tempo with the jit feature."
+  }
+ ]
+}

@@ -1,0 +1,3185 @@
+//! Concrete RPC client for fetching blockchain data.
+//!
+//! Provides [`RpcClient`] — the HTTP-based client for fetching blocks, witnesses, and
+//! contract bytecode from MegaETH nodes.
+//!
+//! ## Network resilience
+//!
+//! - **Multi-endpoint data support**: accepts an ordered list of data endpoints.
+//! - **Multi-endpoint witness support**: accepts an ordered list of witness endpoints.
+//! - **Concurrency limiting**: two independent [`tokio::sync::Semaphore`]s cap in-flight requests —
+//!   one for data-endpoint calls (blocks/headers/code/tx), one for witness fetches — so a burst on
+//!   one path cannot starve the other. `set_validated_blocks` is unthrottled.
+//! - **Retry model**: within a single logical call, each provider is attempted once per round. If
+//!   all providers in a round fail, the client sleeps for round-level exponential backoff (capped
+//!   at [`BackoffPolicy::max`](crate::BackoffPolicy)) and starts a new round. Load distribution
+//!   differs by method type:
+//!   - **Data** (blocks/headers/code/tx): round-robin starting provider rotates per call, so
+//!     healthy endpoints share load evenly.
+//!   - **Witness**: round always starts from provider 0 — the first witness endpoint is the
+//!     primary, others are failover-only.
+//! - **Deadlines**: retrying RPC methods have `_with_deadline` variants that take an
+//!   `Option<Instant>`. With `Some(deadline)` the retry loop returns [`RpcDeadlineExceeded`] once
+//!   the wall-clock deadline passes (and clamps each inter-round sleep so it doesn't overshoot).
+//!   With `None` the loop retries forever — this is the validator's background-sync contract. The
+//!   non-`_with_deadline` methods delegate to the deadline version with `None`.
+//!   `set_validated_blocks` is single-attempt, but still bounded by `per_attempt_timeout`.
+//! - **Attempt bounds**: every provider attempt is capped by
+//!   [`RpcClientConfig::per_attempt_timeout`] (a provider that accepts TCP but never replies
+//!   rotates instead of wedging the loop), and the connect phase alone by
+//!   [`RpcClientConfig::connect_timeout`] — an unreachable host whose handshake gets no answer
+//!   fails fast instead of consuming the whole attempt budget.
+
+use std::{
+    collections::HashMap,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
+
+use alloy_primitives::{B256, Bytes, U64, keccak256};
+use alloy_provider::{Provider, RootProvider};
+use alloy_rpc_client::ClientBuilder;
+use alloy_rpc_types_eth::{Block, BlockId, BlockNumberOrTag, Header};
+use eyre::{Context, Result, ensure, eyre};
+use futures::future;
+use op_alloy_network::Optimism;
+use op_alloy_rpc_types::Transaction;
+use revm::state::Bytecode;
+use salt::SaltWitness;
+use serde::{Deserialize, Serialize};
+use stateless_core::{LightWitness, withdrawals::MptWitness};
+use tokio::sync::Semaphore;
+use tracing::{instrument, trace, warn};
+
+use crate::{
+    BackoffPolicy,
+    metrics::{RpcAttemptOutcome, RpcMethod, RpcMetrics},
+    witness_encoding::{decode_witness_response, decode_witness_response_light},
+    witness_size::WitnessSizeBreakdown,
+};
+
+/// Error returned by the `_with_deadline` RPC methods when a caller-supplied
+/// deadline elapses before any provider succeeds.
+///
+/// The retry loop checks the deadline before each round and clamps inter-round
+/// sleeps to not overshoot it, so the observed wall-clock of this error stays
+/// within a small jitter of the requested deadline.
+#[derive(Debug, thiserror::Error)]
+pub struct RpcDeadlineExceeded {
+    /// The RPC method whose retry loop was aborted.
+    pub method: RpcMethod,
+    /// Wall-clock time from the first attempt to the deadline firing.
+    pub elapsed: Duration,
+}
+
+impl std::fmt::Display for RpcDeadlineExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RPC call for {} exceeded deadline after {:?}",
+            self.method.as_str(),
+            self.elapsed
+        )
+    }
+}
+
+/// Configuration for [`RpcClient`] behavior.
+#[derive(Clone)]
+pub struct RpcClientConfig {
+    /// Skip ECDSA signature verification and block hash verification.
+    /// Enable for trusted data sources (e.g., debug-trace-server fetching from upstream RPC)
+    /// where integrity checks are unnecessary overhead.
+    pub skip_block_verification: bool,
+    /// Optional metrics callbacks for tracking RPC performance.
+    pub metrics: Option<Arc<dyn RpcMetrics>>,
+    /// Maximum number of concurrent in-flight data-endpoint requests
+    /// (blocks, headers, contract bytecode, transactions). `None` means unlimited.
+    pub data_max_concurrent_requests: Option<usize>,
+    /// Maximum number of concurrent in-flight witness fetches. Independent from the data cap so
+    /// a burst of block fetches cannot starve witness retrieval (and vice versa). `None` means
+    /// unlimited.
+    pub witness_max_concurrent_requests: Option<usize>,
+    /// Round-level exponential backoff policy for retrying RPC calls. When a call fails on
+    /// every configured provider in a single round, the client sleeps for `initial` (with
+    /// jitter) before the next round and doubles the sleep each round up to `max`. Retry is
+    /// unbounded — caller-visible failures don't occur.
+    pub rpc_retry: BackoffPolicy,
+    /// Hard cap on a single provider attempt. Applied even when no overall deadline is set,
+    /// so a provider that accepts TCP but never replies cannot wedge the retry loop —
+    /// timing out the attempt rotates `round_robin_with_backoff` to the next provider.
+    /// With `deadline = Some(d)`, each attempt uses `min(per_attempt_timeout, d - now)`.
+    pub per_attempt_timeout: Duration,
+    /// Witness-specific override of [`Self::per_attempt_timeout`], applied only when the
+    /// logical call carries a deadline. `None` inherits `per_attempt_timeout`.
+    ///
+    /// Exists because on the witness path the general cap is dead code: the witness stage
+    /// budget sits below `per_attempt_timeout`, so `min(per_attempt, remaining)` always
+    /// resolves to `remaining` and the first stalled endpoint can legally consume the
+    /// entire stage — leaving no budget for another rotation, which is what turns one slow
+    /// hop into a client-visible timeout. Deadline-bound witness attempts therefore run
+    /// under `AttemptCap::ReserveHalf`: while the round still has an untried provider to
+    /// rotate to, each attempt's window is `min(cap, per_attempt_timeout, remaining / 2)`,
+    /// with the halving recomputed as the attempt starts — after any concurrency-permit
+    /// wait — so neither a stalled hop nor a long permit queue can consume what a
+    /// rotation still needs. The round's last hop, and every hop of a single-provider
+    /// chain, takes the remainder whole under the ceiling instead: with no rotation left
+    /// to reserve for, a slow-but-honest transfer must be allowed to finish. The
+    /// configured value is a ceiling rather than the operative cap whenever the caller's
+    /// deadline stays within the budget it was derived from — the halving term is then
+    /// always at least as tight.
+    ///
+    /// Deadline-less witness fetches (the chain-sync prefetch) deliberately keep the
+    /// general cap: with unbounded rounds, cutting a deterministically-slow-but-honest
+    /// transfer at a value below its duration would re-cut it every round and wedge the
+    /// fetch permanently instead of merely making it slow.
+    pub witness_per_attempt_timeout: Option<Duration>,
+    /// Bound on the TCP connect phase of a single HTTP attempt, applied to every provider
+    /// through the shared HTTP client. Separate from `per_attempt_timeout` so an unreachable
+    /// endpoint — a dead host, or a firewall silently dropping the handshake — fails and
+    /// rotates within seconds, while an established connection keeps the full per-attempt
+    /// budget for a slow multi-megabyte transfer. (A refused connection fails in
+    /// milliseconds on its own; this bounds the no-reply case, which otherwise consumes the
+    /// entire `per_attempt_timeout` on every attempt.)
+    pub connect_timeout: Duration,
+}
+
+impl Default for RpcClientConfig {
+    fn default() -> Self {
+        Self {
+            skip_block_verification: false,
+            metrics: None,
+            data_max_concurrent_requests: None,
+            witness_max_concurrent_requests: None,
+            // Round-level backoff: first cross-provider retry sleeps ~500ms, doubling up to
+            // 30s. That's gentle enough to ride out near-tip witness generation latency (a
+            // few seconds) without hammering upstream when something is genuinely broken.
+            rpc_retry: BackoffPolicy::new(Duration::from_millis(500), Duration::from_secs(30)),
+            // 20s is well above any healthy single-attempt latency (witness near-tip can take
+            // several seconds; everything else is sub-second), but bounded enough that a
+            // stalled (TCP-accept-no-reply) provider is detected within reasonable time.
+            per_attempt_timeout: Duration::from_secs(20),
+            witness_per_attempt_timeout: None,
+            // 3s accommodates a WAN handshake that loses its first SYN (the retransmit fires
+            // at ~1s) while keeping the cost of an unreachable provider to a quick rotation.
+            connect_timeout: Duration::from_secs(3),
+        }
+    }
+}
+
+impl std::fmt::Debug for RpcClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RpcClientConfig")
+            .field("skip_block_verification", &self.skip_block_verification)
+            .field("metrics", &self.metrics.is_some())
+            .field("data_max_concurrent_requests", &self.data_max_concurrent_requests)
+            .field("witness_max_concurrent_requests", &self.witness_max_concurrent_requests)
+            .field("rpc_retry", &self.rpc_retry)
+            .field("per_attempt_timeout", &self.per_attempt_timeout)
+            .field("witness_per_attempt_timeout", &self.witness_per_attempt_timeout)
+            .field("connect_timeout", &self.connect_timeout)
+            .finish()
+    }
+}
+
+impl RpcClientConfig {
+    /// Creates a config for validation mode (full verification).
+    pub fn validator() -> Self {
+        Self { skip_block_verification: false, ..Default::default() }
+    }
+
+    /// Creates a config for trace/debug mode (skip verification).
+    pub fn trace_server() -> Self {
+        Self { skip_block_verification: true, ..Default::default() }
+    }
+
+    /// Sets the metrics callbacks.
+    pub fn with_metrics(mut self, metrics: Arc<dyn RpcMetrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+}
+
+/// Boxed, `'static` future returned by `call()` closures.
+type BoxFuture<T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'static>>;
+
+/// Request parameters for `mega_getBlockWitness`, sent to every provider in
+/// [`RpcClient::witness_providers`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WitnessRequestKeys {
+    /// Block number as U64.
+    pub block_number: U64,
+    /// Block hash.
+    pub block_hash: B256,
+}
+
+/// Response from mega_setValidatedBlocks RPC call
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetValidatedBlocksResponse {
+    pub accepted: bool,
+    pub last_validated_block: (U64, B256),
+}
+
+/// Error returned by the witness fetches that take a caller-computed provider range.
+///
+/// `NoProviderInRange` is a wiring failure, not a transport one: the caller's `skip` selected
+/// past the configured witness endpoints. The constructor rejects an empty endpoint list, so
+/// reaching this means a routing bug in the skip computation rather than a misconfiguration.
+/// It is a typed error rather than an `assert!` so such a bug fails one request instead of the
+/// process — which is the whole reason this type exists.
+#[derive(Debug, thiserror::Error)]
+pub enum WitnessFetchError {
+    #[error("witness fetch skip={skip} leaves none of {configured} configured providers")]
+    NoProviderInRange { skip: usize, configured: usize },
+    #[error(transparent)]
+    Deadline(#[from] RpcDeadlineExceeded),
+}
+
+/// Errors returned by [`RpcClient::get_codes`] / [`RpcClient::get_codes_with_deadline`].
+///
+/// - `VerificationFailure` is deterministic (upstream returned bytecode whose keccak does not match
+///   the requested hash): validators should halt rather than retry.
+/// - `Deadline` only surfaces from [`RpcClient::get_codes_with_deadline`] when the caller- supplied
+///   deadline elapsed before every per-hash fetch completed. The unbounded [`RpcClient::get_codes`]
+///   never produces this variant.
+#[derive(Debug, thiserror::Error)]
+pub enum CodeFetchError {
+    #[error(
+        "RPC provider returned bytecode with unexpected codehash: expected {requested:?}, got {actual:?}"
+    )]
+    VerificationFailure { requested: B256, actual: B256 },
+    #[error(transparent)]
+    Deadline(#[from] RpcDeadlineExceeded),
+}
+
+/// RPC client for MegaETH blockchain data.
+///
+/// Fetches contract bytecode, blocks, and witness data during stateless validation.
+///
+/// Cloning is cheap — all providers are `Arc`-backed internally.
+#[derive(Debug, Clone)]
+pub struct RpcClient {
+    /// Ordered list of data providers. Data methods use round-robin load balancing: each call
+    /// picks a starting provider via an atomic counter and cycles forward on failure.
+    data_providers: Vec<RootProvider<Optimism>>,
+    /// Metric/log labels for `data_providers`, parallel by index (see [`endpoint_label`]).
+    data_provider_labels: Vec<Arc<str>>,
+    /// Round-robin counter for selecting the starting data provider on each call.
+    /// Shared across clones so load balancing is global per logical client.
+    data_rr_counter: Arc<AtomicUsize>,
+    /// Ordered list of witness providers. `get_witness` always starts from index 0 (primary);
+    /// later entries are failover-only.
+    witness_providers: Vec<RootProvider>,
+    /// Metric/log labels for `witness_providers`, parallel by index (see [`endpoint_label`]).
+    witness_provider_labels: Vec<Arc<str>>,
+    /// Optional dedicated provider for reporting validated blocks.
+    report_provider: Option<RootProvider>,
+    /// Metric/log label for `report_provider` (see [`endpoint_label`]); `None` when unconfigured.
+    report_provider_label: Option<Arc<str>>,
+    /// Configuration controlling verification, retry, and concurrency behavior.
+    config: RpcClientConfig,
+    /// Semaphore capping concurrent in-flight data-endpoint requests
+    /// (blocks, headers, contract bytecode, transactions).
+    data_concurrency: Arc<Semaphore>,
+    /// Semaphore capping concurrent in-flight witness fetches, independent of the data cap.
+    witness_concurrency: Arc<Semaphore>,
+}
+
+impl RpcClient {
+    /// Creates a new RPC client connected to MegaETH blockchain nodes.
+    ///
+    /// # Arguments
+    /// * `data_apis` - HTTP URLs of the standard JSON-RPC endpoints for blocks and contract data
+    ///   (tried in order)
+    /// * `witness_apis` - HTTP URLs of the witness RPC endpoints (tried in order)
+    pub fn new(data_apis: &[&str], witness_apis: &[&str]) -> Result<Self> {
+        Self::new_with_config(data_apis, witness_apis, RpcClientConfig::default(), None)
+    }
+
+    /// Creates a new RPC client with custom configuration.
+    ///
+    /// # Arguments
+    /// * `data_apis` - HTTP URLs of the standard JSON-RPC endpoints for blocks and contract data
+    ///   (tried in order, non-empty)
+    /// * `witness_apis` - HTTP URLs of the witness RPC endpoints (tried in order, non-empty)
+    /// * `config` - Configuration controlling verification, retry, and concurrency behavior
+    /// * `report_api` - Optional HTTP URL of the endpoint for reporting validated blocks
+    pub fn new_with_config(
+        data_apis: &[&str],
+        witness_apis: &[&str],
+        config: RpcClientConfig,
+        report_api: Option<&str>,
+    ) -> Result<Self> {
+        if data_apis.is_empty() {
+            return Err(eyre!("At least one data API URL must be provided"));
+        }
+        if witness_apis.is_empty() {
+            return Err(eyre!("At least one witness API URL must be provided"));
+        }
+
+        // One shared HTTP client for every provider (connection pools are keyed per host), so
+        // the connect-phase bound applies uniformly to data, witness, and report endpoints.
+        let http_client = reqwest::Client::builder()
+            .connect_timeout(config.connect_timeout)
+            // Pinned to HTTP/1.1 on purpose. `stateless-r2` turns on reqwest's `http2` feature
+            // for the R2 custom-domain target and Cargo unifies features workspace-wide, so
+            // without this pin every JSON-RPC provider here would start offering h2 — and the
+            // endpoints accept it. That would put the multi-MB witness payloads on one shared
+            // connection per host under hyper's fixed 5MB connection / 2MB stream windows with
+            // adaptive sizing off, capping throughput at roughly window/RTT over the
+            // intercontinental links this client runs across. Moving the RPC path to h2 is a
+            // change worth measuring on its own, not a side effect of a feature added for a
+            // different client.
+            .http1_only()
+            .build()
+            .context("Failed to build HTTP client")?;
+
+        let data_providers = data_apis
+            .iter()
+            .map(|url| -> Result<RootProvider<Optimism>> {
+                Ok(RootProvider::new(ClientBuilder::default().http_with_client(
+                    http_client.clone(),
+                    url.parse().context("Failed to parse data API URL")?,
+                )))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let witness_providers = witness_apis
+            .iter()
+            .map(|url| -> Result<RootProvider> {
+                Ok(RootProvider::new(ClientBuilder::default().http_with_client(
+                    http_client.clone(),
+                    url.parse().context("Failed to parse witness API URL")?,
+                )))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // URLs above are already validated during provider construction, so labels only ever
+        // derive from well-formed endpoints; the parallel-by-index vectors feed the retry
+        // loop's per-endpoint metrics and logs.
+        let data_provider_labels =
+            data_apis.iter().enumerate().map(|(i, url)| endpoint_label(url, i)).collect();
+        let witness_provider_labels =
+            witness_apis.iter().enumerate().map(|(i, url)| endpoint_label(url, i)).collect();
+
+        let report_provider = report_api
+            .map(|url| -> Result<RootProvider> {
+                Ok(RootProvider::new(ClientBuilder::default().http_with_client(
+                    http_client.clone(),
+                    url.parse().context("Failed to parse report API URL")?,
+                )))
+            })
+            .transpose()?;
+        let report_provider_label = report_api.map(|url| endpoint_label(url, 0));
+
+        // `.max(1)` guards against `--data-max-concurrent-requests 0` (or the witness
+        // equivalent) silently wedging every RPC call — `Semaphore::new(0)` blocks
+        // `.acquire()` forever.
+        let data_concurrency = Arc::new(Semaphore::new(
+            config.data_max_concurrent_requests.unwrap_or(Semaphore::MAX_PERMITS).max(1),
+        ));
+        let witness_concurrency = Arc::new(Semaphore::new(
+            config.witness_max_concurrent_requests.unwrap_or(Semaphore::MAX_PERMITS).max(1),
+        ));
+
+        Ok(Self {
+            data_providers,
+            data_provider_labels,
+            data_rr_counter: Arc::new(AtomicUsize::new(0)),
+            witness_providers,
+            witness_provider_labels,
+            report_provider,
+            report_provider_label,
+            config,
+            data_concurrency,
+            witness_concurrency,
+        })
+    }
+
+    /// Returns whether block verification is skipped.
+    pub fn skip_block_verification(&self) -> bool {
+        self.config.skip_block_verification
+    }
+
+    /// Returns the number of configured data endpoints.
+    pub fn data_provider_count(&self) -> usize {
+        self.data_providers.len()
+    }
+
+    /// Returns the number of configured witness endpoints.
+    pub fn witness_provider_count(&self) -> usize {
+        self.witness_providers.len()
+    }
+
+    /// Returns whether a validation report endpoint is configured.
+    pub fn reports_validation(&self) -> bool {
+        self.report_provider.is_some()
+    }
+
+    /// Returns the credential-stripped `{idx}:{host}` metric/log label of the witness
+    /// endpoint at `idx`, or `None` when out of range. Use this instead of the raw
+    /// configured URL wherever an endpoint identity is logged.
+    pub fn witness_provider_label(&self, idx: usize) -> Option<&str> {
+        self.witness_provider_labels.get(idx).map(|label| &**label)
+    }
+
+    /// Wraps a data-method RPC call with round-robin load balancing and round-level backoff.
+    ///
+    /// Retries forever — transient failures never surface to callers. Use
+    /// [`Self::call_with_deadline`] when the caller needs a bounded wait.
+    async fn call<T: Send + 'static>(
+        &self,
+        method: RpcMethod,
+        f: impl Fn(RootProvider<Optimism>) -> BoxFuture<Result<T>>,
+    ) -> T {
+        self.call_with_deadline(method, None, f).await.unwrap_or_else(|e| {
+            // `None` deadline ⇒ retry loop is truly unbounded and this branch is unreachable.
+            unreachable!("call() with None deadline cannot return RpcDeadlineExceeded: {e}")
+        })
+    }
+
+    /// The data provider this call's first round starts at: rotated per call so healthy
+    /// endpoints share load evenly. Within a round the order is fixed (start → start+1 → …).
+    ///
+    /// Safety: the constructor guarantees at least one data provider. The atomic op is
+    /// skipped for a single provider — pointless contention otherwise.
+    fn next_data_rr_start(&self) -> usize {
+        let n = self.data_providers.len();
+        if n > 1 { self.data_rr_counter.fetch_add(1, Ordering::Relaxed) % n } else { 0 }
+    }
+
+    /// Deadline-aware counterpart of [`Self::call`].
+    ///
+    /// With `deadline = Some(..)` the retry loop returns [`RpcDeadlineExceeded`] once the
+    /// deadline passes, clamping each inter-round sleep so it doesn't overshoot. With
+    /// `None` this is equivalent to [`Self::call`] and never returns `Err`.
+    ///
+    /// Each call performs rounds of "try every data provider once in round-robin order",
+    /// starting at [`Self::next_data_rr_start`].
+    async fn call_with_deadline<T: Send + 'static>(
+        &self,
+        method: RpcMethod,
+        deadline: Option<Instant>,
+        f: impl Fn(RootProvider<Optimism>) -> BoxFuture<Result<T>>,
+    ) -> std::result::Result<T, RpcDeadlineExceeded> {
+        self.call_with_deadline_at(method, deadline, false, f).await
+    }
+
+    /// [`Self::call_with_deadline`] with the caller's give-up disposition explicit:
+    /// `best_effort = true` demotes the deadline give-up WARN to debug (the caller has
+    /// declared deadline failure an expected outcome, not an incident) while metrics stay
+    /// untouched.
+    async fn call_with_deadline_at<T: Send + 'static>(
+        &self,
+        method: RpcMethod,
+        deadline: Option<Instant>,
+        best_effort: bool,
+        f: impl Fn(RootProvider<Optimism>) -> BoxFuture<Result<T>>,
+    ) -> std::result::Result<T, RpcDeadlineExceeded> {
+        self.call_with_finish(method, deadline, best_effort, f, |v| Box::pin(async move { Ok(v) }))
+            .await
+    }
+
+    /// [`Self::call_with_deadline_at`] with the retry loop's *finalize* step exposed: `f` runs
+    /// under the per-attempt window, `finish` after it, bounded by the deadline alone. Post-
+    /// transport CPU work belongs in `finish` so it neither burns the rotation reserve nor
+    /// reads as a provider stall, while a failure there still counts as that provider's error
+    /// and rotates.
+    ///
+    /// This is the data path's single funnel into [`round_robin_with_backoff`] — every data
+    /// method's provider rotation, concurrency and attempt-cap policy is assembled here and
+    /// nowhere else. The witness path has its own funnel in [`Self::witness_round_robin`].
+    async fn call_with_finish<W: Send + 'static, T: Send + 'static>(
+        &self,
+        method: RpcMethod,
+        deadline: Option<Instant>,
+        best_effort: bool,
+        f: impl Fn(RootProvider<Optimism>) -> BoxFuture<Result<W>>,
+        finish: impl Fn(W) -> BoxFuture<Result<T>>,
+    ) -> std::result::Result<T, RpcDeadlineExceeded> {
+        round_robin_with_backoff(
+            &self.data_providers,
+            &self.data_provider_labels,
+            &self.data_concurrency,
+            &self.config.rpc_retry,
+            AttemptCap::Fixed(self.config.per_attempt_timeout),
+            self.next_data_rr_start(),
+            method,
+            self.config.metrics.as_ref(),
+            deadline,
+            best_effort,
+            |provider, _provider_label| f(provider.clone()),
+            |v, _provider_label| finish(v),
+        )
+        .await
+    }
+
+    /// Gets contract bytecode for a code hash. Retries forever.
+    pub async fn get_code(&self, hash: B256) -> Bytes {
+        self.get_code_with_deadline(hash, None).await.expect("None deadline cannot time out")
+    }
+
+    /// Deadline-aware counterpart of [`Self::get_code`].
+    ///
+    /// An empty response (`"0x"`) for a non-empty codehash is treated as a transient error and
+    /// rotates round-robin to the next provider. MegaETH RPC nodes return `"0x"` for codes they
+    /// have not yet synced (rather than a JSON-RPC error); without this guard, an unsynced
+    /// upstream would silently return zero bytes that then fail keccak verification, halting the
+    /// validator. Retrying lets a sync-ready provider serve the request.
+    pub async fn get_code_with_deadline(
+        &self,
+        hash: B256,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<Bytes, RpcDeadlineExceeded> {
+        self.call_with_deadline(RpcMethod::EthGetCodeByHash, deadline, move |provider| {
+            Box::pin(async move {
+                let bytes: Bytes =
+                    provider.client().request("eth_getCodeByHash", (hash,)).await.map_err(|e| {
+                        trace!(%hash, error = %e, "eth_getCodeByHash failed");
+                        eyre!("eth_getCodeByHash for hash {hash:?} failed: {e}")
+                    })?;
+                // Guard against the legitimate case where the requested hash *is* the
+                // empty-code hash — then `"0x"` is the correct answer and retrying would loop
+                // forever. Every other empty response is treated as upstream-not-sync-ready.
+                if bytes.is_empty() && hash != revm::primitives::KECCAK_EMPTY {
+                    trace!(%hash, "eth_getCodeByHash returned empty bytecode (provider not sync-ready?)");
+                    return Err(eyre!(
+                        "eth_getCodeByHash for hash {hash:?} returned empty bytecode (provider may not be sync-ready)"
+                    ));
+                }
+                Ok(bytes)
+            })
+        })
+        .await
+    }
+
+    /// Gets a block by its identifier with optional transaction details. Retries forever.
+    ///
+    /// If `skip_block_verification` is enabled in config, skips integrity checks.
+    /// Otherwise performs ECDSA signature and block hash verification — an integrity failure
+    /// is treated as a retriable error (round-robin rotates to the next provider).
+    pub async fn get_block(&self, block_id: BlockId, full_txs: bool) -> Block<Transaction> {
+        self.get_block_with_deadline(block_id, full_txs, None)
+            .await
+            .expect("None deadline cannot time out")
+    }
+
+    /// Deadline-aware counterpart of [`Self::get_block`].
+    ///
+    /// Verification is the retry loop's *finalize* step, not part of the attempt window: it
+    /// is per-transaction ECDSA recovery and re-encoding over a whole block — CPU-bound work
+    /// that would otherwise both burn the rotation reserve and read as a provider stall,
+    /// classifying a healthy endpoint serving a large block as stalled (see
+    /// [`round_robin_with_backoff`]). A verification failure still counts as that provider's
+    /// error, so a tampered block rotates exactly as a transport failure does.
+    pub async fn get_block_with_deadline(
+        &self,
+        block_id: BlockId,
+        full_txs: bool,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<Block<Transaction>, RpcDeadlineExceeded> {
+        let verify = !self.config.skip_block_verification;
+        self.call_with_finish(
+            RpcMethod::EthGetBlock,
+            deadline,
+            false,
+            move |provider| {
+                Box::pin(async move { do_get_block_unchecked(&provider, block_id, full_txs).await })
+            },
+            move |block| {
+                Box::pin(async move {
+                    if verify { verify_block_on_blocking_pool(block).await } else { Ok(block) }
+                })
+            },
+        )
+        .await
+    }
+
+    /// Gets a block by its identifier without integrity checks. Retries forever.
+    ///
+    /// Use this for trusted data sources (e.g., debug-trace-server fetching from upstream RPC)
+    /// where integrity checks are unnecessary overhead.
+    pub async fn get_block_unchecked(
+        &self,
+        block_id: BlockId,
+        full_txs: bool,
+    ) -> Block<Transaction> {
+        self.call(RpcMethod::EthGetBlock, move |provider| {
+            Box::pin(async move { do_get_block_unchecked(&provider, block_id, full_txs).await })
+        })
+        .await
+    }
+
+    /// Gets the current latest block number from the blockchain. Retries forever.
+    pub async fn get_latest_block_number(&self) -> u64 {
+        self.get_latest_block_number_with_deadline(None)
+            .await
+            .expect("None deadline cannot time out")
+    }
+
+    /// Deadline-aware counterpart of [`Self::get_latest_block_number`].
+    pub async fn get_latest_block_number_with_deadline(
+        &self,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<u64, RpcDeadlineExceeded> {
+        self.latest_block_number_at(deadline, false).await
+    }
+
+    /// [`Self::get_latest_block_number_with_deadline`] for best-effort probes: a deadline
+    /// give-up logs at debug instead of WARN, because the caller degrades the failure
+    /// itself (e.g. the trace server's throttled tip seed skips one memoization round).
+    /// The deadline-exceeded metric still fires — only the operator-paging log is demoted.
+    pub async fn get_latest_block_number_best_effort(
+        &self,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<u64, RpcDeadlineExceeded> {
+        self.latest_block_number_at(deadline, true).await
+    }
+
+    async fn latest_block_number_at(
+        &self,
+        deadline: Option<Instant>,
+        best_effort: bool,
+    ) -> std::result::Result<u64, RpcDeadlineExceeded> {
+        self.call_with_deadline_at(RpcMethod::EthBlockNumber, deadline, best_effort, |provider| {
+            Box::pin(async move {
+                provider.get_block_number().await.context("Failed to get block number").map_err(
+                    |e| {
+                        trace!(error = %e, "eth_blockNumber failed");
+                        e
+                    },
+                )
+            })
+        })
+        .await
+    }
+
+    /// Gets the block header by block ID. Retries forever.
+    ///
+    /// Uses `eth_getHeaderByNumber` / `eth_getHeaderByHash` instead of `eth_getBlockByNumber`
+    /// to avoid transferring the transaction hash list. Even without full transaction objects,
+    /// `eth_getBlockByNumber` still returns all transaction hashes, which is significant
+    /// at high TPS.
+    ///
+    /// When `verify_hash` is true, computes `hash_slow()` to verify the header hash matches
+    /// the RPC-provided hash. This is important when initializing from a trusted start block
+    /// hash, but can be skipped when the header will be verified downstream (e.g., via
+    /// `verify_block_integrity`) or when running in a trusted context like the trace server.
+    pub async fn get_header(&self, block_id: BlockId, verify_hash: bool) -> Header {
+        self.get_header_with_deadline(block_id, verify_hash, None)
+            .await
+            .expect("None deadline cannot time out")
+    }
+
+    /// Deadline-aware counterpart of [`Self::get_header`].
+    pub async fn get_header_with_deadline(
+        &self,
+        block_id: BlockId,
+        verify_hash: bool,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<Header, RpcDeadlineExceeded> {
+        self.call_with_deadline(RpcMethod::EthGetHeader, deadline, move |provider| {
+            Box::pin(async move {
+                do_get_header(&provider, block_id, verify_hash).await.map_err(|e| {
+                    trace!(?block_id, error = %e, "get_header failed");
+                    e
+                })
+            })
+        })
+        .await
+    }
+
+    /// Gets just the block hash for a block number. Retries forever.
+    pub async fn get_block_hash(&self, block_number: u64) -> B256 {
+        self.get_header(BlockId::Number(BlockNumberOrTag::Number(block_number)), false).await.hash
+    }
+
+    /// Gets execution witness data for a specific block. Retries forever.
+    ///
+    /// Uses primary-failover rather than round-robin: each round starts from provider 0
+    /// (the primary), falling through to later providers only on failure. If every provider
+    /// fails in a round, sleeps for round-level exponential backoff and starts another round.
+    /// This keeps the primary endpoint as the hot path (cache-friendly) while still
+    /// tolerating its temporary outages.
+    pub async fn get_witness(&self, number: u64, hash: B256) -> (SaltWitness, MptWitness) {
+        self.get_witness_with_deadline(number, hash, None)
+            .await
+            .expect("None deadline cannot time out")
+    }
+
+    /// Deadline-aware counterpart of [`Self::get_witness`].
+    pub async fn get_witness_with_deadline(
+        &self,
+        number: u64,
+        hash: B256,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<(SaltWitness, MptWitness), RpcDeadlineExceeded> {
+        let witness = self
+            .witness_round_robin(
+                0..self.witness_providers.len(),
+                number,
+                hash,
+                deadline,
+                decode_witness_response,
+                "Witness decoded",
+            )
+            .await?;
+
+        if let Some(ref metrics) = self.config.metrics {
+            metrics.on_witness_fetch(WitnessSizeBreakdown::new(&witness.0, &witness.1));
+        }
+        Ok(witness)
+    }
+
+    /// Zero-validation counterpart of [`Self::get_witness`] for execution-only
+    /// consumers: decodes just the light witness (kvs + levels, no
+    /// elliptic-curve work — see `stateless_core::light_witness` for the
+    /// safety model). Consumers that later need the full witness (e.g. to
+    /// assemble test fixtures) re-fetch it via [`Self::get_witness`].
+    ///
+    /// The `on_witness_fetch` size metric is not recorded here — the exact
+    /// breakdown needs the proof's commitment count. Callers that want a size
+    /// signal can record `WitnessSizeBreakdown::new_light` (a documented
+    /// lower bound) themselves.
+    pub async fn get_witness_light(&self, number: u64, hash: B256) -> (LightWitness, MptWitness) {
+        self.get_witness_light_with_deadline(number, hash, None)
+            .await
+            .expect("None deadline cannot time out")
+    }
+
+    /// Deadline-aware counterpart of [`Self::get_witness_light`].
+    pub async fn get_witness_light_with_deadline(
+        &self,
+        number: u64,
+        hash: B256,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<(LightWitness, MptWitness), RpcDeadlineExceeded> {
+        self.witness_round_robin(
+            0..self.witness_providers.len(),
+            number,
+            hash,
+            deadline,
+            decode_witness_response_light,
+            "Witness light-decoded",
+        )
+        .await
+    }
+
+    /// Like [`Self::get_witness_light_with_deadline`], but skips the first `skip` witness
+    /// providers, for callers that know those endpoints cannot serve the request (e.g. an
+    /// internal generator that has pruned the block). Logged endpoint labels keep their
+    /// position in the full configured witness endpoint list, and the shared witness
+    /// concurrency cap still applies.
+    ///
+    /// Returns [`WitnessFetchError::NoProviderInRange`] when `skip` selects past the
+    /// configured witness endpoints — a routing bug fails this one request rather than the
+    /// process.
+    pub async fn get_witness_light_with_deadline_from(
+        &self,
+        skip: usize,
+        number: u64,
+        hash: B256,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<(LightWitness, MptWitness), WitnessFetchError> {
+        // Checked here, where the caller-computed value enters, rather than deeper in the
+        // rotation: every other witness fetch builds its range from the provider count and
+        // cannot be out of range, so this is the only place the check has anything to do.
+        let configured = self.witness_providers.len();
+        if skip >= configured {
+            return Err(WitnessFetchError::NoProviderInRange { skip, configured });
+        }
+        Ok(self
+            .witness_round_robin(
+                skip..configured,
+                number,
+                hash,
+                deadline,
+                decode_witness_response_light,
+                "Witness light-decoded",
+            )
+            .await?)
+    }
+
+    /// Like [`Self::get_witness_light`], but consults only the FIRST witness provider —
+    /// the complement of [`Self::get_witness_light_with_deadline_from`]: that one skips
+    /// providers that cannot have the witness anymore (pruned), this one is for callers
+    /// that know the later providers cannot have it *yet* (e.g. it is still being
+    /// generated upstream). Retries the single provider with round backoff indefinitely;
+    /// callers bound the wait with their own timeout around the future. Deliberately no
+    /// `deadline` parameter: an expired caller budget is a routing decision, not a failed
+    /// logical call, and must not increment the `on_rpc_deadline_exceeded` metric the
+    /// client's deadline path records.
+    pub async fn get_witness_light_first_provider_only(
+        &self,
+        number: u64,
+        hash: B256,
+    ) -> (LightWitness, MptWitness) {
+        self.witness_round_robin(
+            0..1,
+            number,
+            hash,
+            None,
+            decode_witness_response_light,
+            "Witness light-decoded",
+        )
+        .await
+        .expect("None deadline cannot time out")
+    }
+
+    /// Shared `mega_getBlockWitness` retry loop: primary-failover rounds (always start from
+    /// the first selected provider so the primary takes all traffic while healthy; backups
+    /// are touched only while it is failing), each attempt one RPC round trip followed by the
+    /// caller-chosen `decode` (see [`fetch_witness_wire`] / [`decode_witness_wire`]).
+    ///
+    /// `providers` selects the contiguous index range of witness providers in the rotation;
+    /// the logged endpoint labels stay aligned with the full configured list because each
+    /// label bakes in its original index (see [`endpoint_label`]).
+    ///
+    /// Every caller builds `providers` from the configured provider count, so the range is
+    /// non-empty and in bounds by construction; the one caller-supplied value (`skip`) is
+    /// checked in [`Self::get_witness_light_with_deadline_from`] before it gets here.
+    // A `warn`-level span (not the usual `info`) so it stays enabled at the default `warn` log
+    // filter: the generic retry loop's per-attempt failure logs then inherit `block_number`,
+    // which they cannot see otherwise, so an endpoint stall/error is traceable to its block.
+    #[instrument(level = "warn", skip_all, fields(block_number = number, block_hash = %hash))]
+    async fn witness_round_robin<T: Send + 'static>(
+        &self,
+        providers: std::ops::Range<usize>,
+        number: u64,
+        hash: B256,
+        deadline: Option<Instant>,
+        decode: fn(&str) -> std::result::Result<T, crate::WitnessDecodingError>,
+        trace_msg: &'static str,
+    ) -> std::result::Result<T, RpcDeadlineExceeded> {
+        debug_assert!(
+            !providers.is_empty() && providers.end <= self.witness_providers.len(),
+            "witness provider range ({providers:?}) must select at least one of {} providers",
+            self.witness_providers.len()
+        );
+        // Deadline-bound witness attempts run under the reserve-half policy: the tightest of
+        // the configured ceiling, the general per-attempt timeout, and — recomputed at each
+        // attempt, after any permit wait — half of what the call still has, so neither a
+        // stalled hop nor a long permit queue can leave the rotation nothing
+        // (`witness_per_attempt_timeout` documents the full contract). A deadline-less fetch
+        // keeps the general cap, since it must be able to out-wait transfers slower than the
+        // witness cap.
+        let attempt_cap = match (deadline, self.config.witness_per_attempt_timeout) {
+            (Some(_), Some(cap)) => {
+                AttemptCap::ReserveHalf { ceiling: cap.min(self.config.per_attempt_timeout) }
+            }
+            _ => AttemptCap::Fixed(self.config.per_attempt_timeout),
+        };
+        round_robin_with_backoff(
+            &self.witness_providers[providers.clone()],
+            &self.witness_provider_labels[providers],
+            &self.witness_concurrency,
+            &self.config.rpc_retry,
+            attempt_cap,
+            0,
+            RpcMethod::MegaGetBlockWitness,
+            self.config.metrics.as_ref(),
+            deadline,
+            false,
+            |provider, _provider_label| {
+                Box::pin(async move { fetch_witness_wire(&provider, number, hash).await })
+            },
+            move |wire, provider_label| {
+                Box::pin(async move {
+                    decode_witness_wire(wire, &provider_label, number, hash, decode, trace_msg)
+                        .await
+                })
+            },
+        )
+        .await
+    }
+
+    /// Reports a range of validated blocks via the dedicated report endpoint.
+    pub async fn set_validated_blocks(
+        &self,
+        first_block: (u64, B256),
+        last_block: (u64, B256),
+    ) -> Result<SetValidatedBlocksResponse> {
+        let provider =
+            self.report_provider.as_ref().ok_or_else(|| eyre!("Report provider not configured"))?;
+        let attempt_start = Instant::now();
+        // Single-attempt report call (no round-robin), so it classifies its own outcome the same
+        // way the retry loop does: returned error vs per-attempt stall.
+        let (result, outcome) = match tokio::time::timeout(
+            self.config.per_attempt_timeout,
+            provider.client().request::<_, SetValidatedBlocksResponse>(
+                "mega_setValidatedBlocks",
+                (first_block, last_block),
+            ),
+        )
+        .await
+        {
+            Ok(Ok(response)) => (Ok(response), RpcAttemptOutcome::Success),
+            Ok(Err(e)) => {
+                trace!(error = %e, "mega_setValidatedBlocks failed");
+                (Err(eyre!("Failed to set validated blocks: {e}")), RpcAttemptOutcome::Error)
+            }
+            Err(_) => {
+                warn!(
+                    method = RpcMethod::MegaSetValidatedBlocks.as_str(),
+                    attempt_timeout_ms = self.config.per_attempt_timeout.as_millis() as u64,
+                    "Report RPC stalled past per-attempt timeout",
+                );
+                (
+                    Err(eyre!(
+                        "mega_setValidatedBlocks timed out after {:?} (per_attempt_timeout)",
+                        self.config.per_attempt_timeout
+                    )),
+                    RpcAttemptOutcome::Timeout,
+                )
+            }
+        };
+        if let Some(ref metrics) = self.config.metrics {
+            let provider_label = self.report_provider_label.as_deref().unwrap_or("report");
+            metrics.on_rpc_attempt(
+                RpcMethod::MegaSetValidatedBlocks,
+                provider_label,
+                outcome,
+                attempt_start.elapsed().as_secs_f64(),
+            );
+        }
+        result
+    }
+
+    /// Gets contract bytecode for multiple code hashes concurrently.
+    ///
+    /// When `verify` is `true`, each returned bytecode's keccak hash is checked against its
+    /// requested code hash inside the same per-hash future, so hashing runs concurrently
+    /// with the remaining fetches.
+    ///
+    /// # Fail-fast on mismatch
+    ///
+    /// A single hash mismatch aborts the whole batch with an `Err`, and the bytecodes for the
+    /// other (concurrently-fetched and verified) hashes in the same batch are **discarded** —
+    /// they are not returned and not cached. This is an intentional security tradeoff: a
+    /// misbehaving or malicious upstream in the batch taints the entire fetch, and we would
+    /// rather re-do the round-trip than risk priming the cache with any byte from a provider
+    /// that has demonstrated bad data in this batch. A persistently-misbehaving upstream will
+    /// cause repeated failures for any block touching the offending contract until the
+    /// operator intervenes — failure is the intended signal, not silent skipping.
+    ///
+    /// # Return type
+    ///
+    /// Returns plain `Bytecode`: it is already internally reference-counted, so it shares one
+    /// underlying allocation with the [`crate::ContractCache`] end-to-end without an outer `Arc`.
+    /// Callers that feed into the verified `ContractCache` tiers should pass `verify = true`; the
+    /// cache itself trusts memory/disk hits and does not re-verify.
+    pub async fn get_codes(
+        &self,
+        hashes: &[B256],
+        verify: bool,
+    ) -> std::result::Result<HashMap<B256, Bytecode>, CodeFetchError> {
+        self.get_codes_with_deadline(hashes, verify, None).await
+    }
+
+    /// Deadline-aware counterpart of [`Self::get_codes`].
+    ///
+    /// The same deadline is applied to every per-hash fetch; if it fires during any fetch
+    /// the whole batch aborts with `Err(CodeFetchError::Deadline(..))`. With `deadline = None`
+    /// the per-hash retries are unbounded and this function can only fail with
+    /// `VerificationFailure`.
+    pub async fn get_codes_with_deadline(
+        &self,
+        hashes: &[B256],
+        verify: bool,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<HashMap<B256, Bytecode>, CodeFetchError> {
+        // `try_join_all` cancels the remaining per-hash futures on the first error — a
+        // `VerificationFailure` or `Deadline` on one hash stops the rest of the batch
+        // immediately and releases their concurrency permits, so a slow straggler can't
+        // hold permits until its own per-attempt timeout fires.
+        future::try_join_all(hashes.iter().map(|&hash| async move {
+            let bytes = self.get_code_with_deadline(hash, deadline).await?;
+            let code = Bytecode::new_raw(bytes);
+            if verify {
+                let actual = code.hash_slow();
+                if actual != hash {
+                    return Err(CodeFetchError::VerificationFailure { requested: hash, actual });
+                }
+            }
+            Ok::<_, CodeFetchError>((hash, code))
+        }))
+        .await
+        .map(|pairs| pairs.into_iter().collect())
+    }
+
+    /// Gets the transaction by hash and returns its containing block hash. Retries forever.
+    ///
+    /// Returns `Ok(None)` when the tx is not found, `Err` when the tx is pending (no
+    /// block hash yet — a semantic error the caller must handle). Transient RPC failures
+    /// are retried inside `call()`.
+    pub async fn get_transaction_by_hash(
+        &self,
+        tx_hash: B256,
+    ) -> Result<Option<(Transaction, B256)>> {
+        match self.get_transaction_by_hash_with_deadline(tx_hash, None).await {
+            Ok(ok) => ok,
+            // `None` deadline ⇒ retry loop is truly unbounded and this branch is unreachable.
+            Err(e) => unreachable!("None deadline cannot time out: {e}"),
+        }
+    }
+
+    /// Deadline-aware counterpart of [`Self::get_transaction_by_hash`].
+    ///
+    /// On deadline: returns `Err(RpcDeadlineExceeded)`. On a pending tx (no block hash):
+    /// returns `Ok(Err(..))`. On tx-not-found: returns `Ok(Ok(None))`.
+    pub async fn get_transaction_by_hash_with_deadline(
+        &self,
+        tx_hash: B256,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<Result<Option<(Transaction, B256)>>, RpcDeadlineExceeded> {
+        let tx = self
+            .call_with_deadline(RpcMethod::EthGetTransactionByHash, deadline, move |provider| {
+                Box::pin(async move {
+                    provider.get_transaction_by_hash(tx_hash).await.map_err(|e| {
+                        trace!(%tx_hash, error = %e, "get_transaction_by_hash failed");
+                        eyre::Error::from(e)
+                    })
+                })
+            })
+            .await?;
+
+        Ok(match tx {
+            Some(tx) => match tx.block_hash {
+                Some(h) => Ok(Some((tx, h))),
+                None => Err(eyre!("Transaction {} is pending and has no block hash", tx_hash)),
+            },
+            None => Ok(None),
+        })
+    }
+}
+
+/// Emits a tracing event at `warn!` or `debug!` depending on a runtime flag.
+///
+/// Used by the retry loop to escalate DEBUG → WARN after `WARN_AT_ROUND` without
+/// duplicating every log call. The level ends up baked into a static `Metadata`
+/// inside the expanded `tracing::warn!` / `tracing::debug!` calls, so the filter
+/// short-circuit still works per-branch.
+macro_rules! log_at {
+    ($warn_level:expr, $($args:tt)*) => {
+        if $warn_level {
+            ::tracing::warn!($($args)*);
+        } else {
+            ::tracing::debug!($($args)*);
+        }
+    };
+}
+
+/// Derives a bounded, credential-free, per-endpoint metric/log label from an endpoint URL and its
+/// index in the configured list.
+///
+/// Format is `{idx}:{host}`: the host (with port) stays human-readable, while the index keeps two
+/// endpoints that share an authority (same SaaS host, different path or credentials) distinct — so
+/// the per-endpoint metric split holds instead of aggregating them — and also encodes primary (0)
+/// vs failover (1+). Any `user:pass@` userinfo is stripped so endpoint credentials never leak into
+/// labels or logs; cardinality is bounded because the endpoint list is operator-configured. Falls
+/// back to `provider_{idx}` when no host can be extracted (unreachable for the validated URLs the
+/// constructor accepts, but kept total).
+fn endpoint_label(url: &str, idx: usize) -> Arc<str> {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    if host.is_empty() {
+        Arc::from(format!("provider_{idx}"))
+    } else {
+        Arc::from(format!("{idx}:{host}"))
+    }
+}
+
+/// Where a deadline-bound logical call's budget ran out, for the give-up WARN in
+/// `round_robin_with_backoff`. Fields appear only on the phases that measured them, so
+/// "not applicable" stays distinguishable from a genuinely zero measurement in the log.
+enum GiveUpPhase<'a> {
+    /// The deadline had already passed before the next attempt could start.
+    BeforeAttempt,
+    /// The deadline elapsed while still queued for a concurrency permit, so no provider was
+    /// ever contacted — the loss is queue wait behind our own cap, not endpoint latency.
+    PermitWaitClamped { permit_wait: Duration },
+    /// The running attempt was cut because the deadline elapsed alongside it;
+    /// `permit_wait` / `attempt` split the lost hop into queue wait vs call time.
+    AttemptClamped { provider: &'a str, permit_wait: Duration, attempt: Duration },
+    /// Every provider failed the round and no budget remains for the backoff sleep.
+    BeforeBackoff,
+}
+
+impl GiveUpPhase<'_> {
+    /// Stable `phase` label for the give-up WARN.
+    fn as_str(&self) -> &'static str {
+        match self {
+            GiveUpPhase::BeforeAttempt => "before_attempt",
+            GiveUpPhase::PermitWaitClamped { .. } => "permit_wait_clamped",
+            GiveUpPhase::AttemptClamped { .. } => "attempt_clamped",
+            GiveUpPhase::BeforeBackoff => "before_backoff",
+        }
+    }
+}
+
+/// Per-attempt time-cap policy for [`round_robin_with_backoff`].
+enum AttemptCap {
+    /// Every attempt gets `min(cap, remaining budget)` — the general shape: the cap detects
+    /// a stalled provider, and near the deadline an attempt may use everything left.
+    Fixed(Duration),
+    /// Deadline-bound attempts get `min(ceiling, remaining / 2)`, recomputed when the
+    /// attempt starts — after any permit wait — but only while the round still has an
+    /// untried provider to rotate to: the reserve exists to buy exactly that rotation.
+    /// The round's last hop, and every hop of a single-provider chain, takes the
+    /// remainder whole under the ceiling instead — there is nothing left to reserve for,
+    /// and condemning a slow-but-honest transfer would buy nothing. The halving also
+    /// yields once half the remainder drops below [`MIN_RESERVE_HALF_ATTEMPT`] (a window
+    /// that small buys no useful follow-up hop). Without a deadline the ceiling alone
+    /// applies.
+    ReserveHalf { ceiling: Duration },
+}
+
+/// Smallest attempt window worth reserving budget past: below this a witness round trip
+/// cannot complete anyway, so [`AttemptCap::ReserveHalf`] hands the tail to one final
+/// attempt instead of splitting it into unwinnable micro-attempts.
+const MIN_RESERVE_HALF_ATTEMPT: Duration = Duration::from_millis(25);
+
+/// Runs a round-robin RPC call with round-level exponential backoff and an optional deadline.
+///
+/// Each round attempts every provider once in round-robin starting at `rr_start`. If any
+/// provider succeeds, returns the result. If every provider in a round fails, sleeps for
+/// round-level exponential backoff (capped at `policy.max`, with jitter up to 50%) and starts
+/// a new round with the backoff doubled.
+///
+/// When `deadline` is `Some`, the loop returns [`RpcDeadlineExceeded`] once the deadline
+/// elapses, and clamps each permit wait, attempt, and inter-round sleep so none of them
+/// overshoots it. When `deadline` is `None`, retry is unbounded — the function never
+/// returns an error.
+///
+/// Used by both the data-method `call()` (rotates `rr_start` per call for load balancing) and
+/// `get_witness()` (pins `rr_start=0` for primary-failover).
+///
+/// `providers`/`provider_labels` may be parallel slices of the caller's full configured list;
+/// attempts are identified in logs and errors by their label alone, which bakes in the
+/// endpoint's index in the full list at construction, so slicing never misattributes an
+/// attempt.
+// 12-argument retry primitive. Each field plays a distinct role (providers, their metric/log
+// labels, concurrency, backoff policy, per-attempt cap policy, starting provider, method label,
+// metrics sink, deadline, give-up disposition, windowed per-attempt closure, finalize closure)
+// and bundling them into a struct would be ceremony without encapsulation — there are exactly two
+// call sites in this crate. Prefer clarity at the definition over fewer commas at the call.
+// `provider_labels` is parallel to `providers` by index. `f` runs under the attempt window;
+// `finish` runs after it (bounded by the deadline alone): post-transport CPU work — the witness
+// light decode — must neither burn the rotation reserve nor read as a provider stall, while its
+// failure still counts as the provider's `Error` so corrupt-payload rotation is preserved.
+#[allow(clippy::too_many_arguments)]
+async fn round_robin_with_backoff<N, W, T>(
+    providers: &[RootProvider<N>],
+    provider_labels: &[Arc<str>],
+    semaphore: &Semaphore,
+    policy: &BackoffPolicy,
+    attempt_cap: AttemptCap,
+    rr_start: usize,
+    method: RpcMethod,
+    metrics: Option<&Arc<dyn RpcMetrics>>,
+    deadline: Option<Instant>,
+    best_effort: bool,
+    f: impl Fn(RootProvider<N>, Arc<str>) -> BoxFuture<Result<W>>,
+    finish: impl Fn(W, Arc<str>) -> BoxFuture<Result<T>>,
+) -> std::result::Result<T, RpcDeadlineExceeded>
+where
+    N: alloy_provider::Network,
+    W: Send + 'static,
+    T: Send + 'static,
+{
+    debug_assert_eq!(
+        providers.len(),
+        provider_labels.len(),
+        "provider_labels must be parallel to providers (indexed by the same slot)",
+    );
+
+    /// Round index from which retry logs escalate DEBUG → WARN. Short blips typically resolve
+    /// within the first few rounds (with `initial=500ms, max=30s` defaults that's rounds 0/1/2
+    /// sleeping 500/1000/2000 ms + jitter, so cumulative 3.5–5.25 s before a round-3 WARN).
+    /// Only sustained failures past that reach operator-visible WARN.
+    const WARN_AT_ROUND: u32 = 3;
+
+    let n = providers.len();
+    let mut backoff = policy.schedule();
+    let mut round = 0u32;
+    let call_start = Instant::now();
+    // Records the logical-call deadline give-up (once) and builds the typed error. Called
+    // from every site that abandons the call on a blown deadline, so the "request timed
+    // out" metric and the returned error stay in lockstep.
+    let record_deadline = |phase: GiveUpPhase<'_>, round: u32| -> RpcDeadlineExceeded {
+        let elapsed = call_start.elapsed();
+        if let Some(m) = metrics {
+            m.on_rpc_deadline_exceeded(method, elapsed.as_secs_f64());
+        }
+        let (provider, permit_wait, attempt) = match &phase {
+            GiveUpPhase::BeforeAttempt | GiveUpPhase::BeforeBackoff => (None, None, None),
+            GiveUpPhase::PermitWaitClamped { permit_wait } => (None, Some(*permit_wait), None),
+            GiveUpPhase::AttemptClamped { provider, permit_wait, attempt } => {
+                (Some(*provider), Some(*permit_wait), Some(*attempt))
+            }
+        };
+        // tracing skips `None`-valued fields, so each phase logs exactly its own field set.
+        // Best-effort callers degrade the failure themselves, so their give-up is not the
+        // operator-paging signal — it logs at debug while the metric above still fires.
+        log_at!(
+            !best_effort,
+            method = method.as_str(),
+            phase = phase.as_str(),
+            provider,
+            round,
+            elapsed_ms = elapsed.as_millis() as u64,
+            permit_wait_ms = permit_wait.map(|d| d.as_millis() as u64),
+            attempt_ms = attempt.map(|d| d.as_millis() as u64),
+            "RPC logical call gave up on its deadline",
+        );
+        RpcDeadlineExceeded { method, elapsed }
+    };
+
+    loop {
+        // Last error observed in this round. Used for the round-summary log at the bottom so
+        // the per-provider error detail is not lost when we skip the "trying next" log for the
+        // final provider (see below).
+        let mut last_err: Option<eyre::Error> = None;
+        // First few rounds are DEBUG — a transient blip shouldn't page anyone. After the
+        // threshold the same logs escalate to WARN so sustained failures surface to ops.
+        let warn_level = round >= WARN_AT_ROUND;
+
+        for offset in 0..n {
+            let queued = Instant::now();
+            // Bail before eating the next permit if the deadline already fired — avoids
+            // queueing behind the semaphore just to immediately bail.
+            if let Some(d) = deadline &&
+                queued >= d
+            {
+                return Err(record_deadline(GiveUpPhase::BeforeAttempt, round));
+            }
+            let slot = (rr_start + offset) % n;
+            let provider_label: &str = &provider_labels[slot];
+            // The wait sits inside the caller's deadline (metering rationale:
+            // `RpcMetrics::on_rpc_permit_wait`), so the acquire is clamped to it — on a
+            // saturated semaphore the whole budget can die queued right here. A cut-short
+            // wait still records its sample; dropping it would censor the histogram exactly
+            // when the queue is at its worst.
+            let acquired = match deadline {
+                Some(d) => tokio::time::timeout_at(d.into(), semaphore.acquire()).await,
+                None => Ok(semaphore.acquire().await),
+            };
+            let permit_wait = queued.elapsed();
+            if let Some(m) = metrics {
+                m.on_rpc_permit_wait(method, permit_wait.as_secs_f64());
+            }
+            let permit = match acquired {
+                Ok(acquire_result) => acquire_result.expect("semaphore closed unexpectedly"),
+                Err(_) => {
+                    return Err(record_deadline(
+                        GiveUpPhase::PermitWaitClamped { permit_wait },
+                        round,
+                    ));
+                }
+            };
+            // Per-attempt timing: record each provider call individually so histograms
+            // and success/error counters reflect what actually happened in the retry loop
+            // rather than always showing "success" with the cumulative logical-call time.
+            let attempt_start = Instant::now();
+            // Bound every attempt by the cap policy — applied even with `deadline = None`
+            // so a provider that accepts the TCP connection but never replies cannot wedge
+            // the retry loop. With `deadline = Some(d)` the window is further clamped so we
+            // never sleep past the caller's budget; `ReserveHalf` recomputes its halving
+            // here, post-permit, so queue time already spent cannot inflate the window.
+            let attempt_timeout = match (deadline, &attempt_cap) {
+                (None, AttemptCap::Fixed(cap) | AttemptCap::ReserveHalf { ceiling: cap }) => *cap,
+                (Some(d), AttemptCap::Fixed(cap)) => {
+                    d.saturating_duration_since(Instant::now()).min(*cap)
+                }
+                (Some(d), AttemptCap::ReserveHalf { ceiling }) => {
+                    let remaining = d.saturating_duration_since(Instant::now());
+                    let half = remaining / 2;
+                    // Halve only while this round still has an untried provider — the
+                    // reserve exists to buy exactly that rotation, and only while the
+                    // reserved window stays useful (>= MIN_RESERVE_HALF_ATTEMPT). The
+                    // round's last hop — and every hop of a single-provider chain — takes
+                    // the remainder whole instead: there is no rotation left to reserve
+                    // for, and condemning a slow-but-honest transfer would buy nothing.
+                    // The ceiling still bounds every window, which is what cuts the
+                    // incident-shaped stall on a full stage and keeps a retry round
+                    // reachable there.
+                    let has_untried_provider = offset + 1 < n;
+                    if has_untried_provider && half >= MIN_RESERVE_HALF_ATTEMPT {
+                        half
+                    } else {
+                        remaining
+                    }
+                    .min(*ceiling)
+                }
+            };
+            // Classify the attempt into a value or a (typed error, reason) pair, so the failure
+            // reason — a returned error vs a per-attempt stall — survives to the metrics and logs.
+            let attempt: std::result::Result<T, (eyre::Error, RpcAttemptOutcome)> =
+                match tokio::time::timeout(
+                    attempt_timeout,
+                    f(providers[slot].clone(), Arc::clone(&provider_labels[slot])),
+                )
+                .await
+                {
+                    // Transport succeeded inside the window; finalize outside it, bounded
+                    // by the caller's deadline alone. A finalize that outruns the deadline
+                    // classifies as `Timeout` and the deadline check below reclassifies it
+                    // to `DeadlineClamped` — the abandoned blocking decode finishes in the
+                    // background (it cannot be cancelled), the same accepted trade as the
+                    // R2 decode.
+                    Ok(Ok(wire)) => {
+                        let fin = finish(wire, Arc::clone(&provider_labels[slot]));
+                        let fin = match deadline {
+                            Some(d) => tokio::time::timeout_at(d.into(), fin).await,
+                            None => Ok(fin.await),
+                        };
+                        match fin {
+                            Ok(Ok(v)) => Ok(v),
+                            Ok(Err(e)) => Err((e, RpcAttemptOutcome::Error)),
+                            Err(_) => Err((
+                                eyre!(
+                                    "{} finalize for provider {} outran the caller's deadline",
+                                    method.as_str(),
+                                    provider_label,
+                                ),
+                                RpcAttemptOutcome::Timeout,
+                            )),
+                        }
+                    }
+                    Ok(Err(e)) => Err((e, RpcAttemptOutcome::Error)),
+                    Err(_) => Err((
+                        eyre!(
+                            "{} attempt against provider {} timed out after {:?} (per_attempt_timeout)",
+                            method.as_str(),
+                            provider_label,
+                            attempt_timeout,
+                        ),
+                        RpcAttemptOutcome::Timeout,
+                    )),
+                };
+            let attempt_elapsed = attempt_start.elapsed();
+            drop(permit);
+
+            let (err, mut outcome) = match attempt {
+                Ok(v) => {
+                    if let Some(m) = metrics {
+                        m.on_rpc_attempt(
+                            method,
+                            provider_label,
+                            RpcAttemptOutcome::Success,
+                            attempt_elapsed.as_secs_f64(),
+                        );
+                    }
+                    return Ok(v);
+                }
+                Err(pair) => pair,
+            };
+
+            // A per-attempt timeout that also blew the overall deadline is deadline pressure,
+            // not a provider stall (see `RpcAttemptOutcome::DeadlineClamped`); reclassify
+            // before the single recording site below.
+            if outcome == RpcAttemptOutcome::Timeout &&
+                let Some(d) = deadline &&
+                Instant::now() >= d
+            {
+                outcome = RpcAttemptOutcome::DeadlineClamped;
+            }
+
+            // Record the failed attempt against its endpoint with the reason (error vs a genuine
+            // stall vs an attempt the caller's deadline cut short).
+            if let Some(m) = metrics {
+                m.on_rpc_attempt(method, provider_label, outcome, attempt_elapsed.as_secs_f64());
+            }
+
+            if outcome == RpcAttemptOutcome::DeadlineClamped {
+                return Err(record_deadline(
+                    GiveUpPhase::AttemptClamped {
+                        provider: provider_label,
+                        permit_wait,
+                        attempt: attempt_elapsed,
+                    },
+                    round,
+                ));
+            }
+
+            if outcome == RpcAttemptOutcome::Timeout {
+                // Stalled but budget remains. Always WARN, regardless of round — a stalled
+                // provider (TCP-accept-no-reply) is the failure mode this guard exists to catch,
+                // and ops need to see it on round 0 instead of waiting for the round-3 escalation.
+                warn!(
+                    method = method.as_str(),
+                    provider = %provider_label,
+                    round,
+                    attempt_timeout_ms = attempt_timeout.as_millis() as u64,
+                    "RPC provider stalled past per-attempt timeout, rotating",
+                );
+            }
+
+            // Transient failure with budget left → count the retry and rotate to the next provider.
+            if let Some(m) = metrics {
+                m.on_rpc_retry(method);
+            }
+            // Log "trying next" only for a returned error with a next provider in this round: a
+            // stall already logged its own WARN above, and the last provider's error is carried
+            // into the round-summary log below.
+            let has_next = offset + 1 < n;
+            if has_next && outcome != RpcAttemptOutcome::Timeout {
+                log_at!(
+                    warn_level,
+                    method = method.as_str(),
+                    provider = %provider_label,
+                    round,
+                    error = %err,
+                    "RPC provider failed, trying next",
+                );
+            }
+            last_err = Some(err);
+        }
+
+        // Every provider in this round failed — summarize with the last error + sleep.
+        // `last_err` is always `Some` here: `n >= 1` is enforced by the `RpcClient`
+        // constructor and we only reach this point after `n` iterations that each set it.
+        let last_err = last_err.expect("last_err set when every provider failed this round");
+        let mut sleep_ms = backoff.next_sleep_ms();
+        // Clamp the sleep so it doesn't overshoot the caller's deadline — if no time is
+        // left we bail immediately rather than sleeping past the deadline and then bailing.
+        if let Some(d) = deadline {
+            let remaining_ms = d.saturating_duration_since(Instant::now()).as_millis() as u64;
+            if remaining_ms == 0 {
+                return Err(record_deadline(GiveUpPhase::BeforeBackoff, round));
+            }
+            // Half of what is left, not all of it: a sleep that swallows the remainder
+            // wakes exactly at the deadline and forfeits the retry it was sleeping for.
+            sleep_ms = sleep_ms.min((remaining_ms / 2).max(1));
+        }
+        log_at!(
+            warn_level,
+            method = method.as_str(),
+            round,
+            providers = n,
+            sleep_ms,
+            error = %last_err,
+            "All providers failed this round, backing off",
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(sleep_ms)).await;
+        round += 1;
+    }
+}
+
+/// Fetches a block by ID without integrity verification.
+async fn do_get_block_unchecked(
+    provider: &RootProvider<Optimism>,
+    block_id: BlockId,
+    full_txs: bool,
+) -> Result<Block<Transaction>> {
+    let block = if full_txs {
+        provider.get_block(block_id).full().await?
+    } else {
+        provider.get_block(block_id).await?
+    };
+
+    let block = block.ok_or_else(|| eyre!("Block {:?} not found", block_id))?;
+
+    // Verify block_id matches the returned block
+    match block_id {
+        BlockId::Number(BlockNumberOrTag::Number(num)) => {
+            ensure!(
+                block.header.number == num,
+                "Block number mismatch: requested {}, got {}",
+                num,
+                block.header.number
+            );
+        }
+        BlockId::Hash(hash) => {
+            ensure!(
+                block.header.hash == hash.block_hash,
+                "Block hash mismatch: requested {:?}, got {:?}",
+                hash.block_hash,
+                block.header.hash
+            );
+        }
+        _ => {} // Skip for latest, earliest, pending, etc.
+    }
+
+    Ok(block)
+}
+
+/// Fetches a block header by block ID with optional hash verification.
+async fn do_get_header(
+    provider: &RootProvider<Optimism>,
+    block_id: BlockId,
+    verify_hash: bool,
+) -> Result<Header> {
+    let result = match block_id {
+        BlockId::Hash(hash) => provider
+            .client()
+            .request::<_, Header>("eth_getHeaderByHash", (hash.block_hash,))
+            .await
+            .map_err(|e| eyre!("eth_getHeaderByHash for {} failed: {e}", hash.block_hash)),
+        BlockId::Number(tag) => provider
+            .client()
+            .request::<_, Header>("eth_getHeaderByNumber", (tag,))
+            .await
+            .map_err(|e| eyre!("eth_getHeaderByNumber for {:?} failed: {e}", tag)),
+    };
+
+    let header = result?;
+
+    // Verify block_id matches the returned header
+    match block_id {
+        BlockId::Number(BlockNumberOrTag::Number(num)) => {
+            ensure!(
+                header.number == num,
+                "Header number mismatch: requested {}, got {}",
+                num,
+                header.number
+            );
+        }
+        BlockId::Hash(hash) => {
+            ensure!(
+                header.hash == hash.block_hash,
+                "Header hash mismatch: requested {:?}, got {:?}",
+                hash.block_hash,
+                header.hash
+            );
+        }
+        _ => {}
+    }
+
+    if verify_hash {
+        ensure!(
+            header.hash_slow() == header.hash,
+            "Header hash mismatch: expected {:?}, computed {:?}",
+            header.hash,
+            header.hash_slow()
+        );
+    }
+
+    Ok(header)
+}
+
+/// Shared single-attempt `mega_getBlockWitness` transport: one RPC round trip, returning
+/// the still-encoded wire string plus the round-trip time for the success trace. Decoding
+/// lives in [`decode_witness_wire`], run by the retry loop's finalize step *outside* the
+/// attempt window — CPU-bound decode must neither burn the rotation reserve nor be blamed
+/// on the provider as a stall.
+async fn fetch_witness_wire(
+    provider: &RootProvider,
+    number: u64,
+    hash: B256,
+) -> Result<(String, u128)> {
+    let keys = WitnessRequestKeys { block_number: U64::from(number), block_hash: hash };
+    let request_start = Instant::now();
+    let encoded: String = provider
+        .client()
+        .request("mega_getBlockWitness", (keys,))
+        .await
+        .map_err(|e| eyre!("mega_getBlockWitness failed for block {number}: {e}"))?;
+    Ok((encoded, request_start.elapsed().as_millis()))
+}
+
+/// [`fetch_witness_wire`]'s finalize half: the caller-chosen decoder on the blocking pool
+/// (zstd + bincode over a multi-MB payload is CPU-bound), then the per-endpoint success
+/// trace. A decode failure is a corrupt payload from this provider — the retry loop
+/// records it as the provider's `Error` and rotates, exactly like a transport error.
+async fn decode_witness_wire<T: Send + 'static>(
+    wire: (String, u128),
+    provider_label: &str,
+    number: u64,
+    hash: B256,
+    decode: fn(&str) -> std::result::Result<T, crate::WitnessDecodingError>,
+    trace_msg: &'static str,
+) -> Result<T> {
+    let (encoded, request_ms) = wire;
+    let decode_start = Instant::now();
+    let result = tokio::task::spawn_blocking(move || -> Result<T> {
+        decode(&encoded).map_err(|e| eyre!("failed to decode witness response: {e}"))
+    })
+    .await
+    .context("decode task panicked")??;
+
+    // Per-endpoint success trace: names the serving endpoint and splits the RPC round trip from the
+    // CPU-bound decode, so a slow witness fetch can be attributed to the right fallback endpoint.
+    trace!(
+        block_number = number,
+        %hash,
+        provider = %provider_label,
+        request_ms = request_ms as u64,
+        decode_ms = decode_start.elapsed().as_millis() as u64,
+        "{trace_msg}",
+    );
+
+    Ok(result)
+}
+
+/// [`RpcClient::get_block_with_deadline`]'s finalize half: [`verify_block_integrity`] on the
+/// blocking pool (per-transaction ECDSA recovery plus a re-encode of every envelope is
+/// CPU-bound over a full block), handing the block back untouched on success.
+///
+/// A failure here is an integrity failure from this provider — the retry loop records it as
+/// that provider's `Error` and rotates, exactly like a transport error. A panic inside
+/// [`verify_block_integrity`] is folded into that same path rather than unwinding the caller,
+/// matching [`decode_witness_wire`]: both turn provider-supplied bytes into typed values, so a
+/// panic there says this provider's data is bad and rotating is the useful answer (under a
+/// `None` deadline that retries forever). This is deliberately the opposite of the chain
+/// advancer, where a store panic stays fatal because it means the persistence layer is corrupt
+/// and every later block would build on it.
+async fn verify_block_on_blocking_pool(block: Block<Transaction>) -> Result<Block<Transaction>> {
+    tokio::task::spawn_blocking(move || -> Result<Block<Transaction>> {
+        verify_block_integrity(&block)?;
+        Ok(block)
+    })
+    .await
+    .context("block verification task panicked")?
+}
+
+/// Verifies structural integrity of a block fetched from RPC.
+///
+/// Checks:
+/// 1. **Block Hash**: Verifies the block hash matches the computed hash from the header
+/// 2. **Transaction Hashes**: For each transaction, verifies that the transaction hash matches its
+///    computed hash
+/// 3. **Transaction Signers**: Recovers and verifies the signer for each transaction matches the
+///    claimed `from` address
+/// 4. **Transactions Root**: Computes the Merkle root of all transactions and verifies it matches
+///    the `transactions_root` in the block header
+fn verify_block_integrity(block: &Block<Transaction>) -> Result<()> {
+    use alloy_consensus::transaction::{Recovered, SignerRecoverable};
+    use alloy_rpc_types_eth::BlockTransactions;
+    use alloy_trie::root::ordered_trie_root_with_encoder;
+    use op_alloy_network::{TransactionResponse, eip2718::Encodable2718};
+
+    // Verify block hash matches the computed hash from header
+    ensure!(
+        block.header.hash_slow() == block.header.hash,
+        "Block hash mismatch: expected {:?}, computed {:?}",
+        block.header.hash,
+        block.header.hash_slow()
+    );
+
+    // Verify transaction hashes and transactions root
+    if let BlockTransactions::Full(ref transactions) = block.transactions {
+        // The RPC `hash` field seeds the envelope's cached hash, so it is only trusted once keccak
+        // of the envelope's own encoding reproduces it; the same bytes then feed the ordered trie
+        // for the transactions-root check.
+        let mut encoded_txs = Vec::with_capacity(transactions.len());
+        for tx in transactions {
+            // The op and eth RPC wrappers both expose `inner`; under them sits the consensus
+            // envelope paired with the signer the provider claims.
+            let recovered_tx: &Recovered<_> = &tx.inner.inner;
+            let tx_envelope = recovered_tx.inner();
+            let encoded = tx_envelope.encoded_2718();
+            let computed_hash = keccak256(&encoded);
+            ensure!(
+                computed_hash == *tx_envelope.hash(),
+                "Transaction hash mismatch: expected {:?}, computed {:?}",
+                tx_envelope.hash(),
+                computed_hash
+            );
+
+            let recovered_signer = tx_envelope
+                .recover_signer()
+                .map_err(|err| eyre!("Failed to recover signer: {}", err))?;
+
+            ensure!(
+                recovered_signer == tx.from(),
+                "Transaction signer mismatch: expected {:?}, got {:?}",
+                tx.from(),
+                recovered_signer
+            );
+            encoded_txs.push(encoded);
+        }
+
+        let computed_tx_root = ordered_trie_root_with_encoder(&encoded_txs, |tx_bytes, buf| {
+            buf.extend_from_slice(tx_bytes)
+        });
+        ensure!(
+            computed_tx_root == block.header.transactions_root,
+            "Transactions root mismatch: expected {:?}, computed {:?}",
+            block.header.transactions_root,
+            computed_tx_root
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::HashMap,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    use alloy_primitives::BlockHash;
+    use jsonrpsee::{server::ServerHandle, types::ErrorObjectOwned};
+    use stateless_core::{
+        PipelineConfig, block_fetcher,
+        db::{BlockMeta, StoreResult},
+        find_divergence_point,
+        pipeline::{BlockFetcher, DivergenceLookups},
+    };
+    use stateless_test_utils::{
+        fixtures::TestFixtures,
+        mock_rpc::{consistent_header, header_stub, parse_hex_u64, serve},
+    };
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+    use crate::witness_encoding::WITNESS_RESPONSE_VERSION_PREFIX;
+
+    const LOCALHOST_A: &str = "http://localhost:8545";
+    const LOCALHOST_B: &str = "http://localhost:8546";
+
+    /// Test wrapper that implements BlockFetcher by delegating to RpcClient.
+    struct TestFetcher(RpcClient);
+
+    impl BlockFetcher for TestFetcher {
+        type Output = ();
+        async fn fetch(&self, _: u64) -> eyre::Result<()> {
+            unimplemented!("not used")
+        }
+        async fn latest_block_number(&self) -> eyre::Result<u64> {
+            Ok(self.0.get_latest_block_number().await)
+        }
+        async fn block_hash(&self, n: u64) -> eyre::Result<BlockHash> {
+            Ok(self.0.get_block_hash(n).await)
+        }
+        async fn latest_block_meta(&self) -> eyre::Result<BlockMeta> {
+            unimplemented!("not used")
+        }
+    }
+
+    fn client_at(url: &str) -> RpcClient {
+        RpcClient::new(&[url], &[url]).unwrap()
+    }
+
+    fn fetcher_at(url: &str) -> Arc<TestFetcher> {
+        Arc::new(TestFetcher(client_at(url)))
+    }
+
+    fn err_obj(msg: &'static str) -> ErrorObjectOwned {
+        ErrorObjectOwned::owned::<()>(-32000, msg, None)
+    }
+
+    /// Serves `eth_getHeaderByNumber` with headers derived from `hashes`.
+    async fn start_mock_rpc(hashes: HashMap<u64, BlockHash>) -> (ServerHandle, String) {
+        serve(hashes, |m| {
+            m.register_method("eth_getHeaderByNumber", |params, ctx, _| {
+                let (hex,): (String,) = params.parse().unwrap();
+                let n = parse_hex_u64(&hex);
+                Ok::<_, ErrorObjectOwned>(header_stub(n, ctx.get(&n).copied().unwrap_or_default()))
+            })
+            .unwrap();
+        })
+        .await
+    }
+
+    /// Serves `eth_blockNumber` returning `latest`; fails the first `fail_first` calls.
+    /// Returns the hit counter so tests can inspect per-endpoint call counts.
+    async fn start_counting_block_number_rpc(
+        latest: u64,
+        fail_first: usize,
+    ) -> (ServerHandle, String, Arc<AtomicUsize>) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let (handle, url) = serve((latest, fail_first, hits.clone()), |m| {
+            m.register_method("eth_blockNumber", |_p, (latest, fail_first, hits), _| {
+                if hits.fetch_add(1, Ordering::Relaxed) < *fail_first {
+                    Err::<String, _>(err_obj("synthetic failure"))
+                } else {
+                    Ok(format!("0x{:x}", *latest))
+                }
+            })
+            .unwrap();
+        })
+        .await;
+        (handle, url, hits)
+    }
+
+    /// Shortcut for tests that don't care about per-endpoint hit counts.
+    async fn start_block_number_rpc(latest: u64) -> (ServerHandle, String) {
+        let (h, u, _) = start_counting_block_number_rpc(latest, 0).await;
+        (h, u)
+    }
+
+    /// Builds paired local/remote hash maps that agree on `earliest..=diverge_at` and diverge
+    /// on `(diverge_at+1)..=tip`.
+    fn make_divergence_chains(
+        earliest: u64,
+        tip: u64,
+        diverge_at: u64,
+    ) -> (HashMap<u64, BlockHash>, HashMap<u64, BlockHash>) {
+        let mut local = HashMap::new();
+        let mut remote = HashMap::new();
+        for n in earliest..=tip {
+            local.insert(n, BlockHash::from([n as u8; 32]));
+            let remote_hash = if n <= diverge_at { [n as u8; 32] } else { [(n + 128) as u8; 32] };
+            remote.insert(n, BlockHash::from(remote_hash));
+        }
+        (local, remote)
+    }
+
+    /// Minimal `DivergenceLookups` impl for these tests (replaces the two-closure pattern).
+    struct MapLookups {
+        hashes: HashMap<u64, BlockHash>,
+        earliest: u64,
+    }
+
+    impl DivergenceLookups for MapLookups {
+        fn get_hash(&self, n: u64) -> StoreResult<Option<BlockHash>> {
+            Ok(self.hashes.get(&n).copied())
+        }
+        fn get_earliest(&self) -> StoreResult<Option<(u64, BlockHash)>> {
+            Ok(self.hashes.get(&self.earliest).map(|&h| (self.earliest, h)))
+        }
+    }
+
+    /// Runs `find_divergence_point` against a mock server and asserts the expected split.
+    async fn assert_divergence(earliest: u64, tip: u64, diverge_at: u64, expected: u64) {
+        let (local, remote) = make_divergence_chains(earliest, tip, diverge_at);
+        let (handle, url) = start_mock_rpc(remote).await;
+        let fetcher = TestFetcher(client_at(&url));
+        let lookups = MapLookups { hashes: local, earliest };
+        let result = find_divergence_point(&fetcher, &lookups, tip).await.unwrap();
+        assert_eq!(result, expected);
+        handle.stop().unwrap();
+    }
+
+    #[test]
+    fn test_new_validates_urls_and_counts_providers() {
+        assert!(RpcClient::new(&["not a url"], &[LOCALHOST_A]).is_err());
+        assert!(RpcClient::new(&[LOCALHOST_A], &["not a url"]).is_err());
+        assert!(
+            RpcClient::new(&[], &[LOCALHOST_A])
+                .unwrap_err()
+                .to_string()
+                .contains("At least one data API")
+        );
+        assert!(
+            RpcClient::new(&[LOCALHOST_A], &[])
+                .unwrap_err()
+                .to_string()
+                .contains("At least one witness API")
+        );
+
+        for endpoints in [&[LOCALHOST_B][..], &[LOCALHOST_B, "http://localhost:8547"]] {
+            assert_eq!(
+                RpcClient::new(&[LOCALHOST_A], endpoints).unwrap().witness_provider_count(),
+                endpoints.len()
+            );
+            assert_eq!(
+                RpcClient::new(endpoints, &[LOCALHOST_A]).unwrap().data_provider_count(),
+                endpoints.len()
+            );
+        }
+
+        // The public label accessor exposes the credential-stripped `{idx}:{host}` form and
+        // is total over out-of-range indices.
+        let client = RpcClient::new(&[LOCALHOST_A], &[LOCALHOST_B]).unwrap();
+        assert_eq!(client.witness_provider_label(0), Some("0:localhost:8546"));
+        assert_eq!(client.witness_provider_label(1), None);
+    }
+
+    #[test]
+    fn test_config_propagates_to_client() {
+        let make = |config| {
+            RpcClient::new_with_config(&[LOCALHOST_A], &[LOCALHOST_B], config, None).unwrap()
+        };
+        assert!(!make(RpcClientConfig::validator()).skip_block_verification());
+        assert!(make(RpcClientConfig::trace_server()).skip_block_verification());
+        // `Some(0)` must not produce a permanently-blocked semaphore.
+        let zero = make(RpcClientConfig {
+            data_max_concurrent_requests: Some(0),
+            witness_max_concurrent_requests: Some(0),
+            ..Default::default()
+        });
+        assert_eq!(zero.data_concurrency.available_permits(), 1);
+        assert_eq!(zero.witness_concurrency.available_permits(), 1);
+        let client = make(RpcClientConfig {
+            data_max_concurrent_requests: Some(10),
+            witness_max_concurrent_requests: Some(2),
+            ..Default::default()
+        });
+        assert_eq!(client.data_concurrency.available_permits(), 10);
+        assert_eq!(client.witness_concurrency.available_permits(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_find_divergence_single_block_reorg() {
+        assert_divergence(1, 10, 9, 9).await;
+    }
+
+    #[tokio::test]
+    async fn test_find_divergence_multi_block_reorg() {
+        assert_divergence(1, 10, 5, 5).await;
+    }
+
+    #[tokio::test]
+    async fn test_find_divergence_to_earliest() {
+        assert_divergence(5, 10, 5, 5).await;
+    }
+
+    #[tokio::test]
+    async fn test_find_divergence_catastrophic_reorg() {
+        let (local, remote) = make_divergence_chains(1, 5, 0); // no agreement at all
+        let (handle, url) = start_mock_rpc(remote).await;
+        let fetcher = TestFetcher(client_at(&url));
+        let lookups = MapLookups { hashes: local, earliest: 1 };
+
+        let result = find_divergence_point(&fetcher, &lookups, 5).await;
+
+        assert!(result.unwrap_err().to_string().contains("Catastrophic reorg"));
+        handle.stop().unwrap();
+    }
+
+    /// Holds references that must outlive the fetcher under test (server handle, rx).
+    struct FetcherHarness {
+        handle: ServerHandle,
+        fetcher: Arc<TestFetcher>,
+        tx: kanal::Sender<()>,
+        _rx: kanal::Receiver<()>,
+        config: Arc<PipelineConfig>,
+        shutdown: CancellationToken,
+    }
+
+    /// Common setup for block_fetcher tests. `config_fn` mutates the default `PipelineConfig`.
+    async fn fetcher_harness(
+        latest: u64,
+        config_fn: impl FnOnce(&mut PipelineConfig),
+    ) -> FetcherHarness {
+        let (handle, url) = start_block_number_rpc(latest).await;
+        let (tx, _rx) = kanal::bounded::<()>(16);
+        let mut config = PipelineConfig::default();
+        config_fn(&mut config);
+        FetcherHarness {
+            handle,
+            fetcher: fetcher_at(&url),
+            tx,
+            _rx,
+            config: Arc::new(config),
+            shutdown: CancellationToken::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_sync_target_already_reached() {
+        let h = fetcher_harness(100, |c| c.sync_target = Some(5)).await;
+        assert!(block_fetcher(h.fetcher, h.tx, 6, h.config, h.shutdown).await.is_ok());
+        h.handle.stop().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_shutdown_immediate() {
+        let h = fetcher_harness(100, |_| {}).await;
+        h.shutdown.cancel();
+        assert!(block_fetcher(h.fetcher, h.tx, 1, h.config, h.shutdown).await.is_ok());
+        h.handle.stop().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_invokes_latest_block_number() {
+        let h = fetcher_harness(42, |c| c.poll_interval = Duration::from_secs(60)).await;
+        let canceller = h.shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            canceller.cancel();
+        });
+        assert!(block_fetcher(h.fetcher, h.tx, 100, h.config, h.shutdown).await.is_ok());
+        h.handle.stop().unwrap();
+    }
+
+    /// Asserts that `call()` spreads load across data providers via round-robin.
+    ///
+    /// Two healthy mocks, 10 calls, both must receive ≥ 3 hits (perfect distribution = 5/5).
+    /// Proves the counter cycles the starting provider instead of always hitting `[0]`.
+    #[tokio::test]
+    async fn test_call_round_robins_across_healthy_providers() {
+        let (h1, url1, hits1) = start_counting_block_number_rpc(10, 0).await;
+        let (h2, url2, hits2) = start_counting_block_number_rpc(10, 0).await;
+
+        let client = RpcClient::new(&[url1.as_str(), url2.as_str()], &[url1.as_str()]).unwrap();
+        for _ in 0..10 {
+            client.get_latest_block_number().await;
+        }
+
+        let (a, b) = (hits1.load(Ordering::Relaxed), hits2.load(Ordering::Relaxed));
+        assert_eq!(a + b, 10, "all calls should have succeeded");
+        assert!(a >= 3 && b >= 3, "round-robin should distribute load: got {a}/{b}");
+
+        h1.stop().unwrap();
+        h2.stop().unwrap();
+    }
+
+    /// Asserts the round-level retry model: one failing provider + one healthy provider in
+    /// the same pool means the first round has 1 failure + 1 success (no sleep, no second
+    /// round). Total hits = 2.
+    #[tokio::test]
+    async fn test_call_falls_back_to_next_provider_same_round() {
+        let config = RpcClientConfig {
+            rpc_retry: BackoffPolicy::new(Duration::from_millis(1), Duration::from_millis(2)),
+            ..Default::default()
+        };
+        // Provider A fails its single attempt (`fail_first = 1`), B serves success.
+        let (ha, url_a, hits_a) = start_counting_block_number_rpc(42, 1).await;
+        let (hb, url_b, hits_b) = start_counting_block_number_rpc(42, 0).await;
+
+        let client = RpcClient::new_with_config(
+            &[url_a.as_str(), url_b.as_str()],
+            &[url_a.as_str()],
+            config,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(client.get_latest_block_number().await, 42);
+
+        let (a, b) = (hits_a.load(Ordering::Relaxed), hits_b.load(Ordering::Relaxed));
+        assert_eq!(a + b, 2, "1 failed attempt on A + 1 successful attempt on B, got {a}/{b}");
+        assert!(a >= 1 && b >= 1, "both providers should have been tried: got {a}/{b}");
+
+        ha.stop().unwrap();
+        hb.stop().unwrap();
+    }
+
+    /// A block with no transactions, so [`verify_block_integrity`] reduces to its header-hash
+    /// check and the fixture needs no signed transactions.
+    fn block_stub(header: alloy_rpc_types_eth::Header) -> Block<Transaction> {
+        Block { header, ..Default::default() }
+    }
+
+    /// A counting `eth_getBlockByNumber` endpoint that serves `header` on every call, in
+    /// [`start_counting_block_number_rpc`]'s `(handle, url, hits)` shape.
+    async fn start_counting_block_rpc(
+        header: alloy_rpc_types_eth::Header,
+    ) -> (ServerHandle, String, Arc<AtomicUsize>) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let (handle, url) = serve((header, hits.clone()), |m| {
+            m.register_method("eth_getBlockByNumber", |_params, (header, hits), _| {
+                hits.fetch_add(1, Ordering::Relaxed);
+                Ok::<_, ErrorObjectOwned>(block_stub(header.clone()))
+            })
+            .unwrap();
+        })
+        .await;
+        (handle, url, hits)
+    }
+
+    /// Block verification is the retry loop's finalize step rather than part of the attempt
+    /// window (so a large block cannot read as a provider stall), and this pins the property
+    /// that move must not cost: an integrity failure is still that provider's error, so the
+    /// call rotates to the next provider instead of surfacing the bad block.
+    #[tokio::test]
+    async fn block_verification_failure_rotates_to_the_next_provider() {
+        // A hash the header does not actually hash to — the first integrity check.
+        let (bad_handle, bad_url, bad_hits) =
+            start_counting_block_rpc(header_stub(7, BlockHash::from([9u8; 32]))).await;
+        let (good_handle, good_url, good_hits) =
+            start_counting_block_rpc(consistent_header(7)).await;
+
+        let config = RpcClientConfig {
+            rpc_retry: BackoffPolicy::new(Duration::from_millis(1), Duration::from_millis(2)),
+            ..Default::default()
+        };
+        let client = RpcClient::new_with_config(
+            &[bad_url.as_str(), good_url.as_str()],
+            &[good_url.as_str()],
+            config,
+            None,
+        )
+        .unwrap();
+
+        let block = client
+            .get_block_with_deadline(BlockId::number(7), false, None)
+            .await
+            .expect("None deadline cannot time out");
+        assert_eq!(
+            block.header.hash,
+            consistent_header(7).hash,
+            "the verified block must come from the second provider"
+        );
+        assert_eq!(bad_hits.load(Ordering::Relaxed), 1, "the tampering provider must be tried");
+        assert_eq!(good_hits.load(Ordering::Relaxed), 1, "rotation must reach the good provider");
+
+        bad_handle.stop().unwrap();
+        good_handle.stop().unwrap();
+    }
+
+    /// After every provider in a round fails, the helper sleeps and starts a new round.
+    /// Observable via two providers that each fail one request then recover: the call must
+    /// succeed after at least one full round of failures.
+    #[tokio::test]
+    async fn test_call_starts_new_round_after_all_providers_fail() {
+        // Both providers fail their first request, then serve success.
+        let (ha, url_a, hits_a) = start_counting_block_number_rpc(99, 1).await;
+        let (hb, url_b, hits_b) = start_counting_block_number_rpc(99, 1).await;
+
+        let config = RpcClientConfig {
+            rpc_retry: BackoffPolicy::new(Duration::from_millis(1), Duration::from_millis(2)),
+            ..Default::default()
+        };
+        let client = RpcClient::new_with_config(
+            &[url_a.as_str(), url_b.as_str()],
+            &[url_a.as_str()],
+            config,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(client.get_latest_block_number().await, 99);
+
+        // Round 1: both fail → total 2 hits, helper sleeps.
+        // Round 2: first provider tried now succeeds → 1 more hit, total = 3.
+        let total = hits_a.load(Ordering::Relaxed) + hits_b.load(Ordering::Relaxed);
+        assert_eq!(total, 3, "round 1 fails both (2 hits), round 2 succeeds on first try (1 more)");
+
+        ha.stop().unwrap();
+        hb.stop().unwrap();
+    }
+
+    /// A `skip` past the configured witness endpoints is a wiring failure, and must fail this
+    /// one request rather than take the process down.
+    #[tokio::test]
+    async fn witness_fetch_out_of_range_returns_a_typed_error() {
+        let client = RpcClient::new(&[LOCALHOST_A], &[LOCALHOST_B]).unwrap();
+        let err = client
+            .get_witness_light_with_deadline_from(1, 7, B256::ZERO, None)
+            .await
+            .expect_err("skip == provider count leaves no provider");
+        assert!(
+            matches!(err, WitnessFetchError::NoProviderInRange { skip: 1, configured: 1 }),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    /// `get_witness` pins `rr_start = 0`, so every round visits the primary first and only
+    /// falls through to the backup on failure. We can't easily make the primary succeed in
+    /// a unit test (a valid witness payload needs real cryptographic proof material), but
+    /// we can still verify the ordering invariant — primary is always tried *before* the
+    /// backup in every round.
+    #[tokio::test]
+    async fn test_get_witness_always_starts_from_primary() {
+        // Shared log records which provider was hit, in order. Both providers return a stub
+        // that fails decode downstream, so every round runs to completion and all providers
+        // in the pool get hit — the order is what we assert on.
+        let order = Arc::new(std::sync::Mutex::new(Vec::<char>::new()));
+        let (ha, url_a) = start_ordered_witness_rpc('A', order.clone()).await;
+        let (hb, url_b) = start_ordered_witness_rpc('B', order.clone()).await;
+
+        let client = RpcClient::new(&[url_a.as_str()], &[url_a.as_str(), url_b.as_str()]).unwrap();
+
+        // Short-timeout each call so backoff doesn't stretch them into multiple rounds.
+        const CALLS: usize = 5;
+        for _ in 0..CALLS {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(100),
+                client.get_witness(1, BlockHash::ZERO),
+            )
+            .await;
+        }
+
+        let log = order.lock().unwrap();
+        assert_eq!(log.len(), 2 * CALLS, "each call runs one full round hitting both: {log:?}");
+        // A at every even index, B at every odd index — primary strictly precedes backup.
+        for chunk in log.chunks_exact(2) {
+            assert_eq!(chunk, &['A', 'B'], "primary must be hit before backup each round");
+        }
+
+        ha.stop().unwrap();
+        hb.stop().unwrap();
+    }
+
+    /// `get_witness_light_with_deadline_from(skip=1, ..)` must never touch the first witness
+    /// provider: the rotation runs entirely over the remaining endpoints.
+    #[tokio::test]
+    async fn test_witness_fetch_with_skip_never_hits_skipped_provider() {
+        let order = Arc::new(std::sync::Mutex::new(Vec::<char>::new()));
+        let (ha, url_a) = start_ordered_witness_rpc('A', order.clone()).await;
+        let (hb, url_b) = start_ordered_witness_rpc('B', order.clone()).await;
+
+        let config = RpcClientConfig {
+            rpc_retry: BackoffPolicy::new(Duration::from_millis(1), Duration::from_millis(2)),
+            ..Default::default()
+        };
+        let client = RpcClient::new_with_config(
+            &[url_a.as_str()],
+            &[url_a.as_str(), url_b.as_str()],
+            config,
+            None,
+        )
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let result = client
+            .get_witness_light_with_deadline_from(1, 1, BlockHash::ZERO, Some(deadline))
+            .await;
+        assert!(result.is_err(), "stub payloads fail decode, so the deadline must fire");
+
+        let log = order.lock().unwrap();
+        assert!(!log.is_empty(), "the non-skipped provider must have been tried");
+        assert!(log.iter().all(|&l| l == 'B'), "skipped provider A must never be hit: {log:?}");
+
+        ha.stop().unwrap();
+        hb.stop().unwrap();
+    }
+
+    /// `get_witness_light_first_provider_only` must never rotate past the first witness
+    /// provider: rounds retry it alone until the caller-side timeout — the production
+    /// usage shape, since the method itself takes no deadline — cuts the probe off.
+    #[tokio::test]
+    async fn test_witness_fetch_first_only_never_hits_later_providers() {
+        let order = Arc::new(std::sync::Mutex::new(Vec::<char>::new()));
+        let (ha, url_a) = start_ordered_witness_rpc('A', order.clone()).await;
+        let (hb, url_b) = start_ordered_witness_rpc('B', order.clone()).await;
+
+        let config = RpcClientConfig {
+            rpc_retry: BackoffPolicy::new(Duration::from_millis(1), Duration::from_millis(2)),
+            ..Default::default()
+        };
+        let client = RpcClient::new_with_config(
+            &[url_a.as_str()],
+            &[url_a.as_str(), url_b.as_str()],
+            config,
+            None,
+        )
+        .unwrap();
+
+        let probe = client.get_witness_light_first_provider_only(1, BlockHash::ZERO);
+        let result = tokio::time::timeout(Duration::from_millis(100), probe).await;
+        assert!(result.is_err(), "stub payloads fail decode, so the caller timeout must fire");
+
+        let log = order.lock().unwrap();
+        assert!(log.len() >= 2, "the first provider must be retried across rounds: {log:?}");
+        assert!(log.iter().all(|&l| l == 'A'), "provider B must never be hit: {log:?}");
+
+        ha.stop().unwrap();
+        hb.stop().unwrap();
+    }
+
+    /// Label alignment under skip: with three witness endpoints and `skip = 1`, every
+    /// recorded attempt must carry its ORIGINAL-index label (`1:` / `2:`, never `0:`), and
+    /// the first non-skipped endpoint stays the rotation's primary. Pins the documented
+    /// parallel-slicing property the per-endpoint metrics rely on — a refactor that
+    /// re-derived labels from the sliced list would misattribute every backup attempt.
+    #[tokio::test]
+    async fn test_witness_skip_attempts_keep_original_index_labels() {
+        let order = Arc::new(std::sync::Mutex::new(Vec::<char>::new()));
+        let (ha, url_a) = start_ordered_witness_rpc('A', order.clone()).await;
+        let (hb, url_b) = start_ordered_witness_rpc('B', order.clone()).await;
+        let (hc, url_c) = start_ordered_witness_rpc('C', order.clone()).await;
+
+        let (client, metrics) = metered_client(
+            &[url_a.as_str()],
+            &[url_a.as_str(), url_b.as_str(), url_c.as_str()],
+            RpcClientConfig {
+                rpc_retry: BackoffPolicy::new(Duration::from_millis(1), Duration::from_millis(2)),
+                ..Default::default()
+            },
+        );
+
+        let deadline = Instant::now() + Duration::from_millis(120);
+        let result = client
+            .get_witness_light_with_deadline_from(1, 1, BlockHash::ZERO, Some(deadline))
+            .await;
+        assert!(result.is_err(), "stub payloads fail decode, so the deadline must fire");
+
+        let attempts = metrics.attempts.lock().unwrap();
+        let labels: Vec<&str> = attempts
+            .iter()
+            .filter(|(m, _, _)| *m == RpcMethod::MegaGetBlockWitness)
+            .map(|(_, label, _)| label.as_str())
+            .collect();
+        assert!(labels.len() >= 2, "at least one full round over both non-skipped endpoints");
+        assert!(
+            labels.iter().all(|l| l.starts_with("1:") || l.starts_with("2:")),
+            "skipped endpoint 0 must never be attributed: {labels:?}"
+        );
+        assert!(labels[0].starts_with("1:"), "first non-skipped endpoint is the primary");
+        assert!(
+            labels.iter().any(|l| l.starts_with("2:")),
+            "the failover endpoint keeps its original index label: {labels:?}"
+        );
+
+        ha.stop().unwrap();
+        hb.stop().unwrap();
+        hc.stop().unwrap();
+    }
+
+    /// Serves `mega_getBlockWitness` returning a stub that decodes-fails, while recording
+    /// the provider's label to a shared `order` log on each hit. Used to verify call routing.
+    async fn start_ordered_witness_rpc(
+        label: char,
+        order: Arc<std::sync::Mutex<Vec<char>>>,
+    ) -> (ServerHandle, String) {
+        let (handle, url) = serve((label, order), |m| {
+            m.register_method("mega_getBlockWitness", |_p, (label, order), _| {
+                order.lock().unwrap().push(*label);
+                // Stub that fails base64/zstd decode, so the round continues to the next
+                // provider and we see the full routing order.
+                Ok::<_, ErrorObjectOwned>(format!("{WITNESS_RESPONSE_VERSION_PREFIX}AAAA"))
+            })
+            .unwrap();
+        })
+        .await;
+        (handle, url)
+    }
+
+    /// Serves `eth_getCodeByHash` returning `codes[hash]` verbatim (so the server can return
+    /// bytes whose keccak256 does NOT match the requested hash, exercising the verify path).
+    async fn start_code_rpc(codes: HashMap<B256, Bytes>) -> (ServerHandle, String) {
+        serve(codes, |m| {
+            m.register_method("eth_getCodeByHash", |params, ctx, _| {
+                let (hash,): (B256,) = params.parse().unwrap();
+                Ok::<_, ErrorObjectOwned>(
+                    ctx.get(&hash).cloned().unwrap_or_else(|| Bytes::from_static(&[])),
+                )
+            })
+            .unwrap();
+        })
+        .await
+    }
+
+    /// `get_codes(verify=true)` must abort the batch with an `Err` when the returned bytecode's
+    /// keccak256 doesn't match the requested hash. Documents the security contract: unverified
+    /// bytes never reach the cache.
+    #[tokio::test]
+    async fn test_get_codes_verify_rejects_hash_mismatch() {
+        // Good entry: the "requested" hash equals keccak256 of [0x60, 0x00].
+        let good_code = Bytes::from_static(&[0x60, 0x00]);
+        let good_hash = Bytecode::new_raw(good_code.clone()).hash_slow();
+        // Bad entry: request a hash whose keccak the server won't produce (it returns different
+        // bytes). `[0xAA; 32]` is arbitrary — the server returns `[0xDE, 0xAD]` instead.
+        let bad_hash = B256::from([0xAA; 32]);
+        let bad_code = Bytes::from_static(&[0xDE, 0xAD]);
+
+        let codes = HashMap::from([(good_hash, good_code.clone()), (bad_hash, bad_code)]);
+        let (handle, url) = start_code_rpc(codes).await;
+        let client = client_at(&url);
+
+        // `verify=true` on just the bad hash → typed `VerificationFailure` naming that hash.
+        let err = client.get_codes(&[bad_hash], true).await.expect_err("mismatch must fail");
+        match err {
+            CodeFetchError::VerificationFailure { requested, actual } => {
+                assert_eq!(requested, bad_hash);
+                assert_ne!(actual, bad_hash, "actual must reflect what the server returned");
+            }
+            other => panic!("expected VerificationFailure, got {other:?}"),
+        }
+
+        // Mixed batch with one bad hash → whole batch fails (security contract: discard all).
+        let err = client
+            .get_codes(&[good_hash, bad_hash], true)
+            .await
+            .expect_err("any mismatch must abort the batch");
+        assert!(
+            matches!(err, CodeFetchError::VerificationFailure { requested, .. } if requested == bad_hash),
+            "expected VerificationFailure for bad_hash",
+        );
+
+        // `verify=false` → both entries returned (caller opted out of verification).
+        let ok = client.get_codes(&[good_hash, bad_hash], false).await.unwrap();
+        assert_eq!(ok.len(), 2, "verify=false must return every requested entry");
+        // Compare against the canonical analyzed form (revm appends a trailing 0 byte).
+        assert_eq!(ok[&good_hash].bytes_slice(), Bytecode::new_raw(good_code).bytes_slice(),);
+
+        handle.stop().unwrap();
+    }
+
+    /// All-good batch: verified entries are returned as plain `Bytecode` (already internally
+    /// reference-counted, so `ContractCache::insert` shares the allocation without a second wrap).
+    #[tokio::test]
+    async fn test_get_codes_verify_ok_returns_bytecode() {
+        let good_code = Bytes::from_static(&[0x60, 0x00, 0x60, 0x01]);
+        let good_hash = Bytecode::new_raw(good_code.clone()).hash_slow();
+
+        let (handle, url) = start_code_rpc(HashMap::from([(good_hash, good_code.clone())])).await;
+        let client = client_at(&url);
+
+        let ok = client.get_codes(&[good_hash], true).await.unwrap();
+        assert_eq!(ok.len(), 1);
+        let code = ok.get(&good_hash).expect("good hash present");
+        assert_eq!(code.bytes_slice(), Bytecode::new_raw(good_code).bytes_slice());
+        // Compile-time check that the return type is plain `Bytecode` (a cheap refcount clone).
+        let _code_clone: Bytecode = code.clone();
+
+        handle.stop().unwrap();
+    }
+
+    /// `eth_getCodeByHash` returning `"0x"` for a non-empty codehash (the symptom of an
+    /// upstream that isn't sync-ready) must be retried, not propagated as success. Without
+    /// the retry guard this would land in `get_codes(verify=true)` as a bytecode whose
+    /// keccak doesn't match the requested hash → fatal `VerificationFailure` → halt.
+    #[tokio::test]
+    async fn test_get_code_retries_empty_response_until_deadline() {
+        let arbitrary_hash = B256::from([0xCC; 32]);
+        // Server always returns "0x" for any hash and bumps `hits` so the test can prove
+        // the call was actually retried (not accepted on first try).
+        let hits = Arc::new(AtomicUsize::new(0));
+        let (handle, url) = serve(hits.clone(), |m| {
+            m.register_method("eth_getCodeByHash", |_p, hits, _| {
+                hits.fetch_add(1, Ordering::Relaxed);
+                Ok::<Bytes, ErrorObjectOwned>(Bytes::from_static(&[]))
+            })
+            .unwrap();
+        })
+        .await;
+
+        // Tight retry config so the test wraps in well under a second.
+        let config = RpcClientConfig {
+            rpc_retry: BackoffPolicy::new(Duration::from_millis(5), Duration::from_millis(20)),
+            per_attempt_timeout: Duration::from_millis(500),
+            ..Default::default()
+        };
+        let client = RpcClient::new_with_config(&[&url], &[&url], config, None).unwrap();
+
+        let deadline = Instant::now() + Duration::from_millis(300);
+        let err = client
+            .get_code_with_deadline(arbitrary_hash, Some(deadline))
+            .await
+            .expect_err("empty response with non-empty-code hash must surface as deadline");
+        assert_eq!(err.method, RpcMethod::EthGetCodeByHash);
+        assert!(
+            hits.load(Ordering::Relaxed) > 1,
+            "expected > 1 attempt before deadline (was {})",
+            hits.load(Ordering::Relaxed)
+        );
+
+        handle.stop().unwrap();
+    }
+
+    /// The `KECCAK_EMPTY` codehash is the legitimate "empty bytecode" case: `"0x"` is the
+    /// correct answer and must be returned, not retried (otherwise the call would loop forever).
+    ///
+    /// `client.get_code` uses `deadline = None` (unbounded retry); the outer
+    /// `tokio::time::timeout` is a regression guard — if the `!= KECCAK_EMPTY` check is ever
+    /// flipped or removed, the call would hang instead of returning, and CI would hang with
+    /// it. The timeout converts that failure mode into an explicit test failure.
+    #[tokio::test]
+    async fn test_get_code_accepts_empty_response_for_keccak_empty() {
+        let (handle, url) = start_code_rpc(HashMap::new()).await; // server returns "0x" for everything
+        let client = client_at(&url);
+
+        let bytes = tokio::time::timeout(
+            Duration::from_millis(500),
+            client.get_code(revm::primitives::KECCAK_EMPTY),
+        )
+        .await
+        .expect("KECCAK_EMPTY guard must short-circuit without retrying");
+        assert!(bytes.is_empty(), "KECCAK_EMPTY hash must accept empty bytecode");
+
+        handle.stop().unwrap();
+    }
+
+    /// The witness path's own semaphore feeds the same deadline-clamped acquire as the
+    /// data path: a witness call queued on a saturated `witness_concurrency` gives up at
+    /// its deadline — with the give-up and the cut-short permit-wait sample recorded —
+    /// instead of parking until an unrelated in-flight attempt frees a permit.
+    /// `test_deadline_bounds_permit_wait` pins the same clamp on the data semaphore.
+    #[tokio::test]
+    async fn test_witness_deadline_bounds_permit_wait() {
+        let (client, metrics) = metered_client(
+            &[LOCALHOST_A],
+            &[LOCALHOST_A],
+            RpcClientConfig { witness_max_concurrent_requests: Some(1), ..Default::default() },
+        );
+        // Hold the single witness permit for the whole test: the call stays queued and
+        // nothing is ever dialed.
+        let _held = client.witness_concurrency.acquire().await.unwrap();
+
+        let err = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.get_witness_light_with_deadline(
+                2,
+                B256::ZERO,
+                Some(Instant::now() + Duration::from_millis(20)),
+            ),
+        )
+        .await
+        .expect("call must give up at its deadline instead of hanging")
+        .expect_err("no permit ever frees, so the call must exceed its deadline");
+        assert_eq!(err.method, RpcMethod::MegaGetBlockWitness);
+
+        assert_eq!(
+            *metrics.deadlines.lock().unwrap(),
+            vec![RpcMethod::MegaGetBlockWitness],
+            "exactly one give-up per logical call",
+        );
+        assert_eq!(
+            *metrics.permit_waits.lock().unwrap(),
+            vec![RpcMethod::MegaGetBlockWitness],
+            "the cut-short wait still records a permit-wait sample",
+        );
+        assert!(
+            metrics.attempts.lock().unwrap().is_empty(),
+            "no attempt ran — the whole budget died in the permit queue",
+        );
+    }
+
+    /// A long permit wait must not defeat the rotation reserve: `ReserveHalf` recomputes
+    /// its halving after the permit is acquired, so a call that spent most of its budget
+    /// queued still splits what is left across providers. Goes red with the cap frozen at
+    /// chain entry — post-queue `min(entry_cap, remaining)` hands the stalled primary
+    /// everything that is left and the fallback is never tried.
+    #[tokio::test]
+    async fn test_reserve_half_recomputes_after_permit_wait() {
+        // Primary stalls (accepts, never answers); the fallback answers junk fast — any
+        // completed round trip against it proves the rotation reached it.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url_a = format!("http://{}/", listener.local_addr().unwrap());
+        let _held_open = listener;
+        let order = Arc::new(std::sync::Mutex::new(Vec::<char>::new()));
+        let (hb, url_b) = start_ordered_witness_rpc('B', order).await;
+
+        let (client, metrics) = metered_client(
+            &[url_b.as_str()],
+            &[url_a.as_str(), url_b.as_str()],
+            RpcClientConfig {
+                witness_max_concurrent_requests: Some(1),
+                witness_per_attempt_timeout: Some(Duration::from_millis(300)),
+                rpc_retry: BackoffPolicy::new(Duration::from_millis(1), Duration::from_millis(2)),
+                ..Default::default()
+            },
+        );
+
+        // Hold the only witness permit for 500ms of the call's 800ms budget.
+        let permit = Arc::clone(&client.witness_concurrency).acquire_owned().await.unwrap();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            drop(permit);
+        });
+
+        let deadline = Instant::now() + Duration::from_millis(800);
+        let _ = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.get_witness_light_with_deadline(1, B256::ZERO, Some(deadline)),
+        )
+        .await
+        .expect("call must give up by its deadline");
+
+        let attempts = metrics.attempts.lock().unwrap();
+        let providers: std::collections::HashSet<&str> =
+            attempts.iter().map(|(_, p, _)| p.as_str()).collect();
+        assert!(
+            providers.len() >= 2,
+            "post-queue halving must leave the fallback a window: {attempts:?}",
+        );
+        hb.stop().unwrap();
+    }
+
+    /// A provider that accepts the TCP connection but never replies must be detected by the
+    /// per-attempt timeout — even when the call has no deadline (the chain-sync contract).
+    /// Without per-attempt timing, the retry loop wedges on the stalled provider forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_per_attempt_timeout_rotates_past_stalled_provider() {
+        // Stalled "provider": bind a TCP listener that accepts connections but never reads
+        // or writes. A client request to it will hang on the response.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stalled_addr = listener.local_addr().unwrap();
+        let stalled_url = format!("http://{stalled_addr}/");
+        // Keep the listener alive (in scope) so the OS doesn't refuse the connection — we
+        // want accept + never-reply, not refused. Drops cleanly at end of test.
+        let _listener = listener;
+
+        // Healthy provider as the second endpoint. Round-robin starts at index 0 so the
+        // call hits the stalled provider first, has to time out the attempt, then rotates.
+        let healthy_latest = 4242u64;
+        let (handle, healthy_url) = start_block_number_rpc(healthy_latest).await;
+
+        let config = RpcClientConfig {
+            rpc_retry: BackoffPolicy::new(Duration::from_millis(5), Duration::from_millis(20)),
+            // Short per-attempt so a stalled provider rotates quickly.
+            per_attempt_timeout: Duration::from_millis(150),
+            ..Default::default()
+        };
+        let client = RpcClient::new_with_config(
+            &[&stalled_url, &healthy_url],
+            &[&healthy_url],
+            config,
+            None,
+        )
+        .unwrap();
+
+        // Bound the test wall clock with `tokio::time::timeout` (NOT a deadline parameter):
+        // this tests the `deadline = None` path. If the bug regressed, the call would hang
+        // and this outer timeout would fire instead of the call returning Ok.
+        let result = tokio::time::timeout(Duration::from_secs(3), client.get_latest_block_number())
+            .await
+            .expect("call must return — per-attempt timeout should rotate past stalled provider");
+        assert_eq!(result, healthy_latest);
+
+        handle.stop().unwrap();
+    }
+
+    /// An endpoint whose TCP handshake gets no answer (a dead host, or a firewall silently
+    /// dropping SYNs) must fail within `connect_timeout` and rotate, not burn the entire
+    /// `per_attempt_timeout` on every attempt. Simulated with a backlog-1 listener whose
+    /// accept queue is pre-filled: further handshakes are dropped at the connect phase.
+    /// (A closed port answers with RST and fails instantly — that case needs no bound.)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_connect_timeout_rotates_past_unreachable_provider() {
+        let sock = tokio::net::TcpSocket::new_v4().unwrap();
+        sock.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let listener = sock.listen(1).unwrap();
+        let unreachable_addr = listener.local_addr().unwrap();
+        let unreachable_url = format!("http://{unreachable_addr}/");
+        // Keep the listener alive (in scope) without ever accepting, so parked handshakes
+        // stay queued for the whole test.
+        let _listener = listener;
+
+        // Saturate the accept queue: connect until handshakes stop completing. Established
+        // streams are parked in `queue_filler` to keep their slots occupied; the first
+        // connect that hangs proves further handshakes get no reply.
+        let mut queue_filler = Vec::new();
+        loop {
+            match tokio::time::timeout(
+                Duration::from_millis(250),
+                tokio::net::TcpStream::connect(unreachable_addr),
+            )
+            .await
+            {
+                Ok(Ok(stream)) => queue_filler.push(stream),
+                _ => break,
+            }
+            if queue_filler.len() >= 64 {
+                // The kernel keeps completing handshakes far past the requested backlog, so
+                // the no-reply condition cannot be reproduced on this host. On Linux — the
+                // CI platform, where a backlog-1 listener saturates within a few connects —
+                // that is a hard failure: this is the only regression test of
+                // `connect_timeout`, and a silent skip would let a regression ship behind a
+                // green check. Other dev platforms keep the loud skip.
+                if cfg!(target_os = "linux") {
+                    panic!(
+                        "accept queue did not saturate after 64 connects — \
+                         the connect-timeout path was never exercised"
+                    );
+                }
+                eprintln!("skipping: accept queue did not saturate");
+                return;
+            }
+        }
+
+        // Healthy provider as the second endpoint. Round-robin starts at index 0 so the
+        // call hits the unreachable provider first, has to time out the connect, then
+        // rotates.
+        let healthy_latest = 7777u64;
+        let (handle, healthy_url) = start_block_number_rpc(healthy_latest).await;
+
+        let config = RpcClientConfig {
+            rpc_retry: BackoffPolicy::new(Duration::from_millis(5), Duration::from_millis(20)),
+            connect_timeout: Duration::from_millis(200),
+            // Deliberately enormous: if the connect phase were bounded only by the attempt
+            // budget, the outer timeout below would fire long before this elapses.
+            per_attempt_timeout: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let client = RpcClient::new_with_config(
+            &[&unreachable_url, &healthy_url],
+            &[&healthy_url],
+            config,
+            None,
+        )
+        .unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(5), client.get_latest_block_number())
+            .await
+            .expect("connect timeout must rotate past the unreachable provider");
+        assert_eq!(result, healthy_latest);
+
+        handle.stop().unwrap();
+    }
+
+    /// Reporting uses a dedicated provider and does not go through the retry helper, but it
+    /// still must have per-attempt timeout protection so the validation reporter task cannot
+    /// wedge forever on a TCP-accept-no-reply endpoint.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_set_validated_blocks_times_out_stalled_report_provider() {
+        // Stalled report endpoint: keep a listener open so TCP connects succeed, but never
+        // accept/read/write from it. The HTTP request then waits forever without the timeout.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stalled_report_url = format!("http://{}/", listener.local_addr().unwrap());
+        let _listener = listener;
+
+        // Data/witness endpoints are unused by `set_validated_blocks`, but the client
+        // constructor requires them to be configured.
+        let (handle, data_url) = start_block_number_rpc(1).await;
+
+        let config = RpcClientConfig {
+            per_attempt_timeout: Duration::from_millis(150),
+            ..Default::default()
+        };
+        let client = RpcClient::new_with_config(
+            &[&data_url],
+            &[&data_url],
+            config,
+            Some(&stalled_report_url),
+        )
+        .unwrap();
+
+        let err = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.set_validated_blocks((1, B256::ZERO), (2, B256::ZERO)),
+        )
+        .await
+        .expect("report call must return after per-attempt timeout")
+        .expect_err("stalled report endpoint should time out");
+        assert!(
+            err.to_string().contains("mega_setValidatedBlocks timed out"),
+            "unexpected error: {err}"
+        );
+
+        handle.stop().unwrap();
+    }
+
+    #[test]
+    fn test_endpoint_label_extracts_host_without_credentials() {
+        assert_eq!(
+            &*endpoint_label("http://witness.example.com:8545/rpc", 0),
+            "0:witness.example.com:8545"
+        );
+        assert_eq!(&*endpoint_label("http://127.0.0.1:9000", 1), "1:127.0.0.1:9000");
+        // userinfo, path, and query are all stripped — no credential can reach a label/log.
+        assert_eq!(&*endpoint_label("https://user:secret@host.io/v1?token=abc", 2), "2:host.io");
+        // No host to extract → stable positional fallback.
+        assert_eq!(&*endpoint_label("", 3), "provider_3");
+        // Same authority, different index → distinct labels, so per-endpoint metrics don't merge.
+        assert_ne!(
+            endpoint_label("https://gw.saas.io/key-a", 0),
+            endpoint_label("https://gw.saas.io/key-b", 1)
+        );
+    }
+
+    /// Captures [`RpcMetrics`] callbacks so tests can assert per-endpoint attribution.
+    #[derive(Default)]
+    struct CapturingMetrics {
+        attempts: std::sync::Mutex<Vec<(RpcMethod, String, RpcAttemptOutcome)>>,
+        deadlines: std::sync::Mutex<Vec<RpcMethod>>,
+        permit_waits: std::sync::Mutex<Vec<RpcMethod>>,
+    }
+
+    impl RpcMetrics for CapturingMetrics {
+        fn on_rpc_attempt(
+            &self,
+            method: RpcMethod,
+            provider: &str,
+            outcome: RpcAttemptOutcome,
+            _duration_secs: f64,
+        ) {
+            self.attempts.lock().unwrap().push((method, provider.to_owned(), outcome));
+        }
+
+        fn on_rpc_permit_wait(&self, method: RpcMethod, _wait_secs: f64) {
+            self.permit_waits.lock().unwrap().push(method);
+        }
+
+        fn on_rpc_deadline_exceeded(&self, method: RpcMethod, _elapsed_secs: f64) {
+            self.deadlines.lock().unwrap().push(method);
+        }
+
+        fn on_witness_fetch(&self, _breakdown: WitnessSizeBreakdown) {}
+    }
+
+    /// Builds an [`RpcClient`] wired to a fresh [`CapturingMetrics`] — the shared scaffolding
+    /// of the metrics-attribution tests.
+    fn metered_client(
+        data: &[&str],
+        witness: &[&str],
+        config: RpcClientConfig,
+    ) -> (RpcClient, Arc<CapturingMetrics>) {
+        let metrics = Arc::new(CapturingMetrics::default());
+        let client =
+            RpcClient::new_with_config(data, witness, config.with_metrics(metrics.clone()), None)
+                .unwrap();
+        (client, metrics)
+    }
+
+    /// Calls `get_latest_block_number` with `budget` and asserts the typed give-up plus exactly
+    /// one recorded deadline; the outer timeout turns a hung give-up into a clean failure.
+    async fn expect_deadline_give_up(
+        client: &RpcClient,
+        metrics: &CapturingMetrics,
+        budget: Duration,
+    ) {
+        let err = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.get_latest_block_number_with_deadline(Some(Instant::now() + budget)),
+        )
+        .await
+        .expect("call must give up at its deadline instead of hanging")
+        .expect_err("call must exceed its deadline");
+        assert_eq!(err.method, RpcMethod::EthBlockNumber);
+        assert_eq!(
+            *metrics.deadlines.lock().unwrap(),
+            vec![RpcMethod::EthBlockNumber],
+            "exactly one give-up per logical call",
+        );
+    }
+
+    /// Each provider attempt reports its own endpoint label and outcome: a failing primary
+    /// records `Error` against its host, the healthy backup records `Success` against its host.
+    /// This is the per-endpoint attribution the collapsed method-only metric could not give.
+    #[tokio::test]
+    async fn test_metrics_record_per_provider_attempt_outcomes() {
+        let (ha, url_a, _) = start_counting_block_number_rpc(7, usize::MAX).await; // always errors
+        let (hb, url_b) = start_block_number_rpc(7).await;
+
+        // Data round-robin starts at index 0, so the failing A is tried before the healthy B.
+        let (client, metrics) = metered_client(
+            &[url_a.as_str(), url_b.as_str()],
+            &[url_a.as_str()],
+            RpcClientConfig {
+                rpc_retry: BackoffPolicy::new(Duration::from_millis(1), Duration::from_millis(2)),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(client.get_latest_block_number().await, 7);
+
+        let attempts = metrics.attempts.lock().unwrap();
+        assert_eq!(
+            *attempts,
+            vec![
+                (
+                    RpcMethod::EthBlockNumber,
+                    endpoint_label(&url_a, 0).to_string(),
+                    RpcAttemptOutcome::Error
+                ),
+                (
+                    RpcMethod::EthBlockNumber,
+                    endpoint_label(&url_b, 1).to_string(),
+                    RpcAttemptOutcome::Success
+                ),
+            ],
+            "expected A→Error then B→Success, each tagged with its own endpoint host",
+        );
+
+        ha.stop().unwrap();
+        hb.stop().unwrap();
+    }
+
+    /// A logical call that exhausts its deadline records exactly one `on_rpc_deadline_exceeded`
+    /// (the operator-facing "request timed out" signal), on top of the per-attempt failures.
+    #[tokio::test]
+    async fn test_metrics_record_deadline_exceeded_once() {
+        let (h, url, _) = start_counting_block_number_rpc(1, usize::MAX).await; // always errors
+
+        let (client, metrics) = metered_client(
+            &[url.as_str()],
+            &[url.as_str()],
+            RpcClientConfig {
+                rpc_retry: BackoffPolicy::new(Duration::from_millis(5), Duration::from_millis(10)),
+                ..Default::default()
+            },
+        );
+
+        expect_deadline_give_up(&client, &metrics, Duration::from_millis(150)).await;
+        // Not asserted as all-`Error`: near the deadline a laggy response can legitimately be
+        // clamped into `Timeout`/`DeadlineClamped` (exact attribution is pinned by
+        // `test_metrics_record_per_provider_attempt_outcomes`).
+        let attempts = metrics.attempts.lock().unwrap();
+        assert!(
+            !attempts.is_empty() &&
+                attempts.iter().all(|(_, _, o)| *o != RpcAttemptOutcome::Success),
+            "every recorded attempt failed before the give-up: {attempts:?}",
+        );
+
+        h.stop().unwrap();
+    }
+
+    /// A call whose whole budget dies queued for a concurrency permit gives up at its deadline
+    /// instead of blocking until an unrelated permit frees, and still records the give-up plus
+    /// the cut-short permit-wait sample.
+    #[tokio::test]
+    async fn test_deadline_bounds_permit_wait() {
+        let (client, metrics) = metered_client(
+            &[LOCALHOST_A],
+            &[LOCALHOST_A],
+            RpcClientConfig { data_max_concurrent_requests: Some(1), ..Default::default() },
+        );
+
+        // Hold the single data permit for the whole test: the call stays queued and nothing
+        // is ever dialed.
+        let _held = client.data_concurrency.acquire().await.unwrap();
+
+        expect_deadline_give_up(&client, &metrics, Duration::from_millis(20)).await;
+        assert_eq!(
+            *metrics.permit_waits.lock().unwrap(),
+            vec![RpcMethod::EthBlockNumber],
+            "the cut-short wait still records a permit-wait sample",
+        );
+        assert!(
+            metrics.attempts.lock().unwrap().is_empty(),
+            "no attempt ran — the whole budget died in the permit queue",
+        );
+    }
+
+    /// A finalize that outruns the caller's deadline is abandoned and books as
+    /// `deadline_clamped` — the attempt window must not be re-entered and the loop must
+    /// not hang on the finish future. Drives `round_robin_with_backoff` directly with an
+    /// instant transport and a never-finishing finalize, the seam the fixed witness
+    /// decoders leave uninjectable. Goes red if the finalize await loses its deadline
+    /// bound (the call hangs to the outer 5s guard) or lands on the wrong outcome.
+    #[tokio::test]
+    async fn test_finalize_outrun_books_as_deadline_clamped() {
+        let provider: RootProvider<Optimism> =
+            alloy_provider::ProviderBuilder::default().connect_http(LOCALHOST_A.parse().unwrap());
+        let labels = [endpoint_label(LOCALHOST_A, 0)];
+        let semaphore = Semaphore::new(1);
+        let policy = BackoffPolicy::new(Duration::from_millis(1), Duration::from_millis(2));
+        let metrics = Arc::new(CapturingMetrics::default());
+        let metrics_dyn: Arc<dyn RpcMetrics> = metrics.clone();
+
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            round_robin_with_backoff(
+                std::slice::from_ref(&provider),
+                &labels,
+                &semaphore,
+                &policy,
+                AttemptCap::ReserveHalf { ceiling: Duration::from_secs(10) },
+                0,
+                RpcMethod::EthBlockNumber,
+                Some(&metrics_dyn),
+                Some(Instant::now() + Duration::from_millis(50)),
+                false,
+                |_provider, _label| Box::pin(async { Ok(()) }),
+                |(), _label| {
+                    Box::pin(async {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        Ok(())
+                    })
+                },
+            ),
+        )
+        .await
+        .expect("the finalize must be cut at the deadline, not awaited to completion")
+        .expect_err("an outrun finalize must surface the deadline give-up");
+        assert_eq!(result.method, RpcMethod::EthBlockNumber);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "gave up late: {:?}",
+            started.elapsed()
+        );
+
+        assert_eq!(
+            *metrics.attempts.lock().unwrap(),
+            vec![(
+                RpcMethod::EthBlockNumber,
+                endpoint_label(LOCALHOST_A, 0).to_string(),
+                RpcAttemptOutcome::DeadlineClamped,
+            )],
+            "the transport succeeded and the finalize ate the budget — deadline pressure, \
+             not a provider stall",
+        );
+        assert_eq!(*metrics.deadlines.lock().unwrap(), vec![RpcMethod::EthBlockNumber]);
+    }
+
+    /// A best-effort caller's deadline give-up must not log the operator-paging WARN.
+    /// The normal path first proves the capture works (same `log_at!` expansion, so the
+    /// same `warn!` callsite the absence assertion depends on), then the best-effort path
+    /// must leave the WARN buffer empty — its give-up logs at debug. Uses the held-permit
+    /// give-up, so no endpoint is ever contacted and both give-ups are deterministic.
+    #[tokio::test]
+    async fn test_best_effort_give_up_logs_quietly() {
+        #[derive(Clone)]
+        struct SharedBuf(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for SharedBuf {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
+            type Writer = SharedBuf;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let buf = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(SharedBuf(buf.clone()))
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let config =
+            RpcClientConfig { data_max_concurrent_requests: Some(1), ..Default::default() };
+        let client =
+            RpcClient::new_with_config(&[LOCALHOST_A], &[LOCALHOST_A], config, None).unwrap();
+        // Hold the single data permit so every call below gives up at its deadline.
+        let _held = client.data_concurrency.acquire().await.unwrap();
+        let deadline = || Some(Instant::now() + Duration::from_millis(20));
+
+        // Positive control, self-healing against the interest-cache race: concurrent
+        // subscriber-less tests can re-cache `never` for the WARN callsite, so rebuild
+        // and retry until the control WARN is captured instead of flaking.
+        let mut control_seen = false;
+        for attempt in 0..20 {
+            if attempt > 0 {
+                tracing::callsite::rebuild_interest_cache();
+            }
+            let _ = tokio::time::timeout(
+                Duration::from_secs(5),
+                client.get_latest_block_number_with_deadline(deadline()),
+            )
+            .await
+            .expect("give-up must not hang")
+            .expect_err("held permit must exceed the deadline");
+            if String::from_utf8_lossy(&buf.lock().unwrap()).contains("gave up on its deadline") {
+                control_seen = true;
+                break;
+            }
+        }
+        assert!(control_seen, "positive control: the normal give-up WARN was never captured");
+
+        buf.lock().unwrap().clear();
+        let _ = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.get_latest_block_number_best_effort(deadline()),
+        )
+        .await
+        .expect("give-up must not hang")
+        .expect_err("held permit must exceed the deadline");
+        let logs = String::from_utf8_lossy(&buf.lock().unwrap()).to_string();
+        assert!(
+            !logs.contains("gave up on its deadline"),
+            "best-effort give-up must log at debug, not WARN: {logs}",
+        );
+    }
+
+    /// A stalled witness fetch's failure log must carry `block_number` even at the default `warn`
+    /// filter, proving the `warn`-level span propagates block context into the generic retry
+    /// loop's per-attempt logs (which have no block identifier of their own).
+    #[tokio::test]
+    async fn test_witness_failure_log_carries_block_number() {
+        #[derive(Clone)]
+        struct SharedBuf(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for SharedBuf {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
+            type Writer = SharedBuf;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let buf = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(SharedBuf(buf.clone()))
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        // Stalled endpoint: accepts the TCP connection but never replies, so the per-attempt
+        // timeout fires and the retry loop emits its stall WARN — the log we assert on.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stalled_url = format!("http://{}/", listener.local_addr().unwrap());
+        let _listener = listener;
+        let config = RpcClientConfig {
+            per_attempt_timeout: Duration::from_millis(50),
+            rpc_retry: BackoffPolicy::new(Duration::from_millis(1), Duration::from_millis(2)),
+            ..Default::default()
+        };
+        let client =
+            RpcClient::new_with_config(&[&stalled_url], &[&stalled_url], config, None).unwrap();
+
+        // `deadline = None` so every per-attempt timeout emits the stall WARN (no deadline branch
+        // can steal it). The unbounded retry runs as a background task while the test polls the
+        // captured logs and finishes on the first stall WARN that carries the span context.
+        //
+        // Two hardenings, both observed failure modes rather than paranoia:
+        // - No fixed wall-clock window around the fetch: a loaded runner can delay the first 50 ms
+        //   attempt timeout past any fixed budget.
+        // - Concurrent tests drive these same span/event callsites with no subscriber installed,
+        //   which can race `set_default`'s interest-cache rebuild and re-cache a stale `never` for
+        //   the span callsite — every span created afterwards on this thread is `none` and the
+        //   WARNs lose their `block_number` field. Periodically rebuilding the interest cache and
+        //   respawning the fetch creates a fresh span under the repaired cache, so the test
+        //   self-heals instead of flaking.
+        // 60 spawns × 20 polls × 25 ms = a 30 s give-up ceiling with a ~500 ms respawn cadence;
+        // the happy path exits on the first poll after the first ~50 ms attempt timeout.
+        let spawn_fetch = || {
+            let client = client.clone();
+            tokio::spawn(async move {
+                let _ = client.get_witness_light_with_deadline(4242, B256::ZERO, None).await;
+            })
+        };
+        let mut logs = String::new();
+        let mut found = false;
+        for attempt in 0..60 {
+            if attempt > 0 {
+                tracing::callsite::rebuild_interest_cache();
+                buf.lock().unwrap().clear();
+            }
+            let fetch = spawn_fetch();
+            for _ in 0..20 {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                logs = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+                if logs.contains("block_number") && logs.contains("4242") {
+                    found = true;
+                    break;
+                }
+            }
+            fetch.abort();
+            if found {
+                break;
+            }
+        }
+        assert!(found, "witness failure log must carry the block_number span field, got:\n{logs}");
+    }
+
+    /// The deserializer seeds each envelope's cached hash from the RPC `hash` field, so
+    /// `trie_hash()` reproduces the claim by construction; only keccak over the envelope's own
+    /// encoding can tell a hash that does not belong to the bytes. Forging one hash leaves the
+    /// transactions root intact, so the hash check is the only thing that rejects the block.
+    /// Index 0 is asserted to be the deposit (`Sealed`) and the last index a signed envelope, so
+    /// a fixture change cannot silently drop either `trie_hash` override from coverage.
+    #[test]
+    fn verify_block_integrity_rejects_a_forged_transaction_hash() {
+        use alloy_rpc_types_eth::BlockTransactions;
+
+        let fx = TestFixtures::mainnet_shared();
+        let block = fx
+            .paired_blocks()
+            .iter()
+            .map(|(_, hash)| &fx.blocks[hash])
+            .find(|block| !block.transactions.is_empty())
+            .expect("a paired mainnet fixture with transactions");
+        verify_block_integrity(block).expect("untampered fixture block verifies");
+
+        let BlockTransactions::Full(txs) = &block.transactions else {
+            panic!("fixture blocks carry full transactions");
+        };
+        let last = txs.len() - 1;
+        for (index, is_deposit) in [(0, true), (last, false)] {
+            assert_eq!(txs[index].inner.inner.inner().is_deposit(), is_deposit, "tx {index}");
+            let mut json = serde_json::to_value(block).unwrap();
+            json["transactions"][index]["hash"] = serde_json::to_value(B256::ZERO).unwrap();
+            let forged: Block<Transaction> = serde_json::from_value(json).unwrap();
+            let err = verify_block_integrity(&forged).unwrap_err();
+            assert!(err.to_string().contains("Transaction hash mismatch"), "tx {index}: {err:?}");
+        }
+    }
+}

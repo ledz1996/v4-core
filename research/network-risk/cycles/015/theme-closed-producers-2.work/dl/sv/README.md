@@ -1,0 +1,534 @@
+# Stateless Validator
+
+A Rust implementation of a stateless blockchain validator specifically designed for MegaETH.
+MegaETH is a high-performance, Ethereum-compatible blockchain that achieves exceptional throughput through optimized execution and state management.
+
+This validator enables efficient block verification using cryptographic witness data from [SALT (Small Authentication Large Trie)](https://github.com/megaeth-labs/salt) instead of maintaining full blockchain state.
+The stateless approach eliminates the need for validators to run on high-end hardware comparable to sequencer nodes, making it practical to run validator nodes at scale.
+
+## Features
+
+- **Partial Statelessness**: Contract bytecode is fetched on-demand from RPC endpoints and cached locally, rather than included in witness data.
+  This hybrid approach dramatically reduces witness size since contract code changes infrequently compared to state data.
+
+- **Embarrassingly Parallel**: Validation workers operate independently on different blocks with no coordination overhead.
+  Throughput scales linearly with the number of CPU cores available.
+
+- **Lower Hardware Spec**: Thanks to our novel [SALT (Small Authentication Large Trie)](https://github.com/megaeth-labs/salt) data structure, the witness is significantly smaller than traditional Merkle Patricia Tree (MPT) or Verkle tree approaches.
+  This reduces the network bandwidth requirements of stateless validators.
+
+- **Simplicity over Performance**: Designed with simplicity as the core principle.
+  The validator uses a minimal, single-threaded executor based on vanilla Revm interpreter and in-memory storage to prioritize simplicity over raw performance.
+  This creates a small Trusted Computing Base that can be thoroughly audited, ensuring high confidence in validation correctness.
+
+- **Pluggable Execution Engine**: Supports multiple execution implementations to prevent single points of failure.
+  Beyond the default Revm-based executor, the validator also supports an executor based on the formal [K semantics of the EVM](https://github.com/Pi-Squared-Inc/evm-semantics) (developed with Pi²).
+  Combined with the hyper-optimized, parallel, JIT-compiled executor on sequencer nodes, this creates three distinct MegaETH client implementations.
+
+## Project Structure
+
+The workspace contains three binaries and five library crates:
+
+| Crate                  | Path                          | Purpose                                                                                                                                                                              |
+| ---------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `stateless-core`       | `crates/stateless-core`       | Core validation logic, abstract storage traits, generic pipeline, EVM execution                                                                                                      |
+| `stateless-db`         | `crates/stateless-db`         | redb-backed persistence: table definitions, read/write helpers, bounded `ContractCache`                                                                                              |
+| `stateless-common`     | `crates/stateless-common`     | Shared utilities: RPC client, logging, metrics                                                                                                                                       |
+| `stateless-test-utils` | `crates/stateless-test-utils` | Test fixtures (blocks, witnesses, contracts) and env-var lock for integration tests                                                                                                  |
+| `stateless-r2`         | `crates/stateless-r2`         | Shared R2 witness primitives: SigV4 signer, object-key layout, endpoint parsing, signed PUT, and the retrying witness-object GET fetcher over either the signed S3 API or an unsigned Cloudflare custom domain; consumed by mega-reth's witness uploaders (write), this repo's validator, and the trace server's witness source (read) |
+| `stateless-validator`  | `bin/stateless-validator`     | Main binary: chain sync, parallel validation workers                                                                                                                                 |
+| `debug-trace-server`   | `bin/debug-trace-server`      | Standalone RPC server for debug/trace methods                                                                                                                                        |
+| `coverage-replayer`    | `bin/coverage-replayer`       | Offline coverage tool: replays mainnet blocks under LLVM branch instrumentation and derives a small (greedy) block set that reproduces all the execution coverage the scan observed, of mega-evm and the revm execution engine under it |
+
+Additional directories: `test_data/` (integration test fixtures including genesis config), `audits/` (security audit reports).
+
+## Quick Start
+
+### Building
+
+```bash
+cargo build --release
+```
+
+### Running the Validator
+
+```bash
+cargo run --release --bin stateless-validator -- \
+  --data-dir /path/to/validator/data \
+  --rpc-endpoint <public-rpc-endpoint> \
+  --witness-endpoint <witness-rpc-endpoint> \
+  --genesis-file /path/to/genesis.json \
+  --start-block <trusted-block-hash>
+```
+
+**Required Arguments:**
+- `--data-dir`: Directory for validator database and data files
+- `--rpc-endpoint`: JSON-RPC API endpoint URL(s) to retrieve block data.
+  Multiple endpoints can be provided via repeated flags or as a comma-separated list (tried in order on failure, with retry-with-backoff per provider).
+  The env var `STATELESS_VALIDATOR_RPC_ENDPOINT` accepts the same comma-separated form (e.g. `http://a:8545,http://b:8545`).
+- `--witness-endpoint`: MegaETH JSON-RPC API endpoint URL(s) to retrieve witness data.
+  Multiple endpoints can be provided via repeated flags or as a comma-separated list (tried in order on failure).
+  The env var `STATELESS_VALIDATOR_WITNESS_ENDPOINT` accepts the same comma-separated form (e.g. `http://a:8545,http://b:8545`).
+  Always required: without the `--r2-*` flags it is the only witness path, and with them it is the fallback every R2 failure lands on.
+
+**Optional Arguments:**
+- `--genesis-file`: Path to genesis JSON file containing hardfork activation configuration (required on first run, stored in database for subsequent runs)
+- `--start-block`: Trusted anchor block hash; validation starts at the block above it.
+  Required when the data dir holds no validated chain yet, and must be omitted to resume one (see "Restarting and re-anchoring" below).
+  The block must be on the canonical chain of `--rpc-endpoint`; otherwise startup fails, naming the chain head (the highest usable anchor) and, when the block's height is known, the canonical hash at that height.
+- `--force-anchor`: With `--start-block`, replace the stored validated chain with one anchored at that block, clearing its validated progress (even for the same anchor).
+  Either of the two flags alone is refused on a data dir that already holds a validated chain.
+- `--end-block`: Inclusive end block; validate up to this height, then stop cleanly (useful to slice a fixed range across multiple servers)
+- `--block-list`: Replay exactly the block numbers in this file instead of following the chain, then exit; see "Replaying a block list" below.
+  It excludes `--start-block`, `--force-anchor`, `--end-block` and `--report-validation-endpoint`, and requires `--genesis-file`.
+  `STATELESS_VALIDATOR_FORCE_ANCHOR=false` counts as leaving `--force-anchor` out, so an env file shared with chain-following runs can carry it.
+- `--block-list-timeout-secs`, `--block-list-concurrency`, `--block-list-output-dir`: tuning for `--block-list` (per-stage timeout, default 300; blocks in flight, default twice the physical cores, of which at most one per physical core validates at a time; where the output files go, default `--data-dir`).
+  They are rejected without `--block-list`.
+- `--r2-endpoint`, `--r2-bucket`, `--r2-access-key-id`, `--r2-secret-access-key`: R2 connection settings for the signed S3 target, all four required together (prefer the env var for the secret).
+  Configuring a target is the whole switch: there is no mode flag, and with one configured every witness fetch tries the bucket before the `--witness-endpoint` chain.
+  Bulk history then streams from R2 at object-storage parallelism while any R2 failure — a frontier miss the uploader has not reached, a throttle, a corrupt object — hands that one block to RPC instead of stalling it, so the gateway only ever sees the blocks R2 could not serve.
+  That fallback is a second *path* to the same bytes rather than a second copy of them (the witness gateway reads this same bucket), so what it covers is the client path failing, not the bucket.
+  Every R2 failure is recorded and is exactly one fallback. A `missing` within 32 blocks — MegaETH runs one block per second, so also 32 seconds — of the last polled head is the uploader still catching up and is counted on its own `stateless_validator_r2_witness_frontier_misses_total`, so `stateless_validator_r2_witness_errors_total{kind}` stays an error rate and its `kind="missing"` means a hole in objects that must exist.
+  Which of the two a run produces follows from how far behind it is: a tip-following validator fetches inside that window, so all of its misses are frontier misses — routine and numerous — and `kind="missing"` stays at zero; watch the frontier rate there instead.
+  `kind="missing"` is the bucket-integrity signal during catch-up and fixed `--end-block` backfills, where blocks sit far below the head. A hole that first appears near the tip is not caught here, since the block is fetched once, falls back and is never re-probed; that belongs to whatever monitors the uploader.
+  With no `--r2-*` flag set at all, witnesses come from the RPC chain alone; a half-configured target, a blank value, or a tuning flag with no target is rejected at startup by name rather than read as "no R2 configured".
+  "Blank value" covers the flags that travel as text; the two numeric tuning flags are parsed by clap, so a blank one aborts earlier, in clap's parser (see AGENTS.md for the full rule).
+  The R2 attempt for one block is bounded in total by a single `--rpc-per-attempt-timeout-ms`, permit wait included, so an endpoint that accepts connections and then stalls costs the block one upstream hop's wall clock rather than one per retry before the RPC chain takes over.
+- `--r2-custom-domain`: alternative R2 target that replaces the four flags above — unsigned HTTP/2 GETs through a Cloudflare custom domain fronting the bucket (mutually exclusive with `--r2-endpoint`, and any of the four left set is rejected at startup by name rather than silently ignored; optional `--r2-access-client-id`/`--r2-access-client-secret` attach Cloudflare Access service-token headers, which require an `https://` domain unless it is loopback; the domain's cache rule must set 404s to bypass cache, or a cached pre-upload 404 pushes those blocks onto the RPC path for the negative-cache TTL and false-fires the `kind="missing"` alarm once they age past the frontier band)
+- `--report-validation-endpoint`: RPC endpoint URL (typically a replay-full node) the validated chain is reported to via `mega_setValidatedChain` (disabled if not provided).
+  Each report carries both ends of the validated chain `(anchor, validated]` as `{ blockNumber, blockHash }` objects, and is sent once a second while the chain has moved, plus once more on shutdown.
+  The receiver accepts it only when both blocks are on its own canonical chain, and then replaces what it recorded before, so the chain a reorg rewound is reported like any other; a refused report is retried with the chain as it is by the next round.
+  Nothing is reported while no block above the anchor has been validated, since the receiver takes only `anchor < validated`.
+  Each report sent is counted by outcome on `stateless_validator_validated_chain_reports_total`, and `stateless_validator_reported_validated_height` holds the last accepted one, so a receiver that keeps refusing shows on a dashboard rather than only in the logs.
+- `--metrics-enabled`: Enable Prometheus metrics endpoint (disabled by default)
+- `--metrics-port`: Port for Prometheus metrics HTTP endpoint (default: 9090)
+
+### Replaying a block list
+
+```bash
+cargo run --release --bin stateless-validator -- \
+  --data-dir /path/to/fresh-scratch-dir \
+  --genesis-file /path/to/genesis.json \
+  --rpc-endpoint <public-rpc-endpoint> \
+  --witness-endpoint <witness-rpc-endpoint> \
+  --block-list pool.txt
+```
+
+The file has one decimal block number per line.
+Blank lines are skipped and `#` starts a comment, on a line of its own or after a number, so the candidate pool written by the coverage tooling works as is; `coverage-replayer backfill --blocks-file` reads the same format with the same parser.
+Duplicates collapse, and a line that is neither a comment nor a number fails the run before any block is fetched.
+Each block goes through the same fetch (R2 first when configured, then the RPC witness chain) and the same validation as the chain-following mode, up to `--block-list-concurrency` at a time.
+Validation is CPU-bound, so as in the pipeline at most one block per physical core validates at once, and a fetched block waits for a free core before its validation timeout starts.
+Nothing is advanced or reported: the canonical chain is not touched, and `--report-validation-endpoint` is rejected because a sparse set of heights must never move the upstream validated pointer.
+Use a fresh `--data-dir`, since the run opens the validator database exclusively and caches contract bytecode there.
+The genesis file is required and always replaces any genesis stored in the data dir, so replaying blocks past a hardfork needs a genesis that schedules it.
+
+A pass means the witness verified and replaying the block reproduced its header (state root, withdrawals root, receipts root, logs bloom, gas used).
+It does not check that the witness's pre-state equals the parent block's post-state, because the parent is not part of the list.
+A block that fails is recorded and the run continues; the exit status is non-zero if any block did not validate.
+The RPC client retries transport errors indefinitely, so each of the fetch and the validation of a block is bounded by `--block-list-timeout-secs`, and a block that exceeds it is recorded as `fetch_timeout` or `process_timeout`.
+The one chain-head read before the first block is bounded the same way, and fails the run when it times out.
+
+Two files are written to `--block-list-output-dir`, both overwritten on each run.
+`results.jsonl` has one object per block, in completion order, with `block`, `hash`, `status`, `ms`, `retryable` and the validator's error text in `message`.
+`retryable` is true for the fetch statuses and both timeouts, which say nothing about the block itself, and for a validation failure the validator judges transient (a store error rather than a mismatch).
+`failed.txt` is written when the run finishes, through a temporary file and a rename so a reader never sees half of it; until then it holds only a comment, so an interrupted run never leaves the previous run's retry list beside its own results.
+`failed.txt` lists the blocks that did not validate in the input format, so it can be passed back as `--block-list` to retry exactly those.
+The statuses are `validated`, `fetch_timeout`, `fetch_failed`, `process_timeout` and `validation_failed`.
+The end-of-run summary prints the totals, the rate in blocks per second and the slowest blocks.
+
+### Running the Debug Trace Server
+
+```bash
+cargo run --release --bin debug-trace-server -- \
+  --rpc-endpoint <public-rpc-endpoint> \
+  --witness-endpoint <witness-rpc-endpoint> \
+  --addr 0.0.0.0:8545
+```
+
+The debug-trace-server exposes Geth-style and Parity-style tracing RPC methods:
+- `debug_traceBlockByNumber`, `debug_traceBlockByHash`, `debug_traceTransaction`
+- `trace_block`, `trace_transaction`
+- `debug_getCacheStatus`
+
+Two operating modes:
+- **Stateless mode** (no `--data-dir`): All data fetched from remote RPC on demand.
+- **Local cache mode** (with `--data-dir`): Enables chain sync to pre-fetch blocks for faster serving.
+
+**Response cache:**
+The HTTP response cache is keyed by `(resource, block hash, tracer variant)` — an entry is an immutable fact about that exact block, so reorgs need no serve-time validation.
+Entries hold the reply's raw JSON bytes, serialized exactly once from the trace output and spliced verbatim into every response — a hit shares the bytes by `Arc` instead of re-parsing and re-serializing the JSON tree.
+By-number requests resolve their canonical hash before the lookup (local index, then an in-memory memo, then upstream `eth_getHeaderByNumber`), so a reorged height resolves to the new hash and misses cleanly.
+Tag requests (`latest`/`finalized`/`safe`) bind number → hash in their single upstream header fetch, and every resolved (number, hash) pair — tag, canonical-hash resolution, or transaction lookup — is handed to the fetch pipeline, which then skips its own number-discovery header round trip (only raw by-hash requests still pay it).
+The handed number is cross-checked against the served block's own header on every tier, so a drifted (number, hash) pair fails typed instead of serving a witness routed by the wrong height (a cold fetch also cancels the doomed witness fetch).
+Cacheable shapes are the five built-in tracers (`callTracer`, `prestateTracer`, `4byteTracer`, `noopTracer`, `flatCallTracer`, keyed by their parsed, typed `tracerConfig` — equivalent configs collapse onto one entry) and the bare default struct-logger request (no tracer, no `tracerConfig`, default flags).
+JS tracers, `muxTracer`, and struct-logger requests with non-default flags bypass the cache and are recomputed on every request; the unimplemented `erc7562Tracer` is rejected with `-32602` before any block data is fetched.
+A type-malformed `tracerConfig` on a config-reading builtin (`callTracer`/`prestateTracer`/`flatCallTracer`) is rejected with `-32602 invalid params` instead of being silently traced with default settings.
+Disable the cache with `--response-cache-disabled`; `--response-cache-estimated-items` must be at least 1 (the old `=0` disable convention is rejected at startup).
+
+**Concurrent batch execution:**
+Entries of an inbound JSON-RPC batch request execute concurrently as independent runtime tasks, so a batch answers near its slowest entry instead of the sum of its entries — including CPU-bound entries, since EVM tracing runs synchronously inline and merely interleaved futures would serialize behind it (jsonrpsee's built-in batch path is strictly sequential).
+Each entry still goes through the regular per-request pipeline — response cache, single-flight, witness routing, and per-method metrics apply unchanged — and responses may arrive in any order, matched by `id` as JSON-RPC 2.0 permits.
+`--batch-item-concurrency` (default 16) bounds how many entries of one batch run at once, so a single huge batch cannot monopolize downstream resources against concurrently served requests; set it to 1 to restore sequential execution.
+The `debug_trace_batch_size` histogram records entries per inbound batch, and CPU burned inside spawned entries is folded back into `x-execution-time-ns` and the request CPU metric, so batch requests do not under-report their cost.
+
+**Admission control:**
+Every request is checked against a process-wide capacity budget before any work happens, so an offered load beyond what this server can serve is refused immediately instead of degrading everything already in flight.
+Without it the only backpressure is that all runtime workers are busy tracing, which starves chain sync, the accept loop and the metrics exporter along with the requests themselves; the outbound witness/data/R2 caps bound what we ask of others, never what clients ask of us.
+Refused requests are answered `-32013 "Request queue is full"`, matching mega-reth's `ConcurrencyLimiter` byte for byte so a client or gateway that already backs off for the node backs off for this server too.
+The gate has two stages.
+Arrival is a non-blocking check against `--admission-max-concurrent` + `--admission-max-queue`: past that total, the request is shed on the spot.
+An admitted request then waits for one of `--admission-max-concurrent` execution permits, taken only once the response cache has missed — a cache hit costs microseconds and is never queued behind a cold trace — and given up if the wait would leave too little of the request's budget for the witness fetch, which is what turns a full queue into a prompt rejection rather than a deadline error.
+The wait is carved *out of* the request's `--block-fetch-timeout` budget rather than added on top of it, so total client latency stays bounded by that flag however long the queue was; the derived maximum wait (`--block-fetch-timeout` less the witness reserve) is logged at startup as `max_permit_wait_ms`.
+Entries of a JSON-RPC batch admit individually, so one large batch is metered like the equivalent single calls rather than passing as one unit.
+`debug_getCacheStatus` (and its `timed_` alias) is the sole exemption: it does no I/O, and shedding the one endpoint that reports what the server is doing, precisely while it is shedding, would be self-defeating.
+Sizing is not a core count — roughly 2% of a trace request is CPU, the rest is waiting on the upstream node and R2 — so derive `--admission-max-concurrent` from measured service time (`throughput x mean_handler_seconds`), and read `--admission-max-queue` as latency: queue depth over service rate is how long a request waits, so at 1000 blocks/s a 1000-deep queue is one second.
+The defaults sit above the highest occupancy this server has been measured serving cleanly, so they bound a previously unbounded process without throttling a known-good workload; tighten them once `debug_trace_admission_in_flight` and `debug_trace_admission_permit_wait_seconds` show what production actually does.
+Memory-hungry tracers additionally pass `--admission-heavy-max-concurrent`, a much smaller budget: one such response has been measured near a gigabyte.
+That set is `prestateTracer`, JS tracers, `muxTracer`, and **every struct-logger request** — both the bare default (a `debug_trace*` call with no `tracer`) and one with non-default flags, since the flags change the size of that output rather than its kind, and a struct logger emits a record per executed opcode.
+Note the consequence: an opts-less `debug_traceBlockByNumber` is a heavy request, so a client that sends no tracer is limited to `--admission-heavy-max-concurrent` at a time; raise that flag if such traffic is a normal part of your workload.
+Heavy requests also get their own share of the admitted budget — they may queue in the same proportion to their execution budget as the process as a whole — so a flood of them is refused at that share rather than filling the class-blind admitted budget and shedding ordinary traffic that has idle permits waiting.
+Startup logs both `heavy_max_concurrent x max_response_size` and `max_concurrent x max_response_size` — the first bounds the shapes that can actually reach the response cap, the second is the theoretical ceiling if every admitted request returned a maximal body — so they can be checked against the host's memory limit.
+Neither covers a tracer's *intermediate* allocations, which nothing here bounds; a per-transaction-count gate would be needed for that and is not implemented.
+Watch `debug_trace_rpc_errors_total{reason="overloaded"}` for shedding, `debug_trace_admission_in_flight` / `debug_trace_admission_executing` for occupancy (queue depth is their difference), and the `debug_trace_admission_max_*` gauges for what is actually in effect, since the limits are changeable at runtime.
+Disable the whole mechanism with `--admission-disabled`.
+
+**Response size limits:**
+`--max-response-size` (default 256MB) caps one serialized reply and `--max-batch-response-size` (default 1GB) caps a whole assembled batch response; both bodies are discarded rather than returned, and an over-limit single response is counted on `debug_trace_response_oversized_total{method}`.
+They bound different things: a batch retains every completed entry's body until the batch finishes, so its memory is the sum of its entries rather than the largest of them, and left unbounded that accumulation — not any single response — is what has previously exhausted this process.
+The single-response check runs where this server serializes the reply, so an over-limit body is dropped before it can be copied again into the JSON-RPC envelope; the framework's own cap is the backstop.
+
+**Runtime retuning:**
+`--admin-addr` (e.g. `127.0.0.1:8546`, off unless set) starts a second RPC listener serving `admin_getConcurrencyLimit` and `admin_setConcurrencyLimit`, which change the admission limits without a restart:
+
+```bash
+curl -s http://127.0.0.1:8546 -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"admin_setConcurrencyLimit","params":[256,4096,4]}'
+```
+
+Parameters are `[maxConcurrent, maxQueueSize, heavyMaxConcurrent]`, each optional — omitted fields are left alone — and the call returns the resulting limits plus current occupancy.
+Lowering a limit below current occupancy aborts nothing; it stops admitting until the excess drains.
+Zero execution permits is refused, since it would park every subsequent request with nothing left running to release one.
+The listener carries no admission or accounting middleware, so a saturated public port can never shed the call that relieves it, and it runs on its own thread and runtime, so inline EVM tracing on the main runtime cannot starve it — the moment it is needed most.
+It has no authentication and its setters can throttle request serving, so a non-loopback bind is refused at startup; reach it through a port-forward or a sidecar.
+
+**Response compression:**
+Responses negotiate gzip/zstd per request via the client's `Accept-Encoding` header; clients that do not send it keep receiving identity bodies, so nothing changes for consumers that have not opted in.
+Bodies under 4 KiB are always served identity: compressing them would cost a per-response encoder allocation and downgrade `Content-Length` to chunked framing for a few dozen saved bytes.
+Compression runs at the fastest level while the body streams, so `x-execution-time-ns` excludes its CPU cost — the header reflects request processing and no longer bounds total request cost — and `x-response-size` keeps reporting the uncompressed payload size.
+The body-streaming phase is metered separately: `debug_trace_body_cpu_time_seconds` and `debug_trace_wire_bytes_total` (labeled by negotiated encoding) record per-response streaming CPU — compression included — and post-compression wire bytes, which is what tells an operator when compression CPU is worth shedding.
+Compressing at the origin also shrinks a fronting CDN's back-to-origin leg, which edge-side compression alone cannot do.
+Known trade-off: the response cache stores identity JSON, so an opted-in client pays the (fast-level) compression on every cache hit.
+Disable with `--response-compression-disabled`; the flag is read at startup, so shedding compression CPU means a restart and a cold-cache window.
+
+**Canonical-hash memo:**
+`CANONICAL_CHAIN` stays a bounded, contiguous sync window; heights outside it resolve number → hash upstream once, and the hash-verified answer is memoized in a bounded in-memory LRU.
+Only depth-final heights are memoized — more than a safety depth below the observed tip, or bound by a `finalized`-tag resolution (final by definition) — so a memoized binding can no longer reorg; shallow and above-tip heights resolve upstream on every request.
+The observed tip comes from the local window and `latest`-tag lookups; when neither exists (stateless mode with numeric-only traffic), a throttled upstream `eth_blockNumber` seed learns it, so the memo fills there too.
+Resolution order is window → memo → upstream, so historical heights resolve locally after first touch for the lifetime of the process; a restart clears the memo, and reorg bisection reads only the window.
+In local cache mode chain sync also clears the memo on a stale reset and on any reorg at least the safety depth deep; in stateless mode the depth margin alone carries the safety argument (assumed deeper reorgs never happen on the target chain).
+The memo holds `--canonical-hash-memo-capacity` entries (default 8M, roughly 80 bytes each; it fills lazily, so the cap costs nothing until a deep historical scan uses it).
+
+**Size-based pruning:**
+Size-based pruning never removes bodies above `tip - --size-prune-min-retain` (default 256), so a DB file stuck over `--db-max-size` cannot consume the whole body retention.
+Because redb files never shrink on their own, a file that crosses `--db-max-size` ratchets body retention down to that floor and keeps it there until `--db-max-size` is raised or the database is rebuilt.
+
+**Block-data cache:**
+A bounded in-memory `BlockData` cache keyed by block hash sits between the response cache and the local DB / RPC tiers, so requests that miss the response cache — other tracer variants of a block, and especially `debug_traceTransaction` calls for different transactions of the same block, which are never response-cached — reuse one witness fetch and contract resolution.
+Block-number lookups still resolve number → hash against the DB or upstream first, so canonicality is never cached and reorgs need no invalidation here; when a trace fails for a data-attributable reason (the witness cannot replay the block), the entry is dropped so the next request refetches instead of replaying the poisoned data, and each such eviction is counted (`block_data_evictions_total`).
+Size it with `--block-data-cache-max-size` (default `1GB`; `0` disables); the cache uses a fixed 4 shards, so the largest cacheable entry is `max_bytes / 4` on every host (~256 MB at the default), and an insert the cache does not retain is counted (`cache_admission_rejects_total`) and logged rather than masquerading as a miss.
+The byte budget is an estimate of retained payload, not exact RSS: map/allocator overhead is under-counted, and contract bytecode is charged here *and* in the contract cache (the same refcounted allocations), so evicting an entry can free less than its accounted weight.
+A cached witness is charged as its KV/level payload plus the direct-lookup table built beside it once per block and shared by every trace request.
+The table stays resident as long as the entry does, so the same budget holds fewer blocks than the witness maps alone would suggest.
+The server runs on jemalloc rather than the system allocator: under glibc malloc this cache churn left RSS at 2.5–3× the caches' accounted bytes and still rising, because freed memory stayed in malloc's per-thread arenas instead of returning to the OS.
+On Linux, jemalloc runs with background purge threads, so memory freed by a load burst returns to the OS within seconds even from arenas that then go quiet; set `MALLOC_CONF=background_thread:false` to disable them.
+The `Allocator: jemalloc` line logged at startup, with or without metrics, reports the settings that took effect (`background_thread`, `narenas`, and the compiled-in `malloc_conf` that `MALLOC_CONF` overrides).
+With `--metrics-enabled`, jemalloc's own accounting is exported every 10s as `debug_trace_jemalloc_{allocated,active,metadata,resident,mapped,retained}_bytes`: `allocated` is the live heap and `resident` the physical memory the allocator holds, so a gap that widens while `allocated` stays flat is allocator retention rather than a leak.
+Combined default memory across the four caches is roughly 3.1 GB — response cache 1 GB + block-data cache 1 GB + contract cache 512 MB + canonical-hash memo ~0.6 GB at its 8M-entry cap (it fills lazily; the measured working set is 50–130k heights, ~10 MB) — on top of ordinary heap and, in local cache mode, redb's page cache (up to 1 GiB); size hosts (or lower the knobs) accordingly.
+
+**Witness endpoints:**
+Declare the internal witness generator via `--witness-generator-endpoint`; `--witness-endpoint` lists the durable fallbacks (e.g. an R2-backed witness service), tried in order.
+In local cache mode with a generator plus at least one fallback, requests for blocks at least `--witness-local-window` blocks below the local tip skip the generator and fetch from the fallbacks, because the generator only retains a recent window (its `BACKUP`, deployed at 4096) and probing it for pruned blocks is a guaranteed miss.
+The background chain-sync prefetch routes by freshness against the last observed remote head: for frontier-fresh blocks the generator gets a short exclusive grace before the full endpoint chain — its "witness not found" at the frontier means "not generated yet", and the fallbacks receive witnesses from the same generation pipeline, so rotating to them on a fresh miss wastes a round trip per block and exposes tip sync to fallback stalls.
+The head observation is trusted as a freshness anchor only while itself recent (no older than the grace): during a long catch-up stretch the tip is not re-polled and the real head may advance past the generator's retention, so blocks near the stale ceiling fall back to full-chain failover from the first attempt instead of burning the grace on pruned witnesses.
+Deep catch-up blocks (far below the observed head, where the generator may have pruned the witness) keep full failover from the first attempt.
+Without `--witness-generator-endpoint`, historical routing is disabled and the endpoints are plain failover.
+
+**Direct-from-R2 witnesses:**
+With `--r2-endpoint`, `--r2-bucket`, `--r2-access-key-id`, and `--r2-secret-access-key` (all four together), every request-serving witness fetch tries a SigV4-signed GET against the bucket before the RPC witness chain.
+Object storage tolerates far higher parallelism than a shared RPC gateway and the bucket holds full history, so bulk backfill traffic stops competing with everything else on the public endpoint; any R2 failure (missing object, throttle, transport, corrupt payload — counted in `debug_trace_r2_witness_errors_total{kind}`) falls back to the RPC chain on the remaining witness budget, and the R2 attempt is capped at half that budget so a hung endpoint can never starve the fallback.
+Frontier probes usually miss — the uploader typically lags the generator — and cost one fast 404; the frontier band is a small near-tip window (32 blocks of uploader-lag grace around this process's best estimate of the chain head — far narrower than the 4096-block routing window, which asks a different question), hits there are labeled `witness_r2_frontier` (vs `witness_r2` past the band) so their hit rate stays separable, and the speculative probe runs on an eighth of the remaining stage (vs half for blocks R2 must hold), so degraded R2 cannot burn half of every near-tip request's budget before the RPC chain runs.
+A `missing` classifies by band: in-band is expected probe-ahead (excluded from `debug_trace_r2_witness_errors_total{kind="missing"}`), and below-band feeds that bucket-integrity alarm, since the object must exist there.
+The band takes the higher of the tip observed from request traffic and the local DB tip — neither is the chain tip alone, since the first is raised only by by-number and tag lookups and the second only by what sync has ingested.
+The bucket is the same store the public gateway serves witnesses from, so at the frontier it can lead the generator (whose RPC server publishes from a different file than the uploader reads); the route requires a local DB (`--data-dir`), whose tip its witness stage reads for the old-block budget and generator routing.
+`--r2-custom-domain` selects the alternative R2 target (mutually exclusive with `--r2-endpoint`, rejected at startup with an error naming both): unsigned GETs of `/{key}` through a Cloudflare custom domain fronting the bucket, which negotiates HTTP/2 — many in-flight GETs multiplex over a few connections instead of holding one connection each against the HTTP/1.1-only S3 endpoint — and can serve the immutable witness objects from edge cache; optional `--r2-access-client-id`/`--r2-access-client-secret` attach Cloudflare Access service-token headers.
+Client-side routing, budgets, and fallback match the S3 target; edge behavior is zone configuration, and **any cache rule making these objects cacheable must set 404s to bypass cache** — an edge-cached 404 would otherwise pin a pre-upload frontier miss for the negative-cache TTL and can false-fire the below-band `kind="missing"` bucket-integrity alarm.
+The client sends a `User-Agent`, because Cloudflare's Browser Integrity Check — on by default on many zones — challenges requests without one, and that arrives here as a non-retryable 403 on every GET.
+The edge's per-connection stream limit bounds the process, not the request: one `reqwest::Client` holds exactly one HTTP/2 connection and hyper does not open a second when the first saturates, and Cloudflare advertises 100 in the `SETTINGS_MAX_CONCURRENT_STREAMS` it sends on every connection (`nghttp -nv https://<domain>/` reads what a given zone offers).
+`--r2-connections` (default 1) raises that ceiling by holding several clients and picking one per attempt — which also means a retry leaves the connection that just failed, and a dropped connection no longer fails every GET riding it at once.
+The pick is work-conserving: a connection that has a free permit, searched from a rotating cursor, so the shared cap is not partitioned into per-connection budgets that queue independently. A fetch waits only when every connection is full.
+`--r2-max-concurrent-requests` remains the cap across all connections, split evenly and rounded up, so the value to keep at or below the stream limit is the per-connection share rather than the total; the fetcher warns at startup when that share exceeds it, and `debug_trace_r2_connections` publishes the count.
+A count of zero, a non-numeric or blank one, one set alongside the S3 endpoint (whose HTTP/1.1 pool already opens a socket per in-flight GET), and one larger than the cap it divides are each rejected at startup by name — the last because more connections than permits leaves some of them permanently idle.
+The configured target is published as the constant-1 gauge `debug_trace_r2_target_info{target}` (`r2_target_info` on the validator), so the target-less R2 series can be attributed to one target or the other during a rollout.
+Whether the domain actually delivered HTTP/2 is a separate question — selection is pure ALPN, so a misconfigured zone degrades to HTTP/1.1 with the h2 tuning inert — and is answered by `..._r2_negotiated_http_version_info{version}` plus a one-time warning naming the protocol that was negotiated.
+Any single witness-chain RPC attempt under a deadline is additionally capped at the tightest of: half the witness stage budget, the global per-attempt timeout, and — only while the round still has an untried provider to rotate to — half of what the call still has as the attempt starts (recomputed after any permit wait).
+The round's last hop, and every hop of a single-provider chain, takes the remainder whole under the ceiling instead, so a stalled endpoint (or a saturated concurrency permit — waits are deadline-bounded too) can never consume the stage while a rotation is still worth reserving for, and a slow-but-honest transfer is never structurally condemned; the witness decode — and `eth_getBlock`'s integrity verification, which runs on the blocking pool — runs outside the attempt window, bounded by the request deadline alone.
+`--r2-max-concurrent-requests` caps in-flight GETs separately from `--witness-max-concurrent-requests` — the RPC cap sizes a shared gateway, R2 tolerates far more.
+
+**Admission and response-size knobs** (each also settable via its `DEBUG_TRACE_SERVER_*` env var):
+- `--admission-max-concurrent`: Requests that may fetch and replay a block at once (default: 640; must be at least 1).
+- `--admission-max-queue`: Requests that may wait for a permit on top of those executing (default: 8192; `0` means execute-or-shed).
+- `--admission-heavy-max-concurrent`: Concurrent memory-hungry tracer requests (default: 8; sized from memory, not throughput).
+- `--admission-disabled`: Kill switch restoring unbounded concurrent work.
+- `--max-response-size` / `--max-batch-response-size`: Caps on one reply body and on a whole assembled batch response (defaults: 256MB / 1GB).
+- `--admin-addr`: Loopback-only listener for `admin_*` retuning (off unless set).
+
+`--admission-max-concurrent` + `--admission-max-queue` must be at least `--batch-item-concurrency`, and `--max-batch-response-size` at least `--max-response-size`; both are checked at startup and named in the error.
+
+**Witness routing and sync knobs** (each also settable via its `DEBUG_TRACE_SERVER_*` env var):
+- `--witness-local-window`: Block-age threshold for the historical witness route (default: 4096; should match the generator's `BACKUP`).
+- `--witness-old-block-timeout`: Witness-stage budget in seconds for blocks at or below the local tip (defaults to the full `--witness-timeout` budget, tracking it when raised; lower it to fail fast on pruned blocks).
+- `--tip-buffer`: Stay this many blocks behind the upstream head during chain sync so fetches don't race the witness generator (default: 2; must be smaller than `--blocks-to-keep`).
+
+### Environment Variables
+
+Each command-line flag has an equivalent environment variable:
+
+- `STATELESS_VALIDATOR_DATA_DIR` → `--data-dir`
+- `STATELESS_VALIDATOR_RPC_ENDPOINT` → `--rpc-endpoint`
+- `STATELESS_VALIDATOR_WITNESS_ENDPOINT` → `--witness-endpoint`
+- `STATELESS_VALIDATOR_GENESIS_FILE` → `--genesis-file`
+- `STATELESS_VALIDATOR_START_BLOCK` → `--start-block`
+- `STATELESS_VALIDATOR_FORCE_ANCHOR` → `--force-anchor` (`true` to enable, `false` the same as unset)
+- `STATELESS_VALIDATOR_END_BLOCK` → `--end-block`
+- `STATELESS_VALIDATOR_BLOCK_LIST` / `_BLOCK_LIST_TIMEOUT_SECS` / `_BLOCK_LIST_CONCURRENCY` / `_BLOCK_LIST_OUTPUT_DIR` → `--block-list*`
+- `STATELESS_VALIDATOR_R2_ENDPOINT` / `_R2_BUCKET` / `_R2_ACCESS_KEY_ID` / `_R2_SECRET_ACCESS_KEY` → `--r2-*` (the signed S3 target)
+- `STATELESS_VALIDATOR_R2_CUSTOM_DOMAIN` / `_R2_ACCESS_CLIENT_ID` / `_R2_ACCESS_CLIENT_SECRET` → `--r2-custom-domain` and its Cloudflare Access pair
+- `STATELESS_VALIDATOR_REPORT_VALIDATION_ENDPOINT` → `--report-validation-endpoint`
+- `STATELESS_VALIDATOR_METRICS_ENABLED` → `--metrics-enabled` (set to `true` to enable)
+- `STATELESS_VALIDATOR_METRICS_PORT` → `--metrics-port`
+
+**Logging Configuration:**
+- `STATELESS_LOG_FILE_DIRECTORY`: Directory for log files; enables file logging when set.
+  Files rotate daily as `stateless-validator.log.YYYY-MM-DD`.
+- `STATELESS_LOG_FILE`: Log level for file output (debug|info|warn|error, default: debug)
+- `STATELESS_LOG_STDOUT`: Log level for console output (debug|info|warn|error, default: info)
+
+Command-line arguments take precedence over environment variables.
+
+### Getting Started
+
+The stateless validator requires a trusted starting point and hardfork configuration for security.
+On first run, you must specify both a genesis file and a trusted block hash:
+
+```bash
+cargo run --bin stateless-validator -- \
+  --data-dir ./validator-data \
+  --rpc-endpoint https://your-rpc-endpoint.com \
+  --witness-endpoint https://your-witness-endpoint.com \
+  --genesis-file /path/to/genesis.json \
+  --start-block 0x1234567890abcdef...
+```
+
+The validator will:
+1. Load the genesis file and extract hardfork activation rules, then store this configuration in the database
+2. Fetch the specified block from the RPC endpoint
+3. Initialize the canonical chain database with this trusted block
+4. Begin validation from this anchor point, applying the appropriate EVM rules based on hardfork activation
+
+For subsequent runs, omit both `--genesis-file` and `--start-block` to resume from the existing database:
+
+```bash
+cargo run --bin stateless-validator -- \
+  --data-dir ./validator-data \
+  --rpc-endpoint https://your-rpc-endpoint.com \
+  --witness-endpoint https://your-witness-endpoint.com
+```
+
+### Restarting and re-anchoring
+
+The database records the validated chain `(anchor, validated]`: the trusted anchor, and the highest block validated above it (none right after anchoring).
+Startup treats the anchor flags as follows:
+
+| Database | Flags | Result |
+| --- | --- | --- |
+| no validated chain | `--start-block <hash>` (with or without `--force-anchor`) | anchors at the block; validation starts above it |
+| no validated chain | none | startup fails: a trusted starting point is required |
+| validated chain | none | resumes above `validated` (or above the anchor if nothing is validated yet) |
+| validated chain | `--start-block <hash> --force-anchor` | replaces the chain: anchors at the block, clears `validated` |
+| any | `--start-block` alone on a stored chain, or `--force-anchor` alone | startup fails |
+
+When the remote chain reorgs or rewinds — while the validator runs or while it is down — the validator rewinds its validated chain to the fork point on its own and validates again from there:
+
+- A fork above the anchor that the retained canonical-chain rows (`--canonical-chain-max-length`) still cover rewinds `validated` to the fork point, or to nothing when the fork point is the anchor.
+- A fork below those rows but above the anchor rewinds to the anchor, which is kept: every block above it is validated again.
+- A fork below the anchor halts the validator, since it keeps no block hashes below its anchor to locate the fork with and a new anchor is a trust decision.
+  The error names the remote head; restart with `--start-block <hash> --force-anchor` on a trusted block of the current chain.
+
+## Scope and Trust Model
+
+The stateless validator acts as an **execution client**: it fetches block data from an RPC endpoint and re-executes each block to verify that the **state transition function (STF)** is correct.
+It ensures that the computed post-state matches the commitments included in the block, providing execution correctness without maintaining a local state database.
+
+However, the stateless validator **does not verify that the blocks it receives form the canonical chain**.
+It will validate whatever sequence of blocks is supplied, including forks, stale heads, or maliciously injected data.
+Determining canonicality requires a **consensus client**.
+For OP-Stack chains, this role is performed by `op-node`, which derives the canonical L2 chain from L1 and the chain's data-availability (DA) layer and handles reorgs.
+
+### Trust-Minimized Deployment
+
+To avoid trusting a third-party RPC provider to serve you the correct blocks, the recommended setup is:
+
+* **Run `op-node`** to derive the canonical L2 chain from L1 + DA
+* **Run a MegaETH replica node** to efficiently sync with the sequencer and serve the derived L2 blocks
+* **Run the stateless validator** to independently verify every block's STF
+
+In this configuration, `op-node` ensures you see the correct canonical chain, the replica node provides local block data, and the stateless validator verifies correctness.
+This forms a **trust-minimized pipeline**: you rely only on L1 + DA (the rollup's security assumptions) and your own local software, not an external RPC endpoint.
+
+## Architecture
+
+### Pipeline
+
+Both binaries share a generic three-stage pipeline defined in `stateless-core`:
+
+```
+ Stage 1: FETCH          block_fetcher
+                          Streams blocks + witnesses from RPC via a bounded in-flight window
+                          ↓ channel
+ Stage 2: PROCESS        N workers × BlockProcessor
+                          Validator: validate_block (EVM execution)
+                          Trace server: pass-through (no validation)
+                          ↓ channel
+ Stage 3: ADVANCE        chain_advancer
+                          Reorders out-of-order results (BTreeMap)
+                          Verifies parent-hash continuity
+                          Detects reorgs → rollback + restart
+                          Persists via ChainStore::advance_chain() (on the blocking pool)
+
+ Outer loop (run_pipeline):
+   Reorg → ReorgResolver decides floor → rollback → restart pipeline
+   Stale detection (optional) → reset anchor → restart
+```
+
+The pipeline is configured via `PipelineConfig` and customized through trait implementations:
+- `BlockProcessor`: Processing logic per block (validation or pass-through)
+- `PipelineHooks`: Callbacks for advance/reorg/stale events
+- `ProcessedBlock`: Output type of the processing stage
+- `ReorgResolver`: Decides the rollback floor on a detected reorg (`BisectResolver` walks local history; embedders can supply an externally-resolved floor)
+
+### Key Source Files
+
+| File                                                                                           | Purpose                                                                                                     |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `crates/stateless-core/src/pipeline/{mod,config,traits,fetcher,divergence,advancer,worker}.rs` | Generic three-stage pipeline split by responsibility                                                        |
+| `bin/stateless-validator/src/replay.rs`                                                        | `--block-list` mode: bounded-concurrency fetch + validate, results and retry files |
+| `crates/stateless-core/src/executor.rs`                                                        | Block validation and EVM replay                                                                             |
+| `crates/stateless-core/src/db.rs`                                                              | Shared storage traits: `ChainStore`, `ContractStore`, `StoreError` (scenario stores live in their binaries) |
+| `crates/stateless-core/src/evm_database.rs`                                                    | `WitnessDatabase` implementing `revm::DatabaseRef`                                                          |
+| `crates/stateless-core/src/withdrawals.rs`                                                     | Withdrawal MPT witness verification (witness linearized into `alloy_trie::HashBuilder`)                                                              |
+| `crates/stateless-db/src/{lib,tables,helpers,serialize,cache}.rs`                              | Shared redb tables, helpers, serialization, and bounded `ContractCache`                                     |
+| `crates/stateless-common/src/rpc_client.rs`                                                    | `RpcClient`: multi-endpoint HTTP client for blocks, witnesses, and bytecode                                 |
+| `crates/stateless-common/src/metrics.rs`                                                       | `RpcMethod`, `RpcMetrics`, `RpcClientConfig`                                                                |
+| `crates/stateless-common/src/witness_size.rs`                                                  | `WitnessSizeBreakdown` + `estimate_witness_size` for RPC and trace-server metrics                           |
+| `crates/stateless-test-utils/src/fixtures.rs`                                                  | `TestFixtures` loader (blocks, SALT/MPT witnesses, contracts, genesis)                                      |
+| `bin/stateless-validator/src/{main,app,runner,chain_sync,validator_db,metrics}.rs`             | Thin entry, CLI/startup wiring, pipeline+reporter, fetcher/processor, DB                                    |
+| `bin/debug-trace-server/src/chain_sync.rs`                                                     | `TraceFetcher`, `TraceProcessor`, `TraceHooks`                                                              |
+| `bin/debug-trace-server/src/rpc_service.rs`                                                    | RPC method definitions and handlers                                                                         |
+| `bin/debug-trace-server/src/data_provider.rs`                                                  | Block data fetching with single-flight coalescing                                                           |
+| `bin/debug-trace-server/src/block_data_cache.rs`                                               | Bounded in-memory `BlockData` cache keyed by block hash                                                     |
+| `bin/debug-trace-server/src/server_db.rs`                                                      | Defines + implements the bin-local `BlockStore` trait, backed by `stateless-db`                             |
+
+### Database
+
+The validator and trace server each have their own `redb`-backed database, sharing common table definitions and helpers from the `stateless-db` crate:
+
+| Table             | Key                        | Value                                                  | Used By                      |
+| ----------------- | -------------------------- | ------------------------------------------------------ | ---------------------------- |
+| `ANCHOR_BLOCK`    | `"anchor"`                 | `(BlockNumber, BlockHash, StateRoot, WithdrawalsRoot)` | Both                         |
+| `CANONICAL_CHAIN` | `BlockNumber`              | `(BlockHash, StateRoot, WithdrawalsRoot)`              | Both                         |
+| `CONTRACTS`       | `CodeHash`                 | Bincode+LZ4 `Bytecode`                                 | Both                         |
+| `GENESIS_CONFIG`  | `"genesis"`                | JSON `Genesis`                                         | Validator                    |
+| `BLOCK_DATA`      | `BlockHash`                | JSON `Block<Transaction>`                              | Trace server                 |
+| `WITNESSES`       | `BlockHash`                | Bincode+LZ4 `LightWitness`                             | Trace server                 |
+| `BLOCK_RECORDS`   | `(BlockNumber, BlockHash)` | `()`                                                   | Trace server (pruning index) |
+
+In both binaries, `CANONICAL_CHAIN` is a bounded contiguous window — exactly the range reorg bisection trusts.
+`CONTRACTS` rows are self-validating on read: an entry that fails to decode or whose bytecode no longer hashes back to its key (disk corruption, or a `Bytecode` encoding change in a dependency upgrade) is treated as a cache miss and transparently re-fetched from RPC, so existing data dirs survive release upgrades without manual clearing.
+
+### SALT Witness Cryptography
+
+SALT (Small Authentication Large Trie) is the authenticated key-value store that replaces Merkle Patricia Tries for MegaETH state.
+It uses a static 4-level, 256-ary complete tree with ~16.7 million leaf nodes (buckets), each containing a dynamic strongly history-independent (SHI) hash table.
+Cryptographic commitments use the **Banderwagon** elliptic curve with **IPA** (Inner Product Argument) vector commitments, enabling compact aggregatable proofs.
+
+During validation, the witness is verified against the block's pre-state root, `WitnessDatabase` serves state reads from the verified witness during EVM execution, and post-execution state deltas are propagated up the trie (max 4 levels) to compute and verify the post-state root.
+
+## Metrics
+
+The validator exposes Prometheus-compatible metrics when `--metrics-enabled` is set.
+Metrics are available at `http://0.0.0.0:<port>/metrics`.
+
+| Metric                                                  | Type      | Description                                         |
+| ------------------------------------------------------- | --------- | --------------------------------------------------- |
+| `stateless_validator_block_validation_time_seconds`     | Histogram | Block validation time                               |
+| `stateless_validator_witness_verification_time_seconds` | Histogram | Witness verification time                           |
+| `stateless_validator_block_replay_time_seconds`         | Histogram | EVM execution time                                  |
+| `stateless_validator_salt_update_time_seconds`          | Histogram | SALT update time                                    |
+| `stateless_validator_transactions_total`                | Counter   | Total transactions validated                        |
+| `stateless_validator_gas_used_total`                    | Counter   | Total gas used in validated blocks                  |
+| `stateless_validator_block_state_reads`                 | Histogram | State reads per block                               |
+| `stateless_validator_block_state_writes`                | Histogram | State writes per block                              |
+| `stateless_validator_worker_tasks_completed_total`      | Counter   | Tasks completed per worker (with `worker_id` label) |
+| `stateless_validator_worker_tasks_failed_total`         | Counter   | Tasks failed per worker (with `worker_id` label)    |
+| `stateless_validator_local_chain_height`                | Gauge     | Current height of local chain                       |
+| `stateless_validator_remote_chain_height`               | Gauge     | Current height of remote chain                      |
+| `stateless_validator_validation_lag`                    | Gauge     | Blocks pending validation (remote - local)          |
+| `stateless_validator_reorgs_detected_total`             | Counter   | Chain reorgs detected                               |
+| `stateless_validator_reorg_depth`                       | Histogram | Depth of chain reorganizations                      |
+| `stateless_validator_rpc_requests_total`                | Counter   | Total RPC requests (with `method` label)            |
+| `stateless_validator_rpc_errors_total`                  | Counter   | RPC errors (with `method` label)                    |
+| `stateless_validator_rpc_retry_attempts_total`          | Counter   | RPC transient retries (with `method` label)         |
+| `stateless_validator_validated_chain_reports_total`     | Counter   | `mega_setValidatedChain` reports sent (with `outcome` label: `accepted`, `refused` — the receiver lacks a block of the chain on its canonical chain — or `failed`); live with `--report-validation-endpoint` |
+| `stateless_validator_reported_validated_height`         | Gauge     | Validated block of the last chain the receiver accepted, 0 until one is; flat while `local_chain_height` advances means reports are not landing |
+| `stateless_validator_witness_fetch_r2_time_seconds`     | Histogram | R2 witness fetch + decode time                      |
+| `stateless_validator_r2_witness_retry_attempts_total`   | Counter   | R2 witness GET retries (before the final outcome)   |
+| `stateless_validator_r2_witness_errors_total`           | Counter   | Failed R2 witness fetches, each one block that fell back to RPC (with `kind` label; `missing` is a hole below the frontier window) |
+| `stateless_validator_r2_witness_frontier_misses_total`  | Counter   | Near-tip misses where the uploader has not reached the block yet; routine on a tip-following run, kept off the error counter, and its rate is the signal there |
+| `stateless_validator_r2_target_info`                    | Gauge     | Configured R2 target, constant 1 (with `target` label) |
+| `stateless_validator_r2_negotiated_http_version_info`   | Gauge     | Protocol the custom domain negotiated, constant 1 (with `version` label) |
+| `stateless_validator_r2_connections`                    | Gauge     | HTTP/2 connections the custom-domain target spreads GETs over |
+| `stateless_validator_contract_cache_hits_total`         | Counter   | Contract cache hits                                 |
+| `stateless_validator_contract_cache_misses_total`       | Counter   | Contract cache misses                               |
+
+## Development
+
+### Testing
+
+```bash
+cargo test                                    # all tests
+cargo test -p stateless-core                  # core crate only
+cargo test -p stateless-core -- test_name     # single test
+```
+
+### Linting
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features
+cargo clippy -p coverage-replayer --all-targets --all-features -- --cfg coverage_replayer_instrumented
+cargo sort --check --workspace --grouped --order package,workspace,lints,profile,bin,benches,dependencies,dev-dependencies,features
+```
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
+
+at your option.
+
+Every crate directory links both license texts to the root files; `cargo package` and `cargo vendor` resolve the links, so a packaged or vendored crate keeps the full texts.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
