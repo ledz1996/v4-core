@@ -1,6 +1,6 @@
 # All findings
 
-137 findings on record after cycle 16, in-scope ones first.
+137 findings on record after cycle 17, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -1351,45 +1351,6 @@ Sources:
 - https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/params/protocol_params.go (Polygon MaxTxGas 1 << 25)
 - https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/protocol_params.go (BNB Smart Chain MaxTxGas 1 << 24 (read in cycle 8))
 
-## F-133. Follower nodes on OP Mainnet, Base, Zora, World Chain, Celo, X Layer and reth-bsc validate blocks through an execution cache with the stale destroyed-account branch
-
-Low severity, plausible. Effect: degrade. Who can trigger it: any account. Networks: Optimism, Base, Zora, Worldchain, Celo, X Layer, BNB Smart Chain.
-
-What differs on the network: The builds the public endpoints report pin reth revisions with the old branch: op-reth v2.8.1 (OP Mainnet), conduit-op-reth v2.5.1 (Zora) and world-chain v2.8.2 pin ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1, cached_state.rs lines 1286-1305); Base pins base/reth 9e380dd (lines 1278-1297); Celo pins celo-org/reth 74cc8bb (lines 863-882); X Layer v0.0.7 pins okx/reth 81573d2 (lines 904-923); reth-bsc v0.1.4-hotfix pins bnb-chain/reth 3b2bd02 (lines 863-882). Engine tree validation of newPayload reads through this cache by default on all of them.
-
-How it meets the code: On a follower, a stale word from the branch is read while the node re-executes a canonical block. A different read makes the state root, receipts root or gas used differ from the header, so the node rejects a valid block and stops following until restarted, because the cache is in memory. It does not commit wrong state. The same accounts as in the producing-path finding are the only ones that can be read stale, so no read made by the PoolManager, or by a token, hook, router, PositionManager or Permit2 that existed before the block, changes (src/PoolManager.sol:279-288, 349-364). The trigger needs a cached word for an address without code before the block that destroys and re-creates it; I could not trace how an ordinary block produces that word on these builds.
-
-What is at risk: No PoolManager funds move. A stalled RPC node shows an old head to the users and integrations that read from it.
-
-What it takes: A node operator runs one of the listed builds as a validating follower, and the trigger condition above holds.
-
-What can be done: Operators upgrade to a base with reth pull request 28148. Integrations compare block heads across two endpoints before acting.
-
-This entry adds to F-124.
-
-Rated low by the verifier. The verifier's reading: followers run default software and any account could send the trigger transactions if the seeding read exists. The effect is a follower stall with no path to PoolManager funds.
-
-Second reviewer's corrections: actor: unprivileged. The followers run default software, so any account could send the trigger transactions if the seeding link exists, and no operator needs to act. The effect is still an RPC follower stall with no path to PoolManager funds, so the finding stays out of scope for funds. Severity is low (an operational hazard) rather than info. The OP Mainnet endpoint returned only the v0.0.0-dev-unknown build on my query, so its pin to op-v2.6.0-2 is not confirmed for current requests.
-
-Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-364`.
-
-Sources:
-
-- https://raw.githubusercontent.com/ethereum-optimism/reth/3c5f2f11c4e5a5647e6e911cd131ccf1bada4f25/crates/engine/execution-cache/src/cached_state.rs (lines 1286-1305: old branch in ethereum-optimism/reth op-v2.6.0-2)
-- https://raw.githubusercontent.com/okx/reth/81573d2c7d806d5df9ff2d512dd000c2bf542b1b/crates/engine/execution-cache/src/cached_state.rs (lines 904-923: old branch in okx/reth 81573d2)
-- https://raw.githubusercontent.com/bnb-chain/reth/3b2bd02006ef8970c862d2af5dbc98a92f58d57d/crates/engine/execution-cache/src/cached_state.rs (lines 863-882: old branch in bnb-chain/reth 3b2bd02, identical to reth v2.2.0)
-- https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/execution-cache/src/cached_state.rs (lines 1278-1297: old branch)
-- https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs (lines 863-882: old branch)
-- https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.8.1/rust/Cargo.lock (op-reth v2.8.1 pins reth-execution-cache from ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1))
-- https://raw.githubusercontent.com/conduitxyz/conduit-op-reth/v2.5.1/Cargo.lock (conduit-op-reth v2.5.1 pins op-v2.6.0-2)
-- https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/Cargo.lock (world-chain v2.8.2 pins op-v2.6.0-2)
-- https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7/Cargo.lock (xlayer-reth v0.0.7 pins okx/reth 81573d2)
-- https://raw.githubusercontent.com/bnb-chain/reth-bsc/v0.1.4-hotfix/Cargo.lock (reth-bsc v0.1.4-hotfix pins bnb-chain/reth v0.1.4 (3b2bd02))
-- https://mainnet.optimism.io (web3_clientVersion on 2026-11-24 returned op-reth/v2.8.1-72207294 and, on other requests, op-reth/v0.0.0-dev-unknown)
-- https://rpc.zora.energy/ (web3_clientVersion returned conduit-op-reth/v2.5.1-8f0ccac)
-- https://worldchain-mainnet.g.alchemy.com/public (web3_clientVersion returned world-chain/v2.8.2-9596311)
-- https://rpc.xlayer.tech (web3_clientVersion returned reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7)
-
 ## F-135. From Tempo T15 a take to a zone deposit address is forwarded to a zone portal, and a failed deposit returns to the PoolManager, where an account with callbacks in the same portal batch can book it as its own payment
 
 Low severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: Tempo.
@@ -1683,6 +1644,45 @@ Sources:
 - https://raw.githubusercontent.com/base/base/6efa75662b57c578d897fea2449035636f6ad9ad/crates/proof/zk/programs/succinct/Cargo.toml (SP1 6.10.0, sp1-patches for tiny-keccak, sha2, sha3 0.10.8 and curves, riscv64im-succinct-zkvm-elf toolchain.)
 - https://ethereum-rpc.publicnode.com (eth_call at block 26,487,041: DGF 0x43edb88c gameImpls(621) = 0xc08b8ffa, PROOF_THRESHOLD 1, TEE and ZK verifiers not nullified, ASR 0x909f6cf4 respectedGameType 621 (research/network-risk/cycles/013/theme-proof-builds-2.work/base/aggverifier.json, celo/dgf.json, celo/access.json).)
 - file:research/network-risk/cycles/013/theme-proof-builds-2.work/base/base-rv64-vectors.json (0 mismatches on the RV64IM build; planted faults caught.)
+
+## F-133. Follower nodes on OP Mainnet, Base, Zora, World Chain, Celo, X Layer and reth-bsc validate blocks through an execution cache with the stale destroyed-account branch
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: Optimism, Base, Zora, Worldchain, Celo, X Layer, BNB Smart Chain.
+
+What differs on the network: The builds the public endpoints report pin reth revisions with the old branch: op-reth v2.8.1 (OP Mainnet), conduit-op-reth v2.5.1 (Zora) and world-chain v2.8.2 pin ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1, cached_state.rs lines 1286-1305); Base pins base/reth 9e380dd (lines 1278-1297); Celo pins celo-org/reth 74cc8bb (lines 863-882); X Layer v0.0.7 pins okx/reth 81573d2 (lines 904-923); reth-bsc v0.1.4-hotfix pins bnb-chain/reth 3b2bd02 (lines 863-882). Engine tree validation of newPayload reads through this cache by default on all of them.
+
+How it meets the code: On a follower, a stale word from the branch is read while the node re-executes a canonical block. A different read makes the state root, receipts root or gas used differ from the header, so the node rejects a valid block and stops following until restarted, because the cache is in memory. It does not commit wrong state. The same accounts as in the producing-path finding are the only ones that can be read stale, so no read made by the PoolManager, or by a token, hook, router, PositionManager or Permit2 that existed before the block, changes (src/PoolManager.sol:279-288, 349-364). The trigger needs a cached word for an address without code before the block that destroys and re-creates it; I could not trace how an ordinary block produces that word on these builds.
+
+What is at risk: No PoolManager funds move. A stalled RPC node shows an old head to the users and integrations that read from it.
+
+What it takes: A node operator runs one of the listed builds as a validating follower, and the trigger condition above holds.
+
+What can be done: Operators upgrade to a base with reth pull request 28148. Integrations compare block heads across two endpoints before acting.
+
+This entry adds to F-124.
+
+Rated low and plausible until cycle 17. The cycle 17 reading of celo-reth, X Layer reth v0.0.7 and reth-bsc, confirmed by its verifier, finds no default path that stores a storage word of an address without code in the cache, the same result cycle 16 reached for revm 42.0.0. Rated info and confirmed: the stale branch exists, and nothing seeds it.
+
+Second reviewer's corrections: actor: unprivileged. The followers run default software, so any account could send the trigger transactions if the seeding link exists, and no operator needs to act. The effect is still an RPC follower stall with no path to PoolManager funds, so the finding stays out of scope for funds. Severity is low (an operational hazard) rather than info. The OP Mainnet endpoint returned only the v0.0.0-dev-unknown build on my query, so its pin to op-v2.6.0-2 is not confirmed for current requests.
+
+Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-364`.
+
+Sources:
+
+- https://raw.githubusercontent.com/ethereum-optimism/reth/3c5f2f11c4e5a5647e6e911cd131ccf1bada4f25/crates/engine/execution-cache/src/cached_state.rs (lines 1286-1305: old branch in ethereum-optimism/reth op-v2.6.0-2)
+- https://raw.githubusercontent.com/okx/reth/81573d2c7d806d5df9ff2d512dd000c2bf542b1b/crates/engine/execution-cache/src/cached_state.rs (lines 904-923: old branch in okx/reth 81573d2)
+- https://raw.githubusercontent.com/bnb-chain/reth/3b2bd02006ef8970c862d2af5dbc98a92f58d57d/crates/engine/execution-cache/src/cached_state.rs (lines 863-882: old branch in bnb-chain/reth 3b2bd02, identical to reth v2.2.0)
+- https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/execution-cache/src/cached_state.rs (lines 1278-1297: old branch)
+- https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs (lines 863-882: old branch)
+- https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.8.1/rust/Cargo.lock (op-reth v2.8.1 pins reth-execution-cache from ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1))
+- https://raw.githubusercontent.com/conduitxyz/conduit-op-reth/v2.5.1/Cargo.lock (conduit-op-reth v2.5.1 pins op-v2.6.0-2)
+- https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/Cargo.lock (world-chain v2.8.2 pins op-v2.6.0-2)
+- https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7/Cargo.lock (xlayer-reth v0.0.7 pins okx/reth 81573d2)
+- https://raw.githubusercontent.com/bnb-chain/reth-bsc/v0.1.4-hotfix/Cargo.lock (reth-bsc v0.1.4-hotfix pins bnb-chain/reth v0.1.4 (3b2bd02))
+- https://mainnet.optimism.io (web3_clientVersion on 2026-11-24 returned op-reth/v2.8.1-72207294 and, on other requests, op-reth/v0.0.0-dev-unknown)
+- https://rpc.zora.energy/ (web3_clientVersion returned conduit-op-reth/v2.5.1-8f0ccac)
+- https://worldchain-mainnet.g.alchemy.com/public (web3_clientVersion returned world-chain/v2.8.2-9596311)
+- https://rpc.xlayer.tech (web3_clientVersion returned reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7)
 
 ## F-003. A Stylus program used as a hook or token stops answering calls on expiry or a Stylus version change, and activation is blocked
 
@@ -3126,39 +3126,13 @@ Sources:
 - https://docs.optimism.io/op-stack/protocol/hardforks/karst (op-geth does not support Karst)
 - https://forno.celo.org web3_clientVersion batched with eth_call and eth_getBlockByNumber, 2026-11-24 (both backends answer on the public endpoint and agree today (research/network-risk/cycles/009/op-stack-custom-gas.work/out/forno-heads.json))
 
-## F-132. Base and Celo block builders read through the reth execution cache that still has the stale branch for a destroyed account without code, when the operator enables cache sharing
+## F-117. Six go-ethereum family nodes run a Go toolchain with a published silent dead store miscompile, and no function on the opcode or state path has the triggering shape
 
-Low severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Celo.
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Ethereum, Arbitrum One, Robinhood Chain, Polygon, BNB Smart Chain, Avalanche.
 
-What differs on the network: Celo's endpoint still reports reth/v2.2.0-74cc8bb, the celo-org/reth revision with the old insert_state branch for a destroyed account whose original info had no code. The block builder reads through the execution cache only when the engine is started with --engine.share-execution-cache-with-payload-builder, whose default is false.
+What differs on the network: Go issue 81863: from Go 1.26.0 through go1.26.10 and from Go 1.27.0 through go1.27.3, the dead auto elimination pass attributes a CondSelect of two local addresses to its first operand only, so a store through a pointer that a branch chose between two non-escaping locals is deleted when the first local is never read, even if the other one is. It applies on every architecture whose compiler emits CondSelect (amd64, arm64, ppc64le, loong64, wasm). The fix is go1.26.11 and go1.27.4, released 2026-11-10. Today Arbitrum One answers as nitro v3.13.0-rc.9 linux-arm64 go1.27.3, Robinhood Chain as the same release on linux-arm64 and linux-amd64 with go1.27.3, Polygon (publicnode) as five bor v2.11.1-private builds with go1.26.10, BNB Smart Chain as Geth/v1.8.2 linux-amd64 go1.26.10, and Avalanche as avalanchego 1.15.3 go=1.26.10. Elysium reports go1.25.12 and the Celo op-geth backend go1.24.13, which predate the faulty pass order. Cycle 17 addition, Ethereum: the official geth v1.17.9 and v1.17.10 builds pin Go 1.27.2 and 1.27.3, both inside the range of the same issue. These releases also run every untraced execution (eth_call, block import, block building) through a new generated switch, execUntraced, while traced calls still use the old table loop, so a step trace no longer shows the loop that produces blocks.
 
-How it meets the code: 1. Nothing about the code path changed since cycle 14: the endpoint reports the same build and celo-reth v1.0.10 only patched tracing. 2. The public node setup that Celo publishes starts celo-reth without the sharing flag, so follower and RPC nodes built from it never hand the cache to a builder. The sequencer's own start parameters are not published. 3. The PoolManager's storage is never on the faulty branch, because it has code from deployment and cannot be destroyed, and transient storage (src/libraries/CurrencyDelta.sol:21-39, src/libraries/CurrencyReserves.sol:17-36) is not cached across transactions. Only a contract created in the block that destroyed its codeless address can read a stale word, so only an attacker-made token or hook could be affected, and such a contract can misreport balances to sync and settle (src/PoolManager.sol:279-288, 349-364) without any cache fault.
-
-What is at risk: No funds held by the PoolManager for other users move. If the flag is on at the sequencer and the trigger works, unsafe blocks could be published with a state that followers reject, and swaps and liquidity changes in them would be re-executed after the reorg.
-
-What it takes: The Celo sequencer operator runs with cache sharing enabled, and some read in an ordinary block caches a word for a codeless address that a later transaction in the block destroys and re-creates. Neither link is confirmed.
-
-What can be done: Celo upgrades celo-org/reth to a revision with the reth pull request 28148 fix, or keeps sharing off. Integrators wait for safe or finalized blocks before treating a fill as final.
-
-This entry adds to F-124.
-
-Second reviewer's corrections: The title still names Base, while this unit's entry lists only chain 42220; the Base half is held by the existing ledger entry. The follower validation path, which an unprivileged account could reach without the operator flag, is a separate existing finding (theme-reth-cache-drift, actor operator, severity info) and is not covered here.
-
-Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-364`, `src/libraries/CurrencyDelta.sol:21-39`.
-
-Sources:
-
-- https://forno.celo.org web3_clientVersion, 2026-11-24 (the endpoint still reports reth/v2.2.0-74cc8bb)
-- https://github.com/celo-org/celo-kona/releases (v1.0.10 of 20 November is the newest celo-reth release and only fixes SELFDESTRUCT tracing)
-- https://raw.githubusercontent.com/celo-org/celo-l2-node-docker-compose/main/scripts/start-op-reth.sh (the published node start script runs celo-reth without --engine.share-execution-cache-with-payload-builder)
-
-## F-117. Five go-ethereum family nodes run a Go toolchain with a published silent dead store miscompile, and no function on the opcode or state path has the triggering shape
-
-Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Arbitrum One, Robinhood Chain, Polygon, BNB Smart Chain, Avalanche.
-
-What differs on the network: Go issue 81863: from Go 1.26.0 through go1.26.10 and from Go 1.27.0 through go1.27.3, the dead auto elimination pass attributes a CondSelect of two local addresses to its first operand only, so a store through a pointer that a branch chose between two non-escaping locals is deleted when the first local is never read, even if the other one is. It applies on every architecture whose compiler emits CondSelect (amd64, arm64, ppc64le, loong64, wasm). The fix is go1.26.11 and go1.27.4, released 2026-11-10. Today Arbitrum One answers as nitro v3.13.0-rc.9 linux-arm64 go1.27.3, Robinhood Chain as the same release on linux-arm64 and linux-amd64 with go1.27.3, Polygon (publicnode) as five bor v2.11.1-private builds with go1.26.10, BNB Smart Chain as Geth/v1.8.2 linux-amd64 go1.26.10, and Avalanche as avalanchego 1.15.3 go=1.26.10. Elysium reports go1.25.12 and the Celo op-geth backend go1.24.13, which predate the faulty pass order.
-
-How it meets the code: The miscompile needs four things in one function after inlining: two stack allocated locals whose address is taken, a pointer that a side effect free if or if-else picks between their addresses, a store, zeroing or copy through that pointer and no load through it (branchelim refuses a CondSelect whose result feeds a load address), and a later direct read of the second local. A scan of holiman/uint256 v1.3.2 and v1.2.4 (all of uint256.go, mod.go, div.go, conversion.go, decimal.go) and of core/vm instructions.go, interpreter.go, stack.go, memory.go, evm.go, eips.go and core/state journal.go, transient_storage.go, statedb.go, state_object.go, access_list.go of the nitro fork 0e44603, bsc v1.8.2, bor v2.11.1 and libevm d398bc4dbe41 found no such function. The only branch selected pointers are: uint256 AddMod (x = &tmpX, y = &tmpY, v1.3.2 lines 240-245), where one operand is the caller's pointer, the pointers are only loaded from, and branchelim therefore keeps the Phi; SMod and SDiv, where the branch calls Neg and so is not side effect free and the pointer is only passed to Mod or Div; DivMod (m = new(Int).Set(m)) with a side effect in the branch; bor's interrupt flag in Run, loaded atomically and passed to runSwitch; the jump table choice in evm.go, which takes addresses of globals; and journal mutation state, which is heap memory. Sqrt in v1.2.4 swaps two pointers in a loop, which branchelim does not touch, and no opcode calls Sqrt. A dropped store in these functions would change the ADDMOD, SDIV or SMOD result, so those operands were run: 6,000 ADDMOD vectors with a modulus of at least 2^192 and each operand above, equal to or below the modulus, 6,112 SDIV and SMOD vectors over all sign pairs, plus the 99,985 battery and 85,544 targeted vectors. On each of the five networks every request was a JSON-RPC batch of web3_clientVersion and eth_call. There was no mismatch on any build. The PoolManager reaches SDIV and SMOD in TickBitmap.compress and Pool.tickSpacingToMaxLiquidityPerTick and MULMOD in FullMath and SqrtPriceMath; ADDMOD appears only in the compiler's metadata trailer.
+How it meets the code: The miscompile needs four things in one function after inlining: two stack allocated locals whose address is taken, a pointer that a side effect free if or if-else picks between their addresses, a store, zeroing or copy through that pointer and no load through it (branchelim refuses a CondSelect whose result feeds a load address), and a later direct read of the second local. A scan of holiman/uint256 v1.3.2 and v1.2.4 (all of uint256.go, mod.go, div.go, conversion.go, decimal.go) and of core/vm instructions.go, interpreter.go, stack.go, memory.go, evm.go, eips.go and core/state journal.go, transient_storage.go, statedb.go, state_object.go, access_list.go of the nitro fork 0e44603, bsc v1.8.2, bor v2.11.1 and libevm d398bc4dbe41 found no such function. The only branch selected pointers are: uint256 AddMod (x = &tmpX, y = &tmpY, v1.3.2 lines 240-245), where one operand is the caller's pointer, the pointers are only loaded from, and branchelim therefore keeps the Phi; SMod and SDiv, where the branch calls Neg and so is not side effect free and the pointer is only passed to Mod or Div; DivMod (m = new(Int).Set(m)) with a side effect in the branch; bor's interrupt flag in Run, loaded atomically and passed to runSwitch; the jump table choice in evm.go, which takes addresses of globals; and journal mutation state, which is heap memory. Sqrt in v1.2.4 swaps two pointers in a loop, which branchelim does not touch, and no opcode calls Sqrt. A dropped store in these functions would change the ADDMOD, SDIV or SMOD result, so those operands were run: 6,000 ADDMOD vectors with a modulus of at least 2^192 and each operand above, equal to or below the modulus, 6,112 SDIV and SMOD vectors over all sign pairs, plus the 99,985 battery and 85,544 targeted vectors. On each of the five networks every request was a JSON-RPC batch of web3_clientVersion and eth_call. There was no mismatch on any build. The PoolManager reaches SDIV and SMOD in TickBitmap.compress and Pool.tickSpacingToMaxLiquidityPerTick and MULMOD in FullMath and SqrtPriceMath; ADDMOD appears only in the compiler's metadata trailer. Cycle 17 addition, Ethereum: a scan of geth v1.17.9 core/vm and core/state finds no function with the triggering shape, and the generated loop calls the same handler functions as the table loop. The battery, the targeted vectors and 232 PUSH, DUP and SWAP programs give the specified words on geth v1.17.9 built with go1.27.2 (blockpi endpoint). The verifier corrected two points: the fault also reaches go1.26 releases before its 1.26 backport, and the runs reported for a go1.25.14 build went through a gateway that answered only from reth and erigon in 30 samples, so only one geth toolchain has been tested. Whether go1.26.10, which bor, BNB Chain geth and avalanchego use, holds the backport is lead L-838.
 
 What is at risk: No path by which an ordinary account takes or freezes funds was found. If an unread function of the node held the shape, a node built with an affected toolchain would compute another state than one built with a fixed toolchain, which is a consensus fault of the operators and not something an attacker can aim at a pool through the PoolManager.
 
@@ -3182,6 +3156,12 @@ Sources:
 - https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go (uint256 v1.3.2 AddMod lines 215-266, udivrem 520-581, MulMod 720-750, SDiv 789-809, SMod 668-683, Lsh, Rsh, SRsh, ExtendSign 1042-1290: no store through a pointer selected between two locals.)
 - https://raw.githubusercontent.com/holiman/uint256/v1.2.4/uint256.go (uint256 v1.2.4 AddMod 198-249, SMod 636-651, Sqrt 1306-1340: same result.)
 - on-chain query: web3_clientVersion batched with each eth_call, 2026-11-24, research/network-risk/cycles/010/theme-go-miscompile.work/paired.json and research/network-risk/cycles/010/theme-go-miscompile.work/clientversions.json (Builds that answered: Arbitrum One linux-arm64 go1.27.3 (397 chunks); Robinhood Chain linux-arm64 and linux-amd64 go1.27.3 (393 chunks by both, 4 by one); Polygon five bor v2.11.1-private go1.26.10 builds; BSC Geth/v1.8.2 go1.26.10; Avalanche avalanchego 1.15.3 go=1.26.10. 197,641 vectors per network, 0 mismatches, 0 errors.)
+- https://raw.githubusercontent.com/ethereum/go-ethereum/v1.17.10/build/checksums.txt (geth v1.17.10 pins '# version:golang 1.27.3'; the same file at v1.17.9 pins 1.27.2 and at master 1.27.4.)
+- https://raw.githubusercontent.com/ethereum/go-ethereum/v1.17.9/core/vm/interpreter.go (Lines 126-137 select execTraced only when forceTableLoop, EIP-4762, ExtraEips or a tracer is set, and execUntraced otherwise.)
+- https://raw.githubusercontent.com/ethereum/go-ethereum/v1.17.9/core/vm/interpreter_gen.go (The generated loop with constant stack bounds and gas and named handler calls; the default case dispatches through the fork table.)
+- https://github.com/ethereum/go-ethereum/releases (v1.17.9 release notes: opcode dispatch 16% faster through a new inlined switch (#35638); v1.17.10: optimize DUP/SWAP dispatch (#35959).)
+- https://github.com/golang/go/issues/81863 (The miscompile, as recorded in F-117 (affected go1.27.0 to go1.27.3, fixed in go1.27.4).)
+- rpc: web3_clientVersion on https://ethereum.public.blockpi.network/v1/rpc/public and https://eth.api.pocket.network (Geth/v1.17.9-stable-9dffe6e9 with go1.27.2 and with go1.25.14.)
 
 ## F-118. MegaETH blocks are executed by a closed JIT executor that no public RPC node re-executes, so eth_call evidence speaks for a different EVM than the one that writes PoolManager state
 
@@ -3428,19 +3408,47 @@ Sources:
 - rpc debug_traceTransaction callTracer at rpc.monad.xyz, rpc1.monad.xyz, rpc-mainnet.monadinfra.com (results: research/network-risk/cycles/014/theme-monad-native-path.work/oogscan.json) (debug_traceTransaction callTracer over 1,582 failed transactions in blocks 125,115,001-125,118,000 at the endpoints of oogscan.py: 689 out-of-gas frames all status out of gas, 19 on the PoolManager, none reported as error)
 - rpc https://rpc.monad.xyz web3_clientVersion and debug_traceTransaction 0xd5d7b9bf9dc21f66a1186a11f4637a0c0acff3bb859e0e698d01ed891a027ebd on 2026-11-24 (Monad/0.16.7; stored frames returned by rpc.monad.xyz, rpc1, rpc2, rpc-mainnet.monadinfra.com and monad-mainnet.gateway.tatum.io; rpc3 and rpc.ankr.com refuse the method)
 
-## F-136. Elysium's node is built with an end-of-life Go release that lacks two amd64 compiler fixes, and no EVM result was found to depend on them
+## F-132. Base and Celo block builders read through the reth execution cache that still has the stale branch for a destroyed account without code, when the operator enables cache sharing
 
-Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Elysium.
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Celo.
 
-What differs on the network: The Elysium endpoint reports nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12. Go 1.25 left support when go1.27.0 shipped on 2026-08-19. go1.25.13 fixed, among others, issue 79874, where the prove pass emits a 32 bit slice mask for a 64 bit slice operation on targets that sign-extend 32 bit constants (amd64 named), so a slice with a start index of 2^32 or more advances too little, and issue 80517, where prove applies a fact before the point where it holds and drops a bounds check, shown on amd64 as a call through an out-of-range function table entry. Arbitrum One and Robinhood Chain run go1.27.3, which is inside the range of the separate F-117 fault.
+What differs on the network: Celo's endpoint still reports reth/v2.2.0-74cc8bb, the celo-org/reth revision with the old insert_state branch for a destroyed account whose original info had no code. The block builder reads through the execution cache only when the engine is started with --engine.share-execution-cache-with-payload-builder, whose default is false.
 
-How it meets the code: Both faults change behaviour only on unusual shapes. Issue 79874 needs a slice start of 2^32 or more that the compiler has proved in bounds. The interpreter never slices calldata, code, memory or return data with such an index: a copy or load with a larger offset is clamped to the data length or charged for memory expansion first, and a zero-length copy or hash at a large offset touches no slice. The new offsets.py vectors aim at exactly that region (offsets from 2^31 to 2^256-1 for CALLDATALOAD, CALLDATACOPY, CODECOPY, KECCAK256, MCOPY and RETURNDATACOPY) and Elysium returns the specified word or failure on every one. Issue 80517 removes a bounds check whose failure would otherwise panic; on a correct program the check never fires, so it can only turn an existing out-of-range bug of the node into a silent read. The PoolManager paths that depend on these copies are the hook result copy (src/libraries/Hooks.sol:148), the revert bubbling copy (src/libraries/CustomRevert.sol:109), and the arithmetic in src/libraries/FullMath.sol:21-54; all match on the battery, the targeted set, the script sets and 3,515 mined swaps. The settled state is computed by the consensus-v61 WebAssembly machine built with go1.25.9 (F-119), which predates both fixes as well but runs on a different target.
+How it meets the code: 1. Nothing about the code path changed since cycle 14: the endpoint reports the same build and celo-reth v1.0.10 only patched tracing. 2. The public node setup that Celo publishes starts celo-reth without the sharing flag, so follower and RPC nodes built from it never hand the cache to a builder. The sequencer's own start parameters are not published. 3. The PoolManager's storage is never on the faulty branch, because it has code from deployment and cannot be destroyed, and transient storage (src/libraries/CurrencyDelta.sol:21-39, src/libraries/CurrencyReserves.sol:17-36) is not cached across transactions. Only a contract created in the block that destroyed its codeless address can read a stale word, so only an attacker-made token or hook could be affected, and such a contract can misreport balances to sync and settle (src/PoolManager.sol:279-288, 349-364) without any cache fault.
 
-What is at risk: None found. A miscompile in the node would make the Elysium operator's node disagree with an honest validator, which with one whitelisted validator (cycle 11) is the operator agreeing with itself.
+What is at risk: No funds held by the PoolManager for other users move. If the flag is on at the sequencer and the trigger works, unsafe blocks could be published with a state that followers reject, and swaps and liquidity changes in them would be re-executed after the reorg.
 
-What it takes: The Elysium operator keeps building from go1.25.12, and some function on the interpreter or state path has one of the two shapes. Neither shape was found; the Go source of the node build is not public, so the check is by its answers.
+What it takes: The Celo sequencer operator runs with cache sharing enabled, and some read in an ordinary block caches a word for a codeless address that a later transaction in the block destroys and re-creates. Neither link is confirmed.
 
-What can be done: The deployer can ask Kinetiq to rebuild the node with a supported Go release and to publish the version and commit of the build. LPs need do nothing.
+What can be done: Celo upgrades celo-org/reth to a revision with the reth pull request 28148 fix, or keeps sharing off. Integrators wait for safe or finalized blocks before treating a fill as final.
+
+This entry adds to F-124.
+
+Rated low until cycle 17. The builder with cache sharing on reads through the same revm state and journal rules as the default path and adds no slot prefetch, so it takes no path the default lacks (lead L-807). Rated info, the same as F-124 and F-133, which rest on the same upstream branch.
+
+Second reviewer's corrections: The title still names Base, while this unit's entry lists only chain 42220; the Base half is held by the existing ledger entry. The follower validation path, which an unprivileged account could reach without the operator flag, is a separate existing finding (theme-reth-cache-drift, actor operator, severity info) and is not covered here.
+
+Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-364`, `src/libraries/CurrencyDelta.sol:21-39`.
+
+Sources:
+
+- https://forno.celo.org web3_clientVersion, 2026-11-24 (the endpoint still reports reth/v2.2.0-74cc8bb)
+- https://github.com/celo-org/celo-kona/releases (v1.0.10 of 20 November is the newest celo-reth release and only fixes SELFDESTRUCT tracing)
+- https://raw.githubusercontent.com/celo-org/celo-l2-node-docker-compose/main/scripts/start-op-reth.sh (the published node start script runs celo-reth without --engine.share-execution-cache-with-payload-builder)
+
+## F-136. Nodes on seven networks are built with Go releases that are out of support or carry prove pass faults (issues 79874, 80517, 82839), and no EVM result was found to depend on them
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Elysium, BNB Smart Chain, Polygon, Avalanche, Celo, Arbitrum One, Robinhood Chain.
+
+What differs on the network: The Elysium endpoint reports nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12. Go 1.25 left support when go1.27.0 shipped on 2026-08-19. go1.25.13 fixed, among others, issue 79874, where the prove pass emits a 32 bit slice mask for a 64 bit slice operation on targets that sign-extend 32 bit constants (amd64 named), so a slice with a start index of 2^32 or more advances too little, and issue 80517, where prove applies a fact before the point where it holds and drops a bounds check, shown on amd64 as a call through an out-of-range function table entry. Arbitrum One and Robinhood Chain run go1.27.3, which is inside the range of the separate F-117 fault. Cycle 17 additions. (1) BNB Chain: 48 Club, a validator group and block builder, answers at rpc-bsc.48.club from two unpublished geth commits (132104cd and 9b93ce23), both built on 2026-11-16 with go1.25.5, a release line out of support since 2026-08-19 and missing the compiler fixes of go1.25.6 to go1.25.13. (2) Go issue 82839, opened 2026-11-03 and still open: the prove pass carries a fact through a sign extension of a narrow integer compared with a constant that does not fit the narrow type, and takes a branch that cannot be taken. The report names go1.26.6 to go1.26.10, go1.27.3 and master, and a variant from go1.24.13. Inside that range: bor v2.11.1 (go1.26.10), BNB Chain geth v1.8.2 (go1.26.10), avalanchego 1.15.3 (go1.26.10), Celo's op-geth backend (go1.24.13), Nitro on Arbitrum One and Robinhood Chain (go1.27.3) and Elysium (go1.25.12).
+
+How it meets the code: Both faults change behaviour only on unusual shapes. Issue 79874 needs a slice start of 2^32 or more that the compiler has proved in bounds. The interpreter never slices calldata, code, memory or return data with such an index: a copy or load with a larger offset is clamped to the data length or charged for memory expansion first, and a zero-length copy or hash at a large offset touches no slice. The new offsets.py vectors aim at exactly that region (offsets from 2^31 to 2^256-1 for CALLDATALOAD, CALLDATACOPY, CODECOPY, KECCAK256, MCOPY and RETURNDATACOPY) and Elysium returns the specified word or failure on every one. Issue 80517 removes a bounds check whose failure would otherwise panic; on a correct program the check never fires, so it can only turn an existing out-of-range bug of the node into a silent read. The PoolManager paths that depend on these copies are the hook result copy (src/libraries/Hooks.sol:148), the revert bubbling copy (src/libraries/CustomRevert.sol:109), and the arithmetic in src/libraries/FullMath.sol:21-54; all match on the battery, the targeted set, the script sets and 3,515 mined swaps. The settled state is computed by the consensus-v61 WebAssembly machine built with go1.25.9 (F-119), which predates both fixes as well but runs on a different target. Cycle 17 additions: the EVM paths the PoolManager depends on work on 64 bit words in holiman/uint256 and the interpreter, and no comparison of the issue 82839 shape was located there, though the source was not searched systematically (lead L-839) and no binary was decompiled. The answers were tested instead on 2026-11-25: the battery (99,985 vectors), the targeted set (85,544) and the large-offset vectors match the specification on Polygon, BNB Chain, Avalanche and Celo (Celo pinned to its op-geth backend), and on the 48 Club endpoint the battery, the targeted set, the call semantics words, the slot reads and the script sets match too. Which of the two 48 Club builds answered each batch is not known (lead L-844). bor, BNB Chain geth and avalanchego at go1.26.10 already contain the fixes for issues 79874 and 80517.
+
+What is at risk: None found. A miscompiled routine in one operator's build would make that node disagree with the others, which shows up as a missed or reorganised block. On Elysium, with one whitelisted validator, the operator would be agreeing with itself.
+
+What it takes: An operator keeps building from an affected or unsupported Go release, and some function on the interpreter or state path has one of the faulty shapes. No such shape was found. The Elysium, 48 Club and Nitro rc.9 builds are private, so those checks are by their answers.
+
+What can be done: The deployer can ask the operators (Kinetiq for Elysium, 48 Club, and the client teams of bor, BNB Chain geth, avalanchego, Celo op-geth and Nitro) to build with a supported Go release that holds the fixes, and to publish the version and commit of each build. LPs need do nothing.
 
 Second reviewer's corrections: go1.25.12 is two point releases behind, since go1.25.14 also shipped on 2026-08-19; the security fixes in go1.25.13 (crypto/tls, net/http, net/url and others) are an additional operational reason to rebuild, not an EVM result. The reporter of issue 80517 says it does not reproduce on 1.26.5; the exposure of 1.25 rests on the backport note in issue 80618 that the root cause is older and the new tests fail on 1.25. Issue 79874 says the upper half of the mask register is zeroed on amd64, so on amd64 the effect is truncation of the index to 32 bits.
 
@@ -3454,6 +3462,23 @@ Sources:
 - https://github.com/golang/go/issues/79874 (slicemask fault, amd64 and s390x, needs a slice index of 2^32 or more)
 - https://github.com/golang/go/issues/80517 (prove time-travel fault on amd64 that drops a bounds check; tests fail on 1.25 and 1.26)
 - https://rpc.elysium.kinetiq.xyz, https://arb1.arbitrum.io/rpc and https://rpc.mainnet.chain.robinhood.com eth_call with state override, results in research/network-risk/cycles/016/arbitrum-family.work/raw/offsets.json (the large-offset vectors on all three chains)
+- https://rpc-bsc.48.club (web3_clientVersion, 2026-11-25) (The endpoint answers Geth/v1.8.2-132104cd-20261116/linux-amd64/go1.25.5.)
+- https://docs.48.club/48-validators (48 Club is one of the earliest BSC community validators.)
+- https://docs.48.club/privacy-rpc (48 Club describes itself as the biggest MEV builder on BSC that produces most blocks.)
+- https://go.dev/doc/devel/release (Each major release is supported until two newer majors exist; go1.27.0 was released 2026-08-19; go1.25.6 to go1.25.13 include compiler fixes.)
+- https://raw.githubusercontent.com/bnb-chain/bsc/132104cd/core/vm/instructions.go (Returns 404, so the commit is not in the public repository under that name.)
+- https://rpc-bsc.48.club eth_call with state override, 2026-11-25; results in research/network-risk/cycles/017/established-l1.work/battery-second.json, targeted-48club.json, callsem-48club.json, statekeys-48club.json, pmdiff-alt.json, pmdiff2-alt.json, pmdiff6-alt.json (Results of the vectors and scripts on the 48.club build.)
+- https://github.com/golang/go/issues/82839 (open prove miscompile, affected go1.26.6 to go1.26.10, go1.27.3 and master; variant from go1.24.13; caused to surface by the #80619 backport; fix CL 858581)
+- https://go.dev/doc/devel/release (go1.26.6 released 2026-08-13, go1.26.10 2026-10-19, go1.26.11 and go1.27.4 2026-11-10, go1.24.13 2026-02-04)
+- https://polygon-bor-rpc.publicnode.com web3_clientVersion 2026-11-25 (bor/v2.11.1-private/linux-amd64/go1.26.10)
+- https://bsc-dataseed1.bnbchain.org web3_clientVersion 2026-11-25 (Geth/v1.8.2-4e1c8247-20261104/linux-amd64/go1.26.10)
+- https://api.avax.network/ext/bc/C/rpc web3_clientVersion 2026-11-25 (avalanchego/1.15.3 commit 983815fd, go=1.26.10)
+- https://forno.celo.org web3_clientVersion 2026-11-25 (Geth/v0.1.0-untagged-c7ed55b8-20260817/linux-amd64/go1.24.13 and reth/v2.2.0-74cc8bb behind one endpoint)
+- https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/Dockerfile (FROM golang:1.26.10-alpine)
+- https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/go.mod (go 1.26.10)
+- https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/Dockerfile (FROM golang:1.26-alpine)
+- https://raw.githubusercontent.com/celo-org/op-geth/c7ed55b8/Dockerfile (FROM golang:1.24-alpine3.22)
+- eth_call with state override on https://polygon-bor-rpc.publicnode.com, https://bsc-dataseed1.bnbchain.org, https://api.avax.network/ext/bc/C/rpc and https://forno.celo.org, 2026-11-25 (results in research/network-risk/cycles/017/theme-library-paths.work/go/) (battery, targeted and offsets vectors: no mismatch on the four networks)
 
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 

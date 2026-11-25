@@ -1,0 +1,22 @@
+{
+ "unit": "theme-monad-exact-sites",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Task 2 from the source: which callers pass a constant denominator, which pc each compiles to, and whether a wrong remainder at prod1 = 1 could become an accepted amount.",
+   "agrees": true,
+   "note": "The deployed runtime (eth_getCode on https://rpc.monad.xyz, 24,009 bytes, sha256 prefix 288b97729c9e4f34) shows the solc-specialised tail after both sites: pc 22378 MULMOD, then GT, SUB, PUSH1 0x80 SHL, SUB, PUSH1 0x80 SHR, OR, so the result is ((prod1 - (r > prod0)) << 128) | ((prod0 - r) >> 128); pc 22639 is the same with shifts 0xa0 and 0x60. With prod1 = 1 and any r below N the result is at least 2^128 (or 2^160), and in the borrow case (prod1 becomes 0) the wrapped prod0 - r shifted right is at least 2^128 - 1 (or 2^160 - 1). Emitter::mul_mod2 in category-labs/monad v0.16.7 emitter.cpp masks its result to exp bits, so the arm cannot write a remainder at or above N. Every consumer then reverts: Position.update feeds Pool.sol:192 toInt128 (SafeCast.sol:56-58, reverts at 2^127); in SwapMath.sol:64-104 any getAmount1Delta value at or above 2^160 - 1 either is replaced by amountRemaining or flows into amountSpecifiedRemaining or amountCalculated and then into the toInt128 casts at Pool.sol:451-461. A correct node also returns at least 2^160 (2^128) at prod1 >= 1, so the site only runs in calls that revert either way. The require at FullMath.sol:30 holds because liquidity < 2^128 and the price difference < 2^160."
+  },
+  {
+   "check": "Task 3, pc 15519: the sar(128) of BeforeSwapDelta.getSpecifiedDelta, consumed only by SIGNEXTEND 15.",
+   "agrees": true,
+   "note": "The deployed runtime has pc 15512 MLOAD (the word at result + 0x40), pc 15515 PUSH1 0x80, pc 15519 SAR, pc 15520 PUSH1 0x0f, pc 15522 SIGNEXTEND, pc 15523 DUP1 ISZERO JUMPI. SIGNEXTEND with byte index 15 reads only bits 0 to 127 of its operand, which are bits 128 to 255 of the hook word and do not depend on the sign fill SAR writes into the top half. Any fault in the fill is discarded by the next instruction. The site also runs only in pools whose hook has the before-swap-returns-delta flag (src/libraries/Hooks.sol:247-281), so it is not reachable for victims in pools without an attacker hook."
+  },
+  {
+   "check": "The code the harness runs is the code Monad serves; Monad native code under v0.16.5 depends on heap addresses.",
+   "agrees": true,
+   "note": "web3_clientVersion on https://rpc.monad.xyz returned Monad/0.16.7 on 2026-11-25, and eth_getCode of 0x188d586ddcf52439676ca21a244753fa19f9ea8e returned 24,009 bytes with sha256 prefix 288b97729c9e4f34, matching networks.json. The v0.16.5 emitter.cpp fetched from jsDelivr declares std::unordered_map<StackElem *, int32_t> dep_counts at line 1433 and iterates it at line 1466; v0.16.7 uses final_stack_dep_counts_ indexed by stack position (lines 1457-1465). The claim that this only reorders independent stores rests on the unit's asm logs, which I did not rerun."
+  }
+ ],
+ "leads": []
+}

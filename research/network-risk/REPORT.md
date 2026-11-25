@@ -1,6 +1,6 @@
 # PoolManager network risk report
 
-State on 2026-11-25: cycles 1 to 16 are merged. The ledger holds 137 findings, 1,467 checks that came out safe, and 530 open leads across the 21 networks. About 263 agents have worked on it so far, roughly half of them as independent verifiers.
+State on 2026-11-25: cycles 1 to 17 are merged. The ledger holds 137 findings, 1,567 checks that came out safe, and 532 open leads across the 21 networks. About 278 agents have worked on it so far, roughly half of them as independent verifiers.
 
 ## Opcodes and the pool math
 
@@ -25,8 +25,9 @@ On 24 November the review turned to one narrower question: does any network comp
 
 - Cycle 15 answered whether Monad's validators run the PoolManager as compiled code. They do. The emitter was built from source, and the native code of the deployed PoolManager was run against Monad's own interpreter on about 2.2 million calls, including every path no mined transaction has used (`clear`, `donate`, the allowance paths, the overflow fallback, amounts above 2^160). Results, gas and state are equal, and planted faults were caught. The code generator of the compiler that reth ships was transcribed and checked on 631,353 vectors with no mismatch. 33,760 more mined swaps on HyperEVM match the source formulas. The 49 conditional jumps with a side no script takes were reread against the source: every one is unreachable or ends in a revert on all networks. Two findings were added. Polygon's fork of 8 December 2026 replaces the code of five accounts by a mechanism that governance once used on a pooled token (F-134, governance level). From Tempo's T15 fork a `take` to a zone deposit address goes to a zone portal, and if the deposit fails, the refund lands in the PoolManager, where an account with callbacks in the same portal batch can claim it as its own payment (F-135, low: the taker has lost that refund either way, and no pool funds are reachable).
 - Cycle 16 closed two gaps of cycle 15 and tested one assumption on mined data. Monad's native PoolManager code was rebuilt on the exact dependencies of both current releases: it agrees with the interpreter on 20,450 scenarios, and 2,007 mined transactions replayed through it equal the chain in output, gas, storage and logs. MegaETH's public validator was built and reproduced the closed sequencer's state root on 43,645 blocks, among them every block with a PoolManager liquidity removal, fee collection or claim burn; a planted fault was caught. Mined transactions in which an `unlock` is undone and a later one completes were found on seven networks and rerun in the reference interpreter with equal results, and every kind of halt was constructed on all 21 networks without a surviving write. The search for the F-135 pattern on other networks gave one finding (F-137, low): a bridge delivery that anyone may execute, and that pays a recipient the sender named, can be run by any account between its own `sync` and `settle` when that recipient is the PoolManager. It applies to CCTP mints without a destination caller and to several canonical bridge relays on 17 networks. The money is the bridger's, and no pool or claim balance moves. One operator-level note was added for Elysium's Go toolchain (F-136, info). A new keccak cache in an unreleased Polygon client build was read and holds full copies of its inputs, so it cannot return another input's hash.
+- Cycle 17 added no finding and closed most of what cycle 16 left open. The five sites of Monad's native PoolManager code that no scenario had run were executed in the deployed contract's own blocks on both releases; native code and interpreter agree at each, and a fault planted at each site is caught. The script sets were rerun at the real PoolManager address of all 21 networks, with the contract's code and storage left as on chain: every difference from Ethereum is the PoolManager's own state or a limit already known. The large-offset vectors ran on the 18 networks that had not had them, with no mismatch. An audit of the reference interpreter found seven faults, none on a path the PoolManager uses; the tool is corrected, and 21 whole-transaction reruns that cycle 13 had put down to gas now match. The ruint advisory does not reach HyperEVM's replay clients, and the reth cache fault has no path that feeds it on Celo, X Layer or BNB Chain's reth client, so F-132 and F-133 are rated informational now. MegaETH's validator reproduced 7,286 more blocks, among them blocks with PoolManager calls that leave no log. Three operator-level notes on Go toolchains were folded into F-117 and F-136. One result is unfinished: seven HyperEVM swaps of another exchange on the 512-bit branch of `mulDiv` did not reproduce from the source formulas and were not saved, so they are being rerun.
 
-What is still untested is listed in `OPCODES.md`. No item on that list is known to be within an ordinary account's reach. The largest are four sites of Monad's native code whose exact register arm no scenario ran, HyperEVM's closed validator, the three forks scheduled for 8 December 2026 on Tempo, BNB Chain and Polygon, and the OP Stack and Elysium upgrades that are announced and not yet installed. Cycle 17 is working on these.
+What is still untested is listed in `OPCODES.md`. No item on that list is known to be within an ordinary account's reach. The largest are the seven unexplained HyperEVM swaps and the rest of that sample, the order in which Monad v0.16.5 writes a block's exit state, a systematic search of the Go clients for two compiler fault shapes, the full-range swaps that public endpoints on Polygon, Monad and Tempo cut short, the three forks scheduled for 8 December 2026 on Tempo, BNB Chain and Polygon, and the OP Stack and Elysium upgrades that are announced and not yet installed. Cycle 18 is working on the first four.
 
 The faulty library release (ruint 1.21.0) runs on none of the 21 networks. Ethereum's reth nodes and Tempo run the first fixed release, which is a month old, and Tempo has no second client. As a by-product of running both, the built bytecode turned out to be the same bytes as the PoolManager deployed on Ethereum, so the on-chain measurements apply to this build directly.
 
@@ -36,11 +37,11 @@ Can an ordinary account take funds that other users hold in this repository's Po
 
 ## Answer so far
 
-No critical or high finding exists for an ordinary attacker, and the planted weakness has not been identified. Sixteen cycles have found no property of any of the 21 networks that lets an ordinary account reach funds in pools of ordinary tokens. Every finding that an ordinary account can trigger depends on a particular token, a particular third-party hook, or a recipient the taker chose, and the amounts at stake today are small.
+No critical or high finding exists for an ordinary attacker, and the planted weakness has not been identified. Seventeen cycles have found no property of any of the 21 networks that lets an ordinary account reach funds in pools of ordinary tokens. Every finding that an ordinary account can trigger depends on a particular token, a particular third-party hook, or a recipient the taker chose, and the amounts at stake today are small.
 
 Cycle 7 went back to the OP Stack chains, Tempo and Arc, HyperEVM, Monad and MegaETH, walked the five audit reports in `docs/security/audits` against `src/` finding by finding, and swept every priced currency for transfers that cost the sender more than the amount. The network units found nothing an ordinary account can use. The audit walk found every reported hazard closed in the source or left open by a recorded decision of the team, and two guards that the reports list as fixes and the source does not have, neither of which moves funds. The sweep raised the amount behind one earlier finding: the Arc PoolManager holds about 107,000 USD of a token that charges the sender on top.
 
-Fifty-nine findings can be triggered by an ordinary account: 16 medium, 35 low and 8 informational. Six of the informational ones record a mismatch between the source and its comments, tests or audit record, and two describe a network rule that moves no funds (F-125 on Arc, F-127 on Base). The findings fall into eleven groups.
+Fifty-nine findings can be triggered by an ordinary account: 16 medium, 34 low and 9 informational. Six of the informational ones record a mismatch between the source and its comments, tests or audit record, two describe a network rule that moves no funds (F-125 on Arc, F-127 on Base), and one records a stale branch in the reth execution cache that nothing feeds today (F-133). The findings fall into eleven groups.
 
 Capture of balance growth (F-041, F-066, F-067, F-091 medium; F-060, F-081, F-110 low). Any account can call `sync`, cause the PoolManager's balance of a token to rise, and call `settle` to be credited the rise. For Ampleforth on Ethereum the public rebase is guarded by `msg.sender == tx.origin`, and an EIP-7702 delegated account passes that check while running code. On Polygon the capture is in regular use: since 22 May 2026 six accounts have wrapped each sLGNS rebase in `sync` and `settle` and minted the PoolManager's share as claims, 661 mints for 20,418.69 sLGNS, about 3,300 USD. The same is done with sSAC on BNB Smart Chain, where F-066 had recorded the path as unused: a cycle 6 verifier counted 188 payout transactions for 271.92 sSAC since block 115,890,216. Smaller cases are Interest Protocol's USDI on Ethereum, Benqi rewards on qiAVAX on Avalanche, TITHE on Robinhood Chain, where a public `claimFor` call pays 10,002.56 TITHE of holder rewards to the PoolManager, and a MortgageFi vault share on Base, where the same kind of call adds 2.58 shares. In every case the amount taken is growth that no pool, position or claim was credited with, and principal does not fall. A search of 53.3 million claim mint logs on the 21 networks found mints without a matching payment only on Polygon, in three ids that were already known.
 
@@ -1489,45 +1490,6 @@ Sources:
 - https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/params/protocol_params.go (Polygon MaxTxGas 1 << 25)
 - https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/protocol_params.go (BNB Smart Chain MaxTxGas 1 << 24 (read in cycle 8))
 
-### F-133. Follower nodes on OP Mainnet, Base, Zora, World Chain, Celo, X Layer and reth-bsc validate blocks through an execution cache with the stale destroyed-account branch
-
-Low severity, plausible. Effect: degrade. Who can trigger it: any account. Networks: Optimism, Base, Zora, Worldchain, Celo, X Layer, BNB Smart Chain.
-
-What differs on the network: The builds the public endpoints report pin reth revisions with the old branch: op-reth v2.8.1 (OP Mainnet), conduit-op-reth v2.5.1 (Zora) and world-chain v2.8.2 pin ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1, cached_state.rs lines 1286-1305); Base pins base/reth 9e380dd (lines 1278-1297); Celo pins celo-org/reth 74cc8bb (lines 863-882); X Layer v0.0.7 pins okx/reth 81573d2 (lines 904-923); reth-bsc v0.1.4-hotfix pins bnb-chain/reth 3b2bd02 (lines 863-882). Engine tree validation of newPayload reads through this cache by default on all of them.
-
-How it meets the code: On a follower, a stale word from the branch is read while the node re-executes a canonical block. A different read makes the state root, receipts root or gas used differ from the header, so the node rejects a valid block and stops following until restarted, because the cache is in memory. It does not commit wrong state. The same accounts as in the producing-path finding are the only ones that can be read stale, so no read made by the PoolManager, or by a token, hook, router, PositionManager or Permit2 that existed before the block, changes (src/PoolManager.sol:279-288, 349-364). The trigger needs a cached word for an address without code before the block that destroys and re-creates it; I could not trace how an ordinary block produces that word on these builds.
-
-What is at risk: No PoolManager funds move. A stalled RPC node shows an old head to the users and integrations that read from it.
-
-What it takes: A node operator runs one of the listed builds as a validating follower, and the trigger condition above holds.
-
-What can be done: Operators upgrade to a base with reth pull request 28148. Integrations compare block heads across two endpoints before acting.
-
-This entry adds to F-124.
-
-Rated low by the verifier. The verifier's reading: followers run default software and any account could send the trigger transactions if the seeding read exists. The effect is a follower stall with no path to PoolManager funds.
-
-Second reviewer's corrections: actor: unprivileged. The followers run default software, so any account could send the trigger transactions if the seeding link exists, and no operator needs to act. The effect is still an RPC follower stall with no path to PoolManager funds, so the finding stays out of scope for funds. Severity is low (an operational hazard) rather than info. The OP Mainnet endpoint returned only the v0.0.0-dev-unknown build on my query, so its pin to op-v2.6.0-2 is not confirmed for current requests.
-
-Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-364`.
-
-Sources:
-
-- https://raw.githubusercontent.com/ethereum-optimism/reth/3c5f2f11c4e5a5647e6e911cd131ccf1bada4f25/crates/engine/execution-cache/src/cached_state.rs (lines 1286-1305: old branch in ethereum-optimism/reth op-v2.6.0-2)
-- https://raw.githubusercontent.com/okx/reth/81573d2c7d806d5df9ff2d512dd000c2bf542b1b/crates/engine/execution-cache/src/cached_state.rs (lines 904-923: old branch in okx/reth 81573d2)
-- https://raw.githubusercontent.com/bnb-chain/reth/3b2bd02006ef8970c862d2af5dbc98a92f58d57d/crates/engine/execution-cache/src/cached_state.rs (lines 863-882: old branch in bnb-chain/reth 3b2bd02, identical to reth v2.2.0)
-- https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/execution-cache/src/cached_state.rs (lines 1278-1297: old branch)
-- https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs (lines 863-882: old branch)
-- https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.8.1/rust/Cargo.lock (op-reth v2.8.1 pins reth-execution-cache from ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1))
-- https://raw.githubusercontent.com/conduitxyz/conduit-op-reth/v2.5.1/Cargo.lock (conduit-op-reth v2.5.1 pins op-v2.6.0-2)
-- https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/Cargo.lock (world-chain v2.8.2 pins op-v2.6.0-2)
-- https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7/Cargo.lock (xlayer-reth v0.0.7 pins okx/reth 81573d2)
-- https://raw.githubusercontent.com/bnb-chain/reth-bsc/v0.1.4-hotfix/Cargo.lock (reth-bsc v0.1.4-hotfix pins bnb-chain/reth v0.1.4 (3b2bd02))
-- https://mainnet.optimism.io (web3_clientVersion on 2026-11-24 returned op-reth/v2.8.1-72207294 and, on other requests, op-reth/v0.0.0-dev-unknown)
-- https://rpc.zora.energy/ (web3_clientVersion returned conduit-op-reth/v2.5.1-8f0ccac)
-- https://worldchain-mainnet.g.alchemy.com/public (web3_clientVersion returned world-chain/v2.8.2-9596311)
-- https://rpc.xlayer.tech (web3_clientVersion returned reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7)
-
 ### F-135. From Tempo T15 a take to a zone deposit address is forwarded to a zone portal, and a failed deposit returns to the PoolManager, where an account with callbacks in the same portal batch can book it as its own payment
 
 Low severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: Tempo.
@@ -1822,6 +1784,45 @@ Sources:
 - https://ethereum-rpc.publicnode.com (eth_call at block 26,487,041: DGF 0x43edb88c gameImpls(621) = 0xc08b8ffa, PROOF_THRESHOLD 1, TEE and ZK verifiers not nullified, ASR 0x909f6cf4 respectedGameType 621 (research/network-risk/cycles/013/theme-proof-builds-2.work/base/aggverifier.json, celo/dgf.json, celo/access.json).)
 - file:research/network-risk/cycles/013/theme-proof-builds-2.work/base/base-rv64-vectors.json (0 mismatches on the RV64IM build; planted faults caught.)
 
+### F-133. Follower nodes on OP Mainnet, Base, Zora, World Chain, Celo, X Layer and reth-bsc validate blocks through an execution cache with the stale destroyed-account branch
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: Optimism, Base, Zora, Worldchain, Celo, X Layer, BNB Smart Chain.
+
+What differs on the network: The builds the public endpoints report pin reth revisions with the old branch: op-reth v2.8.1 (OP Mainnet), conduit-op-reth v2.5.1 (Zora) and world-chain v2.8.2 pin ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1, cached_state.rs lines 1286-1305); Base pins base/reth 9e380dd (lines 1278-1297); Celo pins celo-org/reth 74cc8bb (lines 863-882); X Layer v0.0.7 pins okx/reth 81573d2 (lines 904-923); reth-bsc v0.1.4-hotfix pins bnb-chain/reth 3b2bd02 (lines 863-882). Engine tree validation of newPayload reads through this cache by default on all of them.
+
+How it meets the code: On a follower, a stale word from the branch is read while the node re-executes a canonical block. A different read makes the state root, receipts root or gas used differ from the header, so the node rejects a valid block and stops following until restarted, because the cache is in memory. It does not commit wrong state. The same accounts as in the producing-path finding are the only ones that can be read stale, so no read made by the PoolManager, or by a token, hook, router, PositionManager or Permit2 that existed before the block, changes (src/PoolManager.sol:279-288, 349-364). The trigger needs a cached word for an address without code before the block that destroys and re-creates it; I could not trace how an ordinary block produces that word on these builds.
+
+What is at risk: No PoolManager funds move. A stalled RPC node shows an old head to the users and integrations that read from it.
+
+What it takes: A node operator runs one of the listed builds as a validating follower, and the trigger condition above holds.
+
+What can be done: Operators upgrade to a base with reth pull request 28148. Integrations compare block heads across two endpoints before acting.
+
+This entry adds to F-124.
+
+Rated low and plausible until cycle 17. The cycle 17 reading of celo-reth, X Layer reth v0.0.7 and reth-bsc, confirmed by its verifier, finds no default path that stores a storage word of an address without code in the cache, the same result cycle 16 reached for revm 42.0.0. Rated info and confirmed: the stale branch exists, and nothing seeds it.
+
+Second reviewer's corrections: actor: unprivileged. The followers run default software, so any account could send the trigger transactions if the seeding link exists, and no operator needs to act. The effect is still an RPC follower stall with no path to PoolManager funds, so the finding stays out of scope for funds. Severity is low (an operational hazard) rather than info. The OP Mainnet endpoint returned only the v0.0.0-dev-unknown build on my query, so its pin to op-v2.6.0-2 is not confirmed for current requests.
+
+Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-364`.
+
+Sources:
+
+- https://raw.githubusercontent.com/ethereum-optimism/reth/3c5f2f11c4e5a5647e6e911cd131ccf1bada4f25/crates/engine/execution-cache/src/cached_state.rs (lines 1286-1305: old branch in ethereum-optimism/reth op-v2.6.0-2)
+- https://raw.githubusercontent.com/okx/reth/81573d2c7d806d5df9ff2d512dd000c2bf542b1b/crates/engine/execution-cache/src/cached_state.rs (lines 904-923: old branch in okx/reth 81573d2)
+- https://raw.githubusercontent.com/bnb-chain/reth/3b2bd02006ef8970c862d2af5dbc98a92f58d57d/crates/engine/execution-cache/src/cached_state.rs (lines 863-882: old branch in bnb-chain/reth 3b2bd02, identical to reth v2.2.0)
+- https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/execution-cache/src/cached_state.rs (lines 1278-1297: old branch)
+- https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs (lines 863-882: old branch)
+- https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.8.1/rust/Cargo.lock (op-reth v2.8.1 pins reth-execution-cache from ethereum-optimism/reth op-v2.6.0-2 (3c5f2f1))
+- https://raw.githubusercontent.com/conduitxyz/conduit-op-reth/v2.5.1/Cargo.lock (conduit-op-reth v2.5.1 pins op-v2.6.0-2)
+- https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/Cargo.lock (world-chain v2.8.2 pins op-v2.6.0-2)
+- https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7/Cargo.lock (xlayer-reth v0.0.7 pins okx/reth 81573d2)
+- https://raw.githubusercontent.com/bnb-chain/reth-bsc/v0.1.4-hotfix/Cargo.lock (reth-bsc v0.1.4-hotfix pins bnb-chain/reth v0.1.4 (3b2bd02))
+- https://mainnet.optimism.io (web3_clientVersion on 2026-11-24 returned op-reth/v2.8.1-72207294 and, on other requests, op-reth/v0.0.0-dev-unknown)
+- https://rpc.zora.energy/ (web3_clientVersion returned conduit-op-reth/v2.5.1-8f0ccac)
+- https://worldchain-mainnet.g.alchemy.com/public (web3_clientVersion returned world-chain/v2.8.2-9596311)
+- https://rpc.xlayer.tech (web3_clientVersion returned reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7)
+
 ## Findings that need a privileged party
 
 These are outside the threat model and are listed for reference. Full text is in `FINDINGS.md`.
@@ -1883,8 +1884,7 @@ These are outside the threat model and are listed for reference. Full text is in
 | F-030 | sequencer, validator or bridge committee | low | confirmed | Soneium | Soneium restricts listed contracts at its own RPC and sequencer, which leaves L1 forced inclusion as the exit for pools that touch a listed token or hook |
 | F-034 | sequencer, validator or bridge committee | low | confirmed | Tempo, Arc | PoolManager ownership on Tempo and Arc is exercised through Wormhole guardian signatures |
 | F-116 | sequencer, validator or bridge committee | low | confirmed | Celo | Celo's public endpoint routes a minority of requests to an op-geth build that Celo no longer supports and that has no Karst rules |
-| F-132 | sequencer, validator or bridge committee | low | confirmed | Celo | Base and Celo block builders read through the reth execution cache that still has the stale branch for a destroyed account without code, when the operator enables cache sharing |
-| F-117 | sequencer, validator or bridge committee | info | confirmed | Arbitrum One, Robinhood Chain, Polygon, BNB Smart Chain, Avalanche | Five go-ethereum family nodes run a Go toolchain with a published silent dead store miscompile, and no function on the opcode or state path has the triggering shape |
+| F-117 | sequencer, validator or bridge committee | info | confirmed | Ethereum, Arbitrum One, Robinhood Chain, Polygon, BNB Smart Chain, Avalanche | Six go-ethereum family nodes run a Go toolchain with a published silent dead store miscompile, and no function on the opcode or state path has the triggering shape |
 | F-118 | sequencer, validator or bridge committee | info | confirmed | MegaETH | MegaETH blocks are executed by a closed JIT executor that no public RPC node re-executes, so eth_call evidence speaks for a different EVM than the one that writes PoolManager state |
 | F-119 | sequencer, validator or bridge committee | info | confirmed | Arbitrum One, Robinhood Chain, Elysium | Arbitrum family validators compute the settled state with a go1.25.9 WebAssembly build that public endpoints do not run |
 | F-120 | sequencer, validator or bridge committee | info | confirmed | HyperEVM | No public client checks the storage that the closed HyperEVM validator writes, because block headers carry a zero state root and nanoreth compares its own root as zero |
@@ -1894,7 +1894,8 @@ These are outside the threat model and are listed for reference. Full text is in
 | F-124 | sequencer, validator or bridge committee | info | confirmed | Arc | Arc nodes from v0.8.0 to v0.8.4 could read stale storage of an account without code that a block deleted and created again, which cannot reach PoolManager storage |
 | F-129 | sequencer, validator or bridge committee | info | confirmed | Ethereum | The released reth binary carries an LLVM compiler for EVM code that validates and builds Ethereum blocks when an operator enables it, and no simulated call can reach it |
 | F-130 | sequencer, validator or bridge committee | info | confirmed | Monad | Monad nodes that serve call traces execute blocks with the interpreter only, so no public data shows compiled execution of the PoolManager |
-| F-136 | sequencer, validator or bridge committee | info | confirmed | Elysium | Elysium's node is built with an end-of-life Go release that lacks two amd64 compiler fixes, and no EVM result was found to depend on them |
+| F-132 | sequencer, validator or bridge committee | info | confirmed | Celo | Base and Celo block builders read through the reth execution cache that still has the stale branch for a destroyed account without code, when the operator enables cache sharing |
+| F-136 | sequencer, validator or bridge committee | info | confirmed | Elysium, BNB Smart Chain, Polygon, Avalanche, Celo, Arbitrum One, Robinhood Chain | Nodes on seven networks are built with Go releases that are out of support or carry prove pass faults (issues 79874, 80517, 82839), and no EVM result was found to depend on them |
 | F-023 | owner, fee controller or chain governance | high | confirmed | Celo | Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile |
 | F-026 | owner, fee controller or chain governance | medium | confirmed | Celo, X Layer | PoolManager ownership on Celo and X Layer rests on the upgradeable L2CrossDomainMessenger, and on X Layer a 2 of 3 Safe of EOAs can upgrade it |
 | F-029 | owner, fee controller or chain governance | medium | confirmed | Optimism, Base, Unichain, Zora, Worldchain, Ink, Soneium | PoolManager ownership rests on an upgradeable messenger predeploy on five chains and on the portal alias on two, and a takeover reaches protocol fees only |
@@ -1938,6 +1939,6 @@ Code group compares the deployed bytecode after blanking the contract's own addr
 ## Where the evidence is
 
 - `FINDINGS.md`: every finding in full, including the out-of-scope ones.
-- `CLEARED.md`: the 1467 checks that came out safe, with the reason for each.
+- `CLEARED.md`: the 1567 checks that came out safe, with the reason for each.
 - `STATUS.md`: coverage per network and lens, open leads, cycle history.
 - `cycles/NNN/`: the raw research and verdict files of each cycle.

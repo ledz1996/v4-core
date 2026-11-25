@@ -54,8 +54,8 @@ class World:
         self.trace_stack = False
         self.logs = 0
 
-    def snapshot(self): return (dict(self.storage), dict(self.transient), dict(self.balances))
-    def restore(self, snap): self.storage, self.transient, self.balances = snap
+    def snapshot(self): return (dict(self.storage), dict(self.transient), dict(self.balances), self.logs)
+    def restore(self, snap): self.storage, self.transient, self.balances, self.logs = snap
 
     def call(self, caller, to, value, data, static, depth, code_addr=None, storage_addr=None, apparent=None):
         """Returns (success, returndata). apparent is the CALLVALUE a DELEGATECALL frame inherits; nothing is transferred for it."""
@@ -69,7 +69,7 @@ class World:
             if code_addr == 2: return True, hashlib.sha256(data).digest()
             if code_addr == 4: return True, bytes(data)
             if code_addr == 1:
-                if len(data) >= 128 and int.from_bytes(data[32:64], 'big') in (27, 28): raise NotImplementedError('ecrecover with a well formed input')
+                if int.from_bytes(bytes(data[:128]).ljust(128, b'\0')[32:64], 'big') in (27, 28): raise NotImplementedError('ecrecover with a well formed input')
                 return True, b''
             if 0 < code_addr < 0x12 or code_addr == 0x100: raise NotImplementedError(f'precompile {code_addr:#x}')
             return True, b''
@@ -100,14 +100,21 @@ class World:
             if trace is not None: trace.append((depth, pc, op, tuple(st[-self.trace_stack:]) if self.trace_stack else None))
             try:
                 if 0x60 <= op <= 0x7f:
-                    k = op - 0x5f; st.append(int.from_bytes(code[pc + 1:pc + 1 + k].ljust(k, b'\0'), 'big')); pc += k + 1; continue
+                    k = op - 0x5f; st.append(int.from_bytes(code[pc + 1:pc + 1 + k].ljust(k, b'\0'), 'big')); pc += k + 1
+                    if len(st) > 1024: raise Halt('stack overflow')
+                    continue
                 if 0x80 <= op <= 0x8f:
-                    st.append(st[-(op - 0x7f)]); pc += 1; continue
+                    st.append(st[-(op - 0x7f)]); pc += 1
+                    if len(st) > 1024: raise Halt('stack overflow')
+                    continue
                 if 0x90 <= op <= 0x9f:
                     k = op - 0x8e; st[-1], st[-k] = st[-k], st[-1]; pc += 1; continue
                 if op == 0x5b: pc += 1; continue
                 if op == 0x50: st.pop(); pc += 1; continue
-                if op == 0x5f: st.append(0); pc += 1; continue
+                if op == 0x5f:
+                    st.append(0); pc += 1
+                    if len(st) > 1024: raise Halt('stack overflow')
+                    continue
                 if op == 0x01: a = st.pop(); st[-1] = (a + st[-1]) & MASK
                 elif op == 0x02: a = st.pop(); st[-1] = (a * st[-1]) & MASK
                 elif op == 0x03: a = st.pop(); st[-1] = (a - st[-1]) & MASK

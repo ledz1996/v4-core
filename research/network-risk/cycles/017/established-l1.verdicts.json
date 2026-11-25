@@ -1,0 +1,47 @@
+{
+  "unit": "established-l1",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "On 2026-11-25 I sent web3_clientVersion to https://rpc-bsc.48.club six times. Three answers were Geth/v1.8.2-9b93ce23-20261116/linux-amd64/go1.25.5 and three were Geth/v1.8.2-132104cd-20261116/linux-amd64/go1.25.5, so the endpoint balances over at least two builds from two different commits, both with go1.25.5. bsc-dataseed1.bnbchain.org answered Geth/v1.8.2-4e1c8247-20261104/linux-amd64/go1.26.10, as in F-121. raw.githubusercontent.com resolves the short hashes 54afaff4 (the v1.8.2 tag) and 4bd1c730 in bnb-chain/bsc with HTTP 200, and returns 404 for 132104cd and 9b93ce23 in bnb-chain/bsc and in the public 48Club/bsc fork, whose master is still version 1.4.9. The 404 is therefore meaningful: neither commit is in those public repositories. go.dev/doc/devel/release states that each major release is supported until two newer majors exist and that go1.27.0 was released 2026-08-19, so go1.25 is out of support. It lists compiler bug fixes in go1.25.6, 1.25.7, 1.25.8, 1.25.9, 1.25.10, 1.25.11, 1.25.12 and 1.25.13, none of which go1.25.5 has. docs.48.club/48-validators says 48 Club is one of several earliest BSC community validators, and docs.48.club/privacy-rpc says it is the biggest MEV builder on BSC and produces most blocks. I ran ten opcode edge vectors of my own by eth_call with code override (MULMOD with modulus 2^256-2 and a full-width modulus, ADDMOD with modulus 2^256-1, SDIV of -2^255 by -1, SMOD with negative dividend, SAR by 255 and 256 of -2^255, SIGNEXTEND at byte 2, BYTE 31, EXP 3^255) on rpc-bsc.48.club and bsc-dataseed1: all ten gave the specified word on both. That a build fault in a minority validator shows as a rejected or missed block, and whether 48 Club's validators run the RPC commit, rest on inference and are not public, as the finding says.",
+      "codeCheck": "The cited lines exist and use the opcodes named. src/libraries/FullMath.sol:24 computes mulmod(a, b, not(0)) for the high half of the 512 bit product, and FullMath.sol:48 computes mulmod(a, b, denominator) for the remainder. src/libraries/TickBitmap.sol:20-26 applies signextend(2, .), sdiv, smod and slt in compress. src/libraries/SqrtPriceMath.sol:252 calls FullMath.mulDiv for amount1 and line 254 rounds up with mulmod. A node that computed any of these differently would compute other amounts and ticks, which only matters for blocks that node produces. No loss path for ordinary users follows from the endpoint facts, and I found none.",
+      "corrections": "The 48.club endpoint serves two unpublished commits, 132104cd and 9b93ce23, both built 2026-11-16 with go1.25.5; the finding names only 132104cd, so its battery and script results may cover one of the two builds or a mix of both. 48 Club's validator page says one of several earliest community validators. Actor operator is correct.",
+      "sources": [
+        {"url": "https://rpc-bsc.48.club", "supports": "web3_clientVersion on 2026-11-25 returned Geth/v1.8.2-132104cd-20261116/linux-amd64/go1.25.5 and Geth/v1.8.2-9b93ce23-20261116/linux-amd64/go1.25.5 on alternate requests; ten opcode edge vectors by eth_call with code override gave the specified results"},
+        {"url": "https://bsc-dataseed1.bnbchain.org", "supports": "web3_clientVersion returned Geth/v1.8.2-4e1c8247-20261104/linux-amd64/go1.26.10; the same ten vectors gave the specified results"},
+        {"url": "https://raw.githubusercontent.com/bnb-chain/bsc/132104cd/core/vm/instructions.go", "supports": "HTTP 404, as is 9b93ce23 and both hashes in 48Club/bsc, while https://raw.githubusercontent.com/bnb-chain/bsc/54afaff4/core/vm/instructions.go returns 200, so short hashes resolve when the commit is public"},
+        {"url": "https://go.dev/doc/devel/release", "supports": "support lasts until two newer majors; go1.27.0 released 2026-08-19; go1.25.6 to go1.25.13 each list compiler bug fixes"},
+        {"url": "https://docs.48.club/48-validators", "supports": "48 Club is one of several earliest BSC community validators"},
+        {"url": "https://docs.48.club/privacy-rpc", "supports": "48 Club says it is the biggest MEV builder on BSC and produces most blocks"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Leads L-032 and L-161 on the releases after v2.11.1: does any change to BlockSTM, its serial fallback or the merge of results let transient storage pass from one transaction to the next.",
+      "agrees": true,
+      "note": "I fetched core/blockstm/executor.go, core/state/statedb.go, core/state/transient_storage.go, core/state/journal.go, core/state_transition.go and core/parallel_state_processor.go at bor v2.11.1, v2.11.2 and v2.12.0-beta from raw.githubusercontent.com. The first five are byte identical across the three tags (same md5). parallel_state_processor.go differs in one line only, an error message at line 1260. In v2.12.0-beta statedb.go, Prepare resets s.transientStorage = newTransientStorage() at line 3051, SetTransientState and GetTransientState (lines 1370-1388) touch only the local map with no MVRead or MVWrite, while balance, nonce, code and storage go through MVRead and MVWrite keys. Transient storage therefore cannot leak between transactions through the multi-version store, and the lock, delta and synced-currency slots (src/libraries/Lock.sol:10-27) start clear in every transaction."
+    },
+    {
+      "check": "Does 48 Club's virtual contract at 0x48, which its RPC uses to identify itself, change what a contract call to that address returns, so that a currency or recipient 0x48 behaves differently on its nodes.",
+      "agrees": true,
+      "note": "On 2026-11-25 a top-level eth_call to 0x48 with value 0x30 returned 0x30 on rpc-bsc.48.club and 0x on bsc-dataseed1. A contract placed by state override that calls 0x48 with value 0 and with value 0x30 got success 1 and RETURNDATASIZE 0 on both endpoints, and eth_getCode of 0x48 is empty on both. The interception is in the RPC layer for top-level calls only and does not change what the PoolManager sees in a native payout (src/types/Currency.sol:48) or a take of currency 0x48."
+    },
+    {
+      "check": "holiman/uint256 v1.3.2 (bor, BSC) and v1.2.4 (avalanchego) executed directly against math/big, plus a copy of bor v2.12.0-beta's MULMOD memo.",
+      "agrees": true,
+      "note": "I read bor v2.12.0-beta core/vm/mulmod_memo.go and opMulmod in core/vm/instructions.go (line 200-205). The memo is a per-EVM field, is replaced whenever the full 256 bit modulus differs (mm.mod != *z compares the whole value), copies the modulus before the result overwrites it, and is used only when z[3] != 0. In uint256 v1.3.2 (proxy.golang.org zip) MulModWithReciprocal (uint256.go:688-715) and MulMod (720-730) share the zero checks, umul and the reduce4 call for a full-width modulus, differing only in whether the reciprocal is passed in or computed by Reciprocal(m). With the memo key checked on every call, a stale reciprocal cannot be used, so FullMath.mulDiv (src/libraries/FullMath.sol:24, 48) gets the stock result. I did not rerun the 3,000,000 case harness."
+    }
+  ],
+  "leads": [
+    {
+      "chainIds": [56],
+      "lens": "L1",
+      "question": "Which of the two 48.club builds (132104cd and 9b93ce23, both go1.25.5) did the battery, targeted set and script sets of this cycle actually reach, and do both give the recorded results when each is pinned by repeated web3_clientVersion checks around each batch?",
+      "why": "The endpoint alternates between two unpublished commits, so a clean result may cover only one of them; the hazard stays operator level.",
+      "priority": "low"
+    }
+  ]
+}
