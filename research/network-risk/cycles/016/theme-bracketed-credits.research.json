@@ -1,0 +1,365 @@
+{
+ "unit": "theme-bracketed-credits",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "A CCTP mint addressed to the PoolManager with no destination caller can be relayed by any account between its own sync and settle, which books the bridged USDC as that account's payment",
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    480,
+    57073,
+    196,
+    42161,
+    137,
+    43114,
+    143,
+    999,
+    5042
+   ],
+   "lens": "L4",
+   "assumptions": [
+    "A2"
+   ],
+   "effect": "siphon",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "Circle's CCTP v2 contracts are deployed at TokenMessengerV2 0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d and MessageTransmitterV2 0x81D40F21F12A8F0E3252Bccb954D722d4c464B64 on 13 of the 21 networks. receiveMessage mints USDC to the mintRecipient named on the source chain inside whatever transaction calls it, and when the message's destinationCaller is zero any account may call it. On Arc the mint is native USDC, which the PoolManager also sees through the ERC-20 face at 0x3600000000000000000000000000000000000000.",
+   "mechanism": "Someone burns USDC on another chain with mintRecipient equal to this network's PoolManager and destinationCaller zero, and Circle attests the message. Any account calls unlock (src/PoolManager.sol:104-114). In the callback it calls sync(USDC) (src/PoolManager.sol:279-288), which records balanceOf(PoolManager). It then calls MessageTransmitterV2.receiveMessage(message, attestation); the destination caller check passes because the field is zero (MessageTransmitterV2.sol lines 300-305), the nonce is marked used (line 221), and TokenMessengerV2._handleReceiveMessage mints amount minus fee to the PoolManager (TokenMessengerV2.sol lines 405-422, BaseTokenMessenger.sol lines 330-355). The callback then calls settle; _settle credits the difference (src/PoolManager.sol:358-364) to the caller, which takes it out with take (src/PoolManager.sol:291-297). On Arc the same sequence uses sync(0x3600...) and the face credit. CCTP v1 receiveMessage has the same destinationCaller rule (MessageTransmitter.sol lines 269-274). CCTP v2 hookData is only carried in the message; TokenMessengerV2 never executes it, so the mint recipient's own code does not run.",
+   "impact": "The account takes the bridged amount. The money belongs to the person who bridged it. No liquidity provider or claim holder funds move. If the mint had been relayed outside any sync bracket (Circle's or a third party relayer in a plain transaction), it would have stayed in the PoolManager as surplus that no caller can claim, so in that case the bracket only redirects money its owner had already lost, as in F-135. The loss is new only when the owner's integration intended to relay the message inside its own unlock (sync, receiveMessage, settleFor the user) and the attacker relays the attested message first; the owner's later receiveMessage then reverts on the used nonce.",
+   "preconditions": "A CCTP burn on another chain with mintRecipient equal to the PoolManager of the destination network and destinationCaller zero, and its attestation, which Circle publishes through its public attestation API. The attacker needs no role and only has to send its transaction before the intended relayer. No such mint was found on Ethereum, Unichain, Ink or World Chain (see leadResults for L-772); other networks were not enumerated.",
+   "mitigations": "Integrations that bridge into a PoolManager must set destinationCaller to their own receiver contract, or mint to their own contract and pay the PoolManager inside their own sync and settle. Front ends should never accept the PoolManager as a CCTP mint recipient. Nothing in the PoolManager can change this, because sync is open by design.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364",
+    "src/PoolManager.sol:104-114",
+    "src/PoolManager.sol:291-297",
+    "src/libraries/CurrencyReserves.sol:27-38"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:279-288",
+     "supports": "sync needs no unlock and stores the currency and balanceOf(PoolManager) in transient storage"
+    },
+    {
+     "url": "src/PoolManager.sol:349-364",
+     "supports": "_settle credits the caller with balanceOf(PoolManager) minus the synced reserves, whoever paid the difference"
+    },
+    {
+     "url": "src/PoolManager.sol:104-114",
+     "supports": "unlock runs the caller's callback, so the caller's code runs before and after any call it makes in between"
+    },
+    {
+     "url": "src/libraries/CurrencyReserves.sol:27-38",
+     "supports": "synced currency and reserves are plain TSTORE slots that persist until settle resets them or the transaction ends"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/v2/MessageTransmitterV2.sol",
+     "supports": "receiveMessage lines 206-243 marks the nonce used and calls the recipient handler; destination caller is checked only when nonzero, lines 300-305"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/v2/TokenMessengerV2.sol",
+     "supports": "_handleReceiveMessage lines 405-422 mints amount minus fee to mintRecipient; hookData is not executed"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/v2/BaseTokenMessenger.sol",
+     "supports": "_mintAndWithdraw lines 330-355 mints through the local minter to the recipient; MintAndWithdraw event has mintRecipient indexed, lines 84-89"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/MessageTransmitter.sol",
+     "supports": "v1 receiveMessage lines 250-300 enforces destinationCaller only when it is nonzero"
+    },
+    {
+     "url": "https://developers.circle.com/cctp/references/contract-addresses",
+     "supports": "CCTP v2 mainnet domains and the shared TokenMessengerV2 and MessageTransmitterV2 addresses for Ethereum, OP Mainnet, Base, Unichain, World Chain, Ink, Arbitrum, Polygon PoS, Avalanche, Monad, HyperEVM, Arc and X Layer"
+    },
+    {
+     "url": "https://developers.circle.com/stablecoins/usdc-contract-addresses",
+     "supports": "native USDC addresses per network, Arc USDC at 0x3600000000000000000000000000000000000000"
+    },
+    {
+     "url": "eth_getCode on every rpc in state/networks.json, 2026-11-25 (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/cctp_probe.json)",
+     "supports": "TokenMessengerV2 and MessageTransmitterV2 hold 2,175 bytes of proxy code on 16 networks (the 13 listed plus BNB Smart Chain and Robinhood Chain, which Circle does not list) and no code on Zora, Soneium, Celo, Elysium, MegaETH and Tempo"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "new",
+   "title": "Canonical bridge relays and replays that any account may execute pay bridged tokens to a named recipient inside the executor's transaction, so a recipient set to the PoolManager can be booked by the executor",
+   "chainIds": [
+    1,
+    10,
+    130,
+    137,
+    196,
+    480,
+    1868,
+    4326,
+    8453,
+    42220,
+    43114,
+    57073,
+    7777777
+   ],
+   "lens": "L4",
+   "assumptions": [
+    "A2"
+   ],
+   "effect": "siphon",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "Several canonical bridges let any account run the last step of someone else's transfer in its own transaction. OP Stack L2CrossDomainMessenger.relayMessage replays a failed message for any caller (live messenger code on OP Mainnet, Base, Unichain, Zora, World Chain, Ink, Soneium, Celo and MegaETH; on X Layer its nonce is still 0). On Ethereum, OptimismPortal2.finalizeWithdrawalTransactionExternalProof finalizes any proven withdrawal for any caller, Arbitrum's Outbox.executeTransaction executes any proven L2 to L1 message, and the LxLy bridge claimAsset pays any proven deposit. X Layer runs the same LxLy bridge (networkID 3). Polygon's StateReceiver at 0x1001 replays failed state syncs for any caller. Avalanche's TeleporterMessenger accepts delivery from any relayer when the message's allowedRelayerAddresses list is empty. Each of these ends in a plain ERC-20 transfer or mint to the recipient named by the original sender.",
+   "mechanism": "The executor calls unlock, calls sync(token) in the callback (src/PoolManager.sol:279-288), then calls the relay function with the public proof or message: relayMessage of a failed message whose target is the L2 standard bridge (CrossDomainMessenger.sol lines 239-248, StandardBridge.sol lines 272-299 mints or transfers to _to with no call to it), finalizeWithdrawalTransactionExternalProof (OptimismPortal2.sol lines 701-730, which takes the prover as an argument), Outbox.executeTransaction (AbsOutbox.sol lines 158-174) reaching L1ArbitrumGateway.finalizeInboundTransfer and safeTransfer to _to (L1ArbitrumGateway.sol lines 104-125, 139-146), claimAsset (PolygonZkEVMBridgeV2.sol line 453 onward, no caller restriction), replayFailedStateSync or replayFailedStateSyncWithData (StateReceiver.sol lines 85-103) reaching the PoS ChildChainManager deposit, or receiveCrossChainMessage (TeleporterMessenger.sol lines 242 and 284, _checkIsAllowedRelayer lines 596-613) reaching an ICTT token home or remote. When the recipient is the PoolManager its token balance rises inside the callback, and settle credits the rise to the executor (src/PoolManager.sol:358-364), who takes it.",
+   "impact": "The executor takes the bridged amount; the money belongs to the bridger who named the PoolManager as recipient. LP and claim funds do not move. A transfer of this kind that completes in its own transaction (the first OP deposit relay, an auto-relayed Teleporter message, a claim sent by a bridge service) leaves the tokens as unclaimable surplus, so the bracket takes money the owner had already lost. The loss is new only where the owner or its router planned to run the relay or replay inside its own unlock and an outsider runs it first.",
+   "preconditions": "A bridge transfer whose final recipient is the PoolManager of the destination network and whose last step is still pending: a failed OP messenger message, an unfinalized OP or Arbitrum withdrawal or unclaimed LxLy deposit to the Ethereum PoolManager, a pending failed Polygon state sync carrying a PoS deposit to the Polygon PoolManager, or a Teleporter message with no relayer restriction. No such pending item was found: the one decoded pending Polygon PoS deposit (state id 3213072) pays 0x08bb17cf80ed16483efa0217480c94c233dd9900. Other bridges were not enumerated.",
+   "mitigations": "Bridges and routers should never use the PoolManager as a bridge recipient. A design that needs to settle bridged funds must receive them in its own contract and pay the PoolManager inside its own sync and settle, or restrict the relayer (Teleporter allowedRelayerAddresses).",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364",
+    "src/PoolManager.sol:104-114",
+    "src/PoolManager.sol:291-297",
+    "src/libraries/CurrencyReserves.sol:27-38"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:279-288",
+     "supports": "sync needs no unlock and stores the currency and balanceOf(PoolManager) in transient storage"
+    },
+    {
+     "url": "src/PoolManager.sol:349-364",
+     "supports": "_settle credits the caller with balanceOf(PoolManager) minus the synced reserves, whoever paid the difference"
+    },
+    {
+     "url": "src/PoolManager.sol:104-114",
+     "supports": "unlock runs the caller's callback, so the caller's code runs before and after any call it makes in between"
+    },
+    {
+     "url": "src/libraries/CurrencyReserves.sol:27-38",
+     "supports": "synced currency and reserves are plain TSTORE slots that persist until settle resets them or the transaction ends"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/CrossDomainMessenger.sol",
+     "supports": "relayMessage line 209; a caller other than the remote messenger may relay a message when failedMessages[versionedHash] is set, lines 239-248"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/StandardBridge.sol",
+     "supports": "finalizeBridgeERC20 lines 272-299 mints or safeTransfers to _to; onlyOtherBridge lines 111-117 is satisfied by a messenger replay"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L1/OptimismPortal2.sol",
+     "supports": "proveWithdrawalTransaction line 509 records msg.sender as prover; finalizeWithdrawalTransactionExternalProof lines 701-730 lets any caller finalize with any prover"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro-contracts/main/src/bridge/AbsOutbox.sol",
+     "supports": "executeTransaction lines 158-174 has no caller restriction"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/token-bridge-contracts/main/contracts/tokenbridge/ethereum/gateway/L1ArbitrumGateway.sol",
+     "supports": "finalizeInboundTransfer lines 104-125 and inboundEscrowTransfer lines 139-146 safeTransfer to the L2 chosen recipient"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/agglayer/agglayer-contracts/v9.0.0/contracts/v2/PolygonZkEVMBridgeV2.sol",
+     "supports": "claimAsset from line 453 has only ifNotEmergencyState and pays destinationAddress"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/genesis-contracts/master/contracts/StateReceiver.sol",
+     "supports": "replayFailedStateSync and replayFailedStateSyncWithData lines 85-103 have no caller restriction and call the stored receiver"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/icm-contracts/main/contracts/teleporter/TeleporterMessenger.sol",
+     "supports": "receiveCrossChainMessage line 242 checks the relayer at line 284; an empty allowed list admits any relayer, lines 596-613"
+    },
+    {
+     "url": "eth_getCode and eth_call on the rpcs in state/networks.json, 2026-11-25 (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/probe2.json, raw/probe3.json)",
+     "supports": "L2CrossDomainMessenger code and messageNonce on the OP Stack networks and MegaETH (X Layer nonce 0); LxLy bridge 0x2a3D...2EDe on Ethereum (networkID 0) and X Layer (networkID 3); TeleporterMessenger on Avalanche C-Chain; StateReceiver code at 0x1001 on Polygon"
+    },
+    {
+     "url": "https://eth.blockscout.com/api (StateSender logs, research/network-risk/cycles/016/theme-bracketed-credits.work/raw/pol_l1_statesynced_3213072.json) and eth_call failedStateSyncHashes on https://polygon-bor-rpc.publicnode.com (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/pol_pending.json)",
+     "supports": "the 25 failed state syncs recorded in cycle 8 are still pending; the PoS deposit 3213072 names user 0x08bb17cf..., not the PoolManager"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    8453,
+    56
+   ],
+   "lens": "L3",
+   "check": "Lead L-771: does the Base B20 stablecoin precompile or a BNB Smart Chain Jenner CAS20 token redirect a transfer by a pattern in the recipient address, or call another contract during a transfer, as Tempo T15 zone deposit addresses do?",
+   "result": "No on both. Base answers reth/v2.5.2 base/v1.5.6. In v1.5.6 the B20 V3 transfer resolves the recipient with B20CreditRecipientStrategy::ExcludingZeroAndSelf, which returns the address unchanged and only rejects zero and the token itself (credit_recipient.rs), checks the executor, sender and receiver policies through is_authorized, which reads registry membership from storage (guards.rs lines 80-94, policy logic v1.rs lines 366-389), and move_balance debits from and credits to the named address (v3.rs lines 55-118, 209-232). BNB Smart Chain answers Geth/v1.8.2. At tag v1.8.2 cas20 transfer calls move and returns a 32 byte true (cas20_token.go lines 175-189); move checks the two policies and writes exactly the source and recipient balance slots (lines 239-269); isAuthorized walks stored policy ids and members only (cas20_policy.go lines 169-199). Neither path calls a contract, so neither opens a bracketing window inside take.",
+   "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_stablecoin/logic/v3.rs; https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/common/ops/credit_recipient.rs; https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/policy/logic/v1.rs; https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/cas20_token.go; https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/cas20_policy.go; web3_clientVersion on https://mainnet.base.org/ and https://bsc-dataseed1.bnbchain.org"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "ERC-4337 handleOps as a carrier that runs several accounts' code in one transaction: can an ordinary account place operations before and after another user's payment to the PoolManager and book it.",
+   "result": "EntryPoint v0.7 code (16,035 bytes) is at 0x0000000071727De22E5E9d8BAf0edAc6f37da032 on all 21 networks, and handleOps is public with only a reentrancy guard (EntryPoint.sol v0.7 lines 174-200), so any account can bundle a victim's signed operation between two of its own. A user operation runs as one call to the sender account, and a user who pays the PoolManager does sync, pay and settle inside one unlock in that call (src/PoolManager.sol:104-114, 279-288, 349-364); another operation cannot run inside it. An operation that sends tokens to the PoolManager outside an unlock gives them up as surplus whether or not anyone brackets it. Paymaster and beneficiary payments go to the paymaster and in native value, and native value is credited only as msg.value (src/PoolManager.sol:352-354). No new loss found. Hazard of a user design that splits sync and settle across two operations is noted in one line only.",
+   "source": "https://raw.githubusercontent.com/eth-infinitism/account-abstraction/v0.7.0/contracts/core/EntryPoint.sol; eth_getCode on all rpcs in state/networks.json (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/probe2.json)"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L2",
+   "check": "Arbitrum retryable tickets and the L2 gateway router as a place where a third party's code runs around a token payment to the PoolManager.",
+   "result": "A retryable executes as its own transaction from the aliased L1 sender, and the L2 gateway's finalizeInboundTransfer pays the recipient there. A manual ArbRetryableTx.redeem only schedules the retry as a separate transaction after the caller's transaction (cleared in an earlier cycle from tx_processor.go and block_processor.go), so its transient sync never covers the payment. ArbRetryableTx exists on all three chains (code at 0x6e). Elysium has no CCTP, LxLy or Teleporter code. Arbitrum One and Robinhood Chain carry CCTP v2 code, covered by the CCTP finding.",
+   "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/tx_processor.go; eth_getCode on https://arb1.arbitrum.io/rpc, https://rpc.mainnet.chain.robinhood.com, https://rpc.elysium.kinetiq.xyz (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/probe3.json)"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "Task 2: balance changes without a transfer call between two frames of one transaction (native credits, protocol mints, fee refunds, rebases) that an ordinary account could book with sync and settle.",
+   "result": "Native value is credited only as msg.value of settle (src/PoolManager.sol:352-354) and the PoolManager has no receive or fallback (grep of src/ finds none), so coinbase rewards, forced ETH, deposit mints and system credits in native value give no one a credit. On networks where the native asset has an ERC-20 face (Celo CELO token, Arc 0x3600..., Polygon 0x1010, OP and Zora legacy ETH) the only inflows that can happen inside an attacker's transaction without a call are SELFDESTRUCT payments, which are the attacker's own money. Fee refunds go to the transaction's fee payer on Celo and Tempo and the PoolManager is never one (Tempo fee spec; Celo cleared item on fee_currencies.go). HyperCore credits are separate system transactions (earlier cleared item). Rebases of B20 Asset splits and CAS20 multipliers need issuer roles and run in the issuer's transaction (earlier cleared items); token specific oracle rebases are a token hazard and were not swept.",
+   "source": "src/PoolManager.sol:349-364; https://tempo.com/developers/docs/protocol/fees/spec-fee.md"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L4",
+   "check": "Tempo protocol-level transactions other than the zone portal batch (F-135): fee manager debit and refund, sponsored and batched transactions, the stablecoin DEX.",
+   "result": "The fee manager debits max_fee from the fee payer and credits the refund to the fee payer through protocol-internal hooks, not public calls (Tempo fee spec). A type 0x76 batch and a sponsored transaction carry the calls of one signer, with the fee payer adding only a signature (earlier cleared item on carriers). No CCTP, OP messenger, LxLy or Teleporter code is deployed. F-135 stays the only Tempo path, and only from T15.",
+   "source": "https://tempo.com/developers/docs/protocol/fees/spec-fee.md; eth_getCode on https://rpc.mainnet.tempo.xyz (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/cctp_probe.json, raw/probe3.json)"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L4",
+   "check": "BNB Smart Chain cross-chain and system contracts as a third-party payment path into the PoolManager.",
+   "result": "Parlia system transactions run with their own transient map and system contracts do not call arbitrary contracts (earlier cleared item). No OP messenger, LxLy, Teleporter or StateReceiver contract is deployed; the code at 0x1001 is the validator set contract. CCTP v2 proxy code is present at the shared addresses, but Circle's address page does not list BNB Smart Chain as a CCTP domain, so no attested mint is expected there; if one is enabled the CCTP finding applies.",
+   "source": "https://developers.circle.com/cctp/references/contract-addresses; eth_getCode on https://bsc-dataseed1.bnbchain.org (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/cctp_probe.json, raw/probe3.json)"
+  },
+  {
+   "chainIds": [
+    99901
+   ],
+   "lens": "L4",
+   "check": "Elysium: any protocol-level or canonical bridge transaction that a third party sends, that pays tokens to an arbitrary address and runs code chosen by another account in the same transaction.",
+   "result": "None found. The chain is a Nitro chain whose retryables run as their own transactions; no CCTP, OP messenger, LxLy or Teleporter code is deployed.",
+   "source": "eth_getCode on https://rpc.elysium.kinetiq.xyz (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/cctp_probe.json, raw/probe3.json)"
+  },
+  {
+   "chainIds": [
+    143,
+    999
+   ],
+   "lens": "L4",
+   "check": "Monad and HyperEVM system paths as a third-party payment into the PoolManager.",
+   "result": "Monad system and staking payments are native value, which is never credited without msg.value (src/PoolManager.sol:352-354). HyperCore to HyperEVM credits are separate system transactions paying the HyperCore sender's own address (earlier cleared item). The only path found on both is CCTP v2, covered by the CCTP finding.",
+   "source": "src/PoolManager.sol:349-364; eth_getCode on https://rpc.monad.xyz and https://rpc.hyperliquid.xyz/evm (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/cctp_probe.json)"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    10,
+    8453,
+    42161,
+    137,
+    43114,
+    143,
+    999,
+    5042,
+    196,
+    4663,
+    56
+   ],
+   "lens": "L4",
+   "question": "Has any CCTP MintAndWithdraw (v1 or v2) on these networks named the PoolManager as mintRecipient, and is any attested message to it still unrelayed? Query the indexed mintRecipient topic over full history through an indexer that serves these chains.",
+   "why": "An unrelayed message with destinationCaller zero can be booked now by any account; a past one shows whether integrations route bridged USDC to the PoolManager.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    4326
+   ],
+   "lens": "L4",
+   "question": "Does failedMessages on L2CrossDomainMessenger hold any message whose final ERC-20 recipient is the PoolManager (FailedRelayedMessage events decoded against finalizeBridgeERC20 calldata)?",
+   "why": "Such a message can be replayed by any account inside its own sync and settle today.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L4",
+   "question": "Decode the pending failed state sync 3212586 (receiver ChildChainManager); the StateSender log was not found at the L1 block recorded in cycle 8. Does it pay the Polygon PoolManager?",
+   "why": "Any account can replay it inside its own bracket.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-771",
+   "outcome": "cleared",
+   "answer": "Neither the Base B20 V3 transfer (base v1.5.6, which mainnet.base.org reports) nor the BNB Smart Chain CAS20 transfer (bsc v1.8.2, which bsc-dataseed1 reports) rewrites the recipient or calls a contract. B20 only rejects zero and the token itself; CAS20 rejects zero and writes the source and recipient slots. Policy checks read storage only."
+  },
+  {
+   "leadId": "L-772",
+   "outcome": "inconclusive",
+   "answer": "CCTP v2 code is present on 16 networks. Blockscout full-history log queries, with a positive control on Ethereum, found no MintAndWithdraw with mintRecipient equal to the PoolManager on Ethereum, Unichain, Ink or World Chain, and no USDC Transfer from the zero address to the PoolManager on Ethereum, Unichain or Ink, which covers v1 and v2 mints. Public RPC range limits and explorer access blocks prevented the same query on OP Mainnet, Base, Arbitrum, Polygon, Avalanche, Monad, HyperEVM, Arc and X Layer. Any CCTP mint with destinationCaller zero can be relayed by any account, so the path itself is reported as a finding."
+  }
+ ]
+}

@@ -1,0 +1,66 @@
+{
+ "unit": "theme-megaeth-validator-build",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "L-768 and L-626, Task 1: can the public MegaETH stateless validator at e1618ed7 be built here without installing a toolchain?",
+   "result": "Task 1. The MegaETH stateless validator at e1618ed7 builds and runs with the installed stable toolchain (rustc 1.97.0, cargo 1.97.0) and no RUSTC_BOOTSTRAP. rust-toolchain.toml pins nightly-2026-04-23 with components only (rustfmt, clippy, rust-src, miri, rust-analyzer); no crate of the workspace, of mega-evm v1.7.3 or of salt carries a #![feature] attribute (grep over the fetched trees), and the workspace declares rust-version 1.94. The work copy drops rust-toolchain.toml so the installed compiler is used. Two steps failed and were resolved: (1) cargo build --offline against the cycle 15 cargohome stops at dependency resolution with 'no matching package named bincode' because that fetch was partial (483 crates); cargo fetch from crates.io inside the work directory completed it. (2) the build script of mega-system-contracts v1.7.3 (crates/system-contracts/build.rs:318-347) panics with 'forge command not found' when the crate's scripts/ directory exists, because in a repository build it re-derives the five system contract bytecodes with Foundry. The scripts/ directory of the work copy was renamed, which makes build.rs take its published crate path: it skips the forge re-derivation and still runs Phase 2, which checks the checked-in constants in src/generated against the versioned artifacts (build.rs:364-385). cargo build --release --offline -p stateless-validator then finished (build/build2.log, EXIT 0). The binary uses revm 40.0.3, revm-handler 20.0.3, revm-interpreter 37.0.3 and ruint 1.17.2 from the validator's own Cargo.lock. The forge attestation of system contract bytecode is the one check this build did not run.",
+   "source": "research/network-risk/cycles/016/theme-megaeth-validator-build.work/build/build.log, build/build2.log; https://raw.githubusercontent.com/megaeth-labs/stateless-validator/e1618ed7f8b6d57d845a355cc3b98d0d35fd80a8/README.md; https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/system-contracts/build.rs (both fetched, identical to the work copy by SHA-256)"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "L-768 and L-626, Task 2: does the closed MegaETH sequencer's post-state for PoolManager liquidity removals, fee collections, ERC-6909 mints and burns and take inside reverted frames equal an independent re-execution?",
+   "result": "Task 2. In --block-list mode the validator fetched each block's witness with mega_getBlockWitness and the block from https://mainnet.megaeth.com/rpc, verified the witness, re-executed every transaction with mega-evm v1.7.3 on the stock revm interpreter and compared state root, receipts root, logs bloom, withdrawals root and gas used with the header the sequencer published. Target set: every block holding a PoolManager ModifyLiquidity with negative liquidityDelta (210 events in 210 blocks), with zero liquidityDelta, i.e. fee collection (545 in 545), an ERC-6909 mint (40 in 40) or burn (81 in 81) from the full PoolManager log history of blocks 2,900,000 to 32,766,000 (cycles/013/theme-mined-branches.work/raw/logs-4326.json and cycles/015/theme-closed-producers-2.work/raw/pmtail-4326.jsonl), plus the 75 blocks of the take, settle and sync inside reverted frames listed in cycles/011/theme-closed-producers.work/raw/mega.json (75 of the 87 cycle 11 counted are in that file's sample). Result: 911 distinct blocks, 911 validated, 0 failed. Anchored check: 45 of these blocks (15 removal, 10 fee collection, 5 burn, 5 mint, 10 reverted-frame blocks, seed 16) were also run in chain-following mode with --start-block set to the parent block hash and --end-block to the block, which in addition checks the witness pre-state against the parent's state root (stateless-core executor.rs:837-841); 45 of 45 validated. Wider sweep: all other blocks that hold any PoolManager log or a cycle 11 sampled transaction, 42734 blocks; all 42734 were run, 42734 validated and 0 failed. Control: the same 911 blocks run with a build whose revm-interpreter MULMOD returns one more than the correct result whenever the 512 bit product exceeds 2^256 (patched copy under build/plant, [patch.crates-io] in build/sv-plant) give 611 validated and 300 failed, mostly with a receipts root mismatch; the failures cover 138 of 210 removal blocks, 67 of 545 fee collection blocks, 25 of 81 burn blocks and 75 of 75 reverted-frame blocks, so the comparison sees a wrong product in these blocks. So for every mined MegaETH liquidity removal, fee collection, ERC-6909 mint and burn and every sampled take inside a reverted frame, the closed sequencer's post-state equals an independent re-execution by the open interpreter, to the state root. Task 3 was not needed.",
+   "source": "research/network-risk/cycles/016/theme-megaeth-validator-build.work/blocks.txt, cats.json, runall/results.jsonl, anch/summary.txt, runrest/results.jsonl, runplant/results.jsonl; mega_getBlockWitness and eth_getBlockByNumber on https://mainnet.megaeth.com/rpc"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "Task 4: when a PoolManager call inside unlock meets a mega-evm compute gas, data size, key-value update or state growth limit, can an inner frame stop while outer frames continue with PoolManager state the source assumes rolled back?",
+   "result": "Task 4. mega-evm v1.7.3 meters four extra dimensions per transaction (Rex constants: compute gas 200,000,000, data 12.5 MiB, key-value updates 500,000, state growth 1,000; crates/mega-evm/src/constants.rs:192-211) and, from Rex4, gives each inner frame 98/100 of its parent's remaining budget (limit/frame_limit.rs:162-171). A transaction-level exceed is latched and reported as OutOfGas; once latched, every later metered opcode in every frame halts (record_compute_gas returns false on a latched exceed, limit/limit.rs:460-480, and the instruction wrapper sets a halt action, evm/instructions.rs:581-594), and every frame return is marked OutOfGas (limit.rs:846-856), so the top frame halts and revm reverts the whole transaction apart from nonce and fee. A frame-local exceed found during execution ends that frame with Revert and revert data MegaLimitExceeded(kind, limit); revm's process_next_action reverts the frame's journal checkpoint for any non-ok result (revm-handler 20.0.3 src/frame.rs:416-423), which undoes storage, transient storage and logs of that frame, and the parent continues. A frame-local exceed found only when the frame returns (before_frame_return_result, limit.rs:801-845) rewrites a successful result to Revert after revm has already committed the frame; the source says so at limit.rs:827-830. The late detection exists for CREATE frames (code size recorded in after_frame_run, limit/data_size.rs:324-335) and for a SELFDESTRUCT whose usage was recorded before its inner instruction halted (limit.rs:450-456); the PoolManager bytecode has neither opcode, so no PoolManager frame can be committed and reported failed. Every outward call of the PoolManager reverts the PoolManager frame when the callee reports failure: the native and ERC-20 transfer (src/types/Currency.sol:40-84), the hook call (src/libraries/Hooks.sol:131-139) and the balanceOf read of sync and settle (src/types/Currency.sol:90-96, src/PoolManager.sol:279-288 and 349-365). So a callee frame reported failed, whether rolled back or not, ends with the PoolManager frame reverted, and that revert undoes Lock (src/libraries/Lock.sol:13-19), NonzeroDeltaCount (src/libraries/NonzeroDeltaCount.sol:20-32) and CurrencyDelta (src/libraries/CurrencyDelta.sol:35-39) together with the payment. No rewrite goes from failure to success, so a payment frame can never be reported successful with its transfer undone. Read-only test on https://mainnet.megaeth.com/rpc with eth_call and code overrides (probe/limits.py, probe/loop.py; the test contracts touch no PoolManager state): a child that creates 990 new storage slots under a parent that gave it all its gas returns success 0 with MegaLimitExceeded(3, 980) and the parent completes; through DELEGATECALL the child's writes are read back as zero after the failed call and the parent's own later write is present, while 900 and 979 slots succeed and persist. A child in an endless loop returns MegaLimitExceeded(2, 58,776,709) and the parent completes. These match the reading: a frame-local exceed rolls back that frame and only that frame.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/limit/limit.rs (fetched, identical to the work copy) and the v1.7.3 checkout in research/network-risk/cycles/016/theme-megaeth-validator-build.work/build/cargohome/git/checkouts/mega-evm-86ab85a902904159/59b8e39; src/types/Currency.sol:40-84; src/libraries/Hooks.sol:131-139; src/PoolManager.sol:104-114; eth_call on https://mainnet.megaeth.com/rpc via research/network-risk/cycles/016/theme-megaeth-validator-build.work/probe/limits.py"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "The validator's lock pins ruint 1.17.2 and revm-interpreter 37.0.3, and earlier cycles read mega-evm v1.7.4 with ruint 1.19.0. Does the version split leave PoolManager arithmetic unchecked?",
+   "result": "The validator binary built here, with ruint 1.17.2, reproduces the sequencer's state root on every block run, including the 300 blocks in which a wrong 512 bit MULMOD is visible. A ruint difference between the two builds on any operation these blocks use would show as a mismatch, and none did. Operands that no mined block reaches are covered only by the battery of OPCODES.md.",
+   "source": "research/network-risk/cycles/016/theme-megaeth-validator-build.work/build/sv/Cargo.lock (ruint 1.17.2, revm-interpreter 37.0.3), runall/results.jsonl, runplant/results.jsonl"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "question": "Run the built validator (cycles/016/theme-megaeth-validator-build.work/build/target/release/stateless-validator) in chain-following mode over every block from the PoolManager deployment to the head, including blocks with PoolManager transactions that emit no PoolManager log (native-only settle and clear), and repeat after each mega-evm release.",
+   "why": "The block lists here cover every block with a PoolManager log through block 32,766,000; a producer fault in a PoolManager transaction that logs nothing, or in a later block, would not be seen.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-768",
+   "outcome": "cleared",
+   "answer": "Yes. It builds with the installed stable 1.97 toolchain after completing the partial crate fetch and skipping the forge re-derivation in mega-system-contracts' build script, and it validated every block run. Details in the first two cleared entries."
+  },
+  {
+   "leadId": "L-626",
+   "outcome": "cleared",
+   "answer": "The validator was run. No block holding a PoolManager removal, fee collection, ERC-6909 mint or burn, or a sampled take, settle or sync inside a reverted frame gives a state root, receipts root or gas mismatch; a planted MULMOD fault is caught in 300 of the same blocks. mega-evm's extra limits end in a full transaction revert or in an ordinary frame revert as far as the PoolManager is concerned."
+  }
+ ]
+}

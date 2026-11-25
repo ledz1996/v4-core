@@ -1,0 +1,50 @@
+{
+  "unit": "arbitrum-family",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "web3_clientVersion queried on 2026-11-25 returns nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12 on https://rpc.elysium.kinetiq.xyz, nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3 on https://arb1.arbitrum.io/rpc and the same version on linux-amd64 on https://rpc.mainnet.chain.robinhood.com. The Go release history page lists go1.25.12 on 2026-07-07, go1.25.13 on 2026-08-13 with compiler and runtime fixes, go1.25.14 on 2026-08-19 and go1.27.0 on 2026-08-19. Issue 79874 describes the slicemask fold that emits a Const32 mask for a 64 bit slice operation and needs a reslice index of 2^32 or more; its 1.25 backport 79875 is listed closed in the Go1.25.13 compiler/runtime milestone. Issue 80517 describes a prove fault that drops a bounds check and makes an indirect call through an out of range table entry on amd64; the 1.25 backport 80618 was merged to release-branch.go1.25 on 2026-08-05 (commit f59f3cc) and says the tests of CL 807182 fail on 1.26 and 1.25. The other compiler fixes in that milestone are for mips, mips64le, riscv64, js/wasm, darwin and arm64 or are compile-time errors, so the two amd64 items are the ones that apply to this build. My own eth_call with a state override on Elysium and Arbitrum One ran CALLDATALOAD at offset 2^64-1, a zero-length MCOPY at offset 2^255 and a zero-length KECCAK256 at offset 2^200; both returned a zero word and the empty-input hash c5d24601...a470, as specified. offsets.log in the work directory records 200 vectors per chain with no mismatch.",
+      "codeCheck": "The PoolManager paths named do not use large offsets. src/libraries/Hooks.sol:131-153 calls the hook with output size 0, then copies return data from offset 0 for returndatasize bytes into freshly allocated memory and checks length >= 32 and the selector. src/libraries/CustomRevert.sol:91-117 copies return data from offset 0 for returndatasize bytes. src/types/Currency.sol:44-75 calls with fixed calldata of 68 bytes and copies at most 32 bytes of return data to offset 0. Any large offset would come from a memory expansion that gas makes impossible before a Go slice is formed. I found no path in src/ that reaches the slice shape of issue 79874, and issue 80517 can only turn an existing out of range access in the node into a silent read. No PoolManager result was found to depend on either fault.",
+      "corrections": "go1.25.12 is two point releases behind, since go1.25.14 also shipped on 2026-08-19; the security fixes in go1.25.13 (crypto/tls, net/http, net/url and others) are an additional operational reason to rebuild, not an EVM result. The reporter of issue 80517 says it does not reproduce on 1.26.5; the exposure of 1.25 rests on the backport note in issue 80618 that the root cause is older and the new tests fail on 1.25. Issue 79874 says the upper half of the mask register is zeroed on amd64, so on amd64 the effect is truncation of the index to 32 bits.",
+      "sources": [
+        {"url": "https://rpc.elysium.kinetiq.xyz", "supports": "web3_clientVersion nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12, queried 2026-11-25"},
+        {"url": "https://arb1.arbitrum.io/rpc", "supports": "web3_clientVersion nitro/v3.13.0-rc.9+b72783f/linux-arm64/go1.27.3, queried 2026-11-25"},
+        {"url": "https://rpc.mainnet.chain.robinhood.com", "supports": "web3_clientVersion nitro/v3.13.0-rc.9+b72783f/linux-amd64/go1.27.3, queried 2026-11-25"},
+        {"url": "https://go.dev/doc/devel/release", "supports": "release dates of go1.25.12, go1.25.13, go1.25.14 and go1.27.0"},
+        {"url": "https://github.com/golang/go/issues/79874", "supports": "slicemask fault, needs a reslice index of 2^32 or more, amd64 named"},
+        {"url": "https://github.com/golang/go/issues/80517", "supports": "prove fault drops a bounds check on amd64; reporter says not reproduced on 1.26.5"},
+        {"url": "https://github.com/golang/go/issues/80618", "supports": "1.25 backport of 80517 merged 2026-08-05, tests fail on 1.25 and 1.26"},
+        {"url": "https://github.com/golang/go/issues?q=milestone%3AGo1.25.13+label%3Acompiler%2Fruntime+is%3Aclosed", "supports": "the closed compiler/runtime fixes of go1.25.13 including 79875 and 80618"},
+        {"url": "https://github.com/golang/go/issues/80578", "supports": "the regalloc fix in go1.25.13 is for riscv64 only"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "The interpreter files of fork 0e44603 against upstream go-ethereum v1.17.4: does any change alter an arithmetic, comparison, shift, jump, copy, hash or call result that src/ uses?",
+      "agrees": true,
+      "note": "I fetched core/vm/instructions.go, core/vm/analysis_legacy.go and go.mod from OffchainLabs/go-ethereum at 0e44603 and from ethereum/go-ethereum at v1.17.4. analysis_legacy.go is identical. The 96 changed lines of instructions.go touch GASPRICE, BLOCKHASH, NUMBER, CREATE, CREATE2, the four call opcodes (multi-gas bookkeeping and address filter touches) and SELFDESTRUCT; none touches an arithmetic, shift, comparison, copy, hash or jump handler. Both go.mod files pin holiman/uint256 v1.3.2. The reading covers Arbitrum One and Robinhood Chain, whose nodes report commit b72783f. It does not bind Elysium, whose node reports vlocal+unknown-unknown with no commit, so for Elysium the clearance rests on the opcode battery and offset vectors only."
+    },
+    {
+      "check": "A1 on the public Nitro master: do the endTxNow transaction types run contract code before StateDB.Prepare resets transient storage?",
+      "agrees": true,
+      "note": "In fork core/state/statedb.go:1622-1650 Prepare resets transientStorage unconditionally, outside the EIP-2929 branch. In fork core/state_transition.go:837-860 an endTxNow result returns before Prepare at line 950. In nitro master arbos/tx_processor.go the StartTxHook region (lines 197-570) contains no evm.Call, Create or StaticCall; it uses ApplyInternalTxUpdate and util.TransferBalance only. In any case src/libraries/Lock.sol is reset by unlock before the transaction ends, so a stale flag would also need a transaction that ends while unlocked."
+    },
+    {
+      "check": "Native token mint and burn through ArbNativeTokenManager (0x73) is off on all three chains.",
+      "agrees": true,
+      "note": "I computed the selector of getNativeTokenManagementFrom() from the ArbOwnerPublic interface (0x3fecbab0) and called 0x...6b on all three RPC URLs on 2026-11-25; each returned 0. Enabling it is a chain owner action, so the actor would be governance."
+    }
+  ],
+  "leads": [
+    {
+      "chainIds": [99901],
+      "lens": "L1",
+      "question": "Which go-ethereum and Nitro commits is the Elysium node built from, given that it reports vlocal+unknown-unknown and an end of life Go release?",
+      "why": "The source readings of the interpreter in this unit are tied to commit b72783f and fork 0e44603, which only Arbitrum One and Robinhood Chain report. A local patch to the Elysium interpreter would be covered only by vectors and mined swaps.",
+      "priority": "medium"
+    }
+  ]
+}

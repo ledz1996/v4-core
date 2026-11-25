@@ -1,0 +1,38 @@
+{
+  "unit": "high-throughput",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "plausible",
+      "severity": "low",
+      "factCheck": "Fetched crates/mega-evm/src/block/limit.rs, block/executor.rs, block/chain.rs and constants.rs from mega-evm main and v1.7.4 on 2026-11-25; cmp reports all four pairs byte identical. limit.rs lines 880-890 on main return Err for every candidate once block_state_growth_used is at or above block_state_growth_limit. Lines 387-399 select rex::BLOCK_STATE_GROWTH_LIMIT for Rex through Rex6, and constants.rs lines 206 and 211 set TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT to 1000, so one transaction can exhaust the block budget. executor.rs commit_tx_result (about lines 580-600) says a rejected transaction returns Err before touching executor state and the caller decides what to do, typically putting it back in the pool. chain.rs lines 35-46 end the mainnet schedule at Rex6 (timestamp 1787626800). On https://mainnet.megaeth.com/rpc, eth_getBlockByNumber latest returned block 32,787,103 with baseFeePerGas 0xf4240 (1,000,000 wei), gasLimit 10,000,000,000 and timestamp 1795584114, which is after Rex6; web3_clientVersion returned mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2. The 22.6 million gas cost for 1,000 new slots was not recomputed this cycle; it rests on the cycle 13 reading of constants.rs. No public source gives the sequencer's requeue order, so the amplified form remains unconfirmed.",
+      "codeCheck": "src/PoolManager.sol:103-113 (unlock with the NonzeroDeltaCount check at line 111), modifyLiquidity from line 145 and take at lines 291-297 have no dependence on block number, time or position in a block. A delayed call later runs with the same checks and the same toInt128 cast at line 294. _settle at lines 349-365 credits msg.value or the balance difference only, so a delay cannot move any delta or balance. The effect is liveness only and applies to every contract on the chain.",
+      "corrections": "The base effect (one filler closes the rest of its block to later candidates) is confirmed by source. Only the amplified form, in which N fillers close N consecutive blocks, depends on the unconfirmed queue rule of the closed sequencer, which is why the verdict is plausible. The coreRefs mark where victim calls enter and do not compute anything differently.",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs", "supports": "lines 880-890 reject every candidate once the block state growth limit is reached; lines 387-399 select the Rex limit for Rex through Rex6; byte identical to v1.7.4"},
+        {"url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/executor.rs", "supports": "commit_tx_result doc comment: rejected transaction leaves state untouched, caller typically puts it back in the pool; byte identical to v1.7.4"},
+        {"url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/constants.rs", "supports": "lines 206 and 211: TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT are 1000"},
+        {"url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/chain.rs", "supports": "lines 35-46: mainnet schedule ends at Rex6, timestamp 1787626800"},
+        {"url": "https://mainnet.megaeth.com/rpc", "supports": "eth_getBlockByNumber latest 2026-11-25: block 32,787,103, baseFeePerGas 0xf4240, gasLimit 10,000,000,000; web3_clientVersion mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "mega-evm releases and main since v1.7.4: no newer tag, core files byte identical, Cargo.lock pins revm 40.0.3, revm-interpreter 37.0.3 and ruint 1.19.0, which predates the ruint 1.21.0 MULMOD fault.",
+      "agrees": true,
+      "note": "Fetched Cargo.lock at main and v1.7.4: lines 4228-4229 revm 40.0.3, 4380-4381 revm-interpreter 37.0.3, 4513-4514 ruint 1.19.0 on both. limit.rs, executor.rs, chain.rs and constants.rs compare byte identical. One caveat: the live node is the closed mega-reth v2.2.3, whose own lock file is not public, so the ruint version it links is inferred from mega-evm. The consequence is bounded: OPCODES.md line 202 records that no MULMOD in the PoolManager bytecode can reach the faulty ruint 1.21.0 path for any input, and the cycle 16 targeted set (24,154 MULMOD and 21,074 mulDiv vectors) ran on the endpoint with 0 mismatches (cycles/016/high-throughput.work/targeted.json)."
+    },
+    {
+      "check": "New releases since cycle 13: whether a Monad release after v0.16.7 exists or runs on the endpoint.",
+      "agrees": true,
+      "note": "raw.githubusercontent.com/category-labs/monad/{v0.16.8,v0.16.9,v0.17.0}/CMakeLists.txt return 404 and v0.16.7 returns 200. https://rpc.monad.xyz web3_clientVersion returned Monad/0.16.7 on 2026-11-25. A tag under another name cannot be excluded without the GitHub API, which is unavailable; the endpoint version is the deciding fact and it matches."
+    },
+    {
+      "check": "Monad main, the new per-block cache of literal memory ends in the x86 emitter (touched_memory_end_): can a compiled MLOAD or MSTORE skip a needed memory expansion?",
+      "agrees": true,
+      "note": "Read emitter.cpp on main. begin_new_block (lines 1047-1062) resets touched_memory_end_ to 0 unless keep_stack_in_next_block_ is set. That flag is set only by jumpi_keep_fallthrough_stack (line 3907), which jumpi (lines 3533-3552) chooses only when the fall-through block is not in jump_dests_, so the release build keeps the cache only for a block with a single entry, not just in debug builds. At lines 6362-6372 the cache is updated before the emitted compare and expansion call; if expansion fails the frame exits, so no later access in that block runs. Literal offsets are bounded to Memory::offset_bits = 28 (runtime/types.hpp line 126, static_assert at emitter.cpp line 6328), so the int32 sum lit + read_size cannot overflow. Memory never shrinks within a frame and the data pointer is reloaded from the context on every cached access."
+    }
+  ],
+  "leads": []
+}

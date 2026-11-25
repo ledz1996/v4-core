@@ -1,0 +1,22 @@
+{
+  "unit": "theme-megaeth-validator-build",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 4: when a PoolManager call inside unlock meets a mega-evm compute gas, data size, key-value update or state growth limit, can an inner frame stop while outer frames continue with PoolManager state the source assumes rolled back?",
+      "agrees": true,
+      "note": "I fetched https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.3/crates/mega-evm/src/limit/limit.rs. Lines 801-856 show that before_frame_return_result rewrites a frame-local exceed to Revert without touching the journal, and the comment there says a frame that exited successfully stays committed. data_size.rs:324-335 records CREATE code size in after_frame_run. frame_limit.rs:155-170 gives a child 98/100 of the parent's remaining budget, so a child's usage exceeds its own budget before any ancestor's, and the late exceed is charged to the CREATE frame and not to the PoolManager frame. A linear opcode scan of eth_getCode for 0xacb7e78fa05d562e0a5d3089ec896d57d057d38e on https://mainnet.megaeth.com/rpc (24009 bytes, PUSH data skipped) found no CREATE, CREATE2, SELFDESTRUCT, CALLCODE or DELEGATECALL byte. So no PoolManager frame can be committed and then reported failed. In src, every outward call reverts the PoolManager frame when the callee fails: the native and ERC-20 transfer (src/types/Currency.sol:44-84) and callHook (src/libraries/Hooks.sol:131-136). unlock checks NonzeroDeltaCount before Lock.lock (src/PoolManager.sol:104-114), so a PoolManager unlock frame that is committed always holds settled deltas. A child reported failed while committed is rolled back with the PoolManager's own genuine revert. src has no try/catch and no call whose failure it tolerates (grep over src/ for call, staticcall, delegatecall, try, create, selfdestruct). I found no path to other users' funds."
+    },
+    {
+      "check": "L-768 and L-626, Task 2: does the closed MegaETH sequencer's post-state for PoolManager liquidity removals, fee collections, ERC-6909 mints and burns and take inside reverted frames equal an independent re-execution?",
+      "agrees": true,
+      "note": "The work files agree with the counts claimed. blocks.txt has 911 lines and runall/results.jsonl has 911 rows, all validated. runrest has 42734 rows, all validated. runplant has 611 validated and 300 validation_failed. cats.json lists removal 210, feeCollect 545, mint6909 40, burn6909 81 and undonePay 75. For block 9168362, eth_getBlockByNumber on https://mainnet.megaeth.com/rpc returns hash 0x9702123f...f647, the same hash as the validator row. In --block-list mode the witness pre-state is not anchored to the parent state root. Only the 45 anchored runs (anch/summary.txt, all exit 0) close that gap. A pre-state faked by the sequencer would need an operator, which is outside the unprivileged scope. The coverage limit is stated correctly: blocks without a PoolManager log and blocks after 32,766,000 were not run."
+    },
+    {
+      "check": "The validator's lock pins ruint 1.17.2 and revm-interpreter 37.0.3, and earlier cycles read mega-evm v1.7.4 with ruint 1.19.0. Does the version split leave PoolManager arithmetic unchecked?",
+      "agrees": true,
+      "note": "build/sv/Cargo.lock pins mega-evm 1.7.3, revm 40.0.3, revm-handler 20.0.3, revm-interpreter 37.0.3 and ruint 1.17.2, and build2.log ends with EXIT 0. The item does not over-claim. It says that operands no mined block reaches are covered only by the OPCODES.md battery. Differential coverage of the sequencer's ruint therefore extends only to the operands seen on chain. That is a limit on coverage and does not show a hazard."
+    }
+  ],
+  "leads": []
+}

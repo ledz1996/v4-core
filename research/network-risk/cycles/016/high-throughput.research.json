@@ -1,0 +1,352 @@
+{
+ "unit": "high-throughput",
+ "_lenses": [
+  "L1",
+  "L2",
+  "L3",
+  "L4"
+ ],
+ "profiles": [
+  {
+   "chainId": 143,
+   "lens": "L1",
+   "summary": "The endpoint still answers Monad/0.16.7 and no newer release tag exists. The main branch carries the next release: Amsterdam opcodes behind the unscheduled revision MONAD_NEXT, an in-house host interface in place of evmc, a new asmjit API in the x86 emitter, a cache of literal memory bounds per basic block, and a Barrett reduction module in the 256 bit library that nothing calls yet. The changes to division, ADDMOD and MULMOD that are live on main read as equivalent to v0.16.7.",
+   "deltas": [
+    {
+     "delta": "Main adds DUPN, SWAPN and EXCHANGE (0xe6 to 0xe8, EIP-8024) and SLOTNUM (0x4b, EIP-7843), all gated on the Amsterdam rules that only MONAD_NEXT selects. Jump analysis is unchanged: a disallowed immediate makes the opcode invalid and is not consumed, and no allowed immediate equals 0x5b or a PUSH opcode. The PoolManager runtime built from this checkout has no byte 0x4b, 0xe6, 0xe7 or 0xe8 outside push data.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/evm/opcodes.hpp ; https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/basic_blocks.hpp (decode_eip8024) ; https://raw.githubusercontent.com/category-labs/monad/main/category/vm/interpreter/intercode.cpp lines 64-65 ; research/network-risk/build/PoolManager.json (linear scan, this cycle)",
+     "relevance": "none"
+    },
+    {
+     "delta": "Main's uint256.hpp adds a namespace barrett with precomputed reciprocals for udivrem, addmod, mulmod and mulmod by a constant (about 760 lines). No file of category/vm read this cycle calls it, so on main it is dormant library code.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/core/runtime/uint256.hpp lines 1383-2143",
+     "relevance": "low"
+    },
+    {
+     "delta": "Main's generic udivrem builds the remainder from the n significant divisor words instead of all N words and zero fills it in the short path, addmod keeps its fast path with one result variable, and mulmod calls wide_mul, which is truncating_mul of the full width. Each change computes the same words as v0.16.7.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/core/runtime/uint256.hpp lines 843-962 against https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/core/runtime/uint256.hpp lines 803-920",
+     "relevance": "low"
+    },
+    {
+     "delta": "Main's x86 emitter moves to a new asmjit API (Vec for Ymm and Xmm, snake case method names) and adds touched_memory_end_, which skips the memory size check for a literal offset whose end lies below one already checked in the same basic block, reset at every block that can be entered by a jump.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/x86/emitter.cpp lines 1047-1062 and 6320-6400",
+     "relevance": "low"
+    }
+   ]
+  },
+  {
+   "chainId": 143,
+   "lens": "L2",
+   "summary": "Rerun on the v0.16.7 endpoint: 50 call semantics words as specified, and 6,099 storage and 6,099 transient reads with no slot alias. Main replaces evmc with its own host types; the transient storage accessors keep the same shape.",
+   "deltas": [
+    {
+     "delta": "Main applies EIP-8246 under MONAD_NEXT: SELFDESTRUCT to self no longer burns, and a contract created and destroyed in one transaction keeps its balance with nonce, code and storage cleared. The PoolManager bytecode has no SELFDESTRUCT.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/state.cpp lines 447-540",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 143,
+   "lens": "L3",
+   "summary": "No new gas or native currency difference. Main charges the 9,000 gas value transfer cost before the EIP-7702 delegation lookup, which changes only when an out-of-gas halt happens. The same 21 and 20 scripts as cycle 13 differ for gas.",
+   "deltas": [
+    {
+     "delta": "CALL with value now debits 9,000 gas and checks the static flag before resolving a delegated callee; before, both came after. Results differ only in which out-of-gas or error status a failing call reports.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/runtime/call.cpp lines 91-107",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 143,
+   "lens": "L4",
+   "summary": "The staking precompile dispatch on main has the same admission rule as v0.16.7: anything but a plain CALL with no flags is rejected. Under Amsterdam a native transfer also emits a log (EIP-7708), which changes no balance.",
+   "deltas": [
+    {
+     "delta": "check_call_monad_precompile on main returns Rejected for a non-CALL kind or nonzero flags, as v0.16.7 did, and passes a new log_native_transfers switch to the contract.",
+     "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/monad/monad_precompiles.cpp lines 38-71 against https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/monad/monad_precompiles.cpp lines 28-62",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4326,
+   "lens": "L1",
+   "summary": "The replica still answers mega-reth/v2.2.3-72527bc. mega-evm main equals v1.7.4 in limit.rs, executor.rs, constants.rs and instructions.rs and pins revm 40.0.3, revm-interpreter 37.0.3 and ruint 1.19.0. The stateless validator README still names a closed JIT executor on the sequencer. Every vector and script set rerun this cycle matches.",
+   "deltas": []
+  },
+  {
+   "chainId": 4326,
+   "lens": "L2",
+   "summary": "Call semantics (50 of 50) and slot reads (6,099 storage, 6,099 transient, no alias) match. The Rex6 page states that a limit-exceeded halt at a frame boundary does not undo writes made before the first frame. This applies only to EIP-7702 authorizations, and Rex6 now skips the whole list in that case.",
+   "deltas": [
+    {
+     "delta": "Rex6, active since 25 August 2026, skips a type-4 transaction's authorization list when a per-transaction limit is already exceeded before the first frame, because writes made before the frame survive the frame-boundary halt.",
+     "source": "https://docs.megaeth.com/spec/network-upgrades/rex6.md lines 91-97",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4326,
+   "lens": "L3",
+   "summary": "The state growth skip rule and the executor's handling of a rejected candidate are byte identical on main and v1.7.4. No fork after Rex6 is scheduled. The queue order of skipped transactions stays unknown.",
+   "deltas": [
+    {
+     "delta": "Rex6 returns gas already forwarded to a child frame when a CALL halts on the compute gas limit. This changes gas_used only. The halted frame still fails, and the PoolManager reverts on any failed outgoing call.",
+     "source": "https://docs.megaeth.com/spec/network-upgrades/rex6.md line 85",
+     "relevance": "none"
+    }
+   ]
+  },
+  {
+   "chainId": 4326,
+   "lens": "L4",
+   "summary": "No new system contract or precompile. The upgrade history page lists MiniRex through Rex6 and nothing later, and the mainnet schedule in mega-evm main ends at Rex6.",
+   "deltas": []
+  }
+ ],
+ "findings": [
+  {
+   "ref": "F-062",
+   "title": "MegaETH orders transactions by time in 10 millisecond mini-blocks and skips every candidate once a block has 1,000 new state entries, so a queue of filling transactions delays later ones by its length if skipped transactions keep their place",
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A9"
+   ],
+   "effect": "degrade",
+   "actor": "unprivileged",
+   "severity": "low",
+   "difference": "MegaETH skips every remaining candidate of a block once the block holds 1,000 new state entries. One transaction may itself create 1,000. Ethereum has no per-block cap on new state.",
+   "mechanism": "Unchanged at the newest code. One transaction that writes 1,000 fresh storage slots in minimum-size buckets costs about 22.6 million gas, about 0.0000226 ETH at the 1,000,000 wei base fee read on 2026-11-25. After it, BlockLimiter::pre_execution_check returns an error for every later candidate of that block, and that includes a modifyLiquidity, take or burn sent to the PoolManager. The executor leaves its state untouched for a rejected candidate, and the caller decides what happens next, typically putting it back in the pool. limit.rs and executor.rs on mega-evm main are byte identical to v1.7.4, and the mainnet schedule ends at Rex6, so nothing scheduled changes this. The PoolManager takes no part: a delayed call later runs with the same checks and amounts. If the closed sequencer keeps skipped transactions ahead of later arrivals, N filling transactions from several accounts close N one-second blocks to everything that arrived after them. If not, each filler delays only the candidates behind it in its own block.",
+   "impact": "No funds move. Swaps, liquidity removals and claim burns of every user are delayed. The delay lasts one block per filler, at about 1.95 ETH per day for one filler per block. A longer delay needs the unconfirmed queue rule.",
+   "preconditions": "The base fee stays near its floor. The sequencer does not filter the sender. For the amplified form, skipped transactions keep their place in the queue, which no public source states.",
+   "mitigations": "Exits under load can use an L1 deposit of at most 1,000,000 gas. The operator can price state growth in minimum-size buckets, raise the block limit above the per-transaction limit, or deprioritise senders who fill the budget.",
+   "coreRefs": [
+    "src/PoolManager.sol:145-184",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs",
+     "supports": "byte identical to v1.7.4 (fetched and compared 2026-11-25); the skip rule recorded in cycles 4 to 13 is unchanged"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/executor.rs",
+     "supports": "byte identical to v1.7.4; a rejected candidate goes back to the caller, typically to the pool"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/chain.rs",
+     "supports": "lines 35-46: the mainnet schedule ends at Rex6 (timestamp 1787626800), so no scheduled fork changes the rule"
+    },
+    {
+     "url": "https://mainnet.megaeth.com/rpc",
+     "supports": "eth_getBlockByNumber latest on 2026-11-25: block 32,780,556 (0x1f4310c), baseFeePerGas 0xf4240, gasLimit 10,000,000,000; web3_clientVersion mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2"
+    }
+   ],
+   "evidence": "inferred"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    143,
+    4326
+   ],
+   "lens": "L1",
+   "check": "Rerun of the opcode battery (99,985 vectors) and the targeted set (85,544 vectors: MULMOD, mulDiv, ADDMOD, division, shifts at limb boundaries) on Monad/0.16.7 and mega-reth v2.2.3-72527bc on 2026-11-25, with Ethereum as reference.",
+   "result": "0 mismatches and 0 errors on all three networks. On Monad this tests the interpreter only, because eth_call never runs compiled code.",
+   "source": "research/network-risk/cycles/016/high-throughput.work/battery.json ; research/network-risk/cycles/016/high-throughput.work/targeted.json"
+  },
+  {
+   "chainIds": [
+    143,
+    4326
+   ],
+   "lens": "L1",
+   "check": "Rerun of pmdiff (250 scripts, 12,322 PoolManager calls) and pmdiff2 (300 scripts with hook and token doubles, 16,263 calls) at 25 million gas.",
+   "result": "MegaETH equals Ethereum on 250 of 250 and 300 of 300. Monad differs on 21 and 20 scripts, and the script ids are exactly those of cycle 13, where every difference was a swap across many ticks that ran out of gas. No new difference.",
+   "source": "research/network-risk/cycles/016/high-throughput.work/pmdiff.json ; research/network-risk/cycles/016/high-throughput.work/pmdiff2.json ; research/network-risk/cycles/013/high-throughput.work/pmdiff.json"
+  },
+  {
+   "chainIds": [
+    143,
+    4326
+   ],
+   "lens": "L1",
+   "check": "Mined swaps checked against the source math: 5,974 Monad swaps in blocks 125,181,970 to 125,184,213 and 5,977 MegaETH swaps in blocks 31,218,969 to 32,780,968, with the multi-step and unexplained samples replayed through the Pool.swap loop from storage.",
+   "result": "Tick relation exact on all 11,951. Single-step formulas account for 5,831 Monad and 5,499 MegaETH pairs. The 20 Monad and 62 MegaETH remaining samples replay to the unit with 0 failures, up to 3 steps.",
+   "source": "research/network-risk/cycles/016/high-throughput.work/swaps.json ; research/network-risk/cycles/016/high-throughput.work/replay.json"
+  },
+  {
+   "chainIds": [
+    143,
+    4326
+   ],
+   "lens": "L2",
+   "check": "Rerun of callsem.py (revert undoes transient and persistent writes, static call protection, return data size and copy bounds, delegatecall storage, value moves exactly) and statekeys.py (one-bit and truncated slot aliases for storage and transient storage).",
+   "result": "50 of 50 words as specified on both networks. 6,099 storage and 6,099 transient reads per network with no alias.",
+   "source": "research/network-risk/cycles/016/high-throughput.work/callsem.json ; research/network-risk/cycles/016/high-throughput.work/statekeys.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "New releases since cycle 13: whether a Monad release after v0.16.7 exists or runs on the endpoint.",
+   "result": "Tags v0.16.8, v0.16.9 and v0.17.0 return 404 on raw.githubusercontent.com and rpc.monad.xyz answers Monad/0.16.7 at block 125,182,846. The interpreter the endpoint runs is the one earlier cycles read.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.8/CMakeLists.txt (404) ; rpc https://rpc.monad.xyz web3_clientVersion 2026-11-25"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Monad main, EIP-8024 and SLOTNUM: can the new opcodes or their immediates change the jump destination map or the execution of the deployed PoolManager?",
+   "result": "No. The opcodes are gated on Amsterdam, which only MONAD_NEXT selects, and mainnet's revision function ends at MONAD_TEN. The interpreter's jump analysis has no EIP-8024 case, because an allowed immediate is never 0x5b or a PUSH. The compiler consumes an immediate only when it is allowed and otherwise ends the block as invalid, so 0x5b after 0xe6 to 0xe8 stays a JUMPDEST. A linear scan of the 24,009 byte runtime finds no 0x4b, 0xe6, 0xe7 or 0xe8 outside push data, so no PoolManager instruction changes meaning.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/basic_blocks.hpp ; https://raw.githubusercontent.com/category-labs/monad/main/category/vm/interpreter/intercode.cpp ; https://raw.githubusercontent.com/category-labs/monad/main/category/execution/monad/chain/monad_mainnet.cpp lines 33-51 ; research/network-risk/build/PoolManager.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Monad main, generic 256 bit division and modular arithmetic that DIV, MOD, ADDMOD and MULMOD call (udivrem, addmod, mulmod), read against v0.16.7 for the paths FullMath.mulDiv (src/libraries/FullMath.sol:24 and 48) and UnsafeMath.divRoundingUp use.",
+   "result": "Equivalent as read. udivrem now forms the remainder from the n significant divisor words. After Knuth division the normalised remainder is below the normalised divisor, so the words at n and above are zero, and v0.16.7 read the same zeros. The short path zero fills the remainder and copies min(M, N) words, which also removes an over-read when M is less than N. addmod's fast path returns the same value through one variable. mulmod's wide_mul is truncating_mul of width M+N. Not run, because the library could not be built here.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/core/runtime/uint256.hpp lines 843-962 ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/core/runtime/uint256.hpp lines 803-920"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Monad main, the new per-block cache of literal memory ends in the x86 emitter (touched_memory_end_): can a compiled MLOAD or MSTORE skip a needed memory expansion?",
+   "result": "No, as read. Memory never shrinks inside a frame. The cache is reset at the start of every block except a fall-through continuation, which a debug assertion requires to have no jump entry, and it only skips the check for literal offsets whose end is at or below one already expanded. The data pointer is reloaded from the context on every use.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/x86/emitter.cpp lines 1047-1062 and 6320-6400"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L3",
+   "check": "Monad main, reordered CALL with value (9,000 gas debited and static flag tested before the EIP-7702 delegate lookup).",
+   "result": "Gas order only. A call that would fail still fails and a call that would succeed still succeeds with the same remaining gas once it starts. The PoolManager's native payout (src/types/Currency.sol:48) is a CALL with value from a non-static frame.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/runtime/call.cpp lines 91-107"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "check": "Monad main, EIP-8246 selfdestruct rules under MONAD_NEXT: can native value reach the PoolManager outside a call and be credited to someone?",
+   "result": "No. The PoolManager has no SELFDESTRUCT. Value that another contract's SELFDESTRUCT sends to it raises address(this).balance, but native settlement credits msg.value only (src/PoolManager.sol:353-354), so the value is stranded and no account is credited.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/ethereum/state3/state.cpp lines 447-540 ; src/PoolManager.sol:349-365"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L4",
+   "check": "Monad main, staking precompile admission for calls from the PoolManager (P1 native take, P2 token take with X = 0x1000, P3 sync).",
+   "result": "Unchanged. Non-CALL kinds and any flag (static included) return Rejected, insufficient gas returns OutOfGas, and a method error reverts, as in v0.16.7. All three revert the PoolManager frame through Currency.transfer (src/types/Currency.sol:51-52 and 82-86) or the high level balanceOf call (src/types/Currency.sol:94).",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/monad/monad_precompiles.cpp lines 38-71"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "mega-evm releases and main since v1.7.4.",
+   "result": "No tag after v1.7.4 (v1.7.5, v1.7.6 and v1.8.0 return 404). On main, CHANGELOG.md starts at v1.7.4. limit.rs, executor.rs, constants.rs and evm/instructions.rs are byte identical to v1.7.4, and Cargo.lock still pins revm 40.0.3, revm-interpreter 37.0.3 and ruint 1.19.0, which predates the ruint 1.21.0 MULMOD fault.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/CHANGELOG.md ; https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/Cargo.lock ; https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.5/CHANGELOG.md (404)"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "Upcoming MegaETH forks in the next six months.",
+   "result": "None is scheduled. The mainnet schedule in mega-evm main ends at Rex6 (1787626800, 25 August 2026), REX7 was removed in v1.7.3, and the upgrade history page lists MiniRex through Rex6.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/chain.rs lines 35-46 ; https://docs.megaeth.com/spec/network-upgrades/overview.md"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Upcoming Monad forks in the next six months.",
+   "result": "MONAD_NEXT (Amsterdam rules: EIP-7708 transfer logs, EIP-7843 SLOTNUM, EIP-8024, EIP-8246, MIP-12) exists on main but has no mainnet activation. monad_mainnet.cpp on main maps every timestamp from 1788359400 on to MONAD_TEN. If it ships as written, the opcode and selfdestruct changes do not touch the PoolManager bytecode (see the EIP-8024 and EIP-8246 items above).",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/main/category/execution/monad/chain/monad_mainnet.cpp lines 33-51 ; https://raw.githubusercontent.com/category-labs/monad/main/category/vm/evm/traits.hpp lines 416-430 and 560-665"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L3",
+   "check": "L-516: do the vaults 0x5f16b71cc05b146d73e181354b1c8ac89fc4bbc3 and 0xdc41ab847d922fe4375d7d050f518480634ff0e9, which hold 17 positions in the MegaETH PoolManager, have ordinary depositors who would need an L1 exit?",
+   "result": "No. Each vault's share token (GAMMA-LP) has exactly one Transfer event in its whole history, the mint to its owner 0xe911f518449ba0011d84b047b4cde50daa081ec1, an account without code. balanceOf(owner) equals totalSupply on both: 2,231,534,980,321,645,294 and 1,000,000,000,000,000. The positions belong to the vault operator alone, so no ordinary user's exit depends on the vault's withdrawal gas.",
+   "source": "rpc https://mainnet.megaeth.com/rpc eth_getLogs (all blocks, address = each vault) and eth_call totalSupply, balanceOf, owner, getTotalAmounts on 2026-11-25"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "question": "In the first Monad release after v0.16.7, does any caller (the interpreter's MULMOD, ADDMOD, DIV, MOD, SDIV, SMOD or the x86 emitter's handling of literal moduli and divisors) use the barrett reciprocal module now in uint256.hpp? If so, do the reduce routines return the exact remainder for MULMOD with modulus 2^256 - 1, 2^96 and 2^128 and for products whose top limbs equal the modulus?",
+   "why": "FullMath.mulDiv calls mulmod(a, b, not(0)) on every swap (src/libraries/FullMath.sol:24) and the optimizer made copies of mulDiv with literal denominators 2^96 and 2^128. A Barrett fast path for literal moduli is the same kind of rewrite that broke ruint 1.21.0. On Monad such a path would run only in compiled code, which no eth_call reaches, so the targeted vectors would have to run through a build of the release.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "question": "Rerun the cycle 15 native-code harness (theme-monad-emitter-blocks) against the next Monad release, which moves the x86 emitter to a new asmjit API and adds the literal memory bound cache, on the PoolManager runtime and the mined scenarios.",
+   "why": "The compiled PoolManager is what validators run, and the next release changes the assembler library under every emitted instruction. Cycle 15 compared compiled and interpreted results only against v0.16.5 and v0.16.7.",
+   "priority": "medium"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-516",
+   "outcome": "cleared",
+   "answer": "Both vaults' share supply is held entirely by their owner EOA 0xe911f518449ba0011d84b047b4cde50daa081ec1: one mint Transfer each in the whole log history, and balanceOf(owner) equals totalSupply (2,231,534,980,321,645,294 and 1,000,000,000,000,000) on 2026-11-25. There are no third-party depositors, so no ordinary user depends on the vault's withdrawal gas fitting the 1,000,000 gas L1 deposit. The question was operator level in any case."
+  },
+  {
+   "leadId": "L-606",
+   "outcome": "inconclusive",
+   "answer": "Nothing new is public. The stateless validator README still describes the sequencer as a parallel JIT-compiled executor and the validator as vanilla revm. Its Cargo.toml pins mega-evm v1.7.3 and revm 40.0.3, and mega-reth is not public (404). The producer is covered only by mined results: this cycle 5,977 MegaETH swaps pass the tick relation and 62 multi-step samples replay to the unit."
+  },
+  {
+   "leadId": "L-549",
+   "outcome": "inconclusive",
+   "answer": "Not done. It is a hook sweep, which the review owner ruled out for this cycle. The Monad part (hook 0x94f802a9efe4dd542fdbd77a25d9e69a6dc828cc) stays open for a hook unit."
+  },
+  {
+   "leadId": "L-170",
+   "outcome": "inconclusive",
+   "answer": "No new evidence. The executor and limiter code on mega-evm main is byte identical to v1.7.4, and the sequencer pool that decides where a skipped transaction goes is closed. The time order shown in cycle 7 stands."
+  },
+  {
+   "leadId": "L-176",
+   "outcome": "inconclusive",
+   "answer": "Not observed and not excluded. The bound of F-062 stands: N fillers close at most N blocks at about 0.0000226 ETH each, at the 1,000,000 wei base fee read on 2026-11-25, and only if skipped transactions keep their place. No fork is scheduled that changes the limit."
+  },
+  {
+   "leadId": "L-177",
+   "outcome": "inconclusive",
+   "answer": "Not attempted again. Without an index of state growth per transaction, finding a transaction with 1,000 new entries needs per-transaction traces over millions of blocks. The source argument from cycle 7 stands: a counterexample would fail stateless validation."
+  },
+  {
+   "leadId": "L-732",
+   "outcome": "inconclusive",
+   "answer": "Unchanged. The endpoint answers mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2, the fork is not public, and the stateless validator still pins reth v2.3.0, which has the cache branch. As cycle 15 noted, the branch cannot reach the PoolManager's storage or that of a contract an existing pool uses."
+  }
+ ]
+}
