@@ -54,20 +54,22 @@ m.mul_div, m.mul_div_rounding_up, m.next_price_amount0_rounding_up = mul_div, mu
 
 # planted faults, to show that the comparison can fail on each branch class
 _mm = m.mulmod; _gsp = m.get_sqrt_price_at_tick; _dru = m.div_rounding_up
-if A.plant == 'mulmod':   # MULMOD by a modulus other than 2^256-1 returns one more when the product needs 512 bits
-    m.mulmod = lambda a, b, c: ((_mm(a, b, c) + 1) % c if c and c != MASK and (a * b) >> 256 else _mm(a, b, c))
-elif A.plant == 'fallback':  # the fallback rounds down
-    def next0f(p, liq, amount, add_):
-        if amount and add_:
-            prod = (amount * p) & MASK
-            if not (prod // amount == p and ((liq << 96) + prod) & MASK >= (liq << 96)):
-                H['fallback'] += 1
-                return ((liq << 96) // ((liq << 96) // p + amount)) & U160
-        return _n0(p, liq, amount, add_)
-    m.next_price_amount0_rounding_up = next0f
-elif A.plant == 'tick':  # getSqrtPriceAtTick one unit high for ticks that are multiples of 10
-    m.get_sqrt_price_at_tick = lambda t: _gsp(t) + (1 if t % 10 == 0 else 0)
-
+def install_plant():
+    global _n0
+    if A.plant == 'mulmod':   # MULMOD by a modulus other than 2^256-1 returns one more when the product needs 512 bits
+        m.mulmod = lambda a, b, c: ((_mm(a, b, c) + 1) % c if c and c != MASK and (a * b) >> 256 else _mm(a, b, c))
+    elif A.plant == 'fallback':  # the fallback rounds down
+        def next0f(p, liq, amount, add_):
+            if amount and add_:
+                prod = (amount * p) & MASK
+                if not (prod // amount == p and ((liq << 96) + prod) & MASK >= (liq << 96)):
+                    H['fallback'] += 1
+                    return ((liq << 96) // ((liq << 96) // p + amount)) & U160
+            return _n0(p, liq, amount, add_)
+        m.next_price_amount0_rounding_up = next0f
+    elif A.plant == 'tick':  # getSqrtPriceAtTick one unit high for ticks that are multiples of 10
+        m.get_sqrt_price_at_tick = lambda t: _gsp(t) + (1 if t % 10 == 0 else 0)
+    
 # ---------------------------------------------------------------- v3 swap step and loop
 def v3_step(cur, target, L, rem, fee):
     """Uniswap v3 SwapMath.computeSwapStep with rem < 0 for exact input (v4 sign), built from the same library functions."""
@@ -133,7 +135,7 @@ class Flat:  # a view with no initialized ticks: one step means no initialized t
     def next_tick(self, tick, lte): return (m.MIN_TICK if lte else m.MAX_TICK), False
     def net(self, t): return 0
 
-st = collections.Counter(); flagged = set(); perpool = collections.Counter(); ex = collections.defaultdict(list)
+st = collections.Counter(); flagged = set(); gflags = collections.defaultdict(set); perpool = collections.Counter(); ex = collections.defaultdict(list)
 for pool, rows in ev.items():
     fee, sp = pools[pool]['fee'], pools[pool]['tickSpacing']
     pre = None
@@ -171,7 +173,7 @@ for pool, rows in ev.items():
         for f_ in flags: st['flag:' + f_] += 1
         key = {k for k in flags if k in ('m512', 'fallback', 'big160', 'onTick', 'm512?', 'fallback?')}
         if key and 'noPre' not in flags:
-            flagged.add((pool, r[1]))
+            flagged.add((pool, r[1])); gflags[(pool, r[1])] |= key
             for k in key:
                 if len(ex[k]) < 5: ex[k].append(r[3])
         pre = (p1, t1, L1)
@@ -180,9 +182,13 @@ if A.stageA_only:
     json.dump({'stageA': st, 'groups': len(flagged), 'examples': ex}, open(A.out, 'w'), indent=1); sys.exit()
 
 # ---------------------------------------------------------------- stage B
+# the plant goes in after stage A, so that both runs pick the same groups and only the stage B comparison sees the fault
+install_plant()
 groups = sorted(flagged)
 if A.only:
-    pass
+    want = set(A.only.split(','))
+    groups = [g for g in groups if gflags[g] & want]
+print('groups selected', len(groups), collections.Counter(k for g in groups for k in gflags[g]), flush=True)
 rnd = random.Random(A.seed)
 if A.limit and len(groups) > A.limit: groups = sorted(rnd.sample(groups, A.limit))
 
@@ -206,7 +212,7 @@ def batch(calls):
     return out
 
 def enc_int(x): return (x & MASK).to_bytes(32, 'big').hex()
-def s128(x): return x - (1 << 128) if x >> 127 else x
+def s128(x): return x - (1 << 256) if x >> 255 else x  # ABI words of int128 are sign extended to 256 bits
 
 class View:
     def __init__(self, pool, block, sp):
@@ -279,6 +285,44 @@ def run_group(g):
                 if q == p1 and tk == t1 and l2 == L1 and s_in == paid and s_out == got:
                     ok = (mode, steps, dict(H)); break
             if ok: break
+        if not ok and p1 != p:
+            # The pool may charge a fee other than fee() (dynamic fee forks). Search the fee in pips that makes the
+            # exact-input loop land on the logged price (the landing price falls as the fee falls for zeroForOne),
+            # then require every logged field to equal the rerun at that fee or a neighbour.
+            zfo = p1 < p; paid, got = expect(zfo, a0, a1)
+            edge = m.MIN_SQRT_PRICE + 1 if zfo else m.MAX_SQRT_PRICE - 1
+            def land(fe):
+                try: return loop(view, p, tick, liq, zfo, -paid, edge, fe)
+                except m.Revert: return None
+            lo_, hi_ = 0, 999999
+            if paid > 0:
+                for _ in range(22):
+                    mid = (lo_ + hi_) // 2; q = land(mid)
+                    if q is None: lo_ = mid + 1; continue
+                    moved_far = (q[0] < p1) if zfo else (q[0] > p1)
+                    if moved_far: lo_ = mid + 1
+                    else: hi_ = mid
+                    if lo_ >= hi_: break
+                def land2(fe, amt, lim):
+                    try: return loop(view, p, tick, liq, zfo, amt, lim, fe)
+                    except m.Revert: return None
+                cands = list(range(max(0, lo_ - 3), min(999999, lo_ + 4)))
+                if got > 0:  # exact output: the amount paid rises with the fee
+                    lo2, hi2 = 0, 999999
+                    for _ in range(22):
+                        mid = (lo2 + hi2) // 2; q = land2(mid, got, edge)
+                        if q is None: hi2 = mid; continue
+                        if q[3] < paid: lo2 = mid + 1
+                        else: hi2 = mid
+                        if lo2 >= hi2: break
+                    cands += list(range(max(0, lo2 - 3), min(999999, lo2 + 4)))
+                for fe in cands:
+                    for amt, lim in ((-paid, edge), (got, edge), (-paid, p1), (got, p1), (-(1 << 200), p1)):
+                        if amt == 0: continue
+                        H.clear(); q = land2(fe, amt, lim)
+                        if q and q[0] == p1 and q[1] == t1 and q[2] == L1 and q[3] == paid and q[4] == got:
+                            ok = ('feeSearch', q[5], dict(H)); break
+                    if ok: break
         res.append(('ok' if ok else 'mismatch', r, ok))
         p, tick, liq = p1, t1, L1  # carry the logged state forward
     return res

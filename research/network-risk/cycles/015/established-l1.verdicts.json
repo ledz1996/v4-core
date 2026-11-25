@@ -1,0 +1,46 @@
+{
+  "unit": "established-l1",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "low",
+      "factCheck": "PR 0xPolygon/bor#2546 (fetched) is merged on 2026-11-23 and says Salvador installs a 344 byte Sweeper runtime at four Polymarket addresses and one Binance address through BlockAlloc, with no new consensus logic, an immutable recovery address, no receive(), and balances and nonces left alone. It schedules mainnet block 98,688,600 for about 2026-12-08. params/config.go on develop (fetched) has SalvadorBlock 98688600 in BorMainnetChainConfig and a BlockAlloc key 98688600 with the same five addresses. Each of the five code strings decodes to 344 bytes. Earlier keys rewrite 0x1010 (22156660), 0x1001 (50523000, 96787900) and 0x1001, 0x1010 and WMATIC 0x0d500B1d... (62278656). consensus/bor/bor.go on develop (fetched) lines 1381-1400 loop over the BlockAlloc entry for the block, call state.SetCode on each address and set the balance only when it is zero. The function is called at lines 1289, 1441 and 1501 in the finalisation paths. On-chain: eth_call balanceOf(address,uint256) on PoolManager 0x6736...5cd6 at polygon-bor-rpc.publicnode.com, latest block 0x5d5fb1d, returns 0 for all five addresses in currency ids 0 (native), USDC 0x3c49...3359 and WPOL 0x0d50...1270. PositionManager balanceOf returns 0 for all five. eth_getCode returns 0x for all five today.",
+      "codeCheck": "src/types/Currency.sol:44-52 sends native value with call(gas(), to, amount, 0, 0, 0, 0) and reverts with NativeTransferFailed on failure, so a native take to a Sweeper address reverts the taker's own unlock only. src/types/Currency.sol:53-80 makes the ERC-20 transfer call, and balanceOfSelf at src/types/Currency.sol:90-95 makes the sync read, both against whatever code the token address holds at the time. src/NoDelegateCall.sol:19-25 compares address(this) with an immutable and cannot see a change of the contract's own code. The path holds as written. A code swap by BlockAlloc on a pooled token, hook or the PoolManager itself would change every call the PoolManager makes to it, and nothing in src/ can detect it. No unprivileged step exists: only a bor release adopted by the validators can add an entry.",
+      "corrections": "Two details are wrong. First, the statement that Salvador is the first use of BlockAlloc on accounts that are not system or genesis contracts is contradicted on chain: eth_getCode for WMATIC/WPOL 0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270 at polygon.drpc.org returns 0x at blocks 1 and 4,915,200 and code at 6,250,000, so WPOL was deployed by an ordinary transaction and its code was already replaced by the 62278656 entry. That precedent is a token the PoolManager holds (7,903 WPOL per the finding). It is the reason for low rather than info: chain governance has already rewritten a pooled currency once. Second, src/libraries/Hooks.sol:27 is ALL_HOOK_MASK; the permission flag constants start at line 29. The actor value governance is right.",
+      "sources": [
+        {"url": "https://github.com/0xPolygon/bor/pull/2546", "supports": "Salvador purpose, five addresses, 344 byte Sweeper, no receive(), balances untouched, mainnet block 98,688,600 around 2026-12-08, merged 2026-11-23"},
+        {"url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/params/config.go", "supports": "SalvadorBlock 98688600 and the BlockAlloc entries at 22156660, 50523000, 62278656 (including WMATIC), 96787900 and 98688600; each Salvador code string is 344 bytes"},
+        {"url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/consensus/bor/bor.go", "supports": "changeContractCodeIfNeeded at lines 1381-1400 calls SetCode and sets balance only if zero; called at lines 1289, 1441, 1501"},
+        {"url": "eth_call balanceOf on PoolManager 0x67366782805870060151383f4bbff9dab53e5cd6 and PositionManager 0x1ec2ebf4f37e7363fdfe3551602425af0b3ceef9 at https://polygon-bor-rpc.publicnode.com, block 0x5d5fb1d", "supports": "zero claims in ids 0, USDC and WPOL and zero position NFTs for all five Salvador addresses; eth_getCode 0x for all five"},
+        {"url": "eth_getCode 0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270 at https://polygon.drpc.org, blocks 0x1, 0x4b0000, 0x5f5e10", "supports": "WPOL has no code at blocks 1 and 4,915,200 and has code at 6,250,000, so it is not a genesis contract"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Opcode battery (99,985 vectors) and targeted set (85,544 vectors) rerun on 2026-11-24 against bor v2.11.1-private, BSC geth v1.8.2-4e1c8247 and avalanchego 1.15.3: 185,529 of 185,529 vectors give the specified word.",
+      "agrees": true,
+      "note": "cycles/015/established-l1.work/out/battery.json and targeted.json record ran equal to vectors and mismatchCount 0 with empty errors for chain ids 137, 56 and 43114. An independent run of 80 MULMOD and ADDMOD vectors at 2^256-1, 2^255, 2^192+1, small and zero moduli, by eth_call with a code override on polygon-bor-rpc.publicnode.com, gave 0 mismatches against Python big integers."
+    },
+    {
+      "check": "Lead L-750: the --precompile-cache in bor v2.12.0-beta cannot give a STATICCALL from sync(X) a cached result for a different input or a different precompile.",
+      "agrees": true,
+      "note": "v2.12.0-beta core/vm/evm.go lines 57-71 use the cache only when it is configured, the precompile set is not overridden, the address is 0x01 and the input is at most 128 bytes. Lines 76-112 key on the input zero-padded to 128 bytes, which equals ecrecover's own padding, charge RequiredGas on a hit, store only results with no error, and clone on store and on return. A nil result (invalid signature) is stored and returned as nil, which is what the uncached call returns."
+    },
+    {
+      "check": "bor v2.11.2 and develop do not change the interpreter or the integer library; the aliased result operand in SDiv, SMod, Exp, AddMod and MulMod is harmless under holiman/uint256 v1.3.2.",
+      "agrees": true,
+      "note": "v2.11.2 go.mod pins holiman/uint256 v1.3.2. instructions.go lines 60, 74, 81, 196 and 202 are y.SDiv(&x, y), y.SMod(&x, y), exponent.Exp(&base, exponent), z.AddMod(&x, &y, z) and z.MulMod(&x, &y, z). In uint256 v1.3.2, SDiv (line 789) negates into fresh values and calls Div, SMod (line 665) reads both signs before writing, Exp (line 1201) works in the local res and reads each exponent word before the single final write, and MulMod (line 720) builds the product in a local array before reducing. The battery exercises these exact aliased call sites on every vector, so an aliasing fault would show as a mismatch."
+    }
+  ],
+  "leads": [
+    {
+      "chainIds": [137],
+      "lens": "L2",
+      "question": "List every BlockAlloc entry in bor history that touched an address with ordinary deployed code (WPOL at 62278656 is one) and check whether the replacement kept balanceOf and transfer semantics for holders such as the PoolManager.",
+      "why": "WPOL is a pooled currency and was already rewritten once by governance, so the precedent applies directly to PoolManager balances.",
+      "priority": "low"
+    }
+  ]
+}

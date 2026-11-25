@@ -4940,6 +4940,119 @@
    ]
   },
   {
+   "title": "From Tempo T15 a take to a zone deposit address is forwarded to a zone portal, and a failed deposit returns to the PoolManager, where an account with callbacks in the same portal batch can book it as its own payment",
+   "chainIds": [
+    4217
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2",
+    "A4"
+   ],
+   "effect": "degrade",
+   "difference": "From T15, which v1.19.1 already contains and which Tempo targets for 15 December 2026, the TIP-20 precompile treats any recipient whose bytes 4 to 12 are 0xFC as a zone virtual deposit address. A transfer to it credits the zone's portal instead of the named address and then calls depositVirtual on the portal with the sender as originator. If the zone cannot deliver the deposit, the portal refunds the originator on Tempo later, minus a fee, or parks the refund for the originator to claim.",
+   "mechanism": "An ordinary caller inside unlock calls take(token, to, amount) with a zone deposit address as to. The PoolManager debits the caller amount of the token (PoolManager.sol:291-297) and calls token.transfer(to, amount) (Currency.sol:53-80). The token debits the PoolManager amount, credits the portal amount, and calls the portal, whose code is a fixed system runtime that does not call the PoolManager. The call returns true, so the take succeeds, and the caller must settle amount as with any other take. The PoolManager loses exactly what the caller owes. If the deposit fails in the zone (unregistered master id, unconfigured key, rejected by the sequencer or the issuer policy), the portal later transfers the net amount to the PoolManager in a separate transaction, or parks it under the PoolManager's address, which the PoolManager can never claim because it makes no arbitrary calls. A refund that arrives with no sync before it raises balanceOf(PoolManager) and credits no caller (PoolManager.sol:279-288, 349-364), so it stays as surplus. A reading of the portal source after the cycle (own check, 2026-11-25) adds one path. The portal pays a refund only inside processWithdrawals, which the zone's sequencer sends (ZonePortal.sol 1386-1408, 1506-1529), and claimRefund pays only its own caller (1531-1539). The same processWithdrawals call also delivers callback withdrawals: any zone account can request one (zone outbox request_withdrawal, outbox/mod.rs 159-262), and when the zone's gateway mode is open the messenger calls onWithdrawalReceived on any target (ZoneMessenger.sol 37-82). sync needs no unlock (PoolManager.sol:279) and the synced currency and reserves live in transient storage until the end of the transaction. So an account that has one callback withdrawal before the refund and one after it in the same batch can call sync(token) in the first callback and unlock, settle and take in the second. settle then counts the refund as that account's payment (PoolManager.sol:358-364).",
+   "impact": "No funds of liquidity providers or claim holders move. The party that named the deposit address, or the router or user it acted for, loses the refund of a failed deposit. The refund stays in the portal's refund registry, stays in the PoolManager as surplus, or goes to an account that placed callback withdrawals around it in the same portal batch. The loss to the taker is the same in all three cases.",
+   "preconditions": "T15 active on mainnet with TIP-1094 in its scope (the T15 page lists only TIP-1166 so far; the code gates TIP-1094 on T15). A zone with a nonzero id below next_zone_id and a key version other than 0. For the capture path: the zone's gateway mode is open, the taker's deposit fails in the zone, and the other account's two callback withdrawals sit on either side of the refund in one processWithdrawals transaction. The zone orders its withdrawal queue, so the account cannot force that position; it can only keep callback withdrawals flowing.",
+   "mitigations": "Routers and front ends should refuse take recipients whose bytes 4 to 12 are 0xFC on Tempo, or pay zone deposits from their own address so refunds return to them. Nothing in the PoolManager can be changed to stop the capture, because sync is open by design.",
+   "coreRefs": [
+    "src/PoolManager.sol:279",
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:349-364",
+    "src/types/Currency.sol:53-80"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/precompiles/src/tip20/mod.rs",
+     "supports": "resolve_transfer routes a reserved address to portal_address(zone_id) under T15, deposit_virtual calls depositVirtual with originator equal to the sender, rejects zero amount and transfers made inside other precompiles"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/contracts/src/zones/address_registry.rs",
+     "supports": "zone deposit address format, magic 0xFC at bytes 4 to 12"
+    },
+    {
+     "url": "https://tips.sh/1094",
+     "supports": "refunds of failed virtual deposits go to the originator, minus the processing fee, or are parked for the originator to claim"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/protocol/upgrades.md",
+     "supports": "T15 targeted for mainnet on 15 December 2026, T14 on 8 December 2026"
+    },
+    {
+     "url": "https://tempo.com/developers/docs/protocol/upgrades/t15.md",
+     "supports": "T15 page lists only TIP-1166 so far and says the scope may change"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/zones/contracts/src/runtime/tempo/ZonePortal.sol",
+     "supports": "depositVirtual 1213-1282, processWithdrawals 1386-1408 (sequencer only, reentrancy guard), deliverWithdrawal 1463-1504, _processDepositBounceBack 1506-1529, claimRefund 1531-1539 pays msg.sender only"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/zones/contracts/src/runtime/tempo/ZoneMessenger.sol",
+     "supports": "relayMessage 37-82 transfers the amount to the target and calls onWithdrawalReceived on it; with gateway mode enforced only targets with the CallbackGateway role are accepted"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/zones/precompiles/src/outbox/mod.rs",
+     "supports": "request_withdrawal 159-262: any zone account that passes the zone's withdrawal policy can queue a withdrawal with a gas limit and callback data"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "low",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 15,
+    "factCheck": "Fetched tempo/v1.19.1 crates/precompiles/src/tip20/mod.rs. transfer (lines 869-884) calls validate_transfer, which calls Recipient::resolve_transfer (line 1253); from T15 resolve_transfer (lines 1679-1695) decodes a zone deposit address, rejects version 0 and zone ids of 0 or at least next_zone_id, and sets the target to portal_address(zone_id). _transfer credits the portal (line 877) and deposit_virtual (lines 1073-1115) then calls depositVirtual with originator equal to the token's msg_sender, refuses zero amounts, caps grossAmount at u128 and turns any portal revert into a revert of the whole transfer. address_registry.rs lines 29-30 and 51-52 define the format as 0xFC in bytes 4 to 12. tips.sh/1094 says a failed deposit refunds the originator on Tempo after the batch settles, minus the processing fee, that there is no refund address field, and that a parked refund needs the refund recipient to act. upgrades.md lists T15 mainnet as 15 December 2026 (target) and t15.md says it covers only TIP-1166 so far and the scope may change. web3_clientVersion at https://rpc.mainnet.tempo.xyz returned tempo/v1.19.1-a9d6748/x86_64-unknown-linux-gnu on this run, so the T15-gated code is in the running client but T15 is not active.",
+    "codeCheck": "take (src/PoolManager.sol:291-297) charges the caller -amount.toInt128() and then calls currency.transfer(to, amount) (src/types/Currency.sol:56-80), which requires success and a return of 1 or empty. The TIP-20 debit equals amount, so the PoolManager loses exactly what the caller owes, and the unlock delta check forces the caller to settle it. A refund paid later to the PoolManager arrives in a separate transaction, so transient reserves set by sync (src/PoolManager.sol:279-288) do not cover it and _settle (src/PoolManager.sol:349-364) credits only reservesNow - reservesBefore inside one transaction. The refund therefore becomes surplus no ordinary caller can claim. The PoolManager has no generic call path, so a parked refund registered to it cannot be claimed. I found no path where the forwarding changes the amount debited or moves another user's balance.",
+    "corrections": "severity: low rather than info. The difference does create an integration hazard, because a user or router that names a zone deposit address as take recipient loses the refund of a failed deposit. It is not info under SCHEMA.md since a loss path exists, but the loss falls only on the party that chose the recipient, so it does not reach liquidity providers or claim holders. The actor value unprivileged is correct for triggering it; the victims are the actor or its own users, not uninvolved users.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/precompiles/src/tip20/mod.rs",
+      "supports": "T15 resolve_transfer to portal_address, credit before depositVirtual, originator equal to msg_sender, zero amount and u128 checks, portal revert reverts the transfer"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/contracts/src/zones/address_registry.rs",
+      "supports": "ZONE_DEPOSIT_ADDRESS_MAGIC is 0xFC repeated in bytes 4 to 12"
+     },
+     {
+      "url": "https://tips.sh/1094",
+      "supports": "failed deposits refund the originator after batch settlement minus a fee; parked refunds need the refund recipient to act"
+     },
+     {
+      "url": "https://tempo.com/developers/docs/protocol/upgrades.md",
+      "supports": "T15 mainnet target 15 December 2026, T14 mainnet 8 December 2026"
+     },
+     {
+      "url": "https://tempo.com/developers/docs/protocol/upgrades/t15.md",
+      "supports": "T15 page covers only TIP-1166 so far and scope may change"
+     },
+     {
+      "url": "https://rpc.mainnet.tempo.xyz",
+      "supports": "web3_clientVersion returned tempo/v1.19.1-a9d6748"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 15,
+   "id": "F-135",
+   "firstCycle": 15,
+   "history": [
+    {
+     "cycle": 15,
+     "unit": "stablecoin-l1",
+     "status": "confirmed",
+     "severity": "low"
+    },
+    {
+     "cycle": 15,
+     "unit": "own-check",
+     "status": "confirmed",
+     "severity": "low",
+     "note": "Lead L-767 answered from the v1.19.1 source: refunds reach the PoolManager only inside the sequencer's processWithdrawals transaction, and callback withdrawals in the same transaction let another account bracket them with sync and settle. On 2026-11-25 the portal implementation at 0x5ad1...0000 on mainnet has claimRefund and refunds but no depositVirtual selector, and the zone factory reports nextZoneId 4."
+    }
+   ]
+  },
+  {
    "title": "Source disagrees with two interface comments and two test conditions, and none of the four changes who can move funds",
    "chainIds": [
     1,
@@ -10182,107 +10295,55 @@
     "A9"
    ],
    "effect": "freeze",
-   "difference": "Ethereum has no protocol component that screens transactions by content. The X Layer execution client contains a risk control filter in the block builder. The release that every mainnet node had to run by 10 November 2026 contains it: tag v0.0.7.3-rc.1 pins the reth revision f60420a that the public endpoint reports and includes the crate rcs-filter, the capture inspector of the builder and the bridge interceptor. The filter evaluates each transaction after simulation against rules supplied by an external service and fails closed when a capture limit is exceeded.",
-   "mechanism": "1. All funds of all pools sit at one address and leave only through take (src/PoolManager.sol:291-297), which runs inside unlock (src/PoolManager.sol:104-114). An exit is a transaction that the sequencer must include. 2. With the filter enabled, the builder runs every candidate transaction under a capture inspector and passes the logs and the observed native transfers to the rule matcher. A deny verdict marks the transaction invalid and removes it from the pool. An audit verdict holds it until the external service approves it. 3. Read at the mainnet tag in this cycle: the limit max_native_transfers_per_tx (default 10,000) counts every nonzero internal value transfer, CREATE endowment and SELFDESTRUCT payout whether or not a rule matches, and the transaction after the limit is denied. The limit max_event_bindings_per_tx (default 10,000) counts bindings evaluated against the loaded rules. A limit on call frame observations and rules that match call frames by selector exist on the main branch only. A rule of that kind could match the selector of take or unlock directly. 4. FilterConfig::default() sets enabled to false and the filter needs a service URL, so the release does not screen unless the operator configures it. 5. Deposits are outside the builder filter. The separate deposit blacklist of F-046 is empty: at block 76,668,710 the blacklist contract stores four values, which are its implementation, its admin, its owner and its initialized flag, and no source hash and no operator. 6. I looked for the observation that lead L-263 names. Between 10 November 2026 07:00 UTC and block 76,667,516 no block used more than 97,312,645 gas. The eleven transactions above 40,000,000 gas have at most four internal native transfers each. A transaction with more than 10,000 internal transfers needs about 91,000,000 gas or more and none exists, so mined transactions neither prove that the filter is off nor suggest that it is on.",
-   "impact": "While a matching rule is active, liquidity providers and swappers cannot move funds through sequencer submitted transactions in the affected pools, or in all pools if a rule targets the PoolManager address. No funds are lost and the code in src/ has no time dependence. Exit through an L1 deposit remains while no source hash is listed, which is the state today.",
-   "preconditions": "The sequencer operator must run with the filter enabled and the risk control service must deliver a rule that matches PoolManager activity. Whether the mainnet sequencer runs with the filter enabled is still not confirmed. It is a start parameter of a node that the public cannot query, the release notes of v0.0.7.3 and v0.0.7.3-rc.1 do not mention the filter, and I found no operator statement about the sequencer setting. The rule set is not public.",
-   "mitigations": "Liquidity providers who hold positions through contracts should keep an EOA controlled path so that an L1 deposit can reach the position. Integrators can watch the deposit blacklist contract for an operator appointment or a first entry, since its storage is empty today and any change shows in the storage root. The deployer can ask OKX to state whether the filter runs on mainnet and which contracts and tokens its rules may match.",
+   "difference": "The X Layer execution client that every mainnet node runs contains a risk control filter in the block builder. It is off by default and needs a service URL. No release after v0.0.7.3-rc.1 changed it.",
+   "mechanism": "1. Every PoolManager exit is a take inside unlock (src/PoolManager.sol:104-114, 291-297), which the sequencer has to include. 2. With the filter on, a rule from the external service can deny or hold a transaction, and the per-transaction capture limits deny a transaction whose simulation exceeds them. 3. The release page lists v0.0.7.3-rc.1 as the newest release, and the release notes still say nothing about whether the mainnet sequencer enables the filter. No OKX statement on the sequencer setting was found in this cycle. 4. L1 deposits are outside the builder filter.",
+   "impact": "While a matching rule is active, users cannot exit the affected pools through sequencer transactions. No funds are lost and the code in src/ has no time dependence.",
+   "preconditions": "The sequencer operator enables the filter and the risk control service delivers a rule that matches PoolManager activity. Neither is confirmed.",
+   "mitigations": "Keep an EOA controlled path for positions so that an L1 deposit can reach them, and ask OKX to state whether the filter runs on mainnet.",
    "coreRefs": [
-    "src/PoolManager.sol:291-297",
-    "src/PoolManager.sol:104-114"
+    "src/PoolManager.sol:104-114",
+    "src/PoolManager.sol:291-297"
    ],
    "sources": [
     {
-     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/Cargo.toml",
-     "supports": "The mainnet patch tag pins okx/reth revision f60420aaac6457295a38b66bd544bab28ab6ec5d, the revision in the client version string of rpc.xlayer.tech, and lists the crates rcs-filter and intercept as workspace members."
-    },
-    {
-     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/rcs-filter/src/config.rs",
-     "supports": "enabled is false by default, a base URL is required when enabled, and the two per transaction limits default to 10,000. The comments define the native transfer limit as a count of observation candidates during simulation and the event limit as bindings evaluated across all rules."
-    },
-    {
-     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/builder/src/flashblocks/rcs_capture.rs",
-     "supports": "observe_native_transfer counts each nonzero internal transfer that is not a self transfer, never rolls the count back and sets a sticky overflow above the limit. The call, create and selfdestruct hooks feed it."
-    },
-    {
-     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/builder/src/flashblocks/context.rs",
-     "supports": "Every capture outcome other than complete maps to Screen::Deny, the capture inspector is built from filter.max_native_transfers_per_tx() when a filter handle exists, and a deny verdict removes the transaction."
-    },
-    {
-     "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/rcs-filter/src/config.rs",
-     "supports": "The main branch adds max_callstack_observations_per_tx with default 10,000 and describes a callstack section of the rule format."
-    },
-    {
      "url": "https://github.com/okx/xlayer-reth/releases",
-     "supports": "v0.0.7 introduced the filter and the interceptor for testnet, v0.0.7.3 required a coordinated mainnet upgrade by 10 November 2026, and v0.0.7.3-rc.1 of 5 November 2026 is a mandatory patch. The notes of the last two do not mention the filter."
+     "supports": "v0.0.7 added the Risk Control Service transaction filter; v0.0.7.3-rc.1 is the newest release and its notes do not mention the filter's mainnet state"
     },
     {
-     "url": "https://rpc.xlayer.tech eth_feeHistory for blocks 75524964 to 76667516, eth_getBlockReceipts for the 16 blocks above 30 percent gas use; https://xlayer.drpc.org debug_traceTransaction with callTracer, 2026-11-23",
-     "supports": "The maximum block gas use in the range is 97,312,645, and the eleven transactions above 40,000,000 gas have between zero and four internal native transfers."
-    },
-    {
-     "url": "https://xlayer.drpc.org eth_getProof for 0x59055c0ef0be92018b33f877a3eB816355791727; https://rpc.xlayer.tech eth_getBlockByNumber 76668710, 2026-11-23",
-     "supports": "The storage trie of the deposit blacklist has four leaves under storage root 0x84d6f8a2145c426cd92452349876bd7386c8dbff1ee9b5d0476ab923d098a89d, and the account proof matches the state root of block 76,668,710."
-    },
-    {
-     "url": "https://web3.okx.com/learn/risk-control-report-h1-2026",
-     "supports": "OKX describes its risk control as screening written into the protocol and names a protocol layer address library for Exchange OS on X Layer. The text does not mention the sequencer filter."
+     "url": "https://rpc.xlayer.tech web3_clientVersion, 2026-11-24",
+     "supports": "the endpoint still reports reth/v2.3.0-f60420a xlayer/v0.0.7"
     }
    ],
-   "evidence": "primary",
+   "evidence": "secondary",
    "actor": "operator",
    "severity": "low",
    "proposedSeverity": "low",
-   "status": "plausible",
+   "status": "confirmed",
    "verification": {
-    "cycle": 6,
-    "factCheck": "Every public source of the finding was fetched again on 2026-11-23 and says what the finding quotes. Cargo.toml at tag v0.0.7.3-rc.1 of okx/xlayer-reth lists crates/intercept and crates/rcs-filter as workspace members and takes every reth crate from okx/reth revision f60420aaac6457295a38b66bd544bab28ab6ec5d. rpc.xlayer.tech answered web3_clientVersion three times with reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7, so the public endpoint runs that line. crates/rcs-filter/src/config.rs at the tag: FilterConfig::default() sets enabled to false and rcs_base_url to an empty string, validate() refuses enabled with an empty URL, and max_native_transfers_per_tx and max_event_bindings_per_tx default to 10,000. rcs_capture.rs lines 381 to 400: observe_native_transfer returns early for a zero value or a self transfer, otherwise raises observed_count and sets the overflow flag above the limit. The comment states that the count never rolls back. The call, create and selfdestruct hooks feed it. context.rs lines 110 to 127: LimitExceeded maps to Screen::Deny. Lines 734 to 735: the capture inspector is built only inside if let Some(filter). Lines 1001 to 1047: Deny and Drop mark the transaction invalid and remove it from the pool, and AuditPending marks it invalid for this iteration and leaves it in the pool. Lines 505 to 640 (execute_sequencer_transactions, the path for deposits) contain no reference to the filter, and line 847 keeps deposits out of the pool loop, so deposits are outside the filter as the finding says. The bridge interceptor in crates/intercept matches BridgeEvent logs of one configured bridge contract and is off by default. It does not look at PoolManager activity. The main branch config.rs adds max_callstack_observations_per_tx with default 10,000. The releases page shows v0.0.7 of 27 August with the entry feat(rcs): add the Risk Control Service transaction filter and RPC audit layer and the sentence that the release is for X Layer Testnet only, v0.0.7.3 of 30 October with the coordinated upgrade due by November 10, 2026, and v0.0.7.3-rc.1 of 5 November as a mandatory patch. The notes of the last two do not mention the filter. On chain: eth_getProof on xlayer.drpc.org for 0x59055c0ef0be92018b33f877a3eB816355791727 at latest (about block 76,675,525) still returns storage root 0x84d6f8a2145c426cd92452349876bd7386c8dbff1ee9b5d0476ab923d098a89d, the root the finding reports for block 76,668,710, so the blacklist storage has not changed since. eth_getStorageAt returns implementation 0xe44bfef30cfd8ecbfb917d78fa2ac215b3397f8e and admin 0x57ffb399eb2d8fb1831001ba893483bc13bd8c2f. I did not walk the trie again. Block 76,589,451 has gasUsed 97,312,645 against a limit of 210,000,000, and transaction 0x349b40443331dbfec3a5ecd1fb666b0dc59935b76f4b688546c4d4278864f04f used 95,673,102 gas with no log. I did not repeat the eth_feeHistory scan of 1,142,553 blocks or the eleven traces. The OKX report says that screening logic is written into the protocol and that for Exchange OS the protocol layer keeps a sanctioned and risk address library. It does not name the sequencer filter. The link that stays unconfirmed is the one the finding itself names: whether the mainnet sequencer starts with the filter enabled, and which rules the service delivers. No public interface exposes the flag and I found no operator statement. I looked for a primary source that contradicts the finding and found none.",
-    "codeCheck": "take is the only function an ordinary caller has that moves a currency out of the PoolManager: src/PoolManager.sol:291-297 debits the caller and calls currency.transfer, which is a native CALL with value or an ERC-20 transfer (src/types/Currency.sol:40-88). take carries onlyWhenUnlocked (src/PoolManager.sol:96-99), and the flag is set only inside unlock (src/PoolManager.sol:104-114, src/libraries/Lock.sol:10-27), which calls back into the caller and reverts unless every delta is zero (src/PoolManager.sol:112). Removing liquidity (src/PoolManager.sol:145-184), burning a claim (src/PoolManager.sol:332-336) and swapping (src/PoolManager.sol:187-227) carry the same modifier. An exit is therefore always one transaction that enters unlock, and it leaves the chain only if the sequencer includes it or if it arrives as an L1 deposit. The second outflow, collectProtocolFees (src/ProtocolFees.sol:44-57), needs msg.sender to equal protocolFeeController, which is the zero address on X Layer (eth_call protocolFeeController() on 0x360e68faccca8ca495c1b759fd9eee466db9fb32 returns 0). Nothing in src/ reads block time, block number or the coinbase, so a delayed exit loses no funds by itself. A take of the native currency is one internal value transfer and a take of a token is none, so an ordinary exit is far below the rule independent limit of 10,000 transfers. A transaction through a hookless pool runs no third party code apart from the token contracts, so an ordinary account cannot push a stranger's exit over that limit. The hazard needs the operator.",
-    "corrections": "The actor operator and the severity low stand. The verdict stays plausible because the enabled state of the filter on the mainnet sequencer is unconfirmed. Correction 1: the gas needed to exceed the native transfer limit is overstated. In revm 40.0.3 (tag v112, call_helpers.rs lines 92 to 105) the caller of a CALL with value pays 9,000 plus 100 for a warm account and the forwarded gas, and the 2,300 stipend is added to the callee's gas without charge, so a transfer to a warm account that runs no code costs 6,800 gas net. 10,001 such transfers cost about 68,000,000 gas plus loop overhead, against the 91,000,000 the finding states. The conclusion is unchanged, because the finding inspected every transaction above 40,000,000 gas and found at most four internal transfers. The open lead should quote about 69,000,000 gas for a test transaction. Correction 2: mechanism step 1 says funds leave only through take. collectProtocolFees is a second outflow (src/ProtocolFees.sol:44-57). It is limited to accrued protocol fees and to the fee controller, which is the zero address on X Layer, so the statement holds for ordinary users. Correction 3: the v0.0.7.3 release notes name okx/reth revision 81573d2 as the sync point. The revision f60420a that the endpoint reports is the one pinned by the patch tag v0.0.7.3-rc.1.",
+    "cycle": 15,
+    "factCheck": "On 2026-11-25 three web3_clientVersion calls to rpc.xlayer.tech answered reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7. The xlayer-reth releases page lists v0.0.7.3-rc.1 of 5 November as newest; tags v0.0.7.3-rc.2, v0.0.7.4 and v0.0.8 return 404 on raw.githubusercontent.com. The v0.0.7 release notes add the Risk Control Service transaction filter. At tag v0.0.7.3-rc.1 the workspace includes crates/rcs-filter, and crates/rcs-filter/src/config.rs lines 68-85 set enabled to false, rcs_base_url empty, and max_native_transfers_per_tx and max_event_bindings_per_tx to 10,000; lines 94-96 refuse to start with the filter on and no URL. No public statement of the mainnet sequencer setting was found by me either.",
+    "codeCheck": "Every exit of funds is a take inside unlock: unlock calls the callback and requires NonzeroDeltaCount to be zero (src/PoolManager.sol:103-113), and take debits the caller's delta and transfers (src/PoolManager.sol:291-297). A transaction the builder refuses to include never reaches this code, so the effect is a freeze for as long as a matching rule is active. A take of one currency makes one native transfer, so an ordinary user's exit stays far below the 10,000 transfer capture limit, and an attacker cannot raise the count of another user's transaction. The hazard needs the operator to enable the filter and a rule to match.",
+    "corrections": "",
     "sources": [
      {
-      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/Cargo.toml",
-      "supports": "Workspace members crates/intercept and crates/rcs-filter, reth crates pinned to okx/reth revision f60420aaac6457295a38b66bd544bab28ab6ec5d, revm 40.0.3."
-     },
-     {
-      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/rcs-filter/src/config.rs",
-      "supports": "enabled is false by default, a base URL is required when enabled, both per transaction limits default to 10,000."
-     },
-     {
-      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/builder/src/flashblocks/rcs_capture.rs",
-      "supports": "observe_native_transfer counts every nonzero transfer between two different accounts, never rolls the count back and sets a sticky overflow above the limit."
-     },
-     {
-      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/builder/src/flashblocks/context.rs",
-      "supports": "A capture outcome other than complete maps to Screen::Deny, the inspector exists only with a filter handle, a deny verdict removes the transaction from the pool, and the deposit path does not consult the filter."
-     },
-     {
-      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/intercept/src/lib.rs",
-      "supports": "The bridge interceptor is off by default and matches BridgeEvent logs of one configured bridge contract only."
-     },
-     {
-      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/main/crates/rcs-filter/src/config.rs",
-      "supports": "The main branch adds max_callstack_observations_per_tx with default 10,000."
+      "url": "https://rpc.xlayer.tech web3_clientVersion, 2026-11-25",
+      "supports": "three answers reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7"
      },
      {
       "url": "https://github.com/okx/xlayer-reth/releases",
-      "supports": "v0.0.7 introduced the filter and is marked for testnet only, v0.0.7.3 required a coordinated mainnet upgrade by 10 November 2026, v0.0.7.3-rc.1 of 5 November is a mandatory patch, and the notes of the last two do not mention the filter."
+      "supports": "v0.0.7.3-rc.1 newest; v0.0.7 added the Risk Control Service transaction filter"
      },
      {
-      "url": "https://raw.githubusercontent.com/bluealloy/revm/refs/tags/v112/crates/interpreter/src/instructions/contract/call_helpers.rs",
-      "supports": "The caller is charged the forwarded gas first and the call stipend is added afterwards, so an unused stipend returns to the caller and a plain value transfer costs 6,800 gas net."
+      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/rcs-filter/src/config.rs",
+      "supports": "FilterConfig default enabled false, empty service URL, capture limits 10,000"
      },
      {
-      "url": "https://web3.okx.com/learn/risk-control-report-h1-2026",
-      "supports": "OKX states that screening logic is written into the protocol and that a sanctioned and risk address library is kept at the protocol layer for Exchange OS. The sequencer filter is not named."
-     },
-     {
-      "url": "https://rpc.xlayer.tech web3_clientVersion, eth_getBlockByNumber 76589451, eth_getTransactionReceipt, eth_getStorageAt on 0x59055c0ef0be92018b33f877a3eB816355791727, eth_call protocolFeeController() on the PoolManager; https://xlayer.drpc.org eth_getProof for the blacklist contract at latest, 2026-11-23",
-      "supports": "Client version reth/v2.3.0-f60420a, block gas use 97,312,645 of 210,000,000, the 95,673,102 gas transaction, unchanged blacklist storage root 0x84d6f8a2...a89d, and a zero fee controller."
+      "url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/Cargo.toml",
+      "supports": "workspace member crates/rcs-filter"
      }
     ]
    },
-   "lastVerifiedCycle": 6,
+   "lastVerifiedCycle": 15,
    "id": "F-024",
    "firstCycle": 1,
    "history": [
@@ -10302,6 +10363,12 @@
      "cycle": 6,
      "unit": "op-stack-custom-gas",
      "status": "plausible",
+     "severity": "low"
+    },
+    {
+     "cycle": 15,
+     "unit": "op-stack-custom-gas",
+     "status": "confirmed",
      "severity": "low"
     }
    ]
@@ -11630,7 +11697,6 @@
   {
    "title": "Base and Celo block builders read through the reth execution cache that still has the stale branch for a destroyed account without code, when the operator enables cache sharing",
    "chainIds": [
-    8453,
     42220
    ],
    "lens": "L2",
@@ -11639,141 +11705,68 @@
     "A14"
    ],
    "effect": "degrade",
-   "difference": "Base v1.5.6 pins base/reth tag base-v2.5.2.11 (9e380dd) and Celo's endpoints report reth/v2.2.0-74cc8bb, which is celo-org/reth 74cc8bb pinned by celo-kona tag celo/reth-v1.0.10. In both, ExecutionCache::insert_state handles a destroyed account whose original info has no code by removing the account entry and continuing, so the storage the block wrote after re-creating that account is never put into the cache and any word cached for it earlier survives (base/reth cached_state.rs lines 1278-1297, celo-org/reth cached_state.rs lines 863-882). reth v2.9.0 and reth pull request 28148 replace this with a removal only when the current info is None. Unlike stock op-reth, both block builders read state through this cache when the engine hands it over: Base's flashblocks builder (crates/builder/core/src/flashblocks/payload.rs lines 260-295, through BuilderStateProvider in crates/execution/payload/src/config.rs lines 477-500) and Celo's fork of the OP payload builder (celo-org/optimism b08a8d0 rust/op-reth/crates/payload/src/builder.rs lines 333-366). The engine hands the cache over only when --engine.share-execution-cache-with-payload-builder is set; its default is false in both forks (crates/node/core/src/args/engine.rs line 291 for Base, line 289 for Celo; crates/engine/primitives/src/config.rs line 262 and 238). On a sequencer the cache is fed after each locally built block through InsertExecutedBlock and on_inserted_executed_block, which calls the same insert_state (base/reth tree/payload_processor/mod.rs lines 435-470, celo-org/reth tree/payload_processor/mod.rs lines 722-757, tree/mod.rs line 1547).",
-   "mechanism": "1. The faulty branch is taken only for an account that the block destroyed and whose info at the start of the block had the empty code hash: an address that did not exist and was created and self-destructed in one transaction, a funded or empty account without code that a CREATE or CREATE2 landed on and that self-destructed in the same transaction, or an empty account removed under EIP-161. When a later transaction of the same block creates the address again, the bundle carries status DestroyedChanged, current info and the new storage, and the old code drops all of it. 2. A word for that address must already sit in the storage cache, indexed by (address, slot). Such an address had no code at the start of the block, so the cached word is its pre-block value, which is zero for every account that can be destroyed (accounts without code that keep storage, such as an EIP-7702 account whose delegation was cleared, have a nonce and cannot be destroyed). The reth fix's own test produces the cached zero through a prewarm read (reth pull request 28148, test_insert_state_recreated_account_updates_cached_storage). On a sequencer that only builds, the cache is filled by insert_state of built blocks and by prewarming of payloads it validated, for example while it was a standby in a high availability set. I could not trace which reads of an ordinary block would put a zero for a codeless address into the cache on these builds; this link is unconfirmed. 3. When both conditions hold and sharing is on, the builder executes a later block with the stale zero where the canonical value is what the re-created contract wrote. The produced block's state differs from what a node without the cache and the proof program compute from the same transactions. 4. The PoolManager's own slots are never on this branch: it has code from deployment and is never destroyed, so its words are replaced by insert_storage after every block, and transient storage (src/libraries/CurrencyDelta.sol:21-39, src/libraries/CurrencyReserves.sol:17-36) is not cached across transactions at all. The only accounts that can read stale words are contracts created in the block that destroyed their address, which are new contracts made by whoever made them. A token, hook, router, PositionManager or Permit2 that a victim pool already uses had code before that block and cannot be destroyed under EIP-6780, and a proxy's implementation is run with the proxy's storage. So a stale word can only change what an attacker-made token returns to sync and settle (src/PoolManager.sol:279-288, 349-364) or what an attacker-made hook decides, which such contracts can do without any cache fault.",
-   "impact": "No funds held by the PoolManager for other users move. If the flag is on and the trigger works, an ordinary account can make the sequencer publish unsafe blocks whose state differs from the derived chain. Followers without the fault reject them and the sequencer's chain is rewritten when derivation reaches them, so swaps and liquidity changes in those blocks are re-executed under different state. Their slippage limits still bind. Parties that act on unsafe-head state (exchanges crediting deposits, fast bridges and intent fillers) bear the risk, and output proposals made by a node with the same fault can be disputed, which delays withdrawals.",
-   "preconditions": "The operator runs the Base or Celo sequencer with --engine.share-execution-cache-with-payload-builder (non-default; Base's and Celo's production flags are not public), and the cache holds a word for an address without code before the block that destroys and re-creates it. An ordinary account can send the destroy and re-create transactions.",
-   "mitigations": "Ask Base and Celo whether their sequencers set the sharing flag, and ask both to move to a base with reth pull request 28148 (reth v2.9.0 or later, or celo-org/reth 4e0169d, which celo-kona main already pins and which has the fix). Integrations should treat unsafe-head state on these chains as revocable.",
+   "difference": "Celo's endpoint still reports reth/v2.2.0-74cc8bb, the celo-org/reth revision with the old insert_state branch for a destroyed account whose original info had no code. The block builder reads through the execution cache only when the engine is started with --engine.share-execution-cache-with-payload-builder, whose default is false.",
+   "mechanism": "1. Nothing about the code path changed since cycle 14: the endpoint reports the same build and celo-reth v1.0.10 only patched tracing. 2. The public node setup that Celo publishes starts celo-reth without the sharing flag, so follower and RPC nodes built from it never hand the cache to a builder. The sequencer's own start parameters are not published. 3. The PoolManager's storage is never on the faulty branch, because it has code from deployment and cannot be destroyed, and transient storage (src/libraries/CurrencyDelta.sol:21-39, src/libraries/CurrencyReserves.sol:17-36) is not cached across transactions. Only a contract created in the block that destroyed its codeless address can read a stale word, so only an attacker-made token or hook could be affected, and such a contract can misreport balances to sync and settle (src/PoolManager.sol:279-288, 349-364) without any cache fault.",
+   "impact": "No funds held by the PoolManager for other users move. If the flag is on at the sequencer and the trigger works, unsafe blocks could be published with a state that followers reject, and swaps and liquidity changes in them would be re-executed after the reorg.",
+   "preconditions": "The Celo sequencer operator runs with cache sharing enabled, and some read in an ordinary block caches a word for a codeless address that a later transaction in the block destroys and re-creates. Neither link is confirmed.",
+   "mitigations": "Celo upgrades celo-org/reth to a revision with the reth pull request 28148 fix, or keeps sharing off. Integrators wait for safe or finalized blocks before treating a fill as final.",
    "coreRefs": [
     "src/PoolManager.sol:279-288",
     "src/PoolManager.sol:349-364",
-    "src/types/Currency.sol:90-95",
     "src/libraries/CurrencyDelta.sol:21-39"
    ],
    "sources": [
     {
-     "url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/execution-cache/src/cached_state.rs",
-     "supports": "lines 1278-1297: destroyed account without original code is removed from the account cache and skipped with continue, storage not inserted"
+     "url": "https://forno.celo.org web3_clientVersion, 2026-11-24",
+     "supports": "the endpoint still reports reth/v2.2.0-74cc8bb"
     },
     {
-     "url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs",
-     "supports": "lines 863-882: the same branch, byte-identical to reth v2.2.0 cached_state.rs"
+     "url": "https://github.com/celo-org/celo-kona/releases",
+     "supports": "v1.0.10 of 20 November is the newest celo-reth release and only fixes SELFDESTRUCT tracing"
     },
     {
-     "url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.9.0/crates/engine/execution-cache/src/cached_state.rs",
-     "supports": "the fixed branch first appears in a reth release at v2.9.0 (remove only when account.info is None); v2.8.1 still has the old one"
-    },
-    {
-     "url": "https://patch-diff.githubusercontent.com/raw/paradigmxyz/reth/pull/28148.patch",
-     "supports": "fix dated 25 October 2026; its test caches a zero through CachedStateProvider::new_prewarm and expects the written 7 after insert_state of a DestroyedChanged account"
-    },
-    {
-     "url": "https://raw.githubusercontent.com/base/base/v1.5.6/Cargo.lock",
-     "supports": "base v1.5.6 pins reth-execution-cache and reth-engine-tree from base/reth tag base-v2.5.2.11 (9e380dd); base-builder-core and base-execution-payload-builder depend on reth-execution-cache"
-    },
-    {
-     "url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/Cargo.lock",
-     "supports": "celo/reth-v1.0.10 pins reth-execution-cache from celo-org/reth 74cc8bb and reth-optimism-payload-builder from celo-org/optimism b08a8d0, which depends on reth-execution-cache"
-    },
-    {
-     "url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/builder/core/src/flashblocks/payload.rs",
-     "supports": "lines 260-295: build_payload takes execution_cache from BuildArguments and passes it to BuilderStateProvider"
-    },
-    {
-     "url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/execution/payload/src/config.rs",
-     "supports": "lines 477-500: BuilderStateProvider wraps the state provider in CachedStateProvider when a cache is given"
-    },
-    {
-     "url": "https://raw.githubusercontent.com/celo-org/optimism/b08a8d0abda93536b105b0f013753d2f35c0d19e/rust/op-reth/crates/payload/src/builder.rs",
-     "supports": "lines 333-366: Celo's OP builder serves account, storage and bytecode reads from the engine's cache when it shares one"
-    },
-    {
-     "url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/node/core/src/args/engine.rs",
-     "supports": "line 291 default false and lines 519-523 flag --engine.share-execution-cache-with-payload-builder"
-    },
-    {
-     "url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/tree/src/tree/mod.rs",
-     "supports": "line 3250: the cache is handed to the builder only when share_execution_cache_with_payload_builder() is true; line 1547 InsertExecutedBlock path"
-    },
-    {
-     "url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/tree/src/tree/payload_processor/mod.rs",
-     "supports": "lines 715-757: on_inserted_executed_block feeds locally built blocks into the cache with insert_state"
-    },
-    {
-     "url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/tree/src/tree/payload_validator.rs",
-     "supports": "lines 1898-1908: payload_builder_resources hands over cache_for(parent) only when the flag is set"
-    },
-    {
-     "url": "https://mainnet.base.org/",
-     "supports": "web3_clientVersion returned reth/v2.5.2-9e380dd/x86_64-unknown-linux-gnu/base/v1.5.6 on 2026-11-24; base-rpc.publicnode.com the same"
-    },
-    {
-     "url": "https://forno.celo.org",
-     "supports": "web3_clientVersion returned reth/v2.2.0-74cc8bb/x86_64-unknown-linux-gnu on 2026-11-24; celo-rpc.publicnode.com the same"
-    },
-    {
-     "url": "src/PoolManager.sol:279-288",
-     "supports": "sync reads balanceOf of the named currency, the only storage read of another account the PoolManager makes on the settlement path"
+     "url": "https://raw.githubusercontent.com/celo-org/celo-l2-node-docker-compose/main/scripts/start-op-reth.sh",
+     "supports": "the published node start script runs celo-reth without --engine.share-execution-cache-with-payload-builder"
     }
    ],
    "evidence": "secondary",
    "actor": "operator",
    "severity": "low",
    "proposedSeverity": "low",
-   "status": "plausible",
+   "status": "confirmed",
    "verification": {
-    "cycle": 14,
-    "factCheck": "I fetched base/reth 9e380dd cached_state.rs and celo-org/reth 74cc8bb cached_state.rs. At base lines 1278-1297 and celo lines 863-882, a destroyed account whose original info has the empty code hash is removed from the account cache and skipped with continue, so its post-block storage is never written to the storage cache. reth v2.9.0 (lines 1182-1185) and the reth pull request 28148 patch (dated 25 October 2026) remove the account only when account.info is None. The patch's test seeds the zero through CachedStateProvider::new_prewarm and expects 7 after insert_state of a DestroyedChanged account. base/reth engine.rs line 291 sets share_execution_cache_with_payload_builder to false, and lines 522-523 define the flag. base/reth payload_validator.rs lines 1902-1905 hand over cache_for(parent) only when the flag is set. Base v1.5.6 flashblocks payload.rs lines 260-295 passes execution_cache to BuilderStateProvider, and config.rs lines 488-494 wraps the provider in CachedStateProvider. celo-org/optimism b08a8d0 builder.rs lines 356-363 do the same for Celo. web3_clientVersion on mainnet.base.org returned reth/v2.5.2-9e380dd/x86_64-unknown-linux-gnu/base/v1.5.6. celo-rpc.publicnode.com returned reth/v2.2.0-74cc8bb on every try. forno.celo.org returned reth/v2.2.0-74cc8bb on most tries and Geth/v0.1.0-untagged-c7ed55b8-20260817 on two of them. One link is not confirmed: the finding cannot show which read puts a storage word for an address that has no code into the shared cache before the block that destroys and re-creates the address. CachedStateProvider fills the cache on a miss only in prewarm mode (base cached_state.rs lines 899-922). In prewarm, a constructor's SSTORE on a newly created account is answered by the EVM journal without a database read, so the obvious path does not seed the word. Whether the sequencers set the flag is also not public.",
-    "codeCheck": "I traced the reads the PoolManager makes on the settlement path. sync (src/PoolManager.sol:279-288) and _settle (src/PoolManager.sol:349-364) read the token's balanceOf through src/types/Currency.sol:90-95, or the PoolManager's own balance for native currency. Deltas and reserves use tload and tstore (src/libraries/CurrencyDelta.sol:21-39), and the execution cache does not hold transient storage. The PoolManager has had code since deployment, and EIP-6780 means it cannot be destroyed, so its words never reach the branch. A stale word can only exist for a contract the block destroyed and re-created, which means a contract made in that block. A token or hook like that is attacker-made, so the code path reaches no pool that uses only existing tokens and hooks. The finding's conclusion that no PoolManager funds move holds.",
-    "corrections": "forno.celo.org is load-balanced across reth/v2.2.0-74cc8bb and an op-geth build (Geth/v0.1.0-untagged-c7ed55b8-20260817), so not every Celo endpoint request reaches the cited reth. The actor operator stands because the hazard needs a non-default sequencer flag, though the trigger transactions can come from any account.",
+    "cycle": 15,
+    "factCheck": "On 2026-11-25 three web3_clientVersion calls to forno.celo.org answered reth/v2.2.0-74cc8bb/x86_64-unknown-linux-gnu. celo-org/reth 74cc8bb crates/engine/execution-cache/src/cached_state.rs lines 863-882 still take the old branch: a destroyed account whose original info has the empty code hash is removed from the account cache and skipped with continue, so its new storage is not inserted. In the same revision crates/node/core/src/args/engine.rs line 289 and crates/engine/primitives/src/config.rs line 238 set share_execution_cache_with_payload_builder to false by default. celo-kona tag celo/reth-v1.0.10 exists, its Cargo.lock pins reth-engine-tree 2.2.0 from celo-org/reth 74cc8bb and revm-interpreter 35.0.1, and tag celo/reth-v1.0.11 returns 404. The v1.0.10 release page (20 November) describes only a SELFDESTRUCT tracing fix and says block execution and state are not affected. The published start-op-reth.sh runs celo-reth node without --engine.share-execution-cache-with-payload-builder (its exec command, lines 98-127, has no such flag). The sequencer's own flags are not public, so the trigger condition stays unconfirmed, as the finding says.",
+    "codeCheck": "The PoolManager has no SELFDESTRUCT or CREATE in src/ (grep over src/ finds none) and has code from deployment, so its account never takes the destroyed branch. Deltas and synced reserves live in transient storage (src/libraries/CurrencyDelta.sol:21-39 uses tload and tstore), which is not part of the cross-block cache. sync reads the token balance through balanceOfSelf (src/PoolManager.sol:279-288) and _settle compares it with the synced reserves (src/PoolManager.sol:349-364), so a stale word can only change what PoolManager sees from a contract whose address was destroyed and re-created in the block, which is a new contract made by the attacker. Tokens and hooks of victim pools had code before and cannot be destroyed under EIP-6780. No path to other users' funds follows.",
+    "corrections": "The title still names Base, while this unit's entry lists only chain 42220; the Base half is held by the existing ledger entry. The follower validation path, which an unprivileged account could reach without the operator flag, is a separate existing finding (theme-reth-cache-drift, actor operator, severity info) and is not covered here.",
     "sources": [
      {
-      "url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/execution-cache/src/cached_state.rs",
-      "supports": "lines 1278-1297 old branch; lines 899-922 cache is filled on miss only in prewarm mode"
+      "url": "https://forno.celo.org web3_clientVersion, 2026-11-25",
+      "supports": "three answers reth/v2.2.0-74cc8bb/x86_64-unknown-linux-gnu"
      },
      {
       "url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs",
-      "supports": "lines 863-882 old branch"
+      "supports": "lines 863-882: destroyed account without original code is removed from the account cache and skipped with continue"
      },
      {
-      "url": "https://patch-diff.githubusercontent.com/raw/paradigmxyz/reth/pull/28148.patch",
-      "supports": "fix that removes the account only when info is None, with a test that seeds the cache through new_prewarm"
+      "url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/node/core/src/args/engine.rs",
+      "supports": "line 289: share_execution_cache_with_payload_builder defaults to false"
      },
      {
-      "url": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.9.0/crates/engine/execution-cache/src/cached_state.rs",
-      "supports": "lines 1182-1185 fixed branch"
+      "url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/Cargo.lock",
+      "supports": "reth-engine-tree 2.2.0 from celo-org/reth 74cc8bb and revm-interpreter 35.0.1"
      },
      {
-      "url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/node/core/src/args/engine.rs",
-      "supports": "line 291 default false, lines 522-523 flag"
+      "url": "https://github.com/celo-org/celo-kona/releases/tag/celo%2Freth-v1.0.10",
+      "supports": "20 November release fixes only SELFDESTRUCT tracing; block execution and state not affected"
      },
      {
-      "url": "https://raw.githubusercontent.com/base/reth/9e380dd9b22f95649fb1b5e84c85449ef03f5dca/crates/engine/tree/src/tree/payload_validator.rs",
-      "supports": "lines 1898-1905 the cache is handed to the builder only when the flag is set"
-     },
-     {
-      "url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/builder/core/src/flashblocks/payload.rs",
-      "supports": "lines 260-295 builder passes the execution cache to BuilderStateProvider"
-     },
-     {
-      "url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/execution/payload/src/config.rs",
-      "supports": "lines 477-500 CachedStateProvider wrap"
-     },
-     {
-      "url": "https://raw.githubusercontent.com/celo-org/optimism/b08a8d0abda93536b105b0f013753d2f35c0d19e/rust/op-reth/crates/payload/src/builder.rs",
-      "supports": "lines 356-363 Celo builder reads through the shared cache"
-     },
-     {
-      "url": "https://mainnet.base.org",
-      "supports": "web3_clientVersion reth/v2.5.2-9e380dd/x86_64-unknown-linux-gnu/base/v1.5.6, queried 2026-11-24"
-     },
-     {
-      "url": "https://forno.celo.org",
-      "supports": "web3_clientVersion alternated between reth/v2.2.0-74cc8bb and Geth/v0.1.0-untagged-c7ed55b8-20260817, queried 2026-11-24"
+      "url": "https://raw.githubusercontent.com/celo-org/celo-l2-node-docker-compose/main/scripts/start-op-reth.sh",
+      "supports": "celo-reth node is started without the cache sharing flag"
      }
     ]
    },
-   "lastVerifiedCycle": 14,
+   "lastVerifiedCycle": 15,
    "extends": "F-124",
    "id": "F-132",
    "firstCycle": 14,
@@ -11782,6 +11775,98 @@
      "cycle": 14,
      "unit": "theme-reth-cache-drift",
      "status": "plausible",
+     "severity": "low"
+    },
+    {
+     "cycle": 15,
+     "unit": "op-stack-custom-gas",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
+   "title": "Polygon's Salvador hardfork rewrites the code of five accounts at block 98,688,600 through BlockAlloc, a mechanism that can give any address new code outside a transaction",
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A7",
+    "A4",
+    "A6"
+   ],
+   "effect": "freeze",
+   "difference": "Bor applies a per-block code table (BlockAlloc) during block finalisation. For every listed address it calls SetCode and keeps the storage, and it sets the balance only when the balance is zero. Ethereum has no rule that replaces an account's code. Polygon has used the table on 0x1001 and 0x1010, and at block 62,278,656 on WPOL (0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270), a token that was deployed by an ordinary transaction and that the PoolManager holds. Salvador, scheduled for 2026-12-08, applies it to five more ordinary accounts.",
+   "mechanism": "At block 98,688,600 the five Polymarket and Binance accounts get a 344 byte sweeper. A call with value reverts, and sweep() sends the native balance to a fixed recovery Safe. For the PoolManager, an address that changes code under BlockAlloc behaves differently through each of the calls it makes. A native take to that address (src/types/Currency.sol:44-52) reverts afterwards. A token take or sync on it (src/types/Currency.sol:53-80 and 90-95) calls code the pool creator never saw. A hook at that address (Hooks.sol permission bits at src/libraries/Hooks.sol:29) answers with other code. The PoolManager's own code could be replaced the same way, and noDelegateCall (src/NoDelegateCall.sol:19-25) does not detect that. The five Salvador targets hold no ERC-6909 claims at the PoolManager in currency 0 (native), USDC, USDC.e, WPOL, USDT or WETH, and no PositionManager position (eth_call at block 97,906,958), so the scheduled rewrite touches no PoolManager funds.",
+   "impact": "None for the Salvador entries as scheduled. In general, a BlockAlloc entry for a pooled token, a hook or the PoolManager would decide every pool that uses that address. On 2026-11-24 the PoolManager holds 3,211,373 POL and 7,903 WPOL.",
+   "preconditions": "A bor release with a BlockAlloc entry, adopted by the validator set through Polygon governance (a PIP and a coordinated release). No ordinary account can add an entry.",
+   "mitigations": "At each bor release, read params/config.go BlockAlloc for the PoolManager, PositionManager and pooled currencies and hooks. After block 98,688,600, compare the code at the five addresses with the table.",
+   "coreRefs": [
+    "src/types/Currency.sol:44-52",
+    "src/types/Currency.sol:90-95",
+    "src/libraries/Hooks.sol:29",
+    "src/NoDelegateCall.sol:19-25"
+   ],
+   "sources": [
+    {
+     "url": "https://github.com/0xPolygon/bor/pull/2546",
+     "supports": "Salvador purpose, the five addresses, recovery addresses, activation blocks and dates, no new consensus rule, and transfers to the addresses reverting"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/params/config.go",
+     "supports": "BorMainnetChainConfig SalvadorBlock 98688600 and the BlockAlloc entry with the sweeper code. Earlier BlockAlloc entries replace 0x1010, 0x1001 and WMATIC 0x0d500B1d..."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/consensus/bor/bor.go",
+     "supports": "changeContractCodeIfNeeded: SetCode on each listed address, balance set only if zero, called in finalisation (lines 1289, 1381-1398, 1441, 1501)"
+    },
+    {
+     "url": "eth_call PoolManager.balanceOf(address,uint256) and PositionManager.balanceOf on https://polygon-bor-rpc.publicnode.com, block 0x5d5eb62",
+     "supports": "the five targets hold no claims in six currency ids and no position NFTs"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "governance",
+   "severity": "low",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 15,
+    "factCheck": "PR 0xPolygon/bor#2546 (fetched) is merged on 2026-11-23 and says Salvador installs a 344 byte Sweeper runtime at four Polymarket addresses and one Binance address through BlockAlloc, with no new consensus logic, an immutable recovery address, no receive(), and balances and nonces left alone. It schedules mainnet block 98,688,600 for about 2026-12-08. params/config.go on develop (fetched) has SalvadorBlock 98688600 in BorMainnetChainConfig and a BlockAlloc key 98688600 with the same five addresses. Each of the five code strings decodes to 344 bytes. Earlier keys rewrite 0x1010 (22156660), 0x1001 (50523000, 96787900) and 0x1001, 0x1010 and WMATIC 0x0d500B1d... (62278656). consensus/bor/bor.go on develop (fetched) lines 1381-1400 loop over the BlockAlloc entry for the block, call state.SetCode on each address and set the balance only when it is zero. The function is called at lines 1289, 1441 and 1501 in the finalisation paths. On-chain: eth_call balanceOf(address,uint256) on PoolManager 0x6736...5cd6 at polygon-bor-rpc.publicnode.com, latest block 0x5d5fb1d, returns 0 for all five addresses in currency ids 0 (native), USDC 0x3c49...3359 and WPOL 0x0d50...1270. PositionManager balanceOf returns 0 for all five. eth_getCode returns 0x for all five today.",
+    "codeCheck": "src/types/Currency.sol:44-52 sends native value with call(gas(), to, amount, 0, 0, 0, 0) and reverts with NativeTransferFailed on failure, so a native take to a Sweeper address reverts the taker's own unlock only. src/types/Currency.sol:53-80 makes the ERC-20 transfer call, and balanceOfSelf at src/types/Currency.sol:90-95 makes the sync read, both against whatever code the token address holds at the time. src/NoDelegateCall.sol:19-25 compares address(this) with an immutable and cannot see a change of the contract's own code. The path holds as written. A code swap by BlockAlloc on a pooled token, hook or the PoolManager itself would change every call the PoolManager makes to it, and nothing in src/ can detect it. No unprivileged step exists: only a bor release adopted by the validators can add an entry.",
+    "corrections": "Two details are wrong. First, the statement that Salvador is the first use of BlockAlloc on accounts that are not system or genesis contracts is contradicted on chain: eth_getCode for WMATIC/WPOL 0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270 at polygon.drpc.org returns 0x at blocks 1 and 4,915,200 and code at 6,250,000, so WPOL was deployed by an ordinary transaction and its code was already replaced by the 62278656 entry. That precedent is a token the PoolManager holds (7,903 WPOL per the finding). It is the reason for low rather than info: chain governance has already rewritten a pooled currency once. Second, src/libraries/Hooks.sol:27 is ALL_HOOK_MASK; the permission flag constants start at line 29. The actor value governance is right.",
+    "sources": [
+     {
+      "url": "https://github.com/0xPolygon/bor/pull/2546",
+      "supports": "Salvador purpose, five addresses, 344 byte Sweeper, no receive(), balances untouched, mainnet block 98,688,600 around 2026-12-08, merged 2026-11-23"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/params/config.go",
+      "supports": "SalvadorBlock 98688600 and the BlockAlloc entries at 22156660, 50523000, 62278656 (including WMATIC), 96787900 and 98688600; each Salvador code string is 344 bytes"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/consensus/bor/bor.go",
+      "supports": "changeContractCodeIfNeeded at lines 1381-1400 calls SetCode and sets balance only if zero; called at lines 1289, 1441, 1501"
+     },
+     {
+      "url": "eth_call balanceOf on PoolManager 0x67366782805870060151383f4bbff9dab53e5cd6 and PositionManager 0x1ec2ebf4f37e7363fdfe3551602425af0b3ceef9 at https://polygon-bor-rpc.publicnode.com, block 0x5d5fb1d",
+      "supports": "zero claims in ids 0, USDC and WPOL and zero position NFTs for all five Salvador addresses; eth_getCode 0x for all five"
+     },
+     {
+      "url": "eth_getCode 0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270 at https://polygon.drpc.org, blocks 0x1, 0x4b0000, 0x5f5e10",
+      "supports": "WPOL has no code at blocks 1 and 4,915,200 and has code at 6,250,000, so it is not a genesis contract"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 15,
+   "id": "F-134",
+   "firstCycle": 15,
+   "history": [
+    {
+     "cycle": 15,
+     "unit": "established-l1",
+     "status": "confirmed",
      "severity": "low"
     }
    ]

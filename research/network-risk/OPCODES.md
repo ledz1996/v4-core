@@ -294,24 +294,42 @@ The critic's first question after the cycle was read directly: do Monad's RPC no
 
 Tempo's release binary does not contain the compiler that reth v2.11 ships: the feature is on by default only for the reth binary itself, and Tempo's own switch for it is off in release builds.
 
+## What cycle 15 added
+
+Cycle 15 built Monad's compiler and ran its output, read the code generator of the reth compiler, went back to the closed producers with larger windows, and reread the 49 one-sided jumps against the source. Network units covered Celo and X Layer, Polygon, BNB Chain and Avalanche, and Tempo and Arc. Seven units, each followed by a verifier. No opcode, swap or settlement result differs from the source or the specification on any network.
+
+| Unit | Result |
+|---|---|
+| Monad's compiled code | The x86 emitter was built from the v0.16.5 and v0.16.7 source. It does compile the PoolManager: its size estimate is 285,084 bytes against a bound of 778,528. A node runs compiled and interpreted code together unless it is started with call tracing, and a contract is compiled once the interpreter has spent 778,528 gas on it. The native code of the deployed PoolManager was then run against Monad's own interpreter from the same state: 20,000 mixed scenarios and nine batteries of about 100,000 calls each on the paths no mined transaction has used (`clear` of an exact credit, `transferFrom`, burns, `approve`, `donate`, the overflow fallback, amounts above 2^160). Call results, gas, storage, transient storage, balances and logs are equal. Two faults planted in the emitter were caught on every battery. The harness stubs some runtime symbols and uses an evmc header patched by hand, and its asmjit commit is not pinned to the release, so a rebuild on the exact dependencies is still owed. |
+| The reth compiler (evm2) | At the two revisions that matter (reth v2.11.0 and Tempo v1.19.1), the arithmetic opcodes call routines that run the interpreter's own integer code. The inline code for `SIGNEXTEND`, `BYTE`, shifts, comparisons and `JUMPI`, the peephole rules, constant folding and the jump table were transcribed and checked: 1,068,620 checks on 631,353 vectors, 657,425 range-fold cases, 38,465 branch-bound cases and 24,030 jump targets give no mismatch, and planted faults were caught. The crates could not be built here (they need LLVM 23), so the LLVM optimiser itself was taken on trust. Only an operator can switch this compiler on, and op-reth v2.10.0-rc.4 does not contain it. |
+| Closed producers | 33,760 swaps of v3 style pools on HyperEVM match the exact formulas from parent-block state, 19,015 of them through the 512 bit branch of `mulDiv` and 2,995 ending on a tick. Planted `MULMOD` and `TickMath` faults were caught. A call trace of all 51,233 MegaETH and 2,783 HyperEVM PoolManager transactions finds no call to `clear`. The MegaETH stateless validator was fetched and not built: it pins a nightly toolchain that is not installed. HyperEVM's validator library versions stay unknown. |
+| The 49 one-sided jumps | Each was reread against the source. All are unreachable or end in a revert on every network, and none depends on a network property. The EVM properties the source relies on that are not opcode results were listed and checked: transient storage rolled back on revert and cleared at the end of a transaction, `msg.value` read once per frame, all gas forwarded on the five outgoing calls, return data of calls to empty addresses and precompiles, and the memory the assembly blocks write. Seven line references in the jump map pointed outside the files and are corrected. |
+| Celo and X Layer | The second backend behind Celo's endpoint is celo-org/op-geth c7ed55b8, whose interpreter files equal go-ethereum v1.16.9. Pinned to it, the battery, the targeted vectors, call semantics, slot reads and 250 scripts match. F-132 (reth cache on builders) and F-024 (X Layer's transaction filter, off by default) stay at operator level and low. |
+| Polygon, BNB Chain, Avalanche | All checks match. Polygon's Salvador fork at block 98,688,600 (about 8 December 2026) puts new code at five accounts outside any transaction, a mechanism Polygon already used once on WPOL, a token that pools hold (F-134, governance level, low). None of the five accounts holds claims or positions. One BNB Chain endpoint returned no logs for a block that has PoolManager logs on another endpoint. |
+| Tempo and Arc | Arc's other two endpoints (v0.8.5 and v0.8.6) pass 185,529 vectors and 250 scripts. From Tempo's T15 fork, a `take` to a zone deposit address is forwarded to a zone portal (F-135, low). |
+
+The verifier of the Monad unit corrected one argument. The overflow fallback of `getNextSqrtPriceFromAmount0RoundingUp` is excluded from successful swaps because a step looks for its target inside one bitmap word and word 0 begins at tick 0, so the step's output is at least 2^160 and the cast at `Pool.sol:455` or `:459` reverts. The bound on liquidity alone does not exclude it.
+
+The critic's first question was read directly in the Tempo v1.19.1 source: can any account make a zone portal pay the PoolManager inside a transaction of its own? It cannot send that transaction. `claimRefund` pays only its caller, and refunds and withdrawals are paid inside `processWithdrawals`, which only the zone's sequencer can call. The same call also delivers callback withdrawals, though, and with a zone's gateway mode open the callback target can be any contract. `sync` needs no unlock, and the synced currency stays in transient storage to the end of the transaction. An account with one callback before a refund to the PoolManager and one after it, in the same batch, can therefore book that refund as its own payment. The refund is money the taker had already lost by naming that recipient, and no pool or claim balance is reachable this way, so F-135 stays low. On 2026-11-25 the portal code on mainnet has no `depositVirtual` yet and three zones exist.
+
 ## What this does not cover
 
-What is still open after cycle 14:
+What is still open after cycle 15:
 
-- Inputs no mined transaction has used on Monad, MegaETH and HyperEVM. Monad's validators may run compiled code and the other two producers are closed, and for these branches the only evidence is the interpreter and reading: `clear` of an exact credit, `transferFrom`, burns through an allowance or an operator, `approve`, `donate`, the overflow fallback of `getNextSqrtPriceFromAmount0RoundingUp`, and amounts above 2^160.
-- Whether Monad compiles the PoolManager at all. That needs a build of the emitter to compare its size estimate with the 778,528 byte bound.
-- HyperEVM's validator. It is closed, its EVM library versions are unknown, and it has 493 mined swaps through the 512 bit branch against thousands on the other two networks.
-- Compilers that exist and are switched off: the LLVM compiler in reth (Ethereum, off unless an operator enables it) and in evm2 (Tempo, not built into releases). Their code for `MULMOD`, signed division, shifts and `SIGNEXTEND` has not been read.
-- The reth execution cache fault on Base and Celo block builders and on follower nodes of seven networks. It cannot reach the PoolManager's storage or that of contracts a pool already uses; whether it can be triggered at all is unproven. MegaETH's reth fork is not public enough to tell.
-- Two scheduled forks inside the deployment window: Tempo T14 and BNB Chain Jenner, both on 8 December 2026. The checks have to be rerun after each. Tempo's later T15 fork lets the token precompile call a portal contract during a transfer and has not been walked through. The next upgrades of the OP Stack chains, Arc, Avalanche and Polygon have not been read.
-- Celo's endpoint mixes two clients. One is an op-geth build no cycle has tied to a source commit.
-- Arc's three public endpoints report three builds and the checks ran on one.
+- Monad's compiled code on the exact dependencies of the release. The harness of cycle 15 found no difference on about 2.2 million calls, with stubs and a patched header in place of two native dependencies, and mined Monad transactions have not been replayed through it.
+- The LLVM stage of the reth compiler, which is off unless an operator enables it on Ethereum and is not built into Tempo's releases. Its rules were transcribed; the compiler was not run.
+- MegaETH's closed sequencer beyond swaps and receipts. Liquidity removals, fee collections and burns have not been compared with an independent post-state, because the stateless validator has not been built.
+- HyperEVM's validator. It is closed and its EVM library versions are unknown. The mined evidence is 33,760 v3 style swaps and the PoolManager's own history.
+- The reth execution cache fault on Base and Celo block builders and on follower nodes of seven networks. It cannot reach the PoolManager's storage or that of contracts a pool already uses; whether it can be triggered at all is unproven.
+- Three forks on 8 December 2026: Tempo T14, BNB Chain Jenner and Polygon Salvador. The checks have to be rerun after each. Tempo T15 follows on 15 December, and whether its published scope includes zone deposit addresses is not settled. The OP Stack upgrade planned for January 2027 and the ArbOS upgrade announced for Elysium have not been read.
+- Token contracts on Base and BNB Chain that may redirect a transfer by the recipient's address, as Tempo's will.
+- Whether other endpoints mix client builds as Celo's does, and whether earlier BNB Chain log scans ran on an endpoint that drops logs.
+- Which release each Arc validator runs.
 - Proof programs as published for Base, Celo and X Layer. Base's was tested as a rebuild from source.
 - The Nitro release that Arbitrum One and Robinhood Chain report is private. The machine that settles their disputes was read; the node build was tested through its answers.
-- The MegaETH stateless validator, which checks the sequencer's state commitment, was not run.
 - BNB Chain's unpublished commit and the unreleased bor v2.12, both read only through their answers or their beta text.
 - The repository's own test suite, which needs `forge`. It is not installed here.
-- Other validators' hardware and builds. Every result describes the node behind the endpoint that was asked, and on Monad, by the check above, the validator quorum as well.
+- Other validators' hardware and builds. Every result describes the node behind the endpoint that was asked, and on Monad the validator quorum as well.
 
 ## How to run it again
 

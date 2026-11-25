@@ -1,6 +1,6 @@
 # PoolManager network risk report
 
-State on 2026-11-24: cycles 1 to 14 are merged. The ledger holds 133 findings, 1,320 checks that came out safe, and 523 open leads across the 21 networks. About 233 agents have worked on it so far, roughly half of them as independent verifiers.
+State on 2026-11-25: cycles 1 to 15 are merged. The ledger holds 135 findings, 1,397 checks that came out safe, and 523 open leads across the 21 networks. About 248 agents have worked on it so far, roughly half of them as independent verifiers.
 
 ## Opcodes and the pool math
 
@@ -23,7 +23,9 @@ On 24 November the review turned to one narrower question: does any network comp
 
 - Cycle 14 settled what mined data on Monad is worth. Public Monad nodes interpret, and validators may run compiled code. Every node compares its own result for each block (state root, receipts root, logs bloom, gas used) with the one the validators certified and stops if they differ, so mined results stand for the validators too. 629,293 mined swaps were checked there and 129,567 go through the 512 bit branch of `FullMath.mulDiv`; a replay of the newest 40,000 blocks leaves none unmatched. The same branch has mined instances that match on MegaETH (3,741) and HyperEVM (493). The proof program image that settles OP Mainnet, Unichain and Ink was scanned on every path and its own shift handlers run on 92,871 vectors. A reth cache fault is still in the code of seven networks; it cannot touch the storage of the PoolManager or of any contract a pool already uses.
 
-What is still untested is listed in `OPCODES.md`. No item on that list is known to be within an ordinary account's reach. The largest is input that no mined transaction has used on Monad, MegaETH and HyperEVM, such as `clear`, `donate` and the allowance paths, where the block producers are compiled or closed. Next are compilers that exist in reth and Tempo's interpreter and are switched off, HyperEVM's closed validator, and two forks scheduled for 8 December 2026 on Tempo and BNB Chain. Cycle 15 is working on these.
+- Cycle 15 answered whether Monad's validators run the PoolManager as compiled code. They do. The emitter was built from source, and the native code of the deployed PoolManager was run against Monad's own interpreter on about 2.2 million calls, including every path no mined transaction has used (`clear`, `donate`, the allowance paths, the overflow fallback, amounts above 2^160). Results, gas and state are equal, and planted faults were caught. The code generator of the compiler that reth ships was transcribed and checked on 631,353 vectors with no mismatch. 33,760 more mined swaps on HyperEVM match the source formulas. The 49 conditional jumps with a side no script takes were reread against the source: every one is unreachable or ends in a revert on all networks. Two findings were added. Polygon's fork of 8 December 2026 replaces the code of five accounts by a mechanism that governance once used on a pooled token (F-134, governance level). From Tempo's T15 fork a `take` to a zone deposit address goes to a zone portal, and if the deposit fails, the refund lands in the PoolManager, where an account with callbacks in the same portal batch can claim it as its own payment (F-135, low: the taker has lost that refund either way, and no pool funds are reachable).
+
+What is still untested is listed in `OPCODES.md`. No item on that list is known to be within an ordinary account's reach. The largest are a rebuild of the Monad harness on the release's exact dependencies, MegaETH's closed sequencer on liquidity removals, HyperEVM's closed validator, and the three forks scheduled for 8 December 2026 on Tempo, BNB Chain and Polygon. Cycle 16 is working on these.
 
 The faulty library release (ruint 1.21.0) runs on none of the 21 networks. Ethereum's reth nodes and Tempo run the first fixed release, which is a month old, and Tempo has no second client. As a by-product of running both, the built bytecode turned out to be the same bytes as the PoolManager deployed on Ethereum, so the on-chain measurements apply to this build directly.
 
@@ -33,7 +35,7 @@ Can an ordinary account take funds that other users hold in this repository's Po
 
 ## Answer so far
 
-No critical or high finding exists for an ordinary attacker, and the planted weakness has not been identified. Fourteen cycles have found no property of any of the 21 networks that lets an ordinary account reach funds in pools of ordinary tokens. Every finding that an ordinary account can trigger depends on a particular token or a particular third-party hook, and the amounts at stake today are small.
+No critical or high finding exists for an ordinary attacker, and the planted weakness has not been identified. Fifteen cycles have found no property of any of the 21 networks that lets an ordinary account reach funds in pools of ordinary tokens. Every finding that an ordinary account can trigger depends on a particular token, a particular third-party hook, or a recipient the taker chose, and the amounts at stake today are small.
 
 Cycle 7 went back to the OP Stack chains, Tempo and Arc, HyperEVM, Monad and MegaETH, walked the five audit reports in `docs/security/audits` against `src/` finding by finding, and swept every priced currency for transfers that cost the sender more than the amount. The network units found nothing an ordinary account can use. The audit walk found every reported hazard closed in the source or left open by a recorded decision of the team, and two guards that the reports list as fixes and the source does not have, neither of which moves funds. The sweep raised the amount behind one earlier finding: the Arc PoolManager holds about 107,000 USD of a token that charges the sender on top.
 
@@ -71,7 +73,7 @@ Limits of the design that the audits recorded and the team accepted (F-102, F-10
 
 The remaining six (F-006, F-014, F-054, F-055, F-100, F-101) record places where the source disagrees with its own comments, tests, test doubles or audit record, with no funds involved. The two new ones come from the audit walk. The Trail of Bits and Spearbit reports list a lock on `sync` and on fee collection as a fix, and the source has a check on the synced currency in their place, which skips `address(0)`. Where the native asset has an ERC-20 face, a native fee collection can therefore run between a `sync` of the face and its `settle`, and the account that holds the sync is the only one that pays. The OpenZeppelin report says `noDelegateCall` was added to all relevant external functions, and the source carries it on the four pool functions only. The reports do not say whether the guards were dropped on purpose later.
 
-The other 76 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end. Five issuer blocks are in force today and an ordinary account can neither set nor lift them.
+The other 77 findings need a party the threat model excludes: a token issuer, a chain operator, governance, or the author of a hook or token that the victims chose. They are listed near the end. Five issuer blocks are in force today and an ordinary account can neither set nor lift them.
 
 - On Ethereum the issuers of yUSD, yETH and xSolvBTC have blocked the PoolManager address, and KITE and NTX are paused. About 1.67 million USD held for pools cannot leave (F-080).
 - On Celo the GoodDollar owner block-listed the PoolManager on 11 September 2026, which holds about 60,000 USD of G$ (F-056).
@@ -1522,6 +1524,35 @@ Sources:
 - https://worldchain-mainnet.g.alchemy.com/public (web3_clientVersion returned world-chain/v2.8.2-9596311)
 - https://rpc.xlayer.tech (web3_clientVersion returned reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7)
 
+### F-135. From Tempo T15 a take to a zone deposit address is forwarded to a zone portal, and a failed deposit returns to the PoolManager, where an account with callbacks in the same portal batch can book it as its own payment
+
+Low severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: Tempo.
+
+What differs on the network: From T15, which v1.19.1 already contains and which Tempo targets for 15 December 2026, the TIP-20 precompile treats any recipient whose bytes 4 to 12 are 0xFC as a zone virtual deposit address. A transfer to it credits the zone's portal instead of the named address and then calls depositVirtual on the portal with the sender as originator. If the zone cannot deliver the deposit, the portal refunds the originator on Tempo later, minus a fee, or parks the refund for the originator to claim.
+
+How it meets the code: An ordinary caller inside unlock calls take(token, to, amount) with a zone deposit address as to. The PoolManager debits the caller amount of the token (PoolManager.sol:291-297) and calls token.transfer(to, amount) (Currency.sol:53-80). The token debits the PoolManager amount, credits the portal amount, and calls the portal, whose code is a fixed system runtime that does not call the PoolManager. The call returns true, so the take succeeds, and the caller must settle amount as with any other take. The PoolManager loses exactly what the caller owes. If the deposit fails in the zone (unregistered master id, unconfigured key, rejected by the sequencer or the issuer policy), the portal later transfers the net amount to the PoolManager in a separate transaction, or parks it under the PoolManager's address, which the PoolManager can never claim because it makes no arbitrary calls. A refund that arrives with no sync before it raises balanceOf(PoolManager) and credits no caller (PoolManager.sol:279-288, 349-364), so it stays as surplus. A reading of the portal source after the cycle (own check, 2026-11-25) adds one path. The portal pays a refund only inside processWithdrawals, which the zone's sequencer sends (ZonePortal.sol 1386-1408, 1506-1529), and claimRefund pays only its own caller (1531-1539). The same processWithdrawals call also delivers callback withdrawals: any zone account can request one (zone outbox request_withdrawal, outbox/mod.rs 159-262), and when the zone's gateway mode is open the messenger calls onWithdrawalReceived on any target (ZoneMessenger.sol 37-82). sync needs no unlock (PoolManager.sol:279) and the synced currency and reserves live in transient storage until the end of the transaction. So an account that has one callback withdrawal before the refund and one after it in the same batch can call sync(token) in the first callback and unlock, settle and take in the second. settle then counts the refund as that account's payment (PoolManager.sol:358-364).
+
+What is at risk: No funds of liquidity providers or claim holders move. The party that named the deposit address, or the router or user it acted for, loses the refund of a failed deposit. The refund stays in the portal's refund registry, stays in the PoolManager as surplus, or goes to an account that placed callback withdrawals around it in the same portal batch. The loss to the taker is the same in all three cases.
+
+What it takes: T15 active on mainnet with TIP-1094 in its scope (the T15 page lists only TIP-1166 so far; the code gates TIP-1094 on T15). A zone with a nonzero id below next_zone_id and a key version other than 0. For the capture path: the zone's gateway mode is open, the taker's deposit fails in the zone, and the other account's two callback withdrawals sit on either side of the refund in one processWithdrawals transaction. The zone orders its withdrawal queue, so the account cannot force that position; it can only keep callback withdrawals flowing.
+
+What can be done: Routers and front ends should refuse take recipients whose bytes 4 to 12 are 0xFC on Tempo, or pay zone deposits from their own address so refunds return to them. Nothing in the PoolManager can be changed to stop the capture, because sync is open by design.
+
+Second reviewer's corrections: severity: low rather than info. The difference does create an integration hazard, because a user or router that names a zone deposit address as take recipient loses the refund of a failed deposit. It is not info under SCHEMA.md since a loss path exists, but the loss falls only on the party that chose the recipient, so it does not reach liquidity providers or claim holders. The actor value unprivileged is correct for triggering it; the victims are the actor or its own users, not uninvolved users.
+
+Code: `src/PoolManager.sol:279`, `src/PoolManager.sol:279-288`, `src/PoolManager.sol:291-297`, `src/PoolManager.sol:349-364`, `src/types/Currency.sol:53-80`.
+
+Sources:
+
+- https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/precompiles/src/tip20/mod.rs (resolve_transfer routes a reserved address to portal_address(zone_id) under T15, deposit_virtual calls depositVirtual with originator equal to the sender, rejects zero amount and transfers made inside other precompiles)
+- https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/contracts/src/zones/address_registry.rs (zone deposit address format, magic 0xFC at bytes 4 to 12)
+- https://tips.sh/1094 (refunds of failed virtual deposits go to the originator, minus the processing fee, or are parked for the originator to claim)
+- https://tempo.com/developers/docs/protocol/upgrades.md (T15 targeted for mainnet on 15 December 2026, T14 on 8 December 2026)
+- https://tempo.com/developers/docs/protocol/upgrades/t15.md (T15 page lists only TIP-1166 so far and says the scope may change)
+- https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/zones/contracts/src/runtime/tempo/ZonePortal.sol (depositVirtual 1213-1282, processWithdrawals 1386-1408 (sequencer only, reentrancy guard), deliverWithdrawal 1463-1504, _processDepositBounceBack 1506-1529, claimRefund 1531-1539 pays msg.sender only)
+- https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/zones/contracts/src/runtime/tempo/ZoneMessenger.sol (relayMessage 37-82 transfers the amount to the target and calls onWithdrawalReceived on it; with gateway mode enforced only targets with the CallbackGateway role are accepted)
+- https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/zones/precompiles/src/outbox/mod.rs (request_withdrawal 159-262: any zone account that passes the zone's withdrawal policy can queue a withdrawal with a gas limit and callback data)
+
 ### F-006. Source disagrees with two interface comments and two test conditions, and none of the four changes who can move funds
 
 Info severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: all 21 networks.
@@ -1802,11 +1833,11 @@ These are outside the threat model and are listed for reference. Full text is in
 | F-016 | sequencer, validator or bridge committee | low | confirmed | Monad, MegaETH | Thirteen Wormhole guardians can act as PoolManager owner on Monad and MegaETH |
 | F-017 | sequencer, validator or bridge committee | low | confirmed | MegaETH | MegaETH has one sequencer, so an exit from the PoolManager that it refuses to include depends on L1 forced inclusion with a 12 hour bound |
 | F-022 | sequencer, validator or bridge committee | low | confirmed | HyperEVM | The owner on HyperEVM is a Wormhole message receiver, so a guardian quorum can exercise the owner role |
-| F-024 | sequencer, validator or bridge committee | low | plausible | X Layer | X Layer block builder can exclude PoolManager transactions through a rule driven risk control filter, which leaves L1 deposits as the exit |
+| F-024 | sequencer, validator or bridge committee | low | confirmed | X Layer | X Layer block builder can exclude PoolManager transactions through a rule driven risk control filter, which leaves L1 deposits as the exit |
 | F-030 | sequencer, validator or bridge committee | low | confirmed | Soneium | Soneium restricts listed contracts at its own RPC and sequencer, which leaves L1 forced inclusion as the exit for pools that touch a listed token or hook |
 | F-034 | sequencer, validator or bridge committee | low | confirmed | Tempo, Arc | PoolManager ownership on Tempo and Arc is exercised through Wormhole guardian signatures |
 | F-116 | sequencer, validator or bridge committee | low | confirmed | Celo | Celo's public endpoint routes a minority of requests to an op-geth build that Celo no longer supports and that has no Karst rules |
-| F-132 | sequencer, validator or bridge committee | low | plausible | Base, Celo | Base and Celo block builders read through the reth execution cache that still has the stale branch for a destroyed account without code, when the operator enables cache sharing |
+| F-132 | sequencer, validator or bridge committee | low | confirmed | Celo | Base and Celo block builders read through the reth execution cache that still has the stale branch for a destroyed account without code, when the operator enables cache sharing |
 | F-117 | sequencer, validator or bridge committee | info | confirmed | Arbitrum One, Robinhood Chain, Polygon, BNB Smart Chain, Avalanche | Five go-ethereum family nodes run a Go toolchain with a published silent dead store miscompile, and no function on the opcode or state path has the triggering shape |
 | F-118 | sequencer, validator or bridge committee | info | confirmed | MegaETH | MegaETH blocks are executed by a closed JIT executor that no public RPC node re-executes, so eth_call evidence speaks for a different EVM than the one that writes PoolManager state |
 | F-119 | sequencer, validator or bridge committee | info | confirmed | Arbitrum One, Robinhood Chain, Elysium | Arbitrum family validators compute the settled state with a go1.25.9 WebAssembly build that public endpoints do not run |
@@ -1822,6 +1853,7 @@ These are outside the threat model and are listed for reference. Full text is in
 | F-029 | owner, fee controller or chain governance | medium | confirmed | Optimism, Base, Unichain, Zora, Worldchain, Ink, Soneium | PoolManager ownership rests on an upgradeable messenger predeploy on five chains and on the portal alias on two, and a takeover reaches protocol fees only |
 | F-045 | owner, fee controller or chain governance | low | confirmed | HyperEVM | The MRB hard fork raised the price of seven precompiles by 5 to 40 times, which can push a hook past the 3,000,000 gas fast block |
 | F-052 | owner, fee controller or chain governance | low | confirmed | Arc | Arc keeps a denylist contract whose owner can keep transactions that name a listed sender or target out of the mempool |
+| F-134 | owner, fee controller or chain governance | low | confirmed | Polygon | Polygon's Salvador hardfork rewrites the code of five accounts at block 98,688,600 through BlockAlloc, a mechanism that can give any address new code outside a transaction |
 | F-058 | owner, fee controller or chain governance | info | confirmed | BNB Smart Chain | BNB Smart Chain runs a call from the system address with its stated value and moves no balance, and no ordinary sender can be that address |
 | F-089 | owner, fee controller or chain governance | info | confirmed | all 21 networks | No test fails when the unsettled delta check of unlock is removed, and under the --isolate flag of the CI no test pins the lock close or the reset of the synced currency; the source has all three statements |
 | F-126 | owner, fee controller or chain governance | info | confirmed | Optimism, Unichain, Ink | The LLVM MIPS shift lowering that kona-client 1.9.0 was compiled with miscompiles 128 bit shifts by 64 to 127 under some constant folds, and a scan of the respected prestate finds no bad shape on any fall-through path |
@@ -1859,6 +1891,6 @@ Code group compares the deployed bytecode after blanking the contract's own addr
 ## Where the evidence is
 
 - `FINDINGS.md`: every finding in full, including the out-of-scope ones.
-- `CLEARED.md`: the 1320 checks that came out safe, with the reason for each.
+- `CLEARED.md`: the 1397 checks that came out safe, with the reason for each.
 - `STATUS.md`: coverage per network and lens, open leads, cycle history.
 - `cycles/NNN/`: the raw research and verdict files of each cycle.

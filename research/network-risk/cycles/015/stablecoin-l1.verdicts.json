@@ -1,0 +1,39 @@
+{
+ "unit": "stablecoin-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "Fetched tempo/v1.19.1 crates/precompiles/src/tip20/mod.rs. transfer (lines 869-884) calls validate_transfer, which calls Recipient::resolve_transfer (line 1253); from T15 resolve_transfer (lines 1679-1695) decodes a zone deposit address, rejects version 0 and zone ids of 0 or at least next_zone_id, and sets the target to portal_address(zone_id). _transfer credits the portal (line 877) and deposit_virtual (lines 1073-1115) then calls depositVirtual with originator equal to the token's msg_sender, refuses zero amounts, caps grossAmount at u128 and turns any portal revert into a revert of the whole transfer. address_registry.rs lines 29-30 and 51-52 define the format as 0xFC in bytes 4 to 12. tips.sh/1094 says a failed deposit refunds the originator on Tempo after the batch settles, minus the processing fee, that there is no refund address field, and that a parked refund needs the refund recipient to act. upgrades.md lists T15 mainnet as 15 December 2026 (target) and t15.md says it covers only TIP-1166 so far and the scope may change. web3_clientVersion at https://rpc.mainnet.tempo.xyz returned tempo/v1.19.1-a9d6748/x86_64-unknown-linux-gnu on this run, so the T15-gated code is in the running client but T15 is not active.",
+   "codeCheck": "take (src/PoolManager.sol:291-297) charges the caller -amount.toInt128() and then calls currency.transfer(to, amount) (src/types/Currency.sol:56-80), which requires success and a return of 1 or empty. The TIP-20 debit equals amount, so the PoolManager loses exactly what the caller owes, and the unlock delta check forces the caller to settle it. A refund paid later to the PoolManager arrives in a separate transaction, so transient reserves set by sync (src/PoolManager.sol:279-288) do not cover it and _settle (src/PoolManager.sol:349-364) credits only reservesNow - reservesBefore inside one transaction. The refund therefore becomes surplus no ordinary caller can claim. The PoolManager has no generic call path, so a parked refund registered to it cannot be claimed. I found no path where the forwarding changes the amount debited or moves another user's balance.",
+   "corrections": "severity: low rather than info. The difference does create an integration hazard, because a user or router that names a zone deposit address as take recipient loses the refund of a failed deposit. It is not info under SCHEMA.md since a loss path exists, but the loss falls only on the party that chose the recipient, so it does not reach liquidity providers or claim holders. The actor value unprivileged is correct for triggering it; the victims are the actor or its own users, not uninvolved users.",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/precompiles/src/tip20/mod.rs", "supports": "T15 resolve_transfer to portal_address, credit before depositVirtual, originator equal to msg_sender, zero amount and u128 checks, portal revert reverts the transfer"},
+    {"url": "https://raw.githubusercontent.com/tempoxyz/tempo/tempo/v1.19.1/crates/contracts/src/zones/address_registry.rs", "supports": "ZONE_DEPOSIT_ADDRESS_MAGIC is 0xFC repeated in bytes 4 to 12"},
+    {"url": "https://tips.sh/1094", "supports": "failed deposits refund the originator after batch settlement minus a fee; parked refunds need the refund recipient to act"},
+    {"url": "https://tempo.com/developers/docs/protocol/upgrades.md", "supports": "T15 mainnet target 15 December 2026, T14 mainnet 8 December 2026"},
+    {"url": "https://tempo.com/developers/docs/protocol/upgrades/t15.md", "supports": "T15 page covers only TIP-1166 so far and scope may change"},
+    {"url": "https://rpc.mainnet.tempo.xyz", "supports": "web3_clientVersion returned tempo/v1.19.1-a9d6748"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "T14 configurable accounts as unlock callers, as hooks and as take recipients",
+   "agrees": true,
+   "note": "instructions.rs lines 141-160 run the 0xef marker only from T14, only when the executing code equals CONFIGURABLE_ACCOUNT_CODE and the code address has a nonzero commitment. shim.rs lines 25-71 return empty success for empty input, answer isValidSignature and onERC721Received, and revert for every other selector, so unlockCallback (src/PoolManager.sol:110) and hook callbacks revert. The shim writes no state and makes no calls. Nothing reaches other users' funds."
+  },
+  {
+   "check": "ruint fixes published after 1.20.0, which Arc pins, for any EVM-reachable arithmetic fault",
+   "agrees": true,
+   "note": "In the ruint-1.20.0 crate, src/algorithms/div/small.rs line 18 aliases div_3x2 to div_3x2_mg10, and knuth.rs lines 3, 64 and 161 and small.rs lines 136, 180 and 188 call that alias. div_3x2_ref (small.rs line 251, marked off by one at line 248) has no caller in the division path. The off-by-one function is not reachable from DIV, MOD or MULMOD."
+  },
+  {
+   "check": "Whether the T15 zone portal call made inside a PoolManager transfer can re-enter the PoolManager or change the debited amount",
+   "agrees": true,
+   "note": "tip20/mod.rs line 877 debits amount before deposit_virtual, grossAmount is u128::try_from(amount) and take bounds amount by toInt128 at src/PoolManager.sol:294, and a portal failure returns RawRevert, which reverts the transfer and so the caller's own take through Currency.sol. I did not read the portal runtime itself, so the claim that it never calls the PoolManager rests on TIP-1094's description of a fixed system portal."
+  }
+ ],
+ "leads": []
+}

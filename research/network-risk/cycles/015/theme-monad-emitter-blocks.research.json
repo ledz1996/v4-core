@@ -1,82 +1,117 @@
 {
-  "unit": "theme-monad-emitter-blocks",
-  "profiles": [],
-  "findings": [],
-  "cleared": [
-    {
-      "chainIds": [143],
-      "lens": "L1",
-      "check": "Task 2 (lead L-726): is the PoolManager compiled at all by Monad's x86 emitter. Method: the emitter was built from downloaded source (category-labs/monad v0.16.7 and v0.16.5 category/vm and category/core from cdn.jsdelivr.net, asmjit at commit 9eb6edbf711ceb25346ee40bae68b40a4505cdf5 from raw.githubusercontent.com, evmc master of category-labs/evmc with the fork's four struct fields added by hand), the runtime symbols it only references were stubbed, and native::compile was run with the production CompilerConfig on the build of this checkout and on the code read with eth_getCode from 0x188d586ddcf52439676ca21a244753fa19f9ea8e at https://rpc.monad.xyz (24,009 bytes, sha256 prefix 288b97729c9e4f34; it differs from build/PoolManager.json only in the 20 immutable bytes at offset 13606, which hold the PoolManager address).",
-      "result": "It is compiled. The size check compares Emitter::estimate_size() (text size + 32 per pending CALLDATALOAD handler + read-only data + 4 x bytecode size, emitter.cpp 1020-1030) with max_code_size(10,240, 24,009) = 10,240 + 32 x 24,009 = 778,528 bytes (x86.hpp 53-65, types.hpp CompilerConfig max_code_size_offset = 10 x 1024, x86.cpp 308-315 and 468-479). The built emitter prints 285,084 bytes for the deployed code and 285,059 for the build with a zero immutable under v0.16.7, and 284,482 and 284,425 under v0.16.5, for MonadTraits MONAD_EIGHT, NINE and TEN alike, and returns an entry point (error_code NoError). This is a measurement from a build, not a bound. The asmjit commit is the vcpkg pin of 2025-05-08, not the submodule pin of the release, which could not be read without the GitHub API; a different asmjit could move the estimate by a few percent at most, and the margin is a factor of 2.7.",
-      "source": "https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/compiler/ir/x86.cpp ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/compiler/ir/x86.hpp ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/compiler/ir/x86/emitter.cpp ; https://raw.githubusercontent.com/microsoft/vcpkg/master/ports/asmjit/portfile.cmake ; eth_getCode 0x188d586ddcf52439676ca21a244753fa19f9ea8e at https://rpc.monad.xyz block 0x775837e ; cycles/015/theme-monad-emitter-blocks.work/driver.cpp, drv, drv165"
-    },
-    {
-      "chainIds": [143],
-      "lens": "L1",
-      "check": "Task 3 (lead L-725): which execution mode Monad validators run by default and after how much interpreted gas the PoolManager is compiled.",
-      "result": "The execution daemon builds vm::VM vm{trace_calls ? InterpreterOnly : Dual} (cmd/monad/main.cpp line 488 at v0.16.7, line 479 at v0.16.5), so a node runs Dual unless it is started with --trace_calls. The published full node instructions recommend --trace_calls only for archive and RPC nodes, and the validator installation page says nothing about execution flags. The docs list monad 0.16.5 for mainnet and 0.16.7 for testnet. In Dual mode VM::execute_raw (vm.cpp 140-191, identical in v0.16.5 and v0.16.7) runs a contract in the interpreter and starts asynchronous compilation once the gas the interpreter has spent on that code hash, summed over all executions, reaches max_code_size(10,240, code size), which is 778,528 gas for the 24,009 byte PoolManager; when the node's code cache is not yet warm it compiles at once. A validator that follows the published setup therefore runs the PoolManager as native code after its first few transactions, and RPC nodes with --trace_calls interpret it.",
-      "source": "https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.5/cmd/monad/main.cpp ; cycles/014/theme-monad-native-path.work/src/monad-v0.16.7_cmd_monad_main.cpp lines 484-488 ; https://docs.monad.xyz/node-ops/full-node-installation.md ; https://docs.monad.xyz/node-ops/validator-installation.md ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/vm.cpp ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/code.hpp"
-    },
-    {
-      "chainIds": [143],
-      "lens": "L1",
-      "check": "Task 1: the compiled code of the never-mined paths against Monad's interpreter. A harness (harness.cpp) links Monad's real interpreter (interpreter::execute), the real emitter (native::compile) and the real runtime library from v0.16.7, with one in-memory host that keeps storage, transient storage, warm sets, logs and balances and reverts them per frame. Every transaction runs twice from the same state, once interpreted and once as native code, with MonadTraits MONAD_TEN, and the harness compares every call result (status, gas left, return bytes), all storage and transient storage, balances and logs. Users and an ERC20 are host-level accounts; inside unlockCallback a user runs a script of PoolManager calls and can read its own delta through exttload and pay it, mint it, or clear it exactly. Paths: clear of an exact credit (src/PoolManager.sol:310-319), transferFrom and burn through an allowance or an operator (src/ERC6909.sol:35-48, src/ERC6909Claims.sol:13-22), approve and setOperator (src/ERC6909.sol:50-64), donate (src/libraries/Pool.sol:466-480), the overflow fallback of getNextSqrtPriceFromAmount0RoundingUp (src/libraries/SqrtPriceMath.sol:52), the amount above 2^160 branch of getNextSqrtPriceFromAmount1RoundingDown (src/libraries/SqrtPriceMath.sol:97), and take, mint, clear and swap amounts drawn from edge sets around 2^64, 2^96, 2^127, 2^128, 2^159 to 2^161, 2^255 and 2^256 - 1.",
-      "result": "No difference. 20,000 mixed scenarios (629,823 transactions and 676,709 calls inside unlocks) and nine per-path batteries of 100,000 calls each (approve, transferFrom, burn, clear, donate, fallback, amount above 2^160, take, swap; 291,020 transactions) give identical results in the interpreter and in native code, gas left included. The v0.16.5 build gives the same on 5,450 scenarios. The only raw difference is the status class of an exceptional halt: native code reports EVMC_FAILURE where the interpreter reports EVMC_OUT_OF_GAS, both with zero gas left; a receipt and a calling frame see only failure, so the harness compares halts as one class. A trace build of the interpreter records coverage: every instruction of clear (17 of 17), transferFrom (60 of 60), approve, setOperator, _burnFrom (37 of 37), Pool.donate (42 of 42), UnsafeMath.simpleMulDiv (35 of 35) and the fallback at SqrtPriceMath.sol:52 (12 of 12) ran; 7,505 of 10,418 PoolManager instructions ran in total. Two planted emitter faults are caught: SUB without borrow propagation (emitter.cpp 2481) makes 200 of 200 mixed and 90 of 90 battery scenarios differ, and an off-by-one in LT with a literal left operand (emitter.cpp 4029) makes 111 of 200 mixed and 48 of 90 battery scenarios differ.",
-      "source": "cycles/015/theme-monad-emitter-blocks.work/harness.cpp, gen.py, gen_mass.py, runs/summary.txt, mass/summary.txt, v165/summary.txt, fault/summary.txt, fault/out14_f1.txt, fault/out14_f2.txt, cov/regions.json ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/interpreter/execute.cpp ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/compiler/ir/x86/emitter.cpp"
-    },
-    {
-      "chainIds": [143],
-      "lens": "L1",
-      "check": "Task 1: the exact basic blocks of each path and the emitter routines chosen for them. The emitter's own assembly log (CompilerConfig asm_log_path, with a comment for every EVM instruction and block) was written for the deployed code (pm.asm, 48,691 lines) and cut into the blocks that hold an instruction of each path (blocks/*.asm, blocks/summary.json, blocks/routines.json).",
-      "result": "The paths occupy 85 blocks with 940 EVM instructions and 3,264 x86 instructions: clear 5 blocks (0xde6 to 0xe31), transferFrom 11, approve 1 (0x2518), setOperator 1 (0x20c1), _burnFrom 7, Pool.donate 8, the fallback 3 (0x5d5d, 0x5d6c, 0x5d71), getNextSqrtPriceFromAmount0RoundingUp 15, getNextSqrtPriceFromAmount1RoundingDown 13, simpleMulDiv 6. Of the EVM instructions, 624 emit no code (PUSH, DUP, SWAP and POP live in the virtual stack), 163 call runtime routines (DIV and MOD of variable operands, SLOAD, SSTORE, TLOAD, TSTORE, KECCAK256, LOG, CALL, memory growth), 112 use AVX moves for block-exit spills and wide literals, 52 are four-limb GPR arithmetic or comparisons (cmp or sub followed by sbb, add followed by adc), and the rest are shifts, setcc after fused ISZERO pairs, and branches. A comparison feeding JUMPI stays in CPU flags, and a dynamic JUMP checks the target below 24,009 with the three upper limbs zero and then goes through a jump table over every byte offset (fallback block 0x5d71). The comparison of whole transactions above runs exactly these instruction sequences on all their entries, so a Python model of each routine was not needed; the comparison is with Monad's interpreter, which cycles 1 to 14 matched to the specification on 185,529 vectors and the mined replays, and not with pyevm.py.",
-      "source": "cycles/015/theme-monad-emitter-blocks.work/asmlog.cpp, pm.asm, blocks.py, routines.py, blocks/summary.json, blocks/routines.json ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/compiler/ir/x86/emitter.cpp (lt 4008-4048, sub 2447-2481, jumpi 3499, udiv 3427, estimate_size 1020-1030)"
-    },
-    {
-      "chainIds": [143],
-      "lens": "L1",
-      "check": "Whether the overflow fallback at src/libraries/SqrtPriceMath.sol:52 and the amount above 2^160 branches at src/libraries/SqrtPriceMath.sol:97 and :105 can decide the outcome of a swap that succeeds, which would make a compiled-only fault there reach funds.",
-      "result": "They cannot in practice. The fallback runs only on an exact-input step that stops short of its target (src/libraries/SwapMath.sol:74-82) with amountRemainingLessFee times sqrtP at or above 2^256. The step target is at most one bitmap word away (256 times the tick spacing), and the amount needed to reach it is token1 reserve times 2^192 / sqrtTarget, so the step needs a token1 reserve in that range above 2^64 times sqrtTarget. With the price at or above 2^96 that is above 2^160 token1, which no deposit can give since every modifyLiquidity delta passes toInt128 (src/libraries/Pool.sol:215-234). With the price below 2^96 the input must exceed 2^160, and the swap then ends in the toInt128 of src/libraries/Pool.sol:455 or :459 and reverts with SafeCastOverflow. The harness confirms this: all 100,000 fallback calls and all 100,000 calls above 2^160 reverted with 0x93dafdf1 in both engines. Branch :105 (exact output above 2^160) needs more than 2^160 of output and was never reached, as cycle 12 found (jumpmap neverReached). A wrong result in these blocks could only change which error a reverting frame returns.",
-      "source": "src/libraries/SqrtPriceMath.sol:31-52 ; src/libraries/SwapMath.sol:60-100 ; src/libraries/Pool.sol:453-460 ; cycles/015/theme-monad-emitter-blocks.work/mass/summary.txt"
-    },
-    {
-      "chainIds": [1, 10, 8453, 130, 7777777, 480, 57073, 1868, 42220, 196, 42161, 4663, 99901, 137, 56, 43114, 4326, 4217, 5042, 999],
-      "lens": "L1",
-      "check": "Whether any of the other 20 networks runs EVM bytecode through a compiler like Monad's.",
-      "result": "No other network in networks.json runs Monad's emitter. The reth JIT (evm2 with reth_jit) was read in cycle 14 and is off on the public endpoints, and Stylus compiles WASM, not EVM bytecode (OPCODES.md, cycle 14 ethereum-reference and arbitrum-family). This unit tested nothing on these networks.",
-      "source": "research/network-risk/OPCODES.md ; research/network-risk/cycles/014/critic.json"
-    }
-  ],
-  "leads": [
-    {
-      "chainIds": [143],
-      "lens": "L1",
-      "question": "Rebuild the harness of this unit with the asmjit commit pinned as the v0.16.5 and v0.16.7 submodule, and with the category-labs/evmc commit of the release in place of the hand-patched header, and rerun the 20,000 scenarios and nine batteries. Does anything change?",
-      "why": "The emitter's instruction selection does not depend on asmjit's version, but the encoder and the evmc struct layout do. Both pins need the GitHub tree API or the release tarball, which this environment blocks.",
-      "priority": "low"
-    },
-    {
-      "chainIds": [143],
-      "lens": "L1",
-      "question": "Replay mined Monad transactions to the PoolManager through the same harness (interpreter against native) from the parent-block storage that cycle 13 already collected. Do any differ?",
-      "why": "This unit compared engines on generated inputs. A replay would add the mined input distribution, hooks that return deltas, and real token contracts, which the harness's host-level ERC20 does not model.",
-      "priority": "low"
-    }
-  ],
-  "leadResults": [
-    {
-      "leadId": "L-726",
-      "outcome": "cleared",
-      "answer": "The x86 emitter was built from v0.16.7 and v0.16.5 source with stubbed runtime symbols. estimate_size() is 285,084 bytes for the deployed PoolManager runtime under v0.16.7 (284,482 under v0.16.5), against the bound of 778,528, and compilation returns an entry point. The PoolManager is compiled on Dual nodes. The 22,586 byte v3 pool was not measured."
-    },
-    {
-      "leadId": "L-725",
-      "outcome": "cleared",
-      "answer": "Nodes run Dual unless started with --trace_calls (cmd/monad/main.cpp 488 at v0.16.7, 479 at v0.16.5). The published docs recommend that flag only for archive and RPC nodes and give validators no execution flag. A contract is compiled once its interpreted gas reaches 10,240 + 32 times its size, which is 778,528 gas for the PoolManager, or at once while the code cache is cold. A local Dual node replaying mainnet was not run; in its place the harness ran the real emitter output against the real interpreter on about 2.2 million generated calls with no difference."
-    },
-    {
-      "leadId": "L-692",
-      "outcome": "inconclusive",
-      "answer": "For Monad: still no mined instance, but the compiled code of every never-mined branch now has direct evidence. clear of an exact credit, transferFrom and burn through an allowance or operator, approve, donate, the overflow fallback and amounts above 2^160 were run as Monad native code and in Monad's interpreter on 100,000 calls per path, and all results, gas and state agree. Planted emitter faults are caught. The fallback and the above 2^160 branches only run inside frames that revert with SafeCastOverflow. MegaETH and HyperEVM are not covered by this unit."
-    }
-  ]
+ "unit": "theme-monad-emitter-blocks",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 2 (lead L-726): is the PoolManager compiled at all by Monad's x86 emitter. Method: the emitter was built from downloaded source (category-labs/monad v0.16.7 and v0.16.5 category/vm and category/core from cdn.jsdelivr.net, asmjit at commit 9eb6edbf711ceb25346ee40bae68b40a4505cdf5 from raw.githubusercontent.com, evmc master of category-labs/evmc with the fork's four struct fields added by hand), the runtime symbols it only references were stubbed, and native::compile was run with the production CompilerConfig on the build of this checkout and on the code read with eth_getCode from 0x188d586ddcf52439676ca21a244753fa19f9ea8e at https://rpc.monad.xyz (24,009 bytes, sha256 prefix 288b97729c9e4f34; it differs from build/PoolManager.json only in the 20 immutable bytes at offset 13606, which hold the PoolManager address).",
+   "result": "It is compiled. The size check compares Emitter::estimate_size() (text size + 32 per pending CALLDATALOAD handler + read-only data + 4 x bytecode size, emitter.cpp 1020-1030) with max_code_size(10,240, 24,009) = 10,240 + 32 x 24,009 = 778,528 bytes (x86.hpp 53-65, types.hpp CompilerConfig max_code_size_offset = 10 x 1024, x86.cpp 308-315 and 468-479). The built emitter prints 285,084 bytes for the deployed code and 285,059 for the build with a zero immutable under v0.16.7, and 284,482 and 284,425 under v0.16.5, for MonadTraits MONAD_EIGHT, NINE and TEN alike, and returns an entry point (error_code NoError). This is a measurement from a build, not a bound. The asmjit commit is the vcpkg pin of 2025-05-08, not the submodule pin of the release, which could not be read without the GitHub API; a different asmjit could move the estimate by a few percent at most, and the margin is a factor of 2.7.",
+   "source": "https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/compiler/ir/x86.cpp ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/compiler/ir/x86.hpp ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/compiler/ir/x86/emitter.cpp ; https://raw.githubusercontent.com/microsoft/vcpkg/master/ports/asmjit/portfile.cmake ; eth_getCode 0x188d586ddcf52439676ca21a244753fa19f9ea8e at https://rpc.monad.xyz block 0x775837e ; cycles/015/theme-monad-emitter-blocks.work/driver.cpp, drv, drv165"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 3 (lead L-725): which execution mode Monad validators run by default and after how much interpreted gas the PoolManager is compiled.",
+   "result": "The execution daemon builds vm::VM vm{trace_calls ? InterpreterOnly : Dual} (cmd/monad/main.cpp line 488 at v0.16.7, line 479 at v0.16.5), so a node runs Dual unless it is started with --trace_calls. The published full node instructions recommend --trace_calls only for archive and RPC nodes, and the validator installation page says nothing about execution flags. The docs list monad 0.16.5 for mainnet and 0.16.7 for testnet. In Dual mode VM::execute_raw (vm.cpp 140-191, identical in v0.16.5 and v0.16.7) runs a contract in the interpreter and starts asynchronous compilation once the gas the interpreter has spent on that code hash, summed over all executions, reaches max_code_size(10,240, code size), which is 778,528 gas for the 24,009 byte PoolManager; when the node's code cache is not yet warm it compiles at once. A validator that follows the published setup therefore runs the PoolManager as native code after its first few transactions, and RPC nodes with --trace_calls interpret it.",
+   "source": "https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.5/cmd/monad/main.cpp ; cycles/014/theme-monad-native-path.work/src/monad-v0.16.7_cmd_monad_main.cpp lines 484-488 ; https://docs.monad.xyz/node-ops/full-node-installation.md ; https://docs.monad.xyz/node-ops/validator-installation.md ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/vm.cpp ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/code.hpp"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 1: the compiled code of the never-mined paths against Monad's interpreter. A harness (harness.cpp) links Monad's real interpreter (interpreter::execute), the real emitter (native::compile) and the real runtime library from v0.16.7, with one in-memory host that keeps storage, transient storage, warm sets, logs and balances and reverts them per frame. Every transaction runs twice from the same state, once interpreted and once as native code, with MonadTraits MONAD_TEN, and the harness compares every call result (status, gas left, return bytes), all storage and transient storage, balances and logs. Users and an ERC20 are host-level accounts; inside unlockCallback a user runs a script of PoolManager calls and can read its own delta through exttload and pay it, mint it, or clear it exactly. Paths: clear of an exact credit (src/PoolManager.sol:310-319), transferFrom and burn through an allowance or an operator (src/ERC6909.sol:35-48, src/ERC6909Claims.sol:13-22), approve and setOperator (src/ERC6909.sol:50-64), donate (src/libraries/Pool.sol:466-480), the overflow fallback of getNextSqrtPriceFromAmount0RoundingUp (src/libraries/SqrtPriceMath.sol:52), the amount above 2^160 branch of getNextSqrtPriceFromAmount1RoundingDown (src/libraries/SqrtPriceMath.sol:97), and take, mint, clear and swap amounts drawn from edge sets around 2^64, 2^96, 2^127, 2^128, 2^159 to 2^161, 2^255 and 2^256 - 1.",
+   "result": "No difference. 20,000 mixed scenarios (629,823 transactions and 676,709 calls inside unlocks) and nine per-path batteries of 100,000 calls each (approve, transferFrom, burn, clear, donate, fallback, amount above 2^160, take, swap; 291,020 transactions) give identical results in the interpreter and in native code, gas left included. The v0.16.5 build gives the same on 5,450 scenarios. The only raw difference is the status class of an exceptional halt: native code reports EVMC_FAILURE where the interpreter reports EVMC_OUT_OF_GAS, both with zero gas left; a receipt and a calling frame see only failure, so the harness compares halts as one class. A trace build of the interpreter records coverage: every instruction of clear (17 of 17), transferFrom (60 of 60), approve, setOperator, _burnFrom (37 of 37), Pool.donate (42 of 42), UnsafeMath.simpleMulDiv (35 of 35) and the fallback at SqrtPriceMath.sol:52 (12 of 12) ran; 7,505 of 10,418 PoolManager instructions ran in total. Two planted emitter faults are caught: SUB without borrow propagation (emitter.cpp 2481) makes 200 of 200 mixed and 90 of 90 battery scenarios differ, and an off-by-one in LT with a literal left operand (emitter.cpp 4029) makes 111 of 200 mixed and 48 of 90 battery scenarios differ.",
+   "source": "cycles/015/theme-monad-emitter-blocks.work/harness.cpp, gen.py, gen_mass.py, runs/summary.txt, mass/summary.txt, v165/summary.txt, fault/summary.txt, fault/out14_f1.txt, fault/out14_f2.txt, cov/regions.json ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/interpreter/execute.cpp ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/compiler/ir/x86/emitter.cpp"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 1: the exact basic blocks of each path and the emitter routines chosen for them. The emitter's own assembly log (CompilerConfig asm_log_path, with a comment for every EVM instruction and block) was written for the deployed code (pm.asm, 48,691 lines) and cut into the blocks that hold an instruction of each path (blocks/*.asm, blocks/summary.json, blocks/routines.json).",
+   "result": "The paths occupy 85 blocks with 940 EVM instructions and 3,264 x86 instructions: clear 5 blocks (0xde6 to 0xe31), transferFrom 11, approve 1 (0x2518), setOperator 1 (0x20c1), _burnFrom 7, Pool.donate 8, the fallback 3 (0x5d5d, 0x5d6c, 0x5d71), getNextSqrtPriceFromAmount0RoundingUp 15, getNextSqrtPriceFromAmount1RoundingDown 13, simpleMulDiv 6. Of the EVM instructions, 624 emit no code (PUSH, DUP, SWAP and POP live in the virtual stack), 163 call runtime routines (DIV and MOD of variable operands, SLOAD, SSTORE, TLOAD, TSTORE, KECCAK256, LOG, CALL, memory growth), 112 use AVX moves for block-exit spills and wide literals, 52 are four-limb GPR arithmetic or comparisons (cmp or sub followed by sbb, add followed by adc), and the rest are shifts, setcc after fused ISZERO pairs, and branches. A comparison feeding JUMPI stays in CPU flags, and a dynamic JUMP checks the target below 24,009 with the three upper limbs zero and then goes through a jump table over every byte offset (fallback block 0x5d71). The comparison of whole transactions above runs exactly these instruction sequences on all their entries, so a Python model of each routine was not needed; the comparison is with Monad's interpreter, which cycles 1 to 14 matched to the specification on 185,529 vectors and the mined replays, and not with pyevm.py.",
+   "source": "cycles/015/theme-monad-emitter-blocks.work/asmlog.cpp, pm.asm, blocks.py, routines.py, blocks/summary.json, blocks/routines.json ; https://cdn.jsdelivr.net/gh/category-labs/monad@v0.16.7/category/vm/compiler/ir/x86/emitter.cpp (lt 4008-4048, sub 2447-2481, jumpi 3499, udiv 3427, estimate_size 1020-1030)"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Whether the overflow fallback at src/libraries/SqrtPriceMath.sol:52 and the amount above 2^160 branches at src/libraries/SqrtPriceMath.sol:97 and :105 can decide the outcome of a swap that succeeds, which would make a compiled-only fault there reach funds.",
+   "result": "They cannot. The fallback runs only on an exact-input step that stops short of its target (src/libraries/SwapMath.sol:74-82) with amountRemainingLessFee times the current price sqrtC at or above 2^256 (src/libraries/SqrtPriceMath.sol:41-43), so the input is at least 2^256 / sqrtC. Inside one step the token1 output equals input times sqrtC times sqrtN / 2^192, where sqrtN is the price at which the step stops, so the output is at least 2^64 times sqrtN. A zeroForOne step searches for its target inside the current bitmap word (src/libraries/TickBitmap.sol:94-104, src/libraries/Pool.sol:348), and word 0 begins at compressed tick 0. A step that starts at a positive tick therefore never has a target below tick 0, where the price is 2^96, so sqrtN is at least 2^96 and the output is at least 2^160, which reverts in the toInt128 of src/libraries/Pool.sol:455 or :459. A step that starts at or below tick 0 has sqrtC of at most about 2^96, so the input is at least 2^160 and reverts the same way. The price limit can only move the target closer. The verifier of this cycle supplied this argument; the bound on liquidity alone does not exclude the fallback. The harness agrees: all 100,000 fallback calls and all 100,000 calls above 2^160 reverted with 0x93dafdf1 in both engines. Branch :105 (exact output above 2^160) needs more than 2^160 of output and was never reached, as cycle 12 found (jumpmap neverReached). A wrong result in these blocks could only change which error a reverting frame returns.",
+   "source": "src/libraries/SqrtPriceMath.sol:31-52 ; src/libraries/SwapMath.sol:60-100 ; src/libraries/Pool.sol:453-460 ; cycles/015/theme-monad-emitter-blocks.work/mass/summary.txt"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Whether any of the other 20 networks runs EVM bytecode through a compiler like Monad's.",
+   "result": "No other network in networks.json runs Monad's emitter. The reth JIT (evm2 with reth_jit) was read in cycle 14 and is off on the public endpoints, and Stylus compiles WASM, not EVM bytecode (OPCODES.md, cycle 14 ethereum-reference and arbitrum-family). This unit tested nothing on these networks.",
+   "source": "research/network-risk/OPCODES.md ; research/network-risk/cycles/014/critic.json"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "question": "Rebuild the harness of this unit with the asmjit commit pinned as the v0.16.5 and v0.16.7 submodule, and with the category-labs/evmc commit of the release in place of the hand-patched header, and rerun the 20,000 scenarios and nine batteries. Does anything change?",
+   "why": "The emitter's instruction selection does not depend on asmjit's version, but the encoder and the evmc struct layout do. Both pins need the GitHub tree API or the release tarball, which this environment blocks.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "question": "Replay mined Monad transactions to the PoolManager through the same harness (interpreter against native) from the parent-block storage that cycle 13 already collected. Do any differ?",
+   "why": "This unit compared engines on generated inputs. A replay would add the mined input distribution, hooks that return deltas, and real token contracts, which the harness's host-level ERC20 does not model.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-726",
+   "outcome": "cleared",
+   "answer": "The x86 emitter was built from v0.16.7 and v0.16.5 source with stubbed runtime symbols. estimate_size() is 285,084 bytes for the deployed PoolManager runtime under v0.16.7 (284,482 under v0.16.5), against the bound of 778,528, and compilation returns an entry point. The PoolManager is compiled on Dual nodes. The 22,586 byte v3 pool was not measured."
+  },
+  {
+   "leadId": "L-725",
+   "outcome": "cleared",
+   "answer": "Nodes run Dual unless started with --trace_calls (cmd/monad/main.cpp 488 at v0.16.7, 479 at v0.16.5). The published docs recommend that flag only for archive and RPC nodes and give validators no execution flag. A contract is compiled once its interpreted gas reaches 10,240 + 32 times its size, which is 778,528 gas for the PoolManager, or at once while the code cache is cold. A local Dual node replaying mainnet was not run; in its place the harness ran the real emitter output against the real interpreter on about 2.2 million generated calls with no difference."
+  },
+  {
+   "leadId": "L-692",
+   "outcome": "inconclusive",
+   "answer": "For Monad: still no mined instance, but the compiled code of every never-mined branch now has direct evidence. clear of an exact credit, transferFrom and burn through an allowance or operator, approve, donate, the overflow fallback and amounts above 2^160 were run as Monad native code and in Monad's interpreter on 100,000 calls per path, and all results, gas and state agree. Planted emitter faults are caught. The fallback and the above 2^160 branches only run inside frames that revert with SafeCastOverflow. MegaETH and HyperEVM are not covered by this unit."
+  }
+ ]
 }

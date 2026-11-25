@@ -1,0 +1,43 @@
+{
+  "unit": "op-stack-custom-gas",
+  "verdicts": [
+    {"findingIndex": 0,
+     "verdict": "confirmed",
+     "severity": "low",
+     "factCheck": "On 2026-11-25 three web3_clientVersion calls to forno.celo.org answered reth/v2.2.0-74cc8bb/x86_64-unknown-linux-gnu. celo-org/reth 74cc8bb crates/engine/execution-cache/src/cached_state.rs lines 863-882 still take the old branch: a destroyed account whose original info has the empty code hash is removed from the account cache and skipped with continue, so its new storage is not inserted. In the same revision crates/node/core/src/args/engine.rs line 289 and crates/engine/primitives/src/config.rs line 238 set share_execution_cache_with_payload_builder to false by default. celo-kona tag celo/reth-v1.0.10 exists, its Cargo.lock pins reth-engine-tree 2.2.0 from celo-org/reth 74cc8bb and revm-interpreter 35.0.1, and tag celo/reth-v1.0.11 returns 404. The v1.0.10 release page (20 November) describes only a SELFDESTRUCT tracing fix and says block execution and state are not affected. The published start-op-reth.sh runs celo-reth node without --engine.share-execution-cache-with-payload-builder (its exec command, lines 98-127, has no such flag). The sequencer's own flags are not public, so the trigger condition stays unconfirmed, as the finding says.",
+     "codeCheck": "The PoolManager has no SELFDESTRUCT or CREATE in src/ (grep over src/ finds none) and has code from deployment, so its account never takes the destroyed branch. Deltas and synced reserves live in transient storage (src/libraries/CurrencyDelta.sol:21-39 uses tload and tstore), which is not part of the cross-block cache. sync reads the token balance through balanceOfSelf (src/PoolManager.sol:279-288) and _settle compares it with the synced reserves (src/PoolManager.sol:349-364), so a stale word can only change what PoolManager sees from a contract whose address was destroyed and re-created in the block, which is a new contract made by the attacker. Tokens and hooks of victim pools had code before and cannot be destroyed under EIP-6780. No path to other users' funds follows.",
+     "corrections": "The title still names Base, while this unit's entry lists only chain 42220; the Base half is held by the existing ledger entry. The follower validation path, which an unprivileged account could reach without the operator flag, is a separate existing finding (theme-reth-cache-drift, actor operator, severity info) and is not covered here.",
+     "sources": [
+      {"url": "https://forno.celo.org web3_clientVersion, 2026-11-25", "supports": "three answers reth/v2.2.0-74cc8bb/x86_64-unknown-linux-gnu"},
+      {"url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/engine/execution-cache/src/cached_state.rs", "supports": "lines 863-882: destroyed account without original code is removed from the account cache and skipped with continue"},
+      {"url": "https://raw.githubusercontent.com/celo-org/reth/74cc8bbce7631c3586ab446460590fef6630d258/crates/node/core/src/args/engine.rs", "supports": "line 289: share_execution_cache_with_payload_builder defaults to false"},
+      {"url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/Cargo.lock", "supports": "reth-engine-tree 2.2.0 from celo-org/reth 74cc8bb and revm-interpreter 35.0.1"},
+      {"url": "https://github.com/celo-org/celo-kona/releases/tag/celo%2Freth-v1.0.10", "supports": "20 November release fixes only SELFDESTRUCT tracing; block execution and state not affected"},
+      {"url": "https://raw.githubusercontent.com/celo-org/celo-l2-node-docker-compose/main/scripts/start-op-reth.sh", "supports": "celo-reth node is started without the cache sharing flag"}
+     ]},
+    {"findingIndex": 1,
+     "verdict": "confirmed",
+     "severity": "low",
+     "factCheck": "On 2026-11-25 three web3_clientVersion calls to rpc.xlayer.tech answered reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7. The xlayer-reth releases page lists v0.0.7.3-rc.1 of 5 November as newest; tags v0.0.7.3-rc.2, v0.0.7.4 and v0.0.8 return 404 on raw.githubusercontent.com. The v0.0.7 release notes add the Risk Control Service transaction filter. At tag v0.0.7.3-rc.1 the workspace includes crates/rcs-filter, and crates/rcs-filter/src/config.rs lines 68-85 set enabled to false, rcs_base_url empty, and max_native_transfers_per_tx and max_event_bindings_per_tx to 10,000; lines 94-96 refuse to start with the filter on and no URL. No public statement of the mainnet sequencer setting was found by me either.",
+     "codeCheck": "Every exit of funds is a take inside unlock: unlock calls the callback and requires NonzeroDeltaCount to be zero (src/PoolManager.sol:103-113), and take debits the caller's delta and transfers (src/PoolManager.sol:291-297). A transaction the builder refuses to include never reaches this code, so the effect is a freeze for as long as a matching rule is active. A take of one currency makes one native transfer, so an ordinary user's exit stays far below the 10,000 transfer capture limit, and an attacker cannot raise the count of another user's transaction. The hazard needs the operator to enable the filter and a rule to match.",
+     "corrections": "",
+     "sources": [
+      {"url": "https://rpc.xlayer.tech web3_clientVersion, 2026-11-25", "supports": "three answers reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7"},
+      {"url": "https://github.com/okx/xlayer-reth/releases", "supports": "v0.0.7.3-rc.1 newest; v0.0.7 added the Risk Control Service transaction filter"},
+      {"url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/crates/rcs-filter/src/config.rs", "supports": "FilterConfig default enabled false, empty service URL, capture limits 10,000"},
+      {"url": "https://raw.githubusercontent.com/okx/xlayer-reth/refs/tags/v0.0.7.3-rc.1/Cargo.toml", "supports": "workspace member crates/rcs-filter"}
+     ]}
+  ],
+  "clearedSpotChecks": [
+    {"check": "Source of the op-geth backend's interpreter: does celo-org/op-geth c7ed55b8 change any instruction, the jump destination analysis, memory or stack handling relative to go-ethereum v1.16.9.",
+     "agrees": true,
+     "note": "I fetched both trees from raw.githubusercontent.com and compared sha256: instructions.go, jump_table.go, analysis_legacy.go, jumpdests.go, memory.go, memory_table.go, stack.go, common.go, eips.go and operations_acl.go are identical. interpreter.go differs only by PrecompileOverrides, NoMaxCodeSize and CallerOverride config fields, and gas_table.go only by the NoMaxCodeSize switch on the init code size check in CREATE and CREATE2 gas, which the PoolManager bytecode does not use. go.mod pins holiman/uint256 v1.3.2 and version.go sets 1.16.9 stable."},
+    {"check": "Opcode battery (99,985 vectors) and targeted vectors (85,544) on the op-geth backend of forno.celo.org, pinned by sending each eth_call between two web3_clientVersion requests in one batch.",
+     "agrees": true,
+     "note": "The weak link is whether the version answers tell which backend served the eth_call in the same batch. I sent 72 batches of [clientVersion, eth_call running 0xfe under a state override, eth_getStorageAt with a bad key, eth_getCode with a bad block, clientVersion]: in all 15 batches whose versions said Geth the eth_call error was geth's 'invalid opcode: INVALID' (code -32000), and in all 57 reth batches it was 'EVM error: InvalidFEOpcode' (code -32003). Batches are served whole, so the pin holds. The work file battery-celo-geth.json records 99,985 ran and 0 mismatches with 167 batches kept on Geth. A side point: in those 15 Geth batches eth_getStorageAt also got geth's error text, so the profile's statement that eth_getStorageAt and eth_getCode always go to celo-reth holds only for batches without eth_call; it does not affect any cleared result."},
+    {"check": "Transfer precompile 0xfd on the op-geth backend: can a PoolManager native payout or settle on op-geth move CELO differently from celo-reth.",
+     "agrees": true,
+     "note": "celo-org/op-geth c7ed55b8 core/vm/celo_contracts.go lines 61-120: Run returns ErrWriteProtection when readOnly, refuses any caller other than the registry's CeloToken, requires exactly 96 bytes, rejects values above 2^256, warms both addresses after Jovian and fails with ErrInsufficientBalance before Transfer. The PoolManager never calls 0xfd directly; its native payouts go through Currency.transfer as plain value calls, and ERC20 CELO moves go through the CELO token, which is the only permitted caller on both clients."}
+  ],
+  "leads": []
+}

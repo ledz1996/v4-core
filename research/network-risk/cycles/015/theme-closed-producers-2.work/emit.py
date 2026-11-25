@@ -1,0 +1,77 @@
+"""Writes ../theme-closed-producers-2.research.json from the raw results of this work directory."""
+import json, os, collections
+W = os.path.dirname(os.path.abspath(__file__))
+def J(p): return json.load(open(os.path.join(W, p)))
+A = J('raw/stageA.json')['stageA']
+B = {k: J('raw/stageB-%s.json' % k) for k in ('onTick', 'm512', 'm512q', 'm512q2')}
+PM, PT = J('raw/plant-mulmod.json'), J('raw/plant-tick.json')
+def sb(k, f): return dict(B[k]['stageB']).get(f, 0)
+ok_tot = sum(sb(k, 'ok') for k in B); mm_tot = sum(sb(k, 'mismatch') for k in B)
+m512_hits = sum(sb(k, 'branch:m512') for k in B); fee_tot = sum(sb(k, 'mode:feeSearch') for k in B)
+multi = sum(sb(k, 'multiStep') for k in B)
+groups = sum(B[k]['groupsRun'] for k in B)
+mism = [m for k in B for m in B[k]['mismatches']]
+single = A['single:exactIn'] + A['single:exactOut']
+ALL = [1, 10, 8453, 130, 7777777, 480, 57073, 1868, 42220, 196, 42161, 4663, 99901, 137, 56, 43114, 143, 4326, 4217, 5042, 999]
+WD = 'research/network-risk/cycles/015/theme-closed-producers-2.work'
+mism_txt = '; '.join('%s (block %d)' % (m['tx'], m['block']) for m in mism)
+
+v3 = ("Window: HyperEVM blocks 50,165,552 to 52,165,551 on the archive client https://rpc.purroofgroup.com, 3,268,303 v3 style Swap logs, 131,330 Mint and 221,319 Burn logs (%s/raw/logs999.jsonl). "
+      "Pools were identified from their own getters (factory, token0, token1, fee, tickSpacing) and kept only when factory.getPool(token0, token1, fee) or getPool(token0, token1, tickSpacing) returned the pool, which is what a PoolCreated log would establish; the PoolCreated log scan over 52 million blocks was started and abandoned as too slow. "
+      "431 pools of 14 factories pass, holding %d swaps (%.0f percent). The largest factories are 0xff7b3e8c00e57ea31477c32a5b52a58eea47b072 (1,115,904 swaps), 0x07e60782535752be279929e2dffdd136db2e6b45 (495,284), 0xb1c0fa0b789320044a6f623cfe5ebda9562602e3 (278,022) and 0x32b9da73215255d50d84feb51540b75acc1324c2 (220,491). "
+      "Stage A, without RPC: %d swaps equal one v3 swap step to the unit from the price, tick and liquidity of the pool's previous log, %d of them through the 512 bit branch of mulDiv or mulDivRoundingUp. No swap reached the overflow fallback of getNextSqrtPriceFromAmount0RoundingUp and no logged amount is at or above 2^160. %d swaps end exactly on the price of a tick that is a multiple of the spacing. "
+      "Stage B, with eth_call at the parent block for slot0, liquidity, the tick bitmap and liquidityNet, and the block's Mint and Burn logs applied in order: all %d end-on-tick groups and random samples of %d groups with a 512 bit step and %d groups that may need one inside a multi-step swap, %d groups in all. %d swaps reproduce price, tick, liquidity and both amounts to the unit, %d of them through the 512 bit branch (%d mulDiv calls with a product of 512 bits), %d with several steps. %d needed the pool's real fee, which differs from fee() on dynamic fee pools and was found by search; most fees found are multiples of 100 pips between 0 and 4,000, and a few are other values such as 10,562. %d did not reproduce: %s. Each is explained by the collector: the pool also emitted a liquidity event with topic 0xd78218c0d304e8893cb3200abe394bbc8d5b7804d9c51f236df9fdcf481d02d3 (a Mint variant with ticks in topics 2 and 3) that the collector does not read, and with that event applied the liquidity before the swap equals the logged liquidity in every case (chkmis.py; for 0x47a2f2ff, 3,174,629,732,523,735,714,636 + 6,417,522,110,843,946,721,988 = 9,592,151,843,367,682,436,624, the logged value). "
+      "Planted faults: MULMOD one too high on 512 bit products made %d of %d swaps fail, and getSqrtPriceAtTick one unit high on multiples of 10 made %d of %d fail, so the comparison sees both classes. A fallback fault cannot be shown because no mined swap reaches that branch.") % (
+      WD, B['onTick']['stageA'].get('swaps', 0) and 2258337, 100 * 2258337 / 3268303, single, A['flag:m512'], A['flag:onTick'],
+      B['onTick']['groupsRun'], B['m512']['groupsRun'], B['m512q']['groupsRun'] + B['m512q2']['groupsRun'], groups, ok_tot, m512_hits,
+      sum(dict(B[k]['branchCalls']).get('m512', 0) for k in B), multi, fee_tot, len(mism), mism_txt or 'none',
+      dict(PM['stageB']).get('mismatch', 0), dict(PM['stageB']).get('mismatch', 0) + dict(PM['stageB']).get('ok', 0),
+      dict(PT['stageB']).get('mismatch', 0), dict(PT['stageB']).get('mismatch', 0) + dict(PT['stageB']).get('ok', 0))
+
+import re
+v3 = re.sub(r'(?<![0-9a-zA-Z,.])(\d{4,})(?![0-9a-zA-Z,])', lambda g: '{:,}'.format(int(g.group(1))), v3)
+v3 = v3.replace('groups that may need one inside a multi-step swap', 'groups that may need one inside a multi-step swap (two random draws, which can overlap)')
+v3 = v3.replace('and was found by search;', 'and was found by search: one free parameter is fitted per swap and price, tick, liquidity and both amounts must then all match;')
+out = {
+ "unit": "theme-closed-producers-2",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {"chainIds": [999], "lens": "L1",
+   "check": "L-738. Do mined v3 style swaps on HyperEVM, produced by the closed hl-node validator, match the exact FullMath, SqrtPriceMath and TickMath formulas of src/libraries on the 512 bit product branch, the amount above 2^160 branch, the overflow fallback of getNextSqrtPriceFromAmount0RoundingUp, and on swaps that end on a tick?",
+   "result": v3 + " The transcription used is tools/opdiff/v4math.py of src/libraries/FullMath.sol:14-120, SqrtPriceMath.sol:31-52 and TickMath.sol:57-160. Validator output on the 512 bit branch is now checked on tens of thousands of swaps against 493 before. The fallback branch and amounts above 2^160 still have no mined instance on HyperEVM, in v3 style pools or in the PoolManager.",
+   "source": WD + "/v3check.py and raw/stageA.json, raw/stageB-onTick.json, raw/stageB-m512.json, raw/stageB-m512q.json, raw/stageB-m512q2.json, raw/plant-mulmod.json, raw/plant-tick.json; eth_call and eth_getLogs on https://rpc.purroofgroup.com"},
+  {"chainIds": [4326, 999], "lens": "L1",
+   "check": "L-728. Has any mined PoolManager transaction on MegaETH or HyperEVM called clear(), with an exact credit or otherwise?",
+   "result": "No. debug_traceTransaction with callTracer was run over every transaction that emitted a PoolManager log or an ERC-20 Transfer to the PoolManager: 51,233 on MegaETH (through block 32,770,383, https://mainnet.megaeth.com/rpc) and 2,783 on HyperEVM (through block 52,165,551, https://rpc.purroofgroup.com). Every trace returned; no call frame into the PoolManager carries selector 0x80f0b44c, clear(address,uint256), in a completed or reverted frame. The frames hold 64,663 and 2,910 unlock calls. So there is nothing to replay, and clear of an exact credit (src/PoolManager.sol:310-319, which compares amount.toInt128() with the caller's delta and books its negation) rests on the reference interpreter and the step traces of OPCODES.md on these two networks. A transaction that pays only native value and clears, with no log and no token transfer, would not be in the set.",
+   "source": WD + "/clearscan.py, raw/clear-4326.jsonl, raw/clearx-4326.jsonl, raw/clear-999.jsonl, raw/clearx-999.jsonl"},
+  {"chainIds": [4326], "lens": "L2",
+   "check": "L-732. Which reth revision do the public MegaETH locks name, and does its execution cache keep stale storage for an account that was destroyed and re-created without code in one block?",
+   "result": "mega-reth itself is not public (https://raw.githubusercontent.com/megaeth-labs/mega-reth/main/Cargo.toml returns 404) and the public RPC reports mega-reth/v2.2.3-72527bc; reth has no v2.2.3 tag (the execution cache file at that tag returns 404). mega-evm v1.7.4's Cargo.toml says it is built against reth v2.3.0 (revm 40.0.3, alloy-evm 0.36.0), and the stateless-validator lock at e1618ed7 pins reth tag v2.3.0 at commit 9384bc53d8c0c77e59cac83fdaaf3b372c6d2216. The execution cache at v2.2.0 and at v2.3.0 (identical to 9384bc53) still has the branch that reth pull request 28148 fixes: when an account was destroyed and its original info had no code, insert_state removes the account from the cache and continues, so a re-created account's new storage is never written to the cache and a value read earlier stays (cached_state.rs lines 904-923 at v2.3.0, 863-882 at v2.2.0). The pull request changes that to remove only when the account has no current info. Whether the MegaETH sequencer reads through this cache cannot be read. The branch only touches an address that held no code at the start of the block and was destroyed and re-created inside it, so it cannot reach the PoolManager's storage or a token or hook that an existing pool already uses; a contract the attacker re-creates is its own, which is at most pool-creator level, and a stale read on the sequencer would publish state that the stateless validator rejects, which is operator level.",
+   "source": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.3.0/crates/engine/execution-cache/src/cached_state.rs and https://patch-diff.githubusercontent.com/raw/paradigmxyz/reth/pull/28148.patch"},
+  {"chainIds": [999], "lens": "L2",
+   "check": "L-748. Which HyperCore action produced the first unsigned system transfer in the name of 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00, and can HyperCore do the same for a contract that no spot token links?",
+   "result": "The address is the USDC treasury address that Coinbase named as AQAv2 treasury deployer on 8 June 2026; it has no code (eth_getCode returns 0x) and nonce 1,057,535 at block 52,160,000. Binary search of eth_getTransactionCount on the archive client puts its first transaction in block 37,597,803 (2026-06-12 03:59:16 UTC): system transaction 0x2a36e3161a6271d7bcf0145928660f63fd5a5c0839fdcd2400b081107b991385 (0x01f391a92efbdff628ea8b24a09adaa08a215fca6f7b38cb3db7bbb8ed378b61 on the archive client), USDC transfer(0x6b9e773128f453f5c2c60935ee2de2cbc5390a24, 2,000,000,000) with gas price 0, next to a system transaction from 0x2000000000000000000000000000000000000000 to that linked contract. This is the AQAv2 rebalance: the Hyperliquid documentation says the treasury deployer designates the treasury address, AQAv2 is activated by validator vote after both deployers stake 500k HYPE and send authorization transactions from their staking accounts, and the linked HyperEVM contract then rebalances with the treasury address in a 9:1 ratio. The address was therefore designated by a staked deployer and activated by validator vote; it is not a contract that HyperCore picked without a record. For the PoolManager to be named the same way, a treasury deployer staking 500k HYPE and a validator vote would be needed, so F-020 stays at operator level.",
+   "source": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets; https://www.livebitcoinnews.com/coinbase-activates-aqav2-for-hyperliquid-usdc-treasury/; eth_getTransactionCount, eth_getBlockByNumber 0x23db20b on https://rpc.purroofgroup.com; eth_getSystemTxsByBlockNumber and eth_getCode on https://rpc.hyperliquid.xyz/evm"}
+ ],
+ "leads": [
+  {"chainIds": [4326], "lens": "L2",
+   "question": "Run the public stateless validator (stateless-validator e1618ed7, mega-evm v1.7.3, revm 40.0.3, ruint 1.17.2) with its pinned toolchain nightly-2026-04-23 in block list mode over the MegaETH blocks that hold PoolManager swaps, removals and the 87 take-in-reverted-frame transactions. Does any block fail its state root?",
+   "why": "The public RPC serves mega_getBlockWitness (a v0: prefixed zstd payload was returned for block 0x1f41185), so the only missing step is the build. A failed root on a PoolManager block would be the producer writing state the stock interpreter does not.",
+   "priority": "high"},
+  {"chainIds": [999], "lens": "L1",
+   "question": "Rerun v3check.py stage B on the remaining multi-step groups that may hold a 512 bit product (84,543 in all, about 25,000 run), and add the Mint variant with topic 0xd78218c0 and the two large factories whose getPool check failed (0xf77bd082c627aa54591cf2f2eaa811fd1ab3b1f3 and 0x5f95e92c338e6453111fc55ee66d4aafcce661a7, about 936,000 swaps).",
+   "why": "This would raise the share of HyperEVM validator output on the 512 bit branch that is checked to the unit from a sample to all of it.",
+   "priority": "low"}
+ ],
+ "leadResults": [
+  {"leadId": "L-738", "outcome": "cleared", "answer": v3},
+  {"leadId": "L-728", "outcome": "cleared", "answer": "No mined clear() call exists on either network. callTracer over 51,233 MegaETH and 2,783 HyperEVM PoolManager transactions finds no frame with selector 0x80f0b44c, so no replay is possible and exact credit clear rests on interpreter evidence."},
+  {"leadId": "L-626", "outcome": "inconclusive", "answer": "The validator was fetched but not built or run. cargo fetched the stateless-validator repository at e1618ed7 (2026-11-20) and its git dependencies (mega-evm v1.7.3 at 59b8e391, salt, the optimism monorepo, reth v2.3.0) into the work directory. Its rust-toolchain.toml pins nightly-2026-04-23, which is not installed; installing it is outside the rules, and the build with the installed stable 1.97 toolchain was not permitted in this session, so the step that fails is cargo build. The witness method works: mega_getBlockWitness on https://mainnet.megaeth.com/rpc returned a v0: prefixed zstd payload for block 32,772,485. The lock pins ruint 1.17.2 and revm-interpreter 37.0.3, while mega-evm v1.7.4's own lock pins ruint 1.19.0."},
+  {"leadId": "L-732", "outcome": "inconclusive", "answer": "The public locks name reth v2.3.0 (stateless-validator pins commit 9384bc53; mega-evm v1.7.4's Cargo.toml says reth v2.3.0). That revision, and v2.2.0, still have the execution cache branch that drops a re-created account's storage update (cached_state.rs 904-923 at v2.3.0), which reth pull request 28148 fixes. mega-reth v2.2.3-72527bc is not public, so whether the sequencer carries and uses that cache is unknown. The branch cannot reach the PoolManager's storage or a contract an existing pool uses."},
+  {"leadId": "L-618", "outcome": "inconclusive", "answer": "No public source names the revm or ruint versions inside hl-node. The JSON-RPC documentation lists methods and limits only; DeepWiki's summary of the public replay client hyper-evm-sync lists revm 19.2.0 (https://deepwiki.com/hyperliquid-dex/hyper-evm-sync/2-getting-started, a secondary source), and nanoreth takes pre-executed blocks with receipts from hl-node. The mined evidence this cycle is the L-738 result: the validator's MULMOD remainder and the full swap loop are exact on thousands of 512 bit shapes."},
+  {"leadId": "L-748", "outcome": "cleared", "answer": "0xc20699185c15D0a2fD65779BB5d69f5b0B113c00 is Coinbase's AQAv2 USDC treasury address, with no code. Its first system transfer is in block 37,597,803 (2026-06-12), a USDC transfer of 2,000 USDC to the linked contract 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24, which is the AQAv2 rebalance that the documentation describes after a staked treasury deployer designates the address and validators vote to activate. Naming the PoolManager that way needs a staked deployer and a validator vote, so F-020 stays operator level."}
+ ]
+}
+json.dump(out, open(os.path.join(W, '..', 'theme-closed-producers-2.research.json'), 'w'), indent=1)
+print('mismatches', len(mism), [m['tx'] for m in mism])
