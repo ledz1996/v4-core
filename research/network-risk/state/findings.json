@@ -2373,7 +2373,7 @@
    ],
    "effect": "degrade",
    "difference": "MegaETH counts new accounts and new storage slots per transaction and per block, and both limits are 1,000 entries. Ethereum has no such counter. The block limiter admits the transaction that brings the block counter to the limit and then rejects every further candidate before execution, whatever that candidate would do. The base fee has stayed at its floor of 1,000,000 wei in every block sampled.",
-   "mechanism": "A sender submits one transaction that creates 1,000 new state entries, for example a contract creation that writes 999 fresh storage slots. eth_estimateGas accepts that creation at 22,559,525 gas, which at the base fee of 1,000,000 wei is about 0.0000226 ETH, and rejects a creation with 1,000 slots. Storage gas is zero for slots in buckets of minimum size, so the cost is the compute gas of the writes. After this transaction the block counter for state growth equals the block limit. BlockLimiter::pre_execution_check then returns StateGrowthLimit for every later candidate of that block, including a liquidity removal or a take that creates no new state. Those candidates are skipped and can enter a later block. A sender who repeats this in every one second block spends about 1.95 ETH per day. Calls to modifyLiquidity and take on the PoolManager have no path that avoids the block limiter. What the sender achieves depends on where its transaction lands inside each block. Candidates placed before it are included. The ordering rule of the sequencer was not confirmed, so the share of each block that the sender can close was not established. Cycle 19 addition: the claim was measured again on 2026-11-25 against the replica build mega-reth/v2.3.1-4499c42 at block 32,832,912 (base fee 1,000,000 wei). eth_estimateGas accepts a contract creation that writes 999 fresh slots at 22,559,525 gas and rejects one with 1,000, because the new account counts as one entry. A call to an existing contract can write 1,000. The files block/limit.rs, constants.rs, block/executor.rs and block/chain.rs are byte identical between mega-evm main and tag v1.7.4. Deposits are exempt only from the two data availability tests in pre_execution_check (limit.rs lines 821 to 845) and not from the state growth test, so a deposit avoids the skip only if it is placed before the filling transaction. No block in the 20,001 blocks from 32,806,000 to 32,826,000 came near the limit (largest estimate 58 entries).",
+   "mechanism": "A sender submits one transaction that creates 1,000 new state entries, for example a contract creation that writes 999 fresh storage slots. eth_estimateGas accepts that creation at 22,559,525 gas, which at the base fee of 1,000,000 wei is about 0.0000226 ETH, and rejects a creation with 1,000 slots. Storage gas is zero for slots in buckets of minimum size, so the cost is the compute gas of the writes. After this transaction the block counter for state growth equals the block limit. BlockLimiter::pre_execution_check then returns StateGrowthLimit for every later candidate of that block, including a liquidity removal or a take that creates no new state. Those candidates are skipped and can enter a later block. A sender who repeats this in every one second block spends about 1.95 ETH per day. Calls to modifyLiquidity and take on the PoolManager have no path that avoids the block limiter. What the sender achieves depends on where its transaction lands inside each block. Candidates placed before it are included. The ordering rule of the sequencer was not confirmed, so the share of each block that the sender can close was not established. Cycle 19 addition: the claim was measured again on 2026-11-25 against the replica build mega-reth/v2.3.1-4499c42 at block 32,832,912 (base fee 1,000,000 wei). eth_estimateGas accepts a contract creation that writes 999 fresh slots at 22,559,525 gas and rejects one with 1,000, because the new account counts as one entry. A call to an existing contract can write 1,000. The files block/limit.rs, constants.rs, block/executor.rs and block/chain.rs are byte identical between mega-evm main and tag v1.7.4. Deposits are exempt only from the two data availability tests in pre_execution_check (limit.rs lines 821 to 845) and not from the state growth test, so a deposit avoids the skip only if it is placed before the filling transaction. No block in the 20,001 blocks from 32,806,000 to 32,826,000 came near the limit (largest estimate 58 entries). Cycle 21 addition: the MegaEVM resource limit specification (https://docs.megaeth.com/spec/megaevm/resource-limits) now states the rule in normative form. The first transaction that brings a block to a limit is still included, later candidates must be skipped before execution, a skipped transaction gets no receipt and may be reconsidered in a later block. Both state growth limits are still 1,000, and limit.rs and constants.rs have equal hashes on mega-evm main and v1.7.4. The endpoint answered mega-reth/v2.3.1-4499c42 at block 32,849,640. A delayed swap or liquidity change runs under the same checks, at whatever pool price the later block has and within the caller's own limits.",
    "impact": "Removals, swaps and claims on the PoolManager can be delayed block by block while the sender keeps paying. No balance moves and no position changes. The delay ends when the sender stops or when users' transactions are ordered ahead of the sender's.",
    "preconditions": "The base fee stays near its floor, and the sender's transaction is ordered early in each block. No role is needed. A full stop of withdrawals would need the sender to be first in every block, which the public record does not show to be possible.",
    "mitigations": "Core has no setting for this. Users can resubmit, pay a higher priority fee if the sequencer orders by fee, or use the L1 deposit path, whose transactions are placed at the start of a block in the OP Stack design. That placement was not confirmed in the MegaETH node source, and a deposit is not exempt from the state growth test itself. The chain operator can raise the block limit above the transaction limit or price new state entries in minimum-size buckets.",
@@ -2421,6 +2421,10 @@
     {
      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/block/limit.rs",
      "supports": "byte identical to main"
+    },
+    {
+     "url": "https://docs.megaeth.com/spec/megaevm/resource-limits",
+     "supports": "skip rule for later candidates, no receipt, may be reconsidered in a later block, both state growth limits 1,000"
     }
    ],
    "evidence": "primary",
@@ -2464,7 +2468,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 19,
+   "lastVerifiedCycle": 21,
    "id": "F-042",
    "firstCycle": 2,
    "history": [
@@ -2480,6 +2484,13 @@
      "status": "confirmed",
      "severity": "low",
      "note": "Evidence refreshed from a report filed under F-062."
+    },
+    {
+     "cycle": 21,
+     "unit": "high-throughput",
+     "status": "confirmed",
+     "severity": "low",
+     "note": "Skip rule confirmed against the published resource limit specification."
     }
    ]
   },
@@ -3032,7 +3043,7 @@
    ],
    "effect": "degrade",
    "difference": "MegaETH skips every remaining candidate of a block once the block holds 1,000 new state entries. One transaction may itself create 1,000. Ethereum has no per-block cap on new state.",
-   "mechanism": "Unchanged at the newest code. One transaction that writes 1,000 fresh storage slots in minimum-size buckets costs about 22.6 million gas, about 0.0000226 ETH at the 1,000,000 wei base fee read on 2026-11-25. After it, BlockLimiter::pre_execution_check returns an error for every later candidate of that block, and that includes a modifyLiquidity, take or burn sent to the PoolManager. The executor leaves its state untouched for a rejected candidate, and the caller decides what happens next, typically putting it back in the pool. limit.rs and executor.rs on mega-evm main are byte identical to v1.7.4, and the mainnet schedule ends at Rex6, so nothing scheduled changes this. The PoolManager takes no part: a delayed call later runs with the same checks and amounts. If the closed sequencer keeps skipped transactions ahead of later arrivals, N filling transactions from several accounts close N one-second blocks to everything that arrived after them. If not, each filler delays only the candidates behind it in its own block.",
+   "mechanism": "Unchanged at the newest code. One transaction that writes 1,000 fresh storage slots in minimum-size buckets costs about 22.6 million gas, about 0.0000226 ETH at the 1,000,000 wei base fee read on 2026-11-25. After it, BlockLimiter::pre_execution_check returns an error for every later candidate of that block, and that includes a modifyLiquidity, take or burn sent to the PoolManager. The executor leaves its state untouched for a rejected candidate, and the caller decides what happens next, typically putting it back in the pool. limit.rs and executor.rs on mega-evm main are byte identical to v1.7.4, and the mainnet schedule ends at Rex6, so nothing scheduled changes this. The PoolManager takes no part: a delayed call later runs with the same checks and amounts. If the closed sequencer keeps skipped transactions ahead of later arrivals, N filling transactions from several accounts close N one-second blocks to everything that arrived after them. If not, each filler delays only the candidates behind it in its own block. Cycle 21 addition: the MegaEVM resource limit specification (https://docs.megaeth.com/spec/megaevm/resource-limits) now states the rule in normative form. The first transaction that brings a block to a limit is still included, later candidates must be skipped before execution, a skipped transaction gets no receipt and may be reconsidered in a later block. Both state growth limits are still 1,000, and limit.rs and constants.rs have equal hashes on mega-evm main and v1.7.4. The endpoint answered mega-reth/v2.3.1-4499c42 at block 32,849,640. A delayed swap or liquidity change runs under the same checks, at whatever pool price the later block has and within the caller's own limits.",
    "impact": "No funds move. Swaps, liquidity removals and claim burns of every user are delayed. The delay lasts one block per filler, at about 1.95 ETH per day for one filler per block. A longer delay needs the unconfirmed queue rule.",
    "preconditions": "The base fee stays near its floor. The sequencer does not filter the sender. For the amplified form, skipped transactions keep their place in the queue, which no public source states.",
    "mitigations": "Exits under load can use an L1 deposit of at most 1,000,000 gas. The operator can price state growth in minimum-size buckets, raise the block limit above the per-transaction limit, or deprioritise senders who fill the budget.",
@@ -3056,6 +3067,10 @@
     {
      "url": "https://mainnet.megaeth.com/rpc",
      "supports": "eth_getBlockByNumber latest on 2026-11-25: block 32,780,556 (0x1f4310c), baseFeePerGas 0xf4240, gasLimit 10,000,000,000; web3_clientVersion mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2"
+    },
+    {
+     "url": "https://docs.megaeth.com/spec/megaevm/resource-limits",
+     "supports": "skip rule for later candidates, no receipt, may be reconsidered in a later block, both state growth limits 1,000"
     }
    ],
    "evidence": "inferred",
@@ -3091,7 +3106,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 19,
+   "lastVerifiedCycle": 21,
    "extends": "F-042",
    "id": "F-062",
    "firstCycle": 4,
@@ -3126,6 +3141,13 @@
      "status": "plausible",
      "severity": "low",
      "note": "Base claim confirmed again and recorded in F-042. The multi-block queue form is still unconfirmed: the sequencer's rule for skipped transactions has no public source."
+    },
+    {
+     "cycle": 21,
+     "unit": "high-throughput",
+     "status": "plausible",
+     "severity": "low",
+     "note": "Base claim confirmed against the specification and recorded in F-042. The specification leaves the order of reconsideration to the sequencer, so the multi-block queue form stays unconfirmed (L-978)."
     }
    ]
   },
@@ -8805,7 +8827,7 @@
    ],
    "effect": "both",
    "difference": "None. The code path is the same on every network. Networks where the code behind an address can change after pool creation (A7) add ways for a hook that was harmless at creation to start doing this.",
-   "mechanism": "modifyLiquidity calls the hook library's beforeModifyLiquidity before it touches the pool (src/PoolManager.sol:156). For liquidityDelta <= 0 the library calls beforeRemoveLiquidity when address bit 9 is set (src/libraries/Hooks.sol:203-204). callHook reverts the whole call when the hook reverts (Hooks.sol:134-137) and when the return data is shorter than 32 bytes or carries the wrong selector (Hooks.sol:152-154). A hook address with no code returns empty data, so it also reverts. After the pool update, afterModifyLiquidity calls afterRemoveLiquidity when bit 8 is set, and when bit 0 is also set it reads a BalanceDelta from the return data, subtracts it from the caller's delta without any bound and credits it to the hook (Hooks.sol:232-243, src/PoolManager.sol:177-183). The hook call is skipped only when msg.sender is the hook itself (Hooks.sol:171-175, 217). No other function removes liquidity. The swap path has the same shape: beforeSwap and afterSwap deltas move value between swapper and hook (Hooks.sol:248-315), and the hook of a dynamic fee pool can set the LP fee to 100 percent (src/PoolManager.sol:339-346, src/libraries/LPFeeLibrary.sol:25, 37-45).",
+   "mechanism": "modifyLiquidity calls the hook library's beforeModifyLiquidity before it touches the pool (src/PoolManager.sol:156). For liquidityDelta <= 0 the library calls beforeRemoveLiquidity when address bit 9 is set (src/libraries/Hooks.sol:203-204). callHook reverts the whole call when the hook reverts (Hooks.sol:134-137) and when the return data is shorter than 32 bytes or carries the wrong selector (Hooks.sol:152-154). A hook address with no code returns empty data, so it also reverts. After the pool update, afterModifyLiquidity calls afterRemoveLiquidity when bit 8 is set, and when bit 0 is also set it reads a BalanceDelta from the return data, subtracts it from the caller's delta without any bound and credits it to the hook (Hooks.sol:232-243, src/PoolManager.sol:177-183). The hook call is skipped only when msg.sender is the hook itself (Hooks.sol:171-175, 217). No other function removes liquidity. The swap path has the same shape: beforeSwap and afterSwap deltas move value between swapper and hook (Hooks.sol:248-315), and the hook of a dynamic fee pool can set the LP fee to 100 percent (src/PoolManager.sol:339-346, src/libraries/LPFeeLibrary.sol:25, 37-45). Cycle 21 addition: Ethereum has a live case. Pool 0x462175dbedc82a59909309d8d93c8ff5283fc3ce41e9dcbea28aea89709ab870 (ETH and tCURV 0x0b5702a3000a3ae3e80c3dfd6be547c4325f7eb9, fee 100, tick spacing 1) names the hook 0xe16af6e33266e572bbcadb288bf3893942cd8220, which has no code, nonce 0 and balance 0 at block 26,495,270 and sets bits 9 (before remove liquidity) and 5 (before donate). The pool was initialized at block 25,072,940 in the transaction that also minted PositionManager token 265,123 over the full range with liquidity 150,557,992,383,766,460,021. A read-only eth_call of modifyLiquidities with a full decrease from the token owner reverts with 0x1e048e1d (InvalidHookResponse) on two endpoints, because the call to the empty address returns no data and Hooks.sol:153 needs 32 bytes. The test at Hooks.sol:202 is liquidityDelta <= 0, so the owner cannot collect fees through a zero change either, and donate to this pool reverts the same way. A control position (token 292,697) in a pool whose empty hook sets only the after swap flag passes the decrease. The position holds about 0.0054 ETH and 4,199,619 tCURV. Its owner created the pool and chose the hook, so no other account is affected today. The case was missed before because the cycle 17 hook census read transaction hashes as pool ids. This behaves the same on every network where an empty address answers a call with success.",
    "impact": "Principal and uncollected fees of every position in the affected pool. A reverting hook freezes them. A hook with the return delta bit can take part or all of what a removal would pay out, up to what the LP's router accepts. Funds in other pools are not reachable this way, because the caller delta plus the hook delta always equals the pool delta (Hooks.sol:230, 242, 312) and each party must net to zero before unlock returns (src/PoolManager.sol:112).",
    "preconditions": "The pool's hook address has bit 9 (0x200) or bit 8 (0x100) set, and for taking funds also bit 0. The hook code reverts, returns a bad selector, returns a hostile delta, or is replaced or removed after LPs deposit. LPs must have chosen that pool. This is how the hook design works; I list it because it is a path to a freeze or loss that the text of core does not limit.",
    "mitigations": "LPs and position managers can read the low 14 bits of the hook address before depositing and treat bits 9, 8 and 0 as custody risk unless the hook code is immutable and reviewed. Routers should enforce minimum amounts on removal so a hostile return delta reverts. The deployer cannot change this without adding a removal path that skips hooks.",
@@ -8833,6 +8855,14 @@
     {
      "url": "src/PoolManager.sol:177-183",
      "supports": "the hook delta is credited to the hook address and the reduced delta to the caller"
+    },
+    {
+     "url": "https://ethereum-rpc.publicnode.com",
+     "supports": "eth_getCode 0x, nonce 0 and balance 0 for hook 0xe16af6e3... at block 26,495,270; getPoolAndPositionInfo(265123); modifyLiquidities eth_call from the owner reverts with 0x1e048e1d"
+    },
+    {
+     "url": "research/network-risk/cycles/021/ethereum-reference.research.json",
+     "supports": "cycle 21 report and verdict for the live mainnet case"
     }
    ],
    "evidence": "primary",
@@ -8876,7 +8906,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 1,
+   "lastVerifiedCycle": 21,
    "id": "F-004",
    "firstCycle": 1,
    "history": [
@@ -8885,6 +8915,13 @@
      "unit": "core-code-accounting",
      "status": "confirmed",
      "severity": "medium"
+    },
+    {
+     "cycle": 21,
+     "unit": "ethereum-reference",
+     "status": "confirmed",
+     "severity": "medium",
+     "note": "Live mainnet example added: a pool whose hook address has no code and sets the before remove liquidity flag."
     }
    ]
   },
@@ -12490,6 +12527,72 @@
    ]
   },
   {
+   "title": "The reth-bsc endpoint on publicnode answers PoolManager log queries below block 135,500,000 with an empty list and no error",
+   "chainIds": [
+    56
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A14"
+   ],
+   "effect": "degrade",
+   "difference": "Ethereum clients that pruned receipts answer a log query for a pruned range with an error. reth-bsc v0.1.4-hotfix on publicnode serves the block body but returns zero logs for every address in blocks below 135,500,000.",
+   "mechanism": "An integration that rebuilds positions, claims or fee state from the PoolManager events Initialize, ModifyLiquidity, Swap and Donate (src/PoolManager.sol:139, 175, 241, 273) through this endpoint sees nothing for older blocks and records no activity. For block 135,483,276 the endpoint returns 0 logs where two other builds return 7 PoolManager logs, and the answer is the same by block number and by block hash. Nothing in the PoolManager depends on logs, so pool state and payouts are unchanged.",
+   "impact": "No funds move. Indexers, front ends and monitoring that use this endpoint can show wrong positions or miss events for older blocks.",
+   "preconditions": "A reader uses this endpoint for history. No attacker action is involved.",
+   "mitigations": "Read history from an archive endpoint and compare a sample of logs with receipts, as gapcheck2.py does.",
+   "coreRefs": [
+    "src/PoolManager.sol:139",
+    "src/PoolManager.sol:241"
+   ],
+   "sources": [
+    {
+     "url": "rpc: eth_getLogs on https://bsc-rpc.publicnode.com and https://rpc-bsc.48.club, block 135483276, file research/network-risk/cycles/021/established-l1.work/l752.log",
+     "supports": "empty answer on reth-bsc, 7 logs on 48 Club, boundary at 135,500,000"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "low",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 21,
+    "factCheck": "On 2026-11-25 I queried https://bsc-rpc.publicnode.com, which answered web3_clientVersion reth-bsc/v0.1.4-hotfix-23b510f/linux. eth_getLogs with no address filter returned 0 logs for block 135,483,276 and for block 135,499,999, and 421 logs for block 135,500,000. The same queries on https://rpc-bsc.48.club (Geth/v1.8.2-9b93ce23-20261116) returned 556, 620 and 421 logs. A query filtered on the PoolManager 0x28e2ea090877bf75740558f6bfb36a5ffee9e9df for block 135,483,276 returned 0 logs and no error on publicnode and 7 logs on 48 Club. publicnode served the body of block 135,487,372 (eth_getBlockByNumber returned hash 0x512215a7...08e1), so the block exists there while its logs do not. The comparison claim about Ethereum holds for go-ethereum: eth/filters/filter.go:93-94 and eth/filters/api.go:484-485 on master return history.PrunedHistoryError for a range below the history pruning cutoff instead of an empty list. Some publicnode requests were answered by a Cloudflare challenge page; the receipt query for one of the seven transactions could not be completed for that reason.",
+    "codeCheck": "src/PoolManager.sol:139 emits Initialize, :175 ModifyLiquidity, :241 Swap and :273 Donate. No line in src/ reads logs; pool state, deltas and payouts are computed from storage and transient storage only, so a client that omits logs changes nothing the PoolManager computes or pays.",
+    "corrections": "severity: low. SCHEMA.md gives low to an operational or integration hazard with no direct loss path, which is what the impact field describes; info is for a difference that creates no hazard. The actor value operator fits as the nearest value, since only the RPC provider's node choice causes it and no attacker is involved. The finding concerns one provider's client, not a rule of BNB Chain.",
+    "sources": [
+     {
+      "url": "rpc: eth_getLogs on https://bsc-rpc.publicnode.com blocks 135483276, 135499999, 135500000 (0, 0, 421 logs) and PoolManager filter at 135483276 (0 logs)",
+      "supports": "empty log answer below 135,500,000 with no error"
+     },
+     {
+      "url": "rpc: eth_getLogs on https://rpc-bsc.48.club blocks 135483276, 135499999, 135500000 (556, 620, 421 logs) and PoolManager filter at 135483276 (7 logs)",
+      "supports": "logs exist for those blocks on another client"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/eth/filters/filter.go",
+      "supports": "geth returns PrunedHistoryError below the pruning cutoff (lines 93-94)"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/eth/filters/api.go",
+      "supports": "geth returns PrunedHistoryError for log ranges below the cutoff (lines 484-485, 539-540)"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 21,
+   "id": "F-142",
+   "firstCycle": 21,
+   "history": [
+    {
+     "cycle": 21,
+     "unit": "established-l1",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
    "title": "BNB Smart Chain runs a call from the system address with its stated value and moves no balance, and no ordinary sender can be that address",
    "chainIds": [
     56
@@ -14666,6 +14769,202 @@
      "status": "confirmed",
      "severity": "info",
      "note": "Elysium go1.25.12 and the go1.25.9 replay build are inside the range of issue 82839; no EVM path has the shape."
+    }
+   ]
+  },
+  {
+   "title": "Go releases up to go1.27.4 still carry four longstanding amd64 and arm64 wrong-code rules and an open phiopt fault, and no EVM path in the searched Go client trees has their shapes",
+   "chainIds": [
+    1,
+    137,
+    56,
+    43114,
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "difference": "Arbitrum One and Robinhood Chain answer as nitro v3.13.0-rc.9 built with go1.27.3, on linux-arm64 and linux-amd64. go1.27.3 lacks the go1.27.4 deadstore fix for Go issue 81863 and the still unmerged fix for issue 82839, and it holds the 81868 fix. Every released Go version that was read (go1.25.12, go1.26.10, go1.27.3, and the go1.27 branch head) also lacks five master fixes: issue 82825, where an amd64 unbounded shift and a ==, !=, <= or > comparison of its count with the width give a wrong boolean; issue 82777, an arm64 conditional complement that becomes XOR 1; arm64 noov comparisons of a - x*y with 0 that are wrong at the minimum integer; arm64 double REVW that loses a zero extension; and issue 83036, a loop-carried boolean phi in phiopt. Ethereum mainnet answers no differently in this respect, because its Go nodes use the same releases. The difference is that these networks run only Go nodes, so no second client would reject a faulty block.",
+   "mechanism": "A miscompile changes an EVM result only if a Go function on the opcode, state or precompile path has the faulty shape. The cycle 20 scanner was extended with five shapes and run, with type information, over holiman/uint256 v1.3.2 and v1.2.4, Nitro's go-ethereum fork at 0e44603 and f1c5f02, Nitro's arbos, arbos/programs, precompiles and util/arbmath at consensus-v61, and the geth v1.17.9, bsc v1.8.2, bor v2.11.1, Celo op-geth c7ed55b8, libevm, coreth and graft/evm trees. Results: no comparison of the 82839 shape (A1 and A2 empty, also in Nitro's own packages); no new 81863 site (four B1 hits in Nitro are heap composite literals in memory-backed state constructors and test helpers); no signed comparison of a - x*y with 0; no nested 32-bit byte reversal; every conditional complement has a constant operand, which folds to a constant and never becomes CSINV. The only D1 sites are uint256 v1.2.4 Lsh, Rsh and SRsh (uint256.go:1040, 1099, 1163), where n > 64 is a switch case. A block control is recomputed by flagalloc, and the fault reaches only materialised booleans, so these sites compile correctly. In v1.3.2, which Nitro pins, the cases are n >= 64 and the shifted count after n -= 64 is a different value. The phiopt shape appears only as the tracing flag logged in the interpreter loop, which a deferred closure captures, so it is not an SSA value. The opcode handlers that the PoolManager's SHL, SHR, SAR, SIGNEXTEND and MULMOD reach (core/vm instructions.go opSHL, opSHR, opSAR, opSignExtend and opMulmod, uint256 Lsh, Rsh, SRsh, ExtendSign and MulMod) contain none of the shapes. The vectors agree: 185,529 battery and targeted vectors and 300 pmdiff2 scripts match the specification and the Ethereum reference on Arbitrum One (arm64 only) and on Robinhood Chain (both architectures, see the cleared entry).",
+   "impact": "No loss path found. If such a site existed on the EVM path of one architecture, nodes of that architecture would compute a different state for an affected block, which stalls confirmations without moving funds. If it existed in the sequencer's binary, a wrong result could be canonical, which is why the opcode paths were searched.",
+   "preconditions": "A Go function on the EVM path with one of the shapes, compiled by an affected release. None was found. The private rc.9 source (b72783f), the fork's hand-written assembly and the generated machine code were not read, and the go1.27.3 compiler could not be built or run here, so the search is syntactic.",
+   "mitigations": "Node operators can move to go1.27.4 or later for 81863, and to the first release that carries the 82825, 82777, noov, REVW and 83036 fixes once one exists. Nitro can rerun its differential tests on both architectures for each toolchain change.",
+   "coreRefs": [
+    "src/libraries/TickMath.sol:61-63",
+    "src/libraries/TickMath.sol:142-145",
+    "src/libraries/TickBitmap.sol:20-38",
+    "src/libraries/FullMath.sol:24",
+    "src/libraries/FullMath.sol:48"
+   ],
+   "sources": [
+    {
+     "url": "https://go.dev/doc/devel/release",
+     "supports": "go1.27.0 2026-08-19, go1.27.1 2026-09-01, go1.27.2 2026-10-08, go1.27.3 2026-10-19 (crypto/x509 only), go1.27.4 2026-11-10 (compiler, linker, runtime)"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+log/go1.27.0..go1.27.1?format=JSON",
+     "supports": "15 commits of go1.27.1"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+log/go1.27.1..go1.27.2?format=JSON",
+     "supports": "46 commits of go1.27.2"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+log/go1.27.2..go1.27.3?format=JSON",
+     "supports": "go1.27.3 is one crypto/x509 commit"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+log/go1.27.3..go1.27.4?format=JSON",
+     "supports": "go1.27.4 carries 8b28706da89e 'teach deadstore about CondSelect' (Fixes #81866, Updates #81863)"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+log/go1.27.4..release-branch.go1.27?format=JSON",
+     "supports": "11 later branch commits, none in cmd/compile"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+log/master?format=JSON&n=1000",
+     "supports": "master commits 7684884c6d0e (82825), 45071c879089 (82777), 607cfcea17a4 (arm64 noov), a15f882163a2 (REVW), d2cdd7563032 (83036), with two further pages"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+log/go1.27rc2..go1.27rc3?format=JSON",
+     "supports": "714546262251 merges master a5f29a67 into release-branch.go1.27 on 2026-07-14, the last such merge"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/deadstore.go?format=TEXT",
+     "supports": "line 333 keeps autos only for Phi, not CondSelect (81863 unfixed); go1.27.4 adds OpCondSelect"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/compile.go?format=TEXT",
+     "supports": "branchelim (line 480) runs before dead auto elim (line 482)"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/prove.go?format=TEXT",
+     "supports": "lines 1161-1219: the x+delta constant derivation has no fitsSigned guard; 1224-1240 the extension look-through (82839 unfixed)"
+    },
+    {
+     "url": "https://go-review.googlesource.com/changes/858581",
+     "supports": "the 82839 fix is status NEW, updated 2026-11-16"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/_gen/generic.rules?format=TEXT",
+     "supports": "line 431 and the other narrow shift canonicalisation rules type the Const64 as TUINT64, so go1.27.3 holds the 81868 fix"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/_gen/AMD64Ops.go?format=TEXT",
+     "supports": "line 818 SBBQcarrymask has no clobberFlags (82825 present); same in go1.26.10 and go1.25.12"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/_gen/ARM64.rules?format=TEXT",
+     "supports": "line 1409 CSINV false fold to (Not y) (82777), lines 1346-1349 and 1388-1389 noov InvertFlags rules, line 1841 ((REV|REVW) ((REV|REVW) p)) => p; same text in go1.26.10 and go1.25.12"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/phiopt.go?format=TEXT",
+     "supports": "lines 228 and 244 lack the single predecessor check that d2cdd7563032 adds (83036)"
+    },
+    {
+     "url": "https://go.dev/dl/go1.27.3.src.tar.gz",
+     "supports": "source archive sha256 6e7749035cf360f06b2575d162ea79df9fda8ef671889e5c375f8e50777f26bb, equal to the go.dev/dl listing; its prove.go and deadstore.go equal the gitiles text"
+    },
+    {
+     "url": "research/network-risk/cycles/021/theme-go127-arch.work/scripts/shapescan3/main.go:1-8",
+     "supports": "cycle 20 shapescan2 plus shapes D1 to D5; the positive control testdata/pc (the issue 82825, 82777 and 83036 reproducers and two synthetic cases) yields every shape"
+    },
+    {
+     "url": "research/network-risk/cycles/021/theme-go127-arch.work/out/scan3-summary.json:1",
+     "supports": "12 trees, 106 packages, 1,066 non-test files; A1 0, A2 0, D1 3 (uint256 v1.2.4 only), D3 0, nested D4 0, D2 with a non-constant operand 0"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/offchainlabs/nitro/@v/consensus-v61.info",
+     "supports": "consensus-v61 is commit dfab1dea5c8d; the module zip of that version supplied arbos, arbos/programs, precompiles and util/arbmath"
+    },
+    {
+     "url": "src/libraries/TickMath.sol:61-63",
+     "supports": "signextend and sar(255) on the tick reach opSignExtend and opSAR"
+    },
+    {
+     "url": "src/libraries/FullMath.sol:24",
+     "supports": "mulmod(a, b, not(0)) reaches opMulmod and uint256 MulMod"
+    },
+    {
+     "url": "src/libraries/TickBitmap.sol:38",
+     "supports": "sar(8, signextend(2, tick)) reaches opSAR and uint256 SRsh"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 21,
+    "factCheck": "web3_clientVersion on https://arb1.arbitrum.io/rpc returned nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3 on every call, and https://rpc.mainnet.chain.robinhood.com returned the same build alternating between linux-arm64 and linux-amd64 on consecutive calls. https://go.dev/doc/devel/release lists go1.27.0 (2026-08-19) through go1.27.4. The go1.27.3 and go1.27.4 deadstore.go texts from gitiles differ only at lines 332-333, where go1.27.4 adds OpCondSelect with the comment naming issue 81863, so go1.27.3 carries the 81863 code. go1.27.3 AMD64Ops.go lines 818-819 define SBBQcarrymask and SBBLcarrymask with no clobberFlags. go1.27.3 ARM64.rules line 1409 folds a false CSINV to (Not y) and line 1841 folds ((REV|REVW) ((REV|REVW) p)) to p. The master commits 7684884c6d0e (2026-11-04, Fixes #82825), 45071c879089 (2026-11-04, CSINV to MVN) and d2cdd7563032 (2026-11-20, phiopt loop-carried booleans) exist with the messages the finding gives. The 82825 commit message states the fault gives wrong booleans only and that branch control values are handled separately by flagalloc, which supports the finding's treatment of switch cases. holiman/uint256 v1.3.2 Lsh, Rsh and SRsh (uint256.go:1042-1133) use n >= 64, n >= 128 and n >= 192 as switch cases and shift only by the reduced n or 64 - n, and v1.2.4 has n > 64 cases at lines 1040, 1099 and 1163, as stated. The work directory scan output lists one A3 hit in v1.3.2, ExtendSign int64(int8(signByte)) at uint256.go:1275, which is a widening with no ordered comparison and so not the 82839 shape. As an independent check I ran 886 opcode edge vectors (SHL, SHR, SAR at counts 0 to 2^256-1 including 63, 64, 65, 128, 192, 255, 256; SIGNEXTEND for byte index 0 to 33, 2^64 and 2^256-1; MULMOD and ADDMOD including modulus not(0); SDIV and SMOD at the minimum integer and -1; DIV, MOD, BYTE, EXP) in one eth_call with a state override. Robinhood Chain: 10 calls with override and 16 as creation calls, all 886 results equal the specification, with the neighbouring clientVersion naming arm64 and amd64 in about equal numbers. Arbitrum One: 4 calls with override, all equal, all labelled arm64. The private rc.9 source and the compiled machine code were not read by me either, so the absence of a faulty site rests on a syntactic search and on vectors.",
+    "codeCheck": "The cited lines reach the opcodes named. src/libraries/TickMath.sol:61-63 applies signextend(2, tick) and sar(255, tick); TickMath.sol:142-145 uses shr, shl and a variable shift shr(f, r); src/libraries/TickBitmap.sol:20-38 uses signextend, sdiv, smod, slt and sar(8, signextend(2, tick)); src/libraries/FullMath.sol:24 uses mulmod(a, b, not(0)) and FullMath.sol:48 mulmod(a, b, denominator). A wrong result from any of these handlers would change tick, price or 512-bit product values, but the vectors I ran on both architectures of Robinhood Chain and on arm64 Arbitrum One give the specified values at the edges these lines depend on. No code path in src/ was found that would compute differently on these builds.",
+    "corrections": "",
+    "sources": [
+     {
+      "url": "https://arb1.arbitrum.io/rpc",
+      "supports": "web3_clientVersion nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3; 886 edge vectors in 4 eth_calls all equal the specification"
+     },
+     {
+      "url": "https://rpc.mainnet.chain.robinhood.com",
+      "supports": "web3_clientVersion alternates linux-arm64 and linux-amd64 of the same rc.9 go1.27.3 build; 886 edge vectors in 26 eth_calls all equal the specification"
+     },
+     {
+      "url": "https://go.dev/doc/devel/release",
+      "supports": "go1.27.0 released 2026-08-19; go1.27.1 to go1.27.4 listed"
+     },
+     {
+      "url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/deadstore.go?format=TEXT",
+      "supports": "line 333 keeps autos for OpPhi only"
+     },
+     {
+      "url": "https://go.googlesource.com/go/+/refs/tags/go1.27.4/src/cmd/compile/internal/ssa/deadstore.go?format=TEXT",
+      "supports": "line 333 adds OpCondSelect, comment cites #81863"
+     },
+     {
+      "url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/_gen/AMD64Ops.go?format=TEXT",
+      "supports": "lines 818-819 SBBQcarrymask and SBBLcarrymask without clobberFlags"
+     },
+     {
+      "url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/_gen/ARM64.rules?format=TEXT",
+      "supports": "line 1409 CSINV fold to Not, line 1841 double REV fold"
+     },
+     {
+      "url": "https://go.googlesource.com/go/+/7684884c6d0e?format=JSON",
+      "supports": "82825 fix message: wrong booleans only, branch controls handled by flagalloc, affects ==, !=, <=, > against the width"
+     },
+     {
+      "url": "https://go.googlesource.com/go/+/45071c879089?format=JSON",
+      "supports": "arm64 constant-flag CSINV fold fix"
+     },
+     {
+      "url": "https://go.googlesource.com/go/+/d2cdd7563032?format=JSON",
+      "supports": "phiopt loop-carried boolean fix, 2026-11-20"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go",
+      "supports": "Lsh, Rsh, SRsh switch on n >= 64/128/192; ExtendSign int64(int8(signByte)) at line 1275 with no comparison"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/holiman/uint256/v1.2.4/uint256.go",
+      "supports": "n > 64 switch cases at lines 1040, 1099, 1163"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 21,
+   "extends": "F-136",
+   "id": "F-143",
+   "firstCycle": 21,
+   "history": [
+    {
+     "cycle": 21,
+     "unit": "theme-go127-arch",
+     "status": "confirmed",
+     "severity": "info"
     }
    ]
   }

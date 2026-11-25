@@ -1,0 +1,163 @@
+{
+ "unit": "theme-blind-read",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    10,
+    56,
+    130,
+    137,
+    196,
+    480,
+    1868,
+    4217,
+    4663,
+    8453,
+    42161,
+    42220,
+    57073,
+    99901,
+    7777777
+   ],
+   "lens": "L1",
+   "check": "Assumption T3, ranked first in the blind list: transient slots of the real PoolManager written in one transaction must be empty in the next transaction of the same block. eth_simulateV1 at the real PoolManager address ran, in one simulated block, a driver (state override) that calls unlock and syncs a stub token inside the callback, ending (1) in success with the currency still synced, (2) INVALID inside and at the top, (3) REVERT, (4) a completed unlock followed by INVALID at the top. After each transaction a separate transaction read IS_UNLOCKED, NONZERO_DELTA_COUNT, RESERVES_OF and CURRENCY through exttload(bytes32[]), and the driver read its own transient slot; a second block read them again. Worldchain, Celo and X Layer were run on thirdweb, ankr and drpc endpoints because the networks.json endpoints refused eth_simulateV1 with HTTP 401 and 403.",
+   "result": "On all 16 networks the in-transaction read returned the synced stub token, so the write happened, and every later transaction and the next block read 0 in all four PoolManager slots and in the driver slot. An IS_UNLOCKED value of 1 would have let any later caller run take() outside unlock (src/PoolManager.sol:96-99,291-297,112). No leak exists on the simulation path of these endpoints. Raw answers with web3_clientVersion before and after are in research/network-risk/cycles/021/theme-blind-read.work/xtx-all.json and xtx-alt.json, script research/network-risk/cycles/021/theme-blind-read.work/scripts/xtx.py.",
+   "source": "research/network-risk/cycles/021/theme-blind-read.work/xtx-all.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Assumption C5, ranked third: CALLVALUE must equal a real debit, because native settle credits msg.value with no balance check (src/PoolManager.sol:353-354). eth_call of a top-level transfer of 1 wei and of 1e18 wei from an address with zero balance on all 21 networks.",
+   "result": "All 21 endpoints refused both calls with an insufficient funds or OutOfFunds error, and the sender balance is 0. Together with the earlier internal-call value tests (tools/opdiff/callsem.py) no endpoint lets a call carry value that was not debited. Results in research/network-risk/cycles/021/theme-blind-read.work/xtx-all.json.",
+   "source": "research/network-risk/cycles/021/theme-blind-read.work/xtx-all.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Assumption T5, never isolated before: TSTORE must fail in a static context. The earlier static write test wrote TSTORE and SSTORE together, so the SSTORE alone would fail the frame. Probe C staticcalls the real PoolManager's sync(X), which writes only transient storage (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-31), then reads CURRENCY and RESERVES_OF. In the same eth_call it checks that sync(X) by plain call sets the slot and sync(address(0)) clears it, that a sub-frame that unlocks, syncs in the callback and then reverts or halts with INVALID leaves CURRENCY, IS_UNLOCKED and NONZERO_DELTA_COUNT at 0, and that a completed unlock leaves IS_UNLOCKED at 0 with the currency still synced.",
+   "result": "18 of 18 words as specified on all 21 networks, including Avalanche, Monad, MegaETH, Arc and HyperEVM whose endpoints have no eth_simulateV1. The review's reference interpreter (tools/opdiff/pyevm.py) running the build of this checkout gives the same 18 words. Results in research/network-risk/cycles/021/theme-blind-read.work/static-all.json, scripts research/network-risk/cycles/021/theme-blind-read.work/scripts/static_rollback.py and scripts/local_ref.py. The first run gave out of gas on every network because a failed static frame burns all forwarded gas; the rerun gives each call a fixed allowance.",
+   "source": "research/network-risk/cycles/021/theme-blind-read.work/static-all.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Blind reading of every file in src/ outside src/test: every assembly block listed in research/network-risk/cycles/021/theme-blind-read.work/assumptions.md with the opcode result it needs. Constants recomputed in python3: the 19 TickMath multipliers equal floor(2^128 / sqrt(1.0001)^(2^i)) plus 0 or 1, the log constant 255738958999603826347141 equals floor(2^64/log2(sqrt(1.0001))) plus 1, the four transient slot constants equal keccak256(name) minus 1, and getSqrtPriceAtTick(+-887272) returns MAX_SQRT_PRICE and MIN_SQRT_PRICE.",
+   "result": "No line computes or decides differently from what its comments and the specification say. take, mint, burn, settle and clear are gated only by IS_UNLOCKED (src/PoolManager.sol:96-99) and the only settlement check is NonzeroDeltaCount at the end of unlock (src/PoolManager.sol:112), so the code's safety rests on transient storage rules T2 to T4, which probes A and C and the earlier work test. The checked addition in CurrencyDelta.applyDelta (src/libraries/CurrencyDelta.sol:37) and the checked subtraction in _settle (src/PoolManager.sol:360) revert rather than wrap. PoolManager has no receive or fallback, so native value enters only through settle and settleFor (src/PoolManager.sol:300-307) or through value that bypasses code.",
+   "source": "src/libraries/TickMath.sol:80-111"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Step 3 comparison of the fifteen highest ranked blind assumptions with OPCODES.md, findings.json and cleared.json.",
+   "result": "Twelve of the fifteen were already tested with evidence that exercises the scenario itself (arithmetic, signed opcodes, division by zero, call output buffers, keccak lengths, jump analysis, gas, sender spoofing, empty-code calls, shared transient frames, frame rollback, dual faces). Three were exercised only near the scenario: transient storage across transactions (one generic simulation on Arbitrum), top-level value without a debit (internal calls only) and TSTORE alone in a static frame. Probes A, B and C close those on the networks whose endpoints serve the method. The table is in research/network-risk/cycles/021/theme-blind-read.work/assumptions.md.",
+   "source": "research/network-risk/cycles/021/theme-blind-read.work/assumptions.md"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    43114,
+    143,
+    4326,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "question": "On Avalanche, Monad, MegaETH, Arc and HyperEVM, does a mined block ever show PoolManager transient state from one transaction in a later transaction of the same block? The public endpoints have no eth_simulateV1 (Avalanche, Monad, MegaETH, Arc and HyperEVM answered method not found; the HyperEVM drpc endpoint answered HTTP 500). Exact test: find blocks where a transaction ends successfully with an ERC-20 still synced (sync without a later settle) and a later transaction in the same block calls settle() without its own sync; with debug_traceTransaction or a receipt, settle must take the native branch (paid = msg.value, src/PoolManager.sol:353-354) and must not credit the earlier transaction's balance difference. For IS_UNLOCKED, list every successful mined transaction whose first PoolManager frame is take, mint, burn, settle or clear outside unlock; there must be none.",
+   "why": "A leak of IS_UNLOCKED=1 across transactions lets any account call take() with no settlement check and drain every currency. Source reading and the synced currency censuses already cover Monad, MegaETH and Avalanche; Arc and HyperEVM have only the per-transaction source of their stock components, and their producers are not public.",
+   "priority": "medium"
+  }
+ ],
+ "leadResults": []
+}

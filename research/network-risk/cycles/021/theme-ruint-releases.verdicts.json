@@ -1,0 +1,22 @@
+{
+ "unit": "theme-ruint-releases",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Task 1, fix #681 (mul_mod quotient skip). Releases 1.18.0 to 1.20.1 lack the fault and 1.21.1 contains the fix: src/algorithms/div/knuth.rs:133-136 skips the top quotient limb only when the top two normalized numerator limbs are strictly less than the divisor's.",
+   "agrees": true,
+   "note": "I fetched ruint-1.21.1.crate and ruint-1.20.0.crate from static.crates.io myself. Their sha256 values (a0de3fa9... and f5e99bff...) match the copies in the work directory. knuth.rs:131-136 reads `len > n + 1 && numerator[len - 1] == 0 && DW::join(numerator[len - 2], numerator[len - 3]) < DW::join(divisor[n - 1], divisor[n - 2])`. I derived the bound independently. If the top numerator limb is zero and the top two limbs are strictly below the divisor's top two, the top n+1 limbs are below the divisor, so the skipped quotient digit is zero. The remaining slice still meets the Knuth precondition that its top n limbs are below the divisor. I also checked the modulus == MAX branch at modular.rs:118-124, because FullMath.sol:24 calls mulmod(a, b, not(0)). It reduces hi + lo with an end-around carry and maps MAX to zero. This is correct for every product, since hi is at most 2^256-2. I ran my own eth_call vectors with a code override (a MULMOD of three calldata words). There were 24 cases in the equality shape that the strict comparison guards: modulus n, a = n or n plus a small offset, b = 2^256-1-k, so the top two product limbs equal the divisor's top two. There were also 6 cases of mulmod(a, b, 2^256-1). All 30 matched Python on Tempo (tempo/v1.19.1-a9d6748, ruint 1.21.1 and evm2), Base (base/v1.5.6), MegaETH (mega-reth v2.3.1), X Layer (xlayer v0.0.7), HyperEVM, Optimism (op-reth) and Arc. I could not query Ethereum: publicnode returned 403 and eth.drpc.org returned 429."
+  },
+  {
+   "check": "Task 2: the ruint functions called by the handlers of the PoolManager's opcodes, read in revm-interpreter 35.0.1 to 43.0.2, evm2 35aa3280 and mega-evm v1.7.4, all found correct in every release.",
+   "agrees": true,
+   "note": "There was one gap. The reth v2.11.0 lockfile in the work directory (line 3702) pins evm2 at 66687c18, while the read covered 35aa3280. I fetched arithmetic.rs, bitwise.rs, i256.rs and control.rs at both commits from raw.githubusercontent.com, and they are byte-identical. stack.rs at 66687c18 defines `pub type Word = U256` from alloy_primitives, which is ruint. In evm2, gmp-mpfr-sys is only the modexp precompile backend (crates/evm2/Cargo.toml:67-69, feature gmp). It is not the word type. The arithmetic handlers call wrapping_add, wrapping_mul, wrapping_sub, wrapping_div and wrapping_rem behind is_zero checks, i256_div and i256_mod, add_mod, mul_mod and wrapping_pow. SIGNEXTEND compares with `*ext < 31` and shifts by at most 247. This matches the list in the cleared item, so the gap does not change the result."
+  },
+  {
+   "check": "What the pool math needs: FullMath mulmod, TickBitmap signed compression, TickMath sign masks, BalanceDelta unpacking and BitMath shifts all use constant amounts or amounts below 256, so no line of src/ computes differently on any of the five releases.",
+   "agrees": true,
+   "note": "I read src/libraries/FullMath.sol:24 (mulmod(a, b, not(0)), which takes the MAX-modulus branch I checked above), src/libraries/TickBitmap.sol:20-26 (signextend(2, ...), sdiv, smod and slt) and src/libraries/BitMath.sol:16-22 (shl by 7, 6, 5, 4 and 3, and shr by r, where r is at most 255). Every shift amount is below 2^32, so the 1.19.0 shift truncation cannot apply. The signed operations go through handlers that do not call wrapping_from. I found no line of src/ that reaches a faulty ruint function."
+  }
+ ],
+ "leads": []
+}

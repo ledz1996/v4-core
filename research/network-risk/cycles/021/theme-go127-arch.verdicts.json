@@ -1,0 +1,45 @@
+{
+ "unit": "theme-go127-arch",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "web3_clientVersion on https://arb1.arbitrum.io/rpc returned nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3 on every call, and https://rpc.mainnet.chain.robinhood.com returned the same build alternating between linux-arm64 and linux-amd64 on consecutive calls. https://go.dev/doc/devel/release lists go1.27.0 (2026-08-19) through go1.27.4. The go1.27.3 and go1.27.4 deadstore.go texts from gitiles differ only at lines 332-333, where go1.27.4 adds OpCondSelect with the comment naming issue 81863, so go1.27.3 carries the 81863 code. go1.27.3 AMD64Ops.go lines 818-819 define SBBQcarrymask and SBBLcarrymask with no clobberFlags. go1.27.3 ARM64.rules line 1409 folds a false CSINV to (Not y) and line 1841 folds ((REV|REVW) ((REV|REVW) p)) to p. The master commits 7684884c6d0e (2026-11-04, Fixes #82825), 45071c879089 (2026-11-04, CSINV to MVN) and d2cdd7563032 (2026-11-20, phiopt loop-carried booleans) exist with the messages the finding gives. The 82825 commit message states the fault gives wrong booleans only and that branch control values are handled separately by flagalloc, which supports the finding's treatment of switch cases. holiman/uint256 v1.3.2 Lsh, Rsh and SRsh (uint256.go:1042-1133) use n >= 64, n >= 128 and n >= 192 as switch cases and shift only by the reduced n or 64 - n, and v1.2.4 has n > 64 cases at lines 1040, 1099 and 1163, as stated. The work directory scan output lists one A3 hit in v1.3.2, ExtendSign int64(int8(signByte)) at uint256.go:1275, which is a widening with no ordered comparison and so not the 82839 shape. As an independent check I ran 886 opcode edge vectors (SHL, SHR, SAR at counts 0 to 2^256-1 including 63, 64, 65, 128, 192, 255, 256; SIGNEXTEND for byte index 0 to 33, 2^64 and 2^256-1; MULMOD and ADDMOD including modulus not(0); SDIV and SMOD at the minimum integer and -1; DIV, MOD, BYTE, EXP) in one eth_call with a state override. Robinhood Chain: 10 calls with override and 16 as creation calls, all 886 results equal the specification, with the neighbouring clientVersion naming arm64 and amd64 in about equal numbers. Arbitrum One: 4 calls with override, all equal, all labelled arm64. The private rc.9 source and the compiled machine code were not read by me either, so the absence of a faulty site rests on a syntactic search and on vectors.",
+   "codeCheck": "The cited lines reach the opcodes named. src/libraries/TickMath.sol:61-63 applies signextend(2, tick) and sar(255, tick); TickMath.sol:142-145 uses shr, shl and a variable shift shr(f, r); src/libraries/TickBitmap.sol:20-38 uses signextend, sdiv, smod, slt and sar(8, signextend(2, tick)); src/libraries/FullMath.sol:24 uses mulmod(a, b, not(0)) and FullMath.sol:48 mulmod(a, b, denominator). A wrong result from any of these handlers would change tick, price or 512-bit product values, but the vectors I ran on both architectures of Robinhood Chain and on arm64 Arbitrum One give the specified values at the edges these lines depend on. No code path in src/ was found that would compute differently on these builds.",
+   "corrections": "",
+   "sources": [
+    {"url": "https://arb1.arbitrum.io/rpc", "supports": "web3_clientVersion nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3; 886 edge vectors in 4 eth_calls all equal the specification"},
+    {"url": "https://rpc.mainnet.chain.robinhood.com", "supports": "web3_clientVersion alternates linux-arm64 and linux-amd64 of the same rc.9 go1.27.3 build; 886 edge vectors in 26 eth_calls all equal the specification"},
+    {"url": "https://go.dev/doc/devel/release", "supports": "go1.27.0 released 2026-08-19; go1.27.1 to go1.27.4 listed"},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/deadstore.go?format=TEXT", "supports": "line 333 keeps autos for OpPhi only"},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.27.4/src/cmd/compile/internal/ssa/deadstore.go?format=TEXT", "supports": "line 333 adds OpCondSelect, comment cites #81863"},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/_gen/AMD64Ops.go?format=TEXT", "supports": "lines 818-819 SBBQcarrymask and SBBLcarrymask without clobberFlags"},
+    {"url": "https://go.googlesource.com/go/+/refs/tags/go1.27.3/src/cmd/compile/internal/ssa/_gen/ARM64.rules?format=TEXT", "supports": "line 1409 CSINV fold to Not, line 1841 double REV fold"},
+    {"url": "https://go.googlesource.com/go/+/7684884c6d0e?format=JSON", "supports": "82825 fix message: wrong booleans only, branch controls handled by flagalloc, affects ==, !=, <=, > against the width"},
+    {"url": "https://go.googlesource.com/go/+/45071c879089?format=JSON", "supports": "arm64 constant-flag CSINV fold fix"},
+    {"url": "https://go.googlesource.com/go/+/d2cdd7563032?format=JSON", "supports": "phiopt loop-carried boolean fix, 2026-11-20"},
+    {"url": "https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go", "supports": "Lsh, Rsh, SRsh switch on n >= 64/128/192; ExtendSign int64(int8(signByte)) at line 1275 with no comparison"},
+    {"url": "https://raw.githubusercontent.com/holiman/uint256/v1.2.4/uint256.go", "supports": "n > 64 switch cases at lines 1040, 1099, 1163"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Task 3 on Robinhood Chain: battery, targeted and pmdiff2 vectors on both architectures with 0 mismatches.",
+   "agrees": true,
+   "note": "This is the item where an error would cost the most, because Robinhood Chain is the network that serves an amd64 go1.27.3 build, the architecture affected by 82825. I confirmed that consecutive web3_clientVersion calls alternate between linux-arm64 and linux-amd64, so routing is per request. I ran my own 886 edge vectors for shifts, SIGNEXTEND, MULMOD, ADDMOD, signed division and modulo, BYTE and EXP in 26 eth_calls (10 with a code override, 16 as creation calls); every answer matched the specification, with neighbouring clientVersion labels split 13 arm64 and 15 amd64 across the runs. The architecture of each eth_call cannot be pinned, as the cleared item says, but with this many independent calls both builds almost certainly answered. Robinhood Chain accepted a 92 KB creation call (initcode limit reported by Arbitrum One is 49152), a difference noted but outside this check."
+  },
+  {
+   "check": "Task 2: the open shapes in uint256 v1.3.2 and v1.2.4, the Nitro go-ethereum forks and other Go client trees, with no site on an EVM opcode path.",
+   "agrees": true,
+   "note": "I read uint256 v1.3.2 Lsh, Rsh and SRsh: the comparisons with 64, 128 and 192 are switch-case branch controls and the 82825 commit message limits the fault to materialised booleans, so these compile correctly; the shifts after n -= 64 use a different value from the compared count. The only A3 hit in v1.3.2, ExtendSign at uint256.go:1275, has no ordered comparison. The search is syntactic and the private rc.9 source was not read, which the finding states. My vectors at the shift-count and sign-extension edges agree on both architectures."
+  },
+  {
+   "check": "Does go1.27.3 hold the code of Go issues 81863, 81868 and 82839?",
+   "agrees": true,
+   "note": "I fetched deadstore.go at go1.27.3 and go1.27.4 and diffed them: the only change is the OpCondSelect condition at lines 332-333 that cites 81863, so go1.27.3 carries the 81863 code as the item says. I did not refetch prove.go or generic.rules; the item's 81868 and 82839 statements rest on the research agent's reading."
+  }
+ ],
+ "leads": []
+}

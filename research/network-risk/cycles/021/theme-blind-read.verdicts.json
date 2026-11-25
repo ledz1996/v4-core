@@ -1,0 +1,30 @@
+{
+ "unit": "theme-blind-read",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Assumption T3: transient slots of the real PoolManager written in one transaction must be empty in the next transaction of the same block, tested with eth_simulateV1 on 16 networks (research/network-risk/cycles/021/theme-blind-read.work/xtx-all.json).",
+   "agrees": true,
+   "note": "I read scripts/xtx.py and reran it for chain ids 10, 42161 and 4217 into research/network-risk/cycles/021/theme-blind-read.verify.work/xtx-recheck.json. All three gave sim=ok: the in-transaction read returned the stub token and every later transaction and the next block read 0 for IS_UNLOCKED, NONZERO_DELTA_COUNT, RESERVES_OF and CURRENCY. Monad again answered Method not found (-32601), so the item correctly leaves it out. The slot constants used by the script match the source: IS_UNLOCKED_SLOT at src/libraries/Lock.sol:8 equals keccak256(\"Unlocked\") minus 1 as its comment at line 7 says, and NONZERO_DELTA_COUNT, ReservesOf and Currency match src/libraries/NonzeroDeltaCount.sol:9-10 and src/libraries/CurrencyReserves.sol:11,13 (recomputed with tools/opdiff/evm.py keccak). The code consequence holds: take, settle, clear, mint and burn are gated only by onlyWhenUnlocked (src/PoolManager.sol:96-99,291-336). The limit is that this is the simulation path of each endpoint, which runs the same EVM as block building on these clients but is not a mined block; the open lead for the five networks without eth_simulateV1 stays valid."
+  },
+  {
+   "check": "Assumption T5 and frame rollback: STATICCALL of PoolManager.sync(X), which writes only transient storage, must fail and leave CURRENCY and RESERVES_OF at 0, and reverted or INVALID unlock sub-frames must leave CURRENCY, IS_UNLOCKED and NONZERO_DELTA_COUNT at 0, on all 21 networks (static-all.json).",
+   "agrees": true,
+   "note": "sync is not gated by the lock and writes only transient slots (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:21-31), so a static call to it isolates TSTORE. I reran scripts/static_rollback.py for 42161, 43114, 143, 4326, 4217, 5042 and 999 into research/network-risk/cycles/021/theme-blind-read.verify.work/static-recheck.json; all seven returned 18 of 18 words as specified, matching the expected vector in static-all.json, including the five networks with no eth_simulateV1. The fixed 500,000 gas allowance per static frame is sound because a failing static frame consumes only what it is given."
+  },
+  {
+   "check": "Blind reading of src/: no line computes or decides differently from its comments and the specification; the only settlement check is NonzeroDeltaCount at the end of unlock; applyDelta and _settle use checked arithmetic; native value enters only through settle and settleFor.",
+   "agrees": true,
+   "note": "Read src/PoolManager.sol:96-114 and 279-364: unlock reverts on nonzero count at line 112, _settle rejects msg.value when a currency is synced (lines 355-356) and uses checked subtraction (line 360). CurrencyDelta.applyDelta does next = previous + delta in checked Solidity (src/libraries/CurrencyDelta.sol, int256 plus int128). SafeCast.toInt128(uint256) rejects x >= 2^127. I also brute checked BitMath.mostSignificantBit and leastSignificantBit (src/libraries/BitMath.sol) in Python on 768 inputs covering every bit position with all-ones and random low bits: 0 mismatches. LiquidityMath.addDelta (src/libraries/LiquidityMath.sol) masks x, sign extends y with SIGNEXTEND(15) and reverts when bits above 127 are set, which is correct. UnsafeMath.divRoundingUp returns 0 for y = 0 by EVM DIV and MOD semantics, which the battery in OPCODES.md already covers. I found no contradiction, but I did not reread TickMath, SqrtPriceMath, SwapMath, TickBitmap or Pool in full, so this agreement rests on the parts named here."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [1, 10, 8453, 130, 7777777, 480, 57073, 1868, 42220, 196, 42161, 4663, 99901, 137, 56, 43114, 143, 4326, 4217, 5042, 999],
+   "lens": "L1",
+   "question": "Probe B shows that each endpoint's eth_call rejects value from a zero-balance sender. That is an RPC precheck, not the consensus rule. Is the balance debit for CALLVALUE enforced in the block execution path of each client (for example on Arbitrum retryable redeems, Tempo batched calls and HyperEVM system transactions, where value can be set by a system path), so that settle() at src/PoolManager.sol:353-354 can never credit value that was not debited?",
+   "why": "Native settle credits msg.value with no balance comparison, so any execution path that sets CALLVALUE without a debit would mint native credit that take() can withdraw from other users' native liquidity.",
+   "priority": "low"
+  }
+ ]
+}

@@ -1,0 +1,41 @@
+{
+  "unit": "ethereum-reference",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "medium",
+      "factCheck": "I ran the queries myself on 2026-11-25. eth_getCode of 0xe16af6e33266e572bbcadb288bf3893942cd8220 on https://ethereum-rpc.publicnode.com returns 0x, with nonce 0 and balance 0 at block 26,495,270. Its low 14 bits are 0b1000100000, so bit 9 (before remove liquidity) and bit 5 (before donate) are set. PositionManager.getPoolAndPositionInfo(265123) returns currency0 0, currency1 0x0b5702a3000a3ae3e80c3dfd6be547c4325f7eb9, fee 100, tick spacing 1 and that hook, and keccak of that key is 0x462175dbedc82a59909309d8d93c8ff5283fc3ce41e9dcbea28aea89709ab870. StateView.getLiquidity of that pool returns 150,557,992,383,766,460,021 and getSlot0 returns tick 204,733. I reran the finding's read-only eth_call of modifyLiquidities (one DECREASE_LIQUIDITY of the full position, from the token owner 0x7f715188103a3ed506e9dd95f918148b93875b22) on both publicnode (reth) and blockpi: both revert with 0x1e048e1d, the InvalidHookResponse selector. The control token 292,697, whose empty hook sets only the after swap flag, reverts with 0x5212cba1 (CurrencyNotSettled) on both, as a decrease without take should.",
+      "codeCheck": "PoolManager.modifyLiquidity calls key.hooks.beforeModifyLiquidity before any pool math (src/PoolManager.sol:155). Hooks.beforeModifyLiquidity calls callHook for beforeRemoveLiquidity whenever params.liquidityDelta <= 0 and bit 9 is set (src/libraries/Hooks.sol:195-206). callHook makes a CALL to the hook (src/libraries/Hooks.sol:134-136); a call to an address with no code succeeds with zero return data, so the success check at line 138 passes, result.length is 0, and line 153 reverts with InvalidHookResponse. The noSelfCall modifier (src/libraries/Hooks.sol:174-178) skips the call only when msg.sender is the hook address, which has no code and no nonce. No other path in src/ removes liquidity from a position, so the principal and fees stay in the PoolManager. Swaps through the pool still work because no swap flag is set.",
+      "corrections": "The block also applies to a zero liquidityDelta, so the owner cannot even collect fees through a poke, since Hooks.sol:202 tests liquidityDelta <= 0. Bit 5 is also set, so donate to this pool reverts the same way. The docstring of l821sim.py names token 264099 while the code uses 0x40ba3, which is 265123; the result is for 265123. This is not a chain difference: it behaves the same on every EVM network where an empty address answers a call with success. The actor pool-creator is right; the only liquidity in the pool was added by the account that created it in the same transaction, so no third party is a victim today.",
+      "sources": [
+        {
+          "url": "https://ethereum-rpc.publicnode.com",
+          "supports": "eth_getCode 0x, nonce 0, balance 0 for the hook at block 26,495,270; getPoolAndPositionInfo(265123) pool key hashing to 0x462175db...; StateView getLiquidity 150,557,992,383,766,460,021 and tick 204,733; modifyLiquidities eth_call from the owner reverts with 0x1e048e1d."
+        },
+        {
+          "url": "https://ethereum.public.blockpi.network/v1/rpc/public",
+          "supports": "Same modifyLiquidities eth_call reverts with 0x1e048e1d for token 265123 and with 0x5212cba1 for control token 292697."
+        }
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Lead L-820: reth's parallel executor for blocks with an access list. Does each transaction start with empty transient storage, and is the rebuilt access list checked against the header?",
+      "agrees": true,
+      "note": "I fetched evm2 7c9f3b6d crates/evm2/src/evm/tx.rs and evm/state/mod.rs. Every path that finalizes a transaction (tx.rs lines 222-249: commit, commit_pending_state and take_pending_state) calls clear_transaction_state, and that function (state/mod.rs lines 563-579) clears transient_storage together with the journal, logs and warm set. committed_copy, used as the base of a nested transaction, starts with an empty transient map (state/mod.rs lines 133-146). So the PoolManager lock and delta count in transient storage cannot carry from one transaction into the next on this path. I did not refetch the header validation lines in reth."
+    },
+    {
+      "check": "Lead L-940 by reading: do revm-interpreter 35.0.0 to 43.0.2 or evm2 7c9f3b6d call ruint wrapping_from, saturating_from or TryFrom of a signed primitive or BigInt on an instruction path?",
+      "agrees": true,
+      "note": "I downloaded revm-interpreter-43.0.2.crate from static.crates.io and searched src/ for wrapping_from, saturating_from, checked_from, try_from( and signed conversions into U256. The only conversions are U256 to u64 and usize (instructions/macros.rs lines 115 and 124, instructions/contract.rs line 188). Signed division and remainder use two_compl on U256 (instructions/i256.rs lines 37-121). The ruint signed conversion faults therefore cannot reach SDIV, SMOD, SAR, SLT or SIGNEXTEND in this release. I did not reread evm2 i256.rs."
+    },
+    {
+      "check": "Lead L-821: liquidity outside the current tick in the 21 pools on hooks that are empty or EIP-7702 delegated, with pool ids recomputed from each pool key.",
+      "agrees": true,
+      "note": "In l821.json the four pools with initialized ticks each have every range containing the current tick (0x08834f72 at -197563 with ranges from -887272 and from -197563 to -197463; 0x992c0ab6 at -198540 with ranges from -198540; 0x462175db full range; 0xf6aaf9bd at -332660 inside -333600 to -331200). I recomputed the pool id of 0x462175db from its key and read StateView getLiquidity and getSlot0 for it and for 0x08834f72 on publicnode; both match the file (150,557,992,383,766,460,021 at tick 204,733 and 56,584,610,728,161). I did not recompute the other 19 ids."
+    }
+  ],
+  "leads": []
+}

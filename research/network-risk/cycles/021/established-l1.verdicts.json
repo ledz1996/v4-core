@@ -1,0 +1,45 @@
+{
+ "unit": "established-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "On 2026-11-25 I queried https://bsc-rpc.publicnode.com, which answered web3_clientVersion reth-bsc/v0.1.4-hotfix-23b510f/linux. eth_getLogs with no address filter returned 0 logs for block 135,483,276 and for block 135,499,999, and 421 logs for block 135,500,000. The same queries on https://rpc-bsc.48.club (Geth/v1.8.2-9b93ce23-20261116) returned 556, 620 and 421 logs. A query filtered on the PoolManager 0x28e2ea090877bf75740558f6bfb36a5ffee9e9df for block 135,483,276 returned 0 logs and no error on publicnode and 7 logs on 48 Club. publicnode served the body of block 135,487,372 (eth_getBlockByNumber returned hash 0x512215a7...08e1), so the block exists there while its logs do not. The comparison claim about Ethereum holds for go-ethereum: eth/filters/filter.go:93-94 and eth/filters/api.go:484-485 on master return history.PrunedHistoryError for a range below the history pruning cutoff instead of an empty list. Some publicnode requests were answered by a Cloudflare challenge page; the receipt query for one of the seven transactions could not be completed for that reason.",
+   "codeCheck": "src/PoolManager.sol:139 emits Initialize, :175 ModifyLiquidity, :241 Swap and :273 Donate. No line in src/ reads logs; pool state, deltas and payouts are computed from storage and transient storage only, so a client that omits logs changes nothing the PoolManager computes or pays.",
+   "corrections": "severity: low. SCHEMA.md gives low to an operational or integration hazard with no direct loss path, which is what the impact field describes; info is for a difference that creates no hazard. The actor value operator fits as the nearest value, since only the RPC provider's node choice causes it and no attacker is involved. The finding concerns one provider's client, not a rule of BNB Chain.",
+   "sources": [
+    {"url": "rpc: eth_getLogs on https://bsc-rpc.publicnode.com blocks 135483276, 135499999, 135500000 (0, 0, 421 logs) and PoolManager filter at 135483276 (0 logs)", "supports": "empty log answer below 135,500,000 with no error"},
+    {"url": "rpc: eth_getLogs on https://rpc-bsc.48.club blocks 135483276, 135499999, 135500000 (556, 620, 421 logs) and PoolManager filter at 135483276 (7 logs)", "supports": "logs exist for those blocks on another client"},
+    {"url": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/eth/filters/filter.go", "supports": "geth returns PrunedHistoryError below the pruning cutoff (lines 93-94)"},
+    {"url": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/eth/filters/api.go", "supports": "geth returns PrunedHistoryError for log ranges below the cutoff (lines 484-485, 539-540)"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Does the MULMOD reciprocal memo of the coming bor release change any mulmod result used by FullMath.mulDiv, mulDivRoundingUp or SqrtPriceMath.getAmount1Delta?",
+   "agrees": true,
+   "note": "I read bor develop core/vm/mulmod_memo.go: for a modulus with z[3] != 0 it compares the stored modulus by value (mm.mod != *z), recomputes uint256.Reciprocal on a miss, and calls MulModWithReciprocal; otherwise it calls stock MulMod. In holiman/uint256 v1.3.2 (the version in bor develop go.mod) MulMod and MulModWithReciprocal have identical bodies except that MulMod computes mu := Reciprocal(m) itself, so the output depends only on (x, y, m). opMulmod in develop instructions.go:200-202 pops x and y as copies and passes z as both modulus and result, the same aliasing as the stock call. bor v2.11.1 instructions.go:202 still calls z.MulMod. FullMath.sol:24 uses mulmod(a, b, not(0)), a full-width modulus, so the memo path serves every mulDiv; FullMath.sol:48 and :112 and SqrtPriceMath.sol:252 use the caller's denominator and take either path with the same result. The memo has not been run in a node, which the unit's own lead records."
+  },
+  {
+   "check": "Script set 2 (pmdiff2, 300 scripts) on Polygon quiknode bor: 279 identical, 20 different, 0 endpoint errors, 0 reference errors; the 20 differences are the full-range swaps cut short by gas recorded in F-064 and F-115.",
+   "agrees": true,
+   "note": "The conclusion holds and the 20 indexes equal those in opcodes/pmdiff2.json for chain 137 (and Monad). The text is wrong on one count: in cycles/021/established-l1.work/pmdiff2-Polygon_quiknode.json referenceHashes[138] is 'ERR HTTP Error 403: Forbidden', so the Ethereum reference failed for script 138 and only 299 scripts were compared (279 + 20). There was one reference error, not zero. Script 138 equals Ethereum on Polygon in the stored opcodes/pmdiff2.json run, so no clearance is lost. Set 1 on Polygon did not finish this cycle either, so the Polygon rerun of the script sets is partial. The gas explanation rests on cycle 18, where the 16 scripts finished at 600 million and 1,000 million gas with every answer equal to Ethereum (OPCODES.md line 365); pmdiff2.py runs every eth_call at 25 million gas (tools/opdiff/pmdiff2.py run_net)."
+  },
+  {
+   "check": "L-928: can the shift rewrite of Go issue 81868 in go1.26.10 break jump destination analysis (BitVec.setN) for the PoolManager?",
+   "agrees": true,
+   "note": "bor v2.11.1 core/vm/analysis_legacy.go setN computes a := flag << (pos % 8) on a uint16 and writes byte(a) and byte(a >> 8); codeBitmap builds one bitmap per code, so attacker bytecode cannot alter the PoolManager's bitmap. The compiled form was not read, so the clearance rests on behaviour: PoolManager bytecode ran set 1 with results equal to Ethereum on two go1.26.10 builds (BSC dataseed1 and avalanchego). For Polygon itself set 1 did not finish this cycle, and the go1.26.10 Polygon endpoint ran only JUMPI vectors; the Polygon side is covered by the mined swap checks of earlier cycles and the same setN source. I could not open the text of Go issue 81868: go.dev/issue/81868 redirected and the GitHub page returned no readable title, so the description of that issue is taken from the ledger (ledger.json line 19027), not confirmed here."
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [137],
+   "lens": "L1",
+   "question": "Rerun script set 1 (pmdiff) to completion and script 138 of set 2 on a Polygon endpoint that reports bor v2.11.1 on go1.26.10, with a reference endpoint that does not answer HTTP 403.",
+   "why": "This cycle's Polygon rerun left set 1 unfinished and did not compare script 138 of set 2, so the go1.26.10 Polygon build has no complete script run.",
+   "priority": "low"
+  }
+ ]
+}
