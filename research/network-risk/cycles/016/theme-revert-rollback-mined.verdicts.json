@@ -1,0 +1,22 @@
+{
+ "unit": "theme-revert-rollback-mined",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Tokens the node implements natively, inside frames that revert or halt: the probe TokenRollbackProbe.sol was placed by state override at the PoolManager address of Base, Tempo, Celo and Arc so that it holds what the PoolManager holds, and it transferred 1 unit of Base B20 OUSD and AMDc, Tempo TIP-20 pathUSD, the CELO ERC-20 face and the Arc USDC face inside a frame that then reverted, hit INVALID, overflowed the stack or ran out of gas, and under STATICCALL.",
+   "agrees": true,
+   "note": "I reran the compiled probe (work/build/TokenRollbackProbe.json) myself with eth_call on https://rpc.mainnet.tempo.xyz at block 0x305f194, placed at the Tempo PoolManager 0x33620f62c5b9b2086dd6b62f4a297a9f30347029, with a different sender, a different recipient (0x...0bee77) and amount 7. For pathUSD 0x20c0000000000000000000000000000000000000 (PoolManager balance 20383724796) and a second TIP-20 the PoolManager holds, 0x20c000000000000000000000b9537d11c60e8b50 (balance 41131467686), the revert, INVALID, stack overflow, out of gas and STATICCALL cases all left both balances unchanged and reported failure, and the control moved exactly 7 units. The raw file raw/token_rollback.json shows no leak for all eight cases. The probe source reads the balances in the outer frame after each inner call returns, so a surviving write would be visible. This is RPC node execution, not producer evidence, which the item does not claim. The settlement code depends on this rollback because take transfers first and only the end-of-unlock delta check guards it (src/PoolManager.sol:291-297, 104-114; src/types/Currency.sol:40-89)."
+  },
+  {
+   "check": "Task 3, Tempo type 0x76 batched and sponsored transactions: does transient storage survive between the calls of a batch, and can two unrelated users share it?",
+   "agrees": true,
+   "note": "I fetched https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/evm/src/handler.rs (1746 lines). execute_batch at lines 1284-1373 takes one checkpoint (line 1296), sets origin to the single caller (line 1311), runs every call through prepare_initial_frame with that same caller (lines 1330-1340), rolls the whole checkpoint back on the first failed call (lines 1344-1355) and otherwise keeps all writes. Nothing in the loop clears transient storage between calls, so the calls share it, but only the signer's own calls do, as the item says. In the code, the only transient state that outlives an unlock is the synced currency and reserves (src/libraries/CurrencyReserves.sol:28-33; src/PoolManager.sol:279-288). unlock clears the lock flag and requires a zero nonzero-delta count before it returns (src/PoolManager.sol:104-114). A stale sync credits whoever calls settle next (src/PoolManager.sol:349-364), so the party that left it gains nothing."
+  },
+  {
+   "check": "Task 2, halts other than REVERT, constructed with eth_call and state overrides against the deployed PoolManager of each of the 21 networks (HaltProbe.sol, halt.py, halt_fix.py in the work directory).",
+   "agrees": true,
+   "note": "raw/halt_all.txt shows 0 leaks on every one of the 21 networks. MegaETH (23) and Tempo (79) had RPC errors in the first sweep, and halt_fix.txt reruns them with 9,200 and 31,599 attempts, all failing and 0 leaking. I read the code paths the item relies on. Lock.unlock and CurrencyReserves.syncCurrencyAndReserves are plain TSTOREs (src/libraries/Lock.sol:10-14, src/libraries/CurrencyReserves.sol:28-33), so a static call into sync or unlock halts before it writes anything. callHook bubbles any failed hook call (src/libraries/Hooks.sol:131-137). Currency.transfer reverts on a failed native or ERC-20 call (src/types/Currency.sol:40-89). The unlock callback is a high-level call that is not wrapped in try (src/PoolManager.sol:110). No PoolManager path catches a failed callee and carries on, so any halt below a PoolManager frame undoes the whole unlock. One link rests on the RPC node: on MegaETH the closed sequencer is not tested, as the item states."
+  }
+ ],
+ "leads": []
+}

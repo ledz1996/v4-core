@@ -57,8 +57,8 @@ class World:
     def snapshot(self): return (dict(self.storage), dict(self.transient), dict(self.balances))
     def restore(self, snap): self.storage, self.transient, self.balances = snap
 
-    def call(self, caller, to, value, data, static, depth, code_addr=None, storage_addr=None):
-        """Returns (success, returndata)."""
+    def call(self, caller, to, value, data, static, depth, code_addr=None, storage_addr=None, apparent=None):
+        """Returns (success, returndata). apparent is the CALLVALUE a DELEGATECALL frame inherits; nothing is transferred for it."""
         snap = self.snapshot()
         if value:
             if self.balances.get(caller, 0) < value: return False, b''
@@ -74,7 +74,7 @@ class World:
             if 0 < code_addr < 0x12 or code_addr == 0x100: raise NotImplementedError(f'precompile {code_addr:#x}')
             return True, b''
         try:
-            ok, ret = self.run(code_addr, to if storage_addr is None else storage_addr, caller, value, data, static, depth)
+            ok, ret = self.run(code_addr, to if storage_addr is None else storage_addr, caller, value if apparent is None else apparent, data, static, depth)
         except Halt:
             ok, ret = False, b''
         if not ok: self.restore(snap)
@@ -202,7 +202,7 @@ class World:
                     if depth >= 1024: ok, rd = False, b''
                     elif op == 0xf1: ok, rd = self.call(me, to, val, arg, static, depth + 1)
                     elif op == 0xfa: ok, rd = self.call(me, to, 0, arg, True, depth + 1)
-                    else: ok, rd = self.call(caller, me, 0, arg, static, depth + 1, code_addr=to, storage_addr=me)
+                    else: ok, rd = self.call(caller, me, 0, arg, static, depth + 1, code_addr=to, storage_addr=me, apparent=value)
                     k = min(osz, len(rd))
                     if k: mem[oo:oo + k] = rd[:k]
                     st.append(int(ok))

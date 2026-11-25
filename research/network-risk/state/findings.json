@@ -3004,27 +3004,31 @@
     "A9"
    ],
    "effect": "degrade",
-   "difference": "MegaETH skips every candidate transaction of a block once the block has reached 1,000 new state entries, and orders by arrival inside 10 ms mini-blocks. Ethereum has no per block cap on new state and orders by fee.",
-   "mechanism": "Unchanged from cycle 4 and 7: one transaction that creates 1,000 new state entries costs about 22.6 million gas, about 0.0000226 ETH at the floor base fee, and after it BlockLimiter::pre_execution_check skips every later candidate of that block, a modifyLiquidity or take included. What this cycle adds is that the deciding link is still open at the newest release: the block executor of v1.7.4 returns a rejected transaction to its caller with the comment that it is typically put back in the pool, the specification says only that it may be reconsidered in a later block, and the code that orders the pool is the closed sequencer. If skipped transactions keep their place ahead of later arrivals, N filling transactions sent from several accounts close N consecutive one second blocks for every transaction that arrived after them. If they go to the back of the pool, the delay is one block per filling transaction that arrives before the victim's.",
-   "impact": "No funds move. Liquidity removals, swaps and claims are delayed for as long as the sender pays, at about 1.95 ETH per day for one filling transaction per block.",
-   "preconditions": "The base fee stays near its floor, the sequencer keeps skipped transactions ahead of later arrivals (not confirmed), and the sequencer does not filter the sender.",
-   "mitigations": "Exits under load can go through an L1 deposit of at most 1,000,000 gas. The operator can price state growth in minimum-size buckets, raise the block limit above the transaction limit, or filter pool entries with large state growth.",
+   "difference": "MegaETH skips every remaining candidate of a block once the block holds 1,000 new state entries. One transaction may itself create 1,000. Ethereum has no per-block cap on new state.",
+   "mechanism": "Unchanged at the newest code. One transaction that writes 1,000 fresh storage slots in minimum-size buckets costs about 22.6 million gas, about 0.0000226 ETH at the 1,000,000 wei base fee read on 2026-11-25. After it, BlockLimiter::pre_execution_check returns an error for every later candidate of that block, and that includes a modifyLiquidity, take or burn sent to the PoolManager. The executor leaves its state untouched for a rejected candidate, and the caller decides what happens next, typically putting it back in the pool. limit.rs and executor.rs on mega-evm main are byte identical to v1.7.4, and the mainnet schedule ends at Rex6, so nothing scheduled changes this. The PoolManager takes no part: a delayed call later runs with the same checks and amounts. If the closed sequencer keeps skipped transactions ahead of later arrivals, N filling transactions from several accounts close N one-second blocks to everything that arrived after them. If not, each filler delays only the candidates behind it in its own block.",
+   "impact": "No funds move. Swaps, liquidity removals and claim burns of every user are delayed. The delay lasts one block per filler, at about 1.95 ETH per day for one filler per block. A longer delay needs the unconfirmed queue rule.",
+   "preconditions": "The base fee stays near its floor. The sequencer does not filter the sender. For the amplified form, skipped transactions keep their place in the queue, which no public source states.",
+   "mitigations": "Exits under load can use an L1 deposit of at most 1,000,000 gas. The operator can price state growth in minimum-size buckets, raise the block limit above the per-transaction limit, or deprioritise senders who fill the budget.",
    "coreRefs": [
     "src/PoolManager.sol:145-184",
     "src/PoolManager.sol:291-297"
    ],
    "sources": [
     {
-     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/block/executor.rs",
-     "supports": "lines 586-596: a rejected transaction returns Err before touching executor state and the caller decides what to do with it, typically put it back in the pool; byte identical to v1.7.3"
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs",
+     "supports": "byte identical to v1.7.4 (fetched and compared 2026-11-25); the skip rule recorded in cycles 4 to 13 is unchanged"
     },
     {
-     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/block/limit.rs",
-     "supports": "byte identical to v1.7.3, so the skip rule recorded in cycle 4 is unchanged"
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/executor.rs",
+     "supports": "byte identical to v1.7.4; a rejected candidate goes back to the caller, typically to the pool"
     },
     {
-     "url": "https://docs.megaeth.com/spec/megaevm/resource-limits.md",
-     "supports": "lines 108-131: the transaction that reaches a block limit is included, later candidates are skipped and may be reconsidered in a later block, with no ordering rule"
+     "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/chain.rs",
+     "supports": "lines 35-46: the mainnet schedule ends at Rex6 (timestamp 1787626800), so no scheduled fork changes the rule"
+    },
+    {
+     "url": "https://mainnet.megaeth.com/rpc",
+     "supports": "eth_getBlockByNumber latest on 2026-11-25: block 32,780,556 (0x1f4310c), baseFeePerGas 0xf4240, gasLimit 10,000,000,000; web3_clientVersion mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2"
     }
    ],
    "evidence": "inferred",
@@ -3033,38 +3037,34 @@
    "proposedSeverity": "low",
    "status": "plausible",
    "verification": {
-    "cycle": 13,
-    "factCheck": "Fetched mega-evm v1.7.4 and v1.7.3 crates/mega-evm/src/block/limit.rs and block/executor.rs; both pairs are byte identical (cmp). limit.rs lines 880-890: pre_execution_check returns Err for every candidate once block_state_growth_used is at or above block_state_growth_limit, whatever that candidate would grow. limit.rs lines 387-399 set block_state_growth_limit to rex::BLOCK_STATE_GROWTH_LIMIT for Rex through Rex6, and constants.rs at v1.7.4 lines 206 and 211 put both the transaction and the block state growth limit at 1000, so one transaction can fill the block budget. limit.rs lines 819-845 exempt deposits only from the DA size checks, so deposits face the state growth check too; they sit at the start of a block, before any filler. executor.rs lines 585-596 say a rejected transaction leaves executor state untouched and the caller decides what to do, typically put it back in the pool. docs.megaeth.com/spec/megaevm/resource-limits.md lines 108-131 say later candidates are skipped and may be reconsidered in a later block, and give no rule for their place in the queue. resource-accounting.md lines 161-187 count state growth per new account and per new storage slot. constants.rs rex lines: SSTORE_SET_STORAGE_GAS_BASE 20,000 times (bucket_capacity / MIN_BUCKET_SIZE - 1), which is zero in a minimum-size bucket, so the cost of about 22.6 million gas for 1,000 new slots is consistent. On-chain, eth_getBlockByNumber latest on https://mainnet.megaeth.com/rpc on 2026-11-24 returned block 32,752,085 with baseFeePerGas 0xf4240 (1,000,000 wei) and gasLimit 10,000,000,000. web3_clientVersion returned mega-reth/v2.2.3-72527bc. 22.6 million gas at 1,000,000 wei is 0.0000226 ETH, and one per second for a day is 1.95 ETH, as stated. The link that decides whether N fillers delay later arrivals by N blocks is how the closed sequencer requeues skipped transactions. No public source states it, so it is still unconfirmed.",
-    "codeCheck": "The PoolManager code takes no part in the mechanism. src/PoolManager.sol:103-113 (unlock), 143-180 (modifyLiquidity) and 290-296 (take) have no time or block dependence. A delayed transaction runs later with the same checks: NonzeroDeltaCount at line 111, the toInt128 cast at line 293. No balance or delta can be moved by the delay. The effect is liveness only, and it reaches every contract on the chain, not this PoolManager in particular.",
-    "corrections": "The coreRefs mark where victims' calls enter. They are not code that computes anything differently; the hazard sits entirely in the sequencer's admission rule. The unconfirmed queue rule matters only for the amplified version, where N fillers close N blocks. The base effect is confirmed by source: one filler per block closes the rest of that block to every later candidate.",
+    "cycle": 16,
+    "factCheck": "Fetched crates/mega-evm/src/block/limit.rs, block/executor.rs, block/chain.rs and constants.rs from mega-evm main and v1.7.4 on 2026-11-25; cmp reports all four pairs byte identical. limit.rs lines 880-890 on main return Err for every candidate once block_state_growth_used is at or above block_state_growth_limit. Lines 387-399 select rex::BLOCK_STATE_GROWTH_LIMIT for Rex through Rex6, and constants.rs lines 206 and 211 set TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT to 1000, so one transaction can exhaust the block budget. executor.rs commit_tx_result (about lines 580-600) says a rejected transaction returns Err before touching executor state and the caller decides what to do, typically putting it back in the pool. chain.rs lines 35-46 end the mainnet schedule at Rex6 (timestamp 1787626800). On https://mainnet.megaeth.com/rpc, eth_getBlockByNumber latest returned block 32,787,103 with baseFeePerGas 0xf4240 (1,000,000 wei), gasLimit 10,000,000,000 and timestamp 1795584114, which is after Rex6; web3_clientVersion returned mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2. The 22.6 million gas cost for 1,000 new slots was not recomputed this cycle; it rests on the cycle 13 reading of constants.rs. No public source gives the sequencer's requeue order, so the amplified form remains unconfirmed.",
+    "codeCheck": "src/PoolManager.sol:103-113 (unlock with the NonzeroDeltaCount check at line 111), modifyLiquidity from line 145 and take at lines 291-297 have no dependence on block number, time or position in a block. A delayed call later runs with the same checks and the same toInt128 cast at line 294. _settle at lines 349-365 credits msg.value or the balance difference only, so a delay cannot move any delta or balance. The effect is liveness only and applies to every contract on the chain.",
+    "corrections": "The base effect (one filler closes the rest of its block to later candidates) is confirmed by source. Only the amplified form, in which N fillers close N consecutive blocks, depends on the unconfirmed queue rule of the closed sequencer, which is why the verdict is plausible. The coreRefs mark where victim calls enter and do not compute anything differently.",
     "sources": [
      {
-      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/block/limit.rs",
-      "supports": "lines 387-399 pick the Rex block state growth limit; lines 880-890 skip every candidate once it is reached; lines 819-845 exempt deposits only from DA checks"
+      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs",
+      "supports": "lines 880-890 reject every candidate once the block state growth limit is reached; lines 387-399 select the Rex limit for Rex through Rex6; byte identical to v1.7.4"
      },
      {
-      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/constants.rs",
-      "supports": "TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT are both 1000 for Rex; the SSTORE set storage gas scales with bucket capacity and is zero at minimum size"
+      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/executor.rs",
+      "supports": "commit_tx_result doc comment: rejected transaction leaves state untouched, caller typically puts it back in the pool; byte identical to v1.7.4"
      },
      {
-      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/block/executor.rs",
-      "supports": "lines 585-596: the caller decides what happens to a rejected transaction, typically it goes back in the pool; byte identical to v1.7.3"
+      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/constants.rs",
+      "supports": "lines 206 and 211: TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT are 1000"
      },
      {
-      "url": "https://docs.megaeth.com/spec/megaevm/resource-limits.md",
-      "supports": "lines 108-131: skipped transactions may be reconsidered in a later block, with no ordering rule"
-     },
-     {
-      "url": "https://docs.megaeth.com/spec/megaevm/resource-accounting.md",
-      "supports": "lines 161-187: state growth counts new accounts and new storage slots"
+      "url": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/chain.rs",
+      "supports": "lines 35-46: mainnet schedule ends at Rex6, timestamp 1787626800"
      },
      {
       "url": "https://mainnet.megaeth.com/rpc",
-      "supports": "eth_getBlockByNumber latest 2026-11-24: block 32,752,085, baseFeePerGas 1,000,000 wei, gasLimit 10,000,000,000; web3_clientVersion mega-reth/v2.2.3-72527bc"
+      "supports": "eth_getBlockByNumber latest 2026-11-25: block 32,787,103, baseFeePerGas 0xf4240, gasLimit 10,000,000,000; web3_clientVersion mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2"
      }
     ]
    },
-   "lastVerifiedCycle": 13,
+   "lastVerifiedCycle": 16,
    "extends": "F-042",
    "id": "F-062",
    "firstCycle": 4,
@@ -3083,6 +3083,12 @@
     },
     {
      "cycle": 13,
+     "unit": "high-throughput",
+     "status": "plausible",
+     "severity": "low"
+    },
+    {
+     "cycle": 16,
      "unit": "high-throughput",
      "status": "plausible",
      "severity": "low"
@@ -5049,6 +5055,193 @@
      "status": "confirmed",
      "severity": "low",
      "note": "Lead L-767 answered from the v1.19.1 source: refunds reach the PoolManager only inside the sequencer's processWithdrawals transaction, and callback withdrawals in the same transaction let another account bracket them with sync and settle. On 2026-11-25 the portal implementation at 0x5ad1...0000 on mainnet has claimRefund and refunds but no depositVirtual selector, and the zone factory reports nextZoneId 4."
+    },
+    {
+     "cycle": 16,
+     "unit": "own-merge",
+     "status": "confirmed",
+     "severity": "low",
+     "note": "Same hazard class as F-137 (payment addressed to the PoolManager, delivered inside another account's sync and settle)."
+    }
+   ]
+  },
+  {
+   "title": "A bridge payment addressed to the PoolManager, delivered by a relay that any account may execute, can be run between that account's own sync and settle and booked as its payment",
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    137,
+    43114,
+    143,
+    4326,
+    5042,
+    999
+   ],
+   "lens": "L4",
+   "assumptions": [
+    "A2"
+   ],
+   "effect": "siphon",
+   "difference": "Circle's CCTP v2 contracts are deployed at TokenMessengerV2 0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d and MessageTransmitterV2 0x81D40F21F12A8F0E3252Bccb954D722d4c464B64 on 13 of the 21 networks. receiveMessage mints USDC to the mintRecipient named on the source chain inside whatever transaction calls it, and when the message's destinationCaller is zero any account may call it. On Arc the mint is native USDC, which the PoolManager also sees through the ERC-20 face at 0x3600000000000000000000000000000000000000. The same shape exists for canonical bridges. Several canonical bridges let any account run the last step of someone else's transfer in its own transaction. OP Stack L2CrossDomainMessenger.relayMessage replays a failed message for any caller (live messenger code on OP Mainnet, Base, Unichain, Zora, World Chain, Ink, Soneium, Celo and MegaETH; on X Layer its nonce is still 0). On Ethereum, OptimismPortal2.finalizeWithdrawalTransactionExternalProof finalizes any proven withdrawal for any caller, Arbitrum's Outbox.executeTransaction executes any proven L2 to L1 message, and the LxLy bridge claimAsset pays any proven deposit. X Layer runs the same LxLy bridge (networkID 3). Polygon's StateReceiver at 0x1001 replays failed state syncs for any caller. Avalanche's TeleporterMessenger accepts delivery from any relayer when the message's allowedRelayerAddresses list is empty. Each of these ends in a plain ERC-20 transfer or mint to the recipient named by the original sender.",
+   "mechanism": "The base case is CCTP. Someone burns USDC on another chain with mintRecipient equal to this network's PoolManager and destinationCaller zero, and Circle attests the message. Any account calls unlock (src/PoolManager.sol:104-114). In the callback it calls sync(USDC) (src/PoolManager.sol:279-288), which records balanceOf(PoolManager). It then calls MessageTransmitterV2.receiveMessage(message, attestation); the destination caller check passes because the field is zero (MessageTransmitterV2.sol lines 300-305), the nonce is marked used (line 221), and TokenMessengerV2._handleReceiveMessage mints amount minus fee to the PoolManager (TokenMessengerV2.sol lines 405-422, BaseTokenMessenger.sol lines 330-355). The callback then calls settle; _settle credits the difference (src/PoolManager.sol:358-364) to the caller, which takes it out with take (src/PoolManager.sol:291-297). On Arc the same sequence uses sync(0x3600...) and the face credit. CCTP v1 receiveMessage has the same destinationCaller rule (MessageTransmitter.sol lines 269-274). CCTP v2 hookData is only carried in the message; TokenMessengerV2 never executes it, so the mint recipient's own code does not run. The canonical bridge paths work the same way. The executor calls unlock, calls sync(token) in the callback (src/PoolManager.sol:279-288), then calls the relay function with the public proof or message: relayMessage of a failed message whose target is the L2 standard bridge (CrossDomainMessenger.sol lines 239-248, StandardBridge.sol lines 272-299 mints or transfers to _to with no call to it), finalizeWithdrawalTransactionExternalProof (OptimismPortal2.sol lines 701-730, which takes the prover as an argument), Outbox.executeTransaction (AbsOutbox.sol lines 158-174) reaching L1ArbitrumGateway.finalizeInboundTransfer and safeTransfer to _to (L1ArbitrumGateway.sol lines 104-125, 139-146), claimAsset (PolygonZkEVMBridgeV2.sol line 453 onward, no caller restriction), replayFailedStateSync or replayFailedStateSyncWithData (StateReceiver.sol lines 85-103) reaching the PoS ChildChainManager deposit, or receiveCrossChainMessage (TeleporterMessenger.sol lines 242 and 284, _checkIsAllowedRelayer lines 596-613) reaching an ICTT token home or remote. When the recipient is the PoolManager its token balance rises inside the callback, and settle credits the rise to the executor (src/PoolManager.sol:358-364), who takes it. Relay paths by network: CCTP receiveMessage with destinationCaller zero on Ethereum, OP Mainnet, Base, Unichain, World Chain, Ink, X Layer, Arbitrum One, Polygon, Avalanche, Monad, HyperEVM and Arc; replay of a failed L2CrossDomainMessenger message on OP Mainnet, Base, Unichain, Zora, World Chain, Ink, Soneium, Celo and MegaETH; OptimismPortal2 external-proof finalisation, Arbitrum Outbox execution and LxLy claimAsset on Ethereum; LxLy claimAsset on X Layer; StateReceiver replay on Polygon; Teleporter delivery with an empty relayer list on Avalanche. F-135 is the Tempo member of this class (zone portal refunds from the T15 fork).",
+   "impact": "The executor takes the bridged amount. The money belongs to whoever bridged it and named the PoolManager as recipient. No liquidity provider or claim holder funds move. A transfer of this kind that completes in a plain transaction (Circle's relayer, the first OP deposit relay, an auto-relayed Teleporter message, a claim sent by a bridge service) leaves the tokens in the PoolManager as surplus that no caller can claim, so in that case the bracket only takes money its owner had already lost, as in F-135. The loss is new only when the owner's integration planned to run the relay inside its own unlock (sync, relay, settleFor the user) and an outsider runs it first; the owner's later relay then reverts on the used nonce or spent message.",
+   "preconditions": "A CCTP burn on another chain with mintRecipient equal to the PoolManager of the destination network and destinationCaller zero, and its attestation, which Circle publishes through its public attestation API. The attacker needs no role and only has to send its transaction before the intended relayer. No such mint was found on Ethereum, Unichain, Ink or World Chain (see leadResults for L-772); other networks were not enumerated. For the canonical bridges: A bridge transfer whose final recipient is the PoolManager of the destination network and whose last step is still pending: a failed OP messenger message, an unfinalized OP or Arbitrum withdrawal or unclaimed LxLy deposit to the Ethereum PoolManager, a pending failed Polygon state sync carrying a PoS deposit to the Polygon PoolManager, or a Teleporter message with no relayer restriction. No such pending item was found: the one decoded pending Polygon PoS deposit (state id 3213072) pays 0x08bb17cf80ed16483efa0217480c94c233dd9900. Other bridges were not enumerated.",
+   "mitigations": "Integrations that bridge into a PoolManager should set the CCTP destinationCaller to their own receiver contract, restrict the Teleporter relayer list, or receive the funds in their own contract and pay the PoolManager inside their own sync and settle. Front ends and routers should never accept the PoolManager as a bridge recipient. Nothing in the PoolManager can change this, because sync is open by design.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-364",
+    "src/PoolManager.sol:104-114",
+    "src/PoolManager.sol:291-297",
+    "src/libraries/CurrencyReserves.sol:27-38"
+   ],
+   "sources": [
+    {
+     "url": "src/PoolManager.sol:279-288",
+     "supports": "sync needs no unlock and stores the currency and balanceOf(PoolManager) in transient storage"
+    },
+    {
+     "url": "src/PoolManager.sol:349-364",
+     "supports": "_settle credits the caller with balanceOf(PoolManager) minus the synced reserves, whoever paid the difference"
+    },
+    {
+     "url": "src/PoolManager.sol:104-114",
+     "supports": "unlock runs the caller's callback, so the caller's code runs before and after any call it makes in between"
+    },
+    {
+     "url": "src/libraries/CurrencyReserves.sol:27-38",
+     "supports": "synced currency and reserves are plain TSTORE slots that persist until settle resets them or the transaction ends"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/v2/MessageTransmitterV2.sol",
+     "supports": "receiveMessage lines 206-243 marks the nonce used and calls the recipient handler; destination caller is checked only when nonzero, lines 300-305"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/v2/TokenMessengerV2.sol",
+     "supports": "_handleReceiveMessage lines 405-422 mints amount minus fee to mintRecipient; hookData is not executed"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/v2/BaseTokenMessenger.sol",
+     "supports": "_mintAndWithdraw lines 330-355 mints through the local minter to the recipient; MintAndWithdraw event has mintRecipient indexed, lines 84-89"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/MessageTransmitter.sol",
+     "supports": "v1 receiveMessage lines 250-300 enforces destinationCaller only when it is nonzero"
+    },
+    {
+     "url": "https://developers.circle.com/cctp/references/contract-addresses",
+     "supports": "CCTP v2 mainnet domains and the shared TokenMessengerV2 and MessageTransmitterV2 addresses for Ethereum, OP Mainnet, Base, Unichain, World Chain, Ink, Arbitrum, Polygon PoS, Avalanche, Monad, HyperEVM, Arc and X Layer"
+    },
+    {
+     "url": "https://developers.circle.com/stablecoins/usdc-contract-addresses",
+     "supports": "native USDC addresses per network, Arc USDC at 0x3600000000000000000000000000000000000000"
+    },
+    {
+     "url": "eth_getCode on every rpc in state/networks.json, 2026-11-25 (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/cctp_probe.json)",
+     "supports": "TokenMessengerV2 and MessageTransmitterV2 hold 2,175 bytes of proxy code on 16 networks (the 13 listed plus BNB Smart Chain and Robinhood Chain, which Circle does not list) and no code on Zora, Soneium, Celo, Elysium, MegaETH and Tempo"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/CrossDomainMessenger.sol",
+     "supports": "relayMessage line 209; a caller other than the remote messenger may relay a message when failedMessages[versionedHash] is set, lines 239-248"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/StandardBridge.sol",
+     "supports": "finalizeBridgeERC20 lines 272-299 mints or safeTransfers to _to; onlyOtherBridge lines 111-117 is satisfied by a messenger replay"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/L1/OptimismPortal2.sol",
+     "supports": "proveWithdrawalTransaction line 509 records msg.sender as prover; finalizeWithdrawalTransactionExternalProof lines 701-730 lets any caller finalize with any prover"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro-contracts/main/src/bridge/AbsOutbox.sol",
+     "supports": "executeTransaction lines 158-174 has no caller restriction"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/token-bridge-contracts/main/contracts/tokenbridge/ethereum/gateway/L1ArbitrumGateway.sol",
+     "supports": "finalizeInboundTransfer lines 104-125 and inboundEscrowTransfer lines 139-146 safeTransfer to the L2 chosen recipient"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/agglayer/agglayer-contracts/v9.0.0/contracts/v2/PolygonZkEVMBridgeV2.sol",
+     "supports": "claimAsset from line 453 has only ifNotEmergencyState and pays destinationAddress"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/genesis-contracts/master/contracts/StateReceiver.sol",
+     "supports": "replayFailedStateSync and replayFailedStateSyncWithData lines 85-103 have no caller restriction and call the stored receiver"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/icm-contracts/main/contracts/teleporter/TeleporterMessenger.sol",
+     "supports": "receiveCrossChainMessage line 242 checks the relayer at line 284; an empty allowed list admits any relayer, lines 596-613"
+    },
+    {
+     "url": "eth_getCode and eth_call on the rpcs in state/networks.json, 2026-11-25 (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/probe2.json, raw/probe3.json)",
+     "supports": "L2CrossDomainMessenger code and messageNonce on the OP Stack networks and MegaETH (X Layer nonce 0); LxLy bridge 0x2a3D...2EDe on Ethereum (networkID 0) and X Layer (networkID 3); TeleporterMessenger on Avalanche C-Chain; StateReceiver code at 0x1001 on Polygon"
+    },
+    {
+     "url": "https://eth.blockscout.com/api (StateSender logs, research/network-risk/cycles/016/theme-bracketed-credits.work/raw/pol_l1_statesynced_3213072.json) and eth_call failedStateSyncHashes on https://polygon-bor-rpc.publicnode.com (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/pol_pending.json)",
+     "supports": "the 25 failed state syncs recorded in cycle 8 are still pending; the PoS deposit 3213072 names user 0x08bb17cf..., not the PoolManager"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 16,
+    "factCheck": "Fetched MessageTransmitterV2.sol from circlefin/evm-cctp-contracts master. receiveMessage (lines 206-243) validates, sets usedNonces[_nonce] at line 221 and calls the recipient handler. The destination caller is enforced only when nonzero (lines 300-305). TokenMessengerV2.handleReceiveFinalizedMessage and handleReceiveUnfinalizedMessage (lines 245-283) check only that the caller is the local transmitter and that the sender is the remote token messenger, then _handleReceiveMessage (lines 405-422) mints amount minus fee to mintRecipient through BaseTokenMessenger._mintAndWithdraw (lines 330-355). hookData is never executed. v1 MessageTransmitter.sol lines 269-274 has the same zero destinationCaller rule. Circle's contract-addresses page (fetched) contains both shared v2 addresses and lists Arc, Monad, HyperEVM, X Layer, Ink, World Chain, Unichain, Polygon and Avalanche; it does not mention BNB or Robinhood. My own eth_getCode returned 2,175 bytes at both addresses on Ethereum, Base, Arc and Monad and 0 bytes on Soneium. On Arc, MessageTransmitterV2.localDomain() returns 26 and paused() returns false. balanceOf(PoolManager) on 0x3600...0000 returns 0x22fa82e0ad4 (6 decimals) and eth_getBalance of the PoolManager returns 0x1fd0149da51a004d56e6b (18 decimals), the same amount, so a native USDC mint is visible to sync and settle through the ERC-20 face.",
+    "codeCheck": "sync needs no unlock and stores currency and balanceOf(PoolManager) in transient slots (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32). _settle reads the synced currency, rejects msg.value for an ERC-20, and credits balanceOf minus the synced reserves to the caller (src/PoolManager.sol:349-364). take debits the delta and transfers (src/PoolManager.sol:291-297), and unlock requires a zero delta count at the end (src/PoolManager.sol:104-114), which is met after take. No guard ties the balance increase to the settler. Any mint to the PoolManager that happens between the caller's sync and settle is credited to that caller.",
+    "corrections": "The handler reached on v2 is handleReceiveFinalizedMessage or handleReceiveUnfinalizedMessage depending on finalityThresholdExecuted (MessageTransmitterV2.sol lines 223-241), which both call _handleReceiveMessage. The victim is a bridger who chose the PoolManager as mintRecipient, which is an unusual act; no LP or ERC-6909 holder funds are exposed, so low is right. BNB Smart Chain and Robinhood Chain carry the code but are not listed as Circle domains; that agrees with the finding.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/v2/MessageTransmitterV2.sol",
+      "supports": "nonce marked used at line 221, destination caller checked only when nonzero at lines 300-305"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/v2/TokenMessengerV2.sol",
+      "supports": "handlers at lines 245-283 restricted to the local transmitter and remote messenger; mint to mintRecipient at lines 405-422"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/v2/BaseTokenMessenger.sol",
+      "supports": "_mintAndWithdraw mints to the recipient, lines 330-355"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/circlefin/evm-cctp-contracts/master/src/MessageTransmitter.sol",
+      "supports": "v1 destinationCaller rule, lines 269-274"
+     },
+     {
+      "url": "https://developers.circle.com/cctp/references/contract-addresses",
+      "supports": "shared v2 addresses and the listed domains"
+     },
+     {
+      "url": "eth_getCode and eth_call on https://ethereum-rpc.publicnode.com, https://mainnet.base.org/, https://rpc.mainnet.arc.io, https://rpc.monad.xyz, https://rpc.soneium.org (2026-11-25)",
+      "supports": "2,175 bytes at both addresses on four networks, none on Soneium; Arc localDomain 26, not paused, ERC-20 face balance equal to native balance"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 16,
+   "id": "F-137",
+   "firstCycle": 16,
+   "history": [
+    {
+     "cycle": 16,
+     "unit": "theme-bracketed-credits",
+     "status": "confirmed",
+     "severity": "low"
+    },
+    {
+     "cycle": 16,
+     "unit": "own-merge",
+     "status": "confirmed",
+     "severity": "low",
+     "note": "Canonical bridge relay paths (second finding of theme-bracketed-credits, confirmed low by its verifier) folded in at the critic's request; F-135 named as the Tempo member of the class."
     }
    ]
   },
@@ -13541,6 +13734,114 @@
     {
      "cycle": 14,
      "unit": "theme-proof-images",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
+   "title": "Elysium's node is built with an end-of-life Go release that lacks two amd64 compiler fixes, and no EVM result was found to depend on them",
+   "chainIds": [
+    99901
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "difference": "The Elysium endpoint reports nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12. Go 1.25 left support when go1.27.0 shipped on 2026-08-19. go1.25.13 fixed, among others, issue 79874, where the prove pass emits a 32 bit slice mask for a 64 bit slice operation on targets that sign-extend 32 bit constants (amd64 named), so a slice with a start index of 2^32 or more advances too little, and issue 80517, where prove applies a fact before the point where it holds and drops a bounds check, shown on amd64 as a call through an out-of-range function table entry. Arbitrum One and Robinhood Chain run go1.27.3, which is inside the range of the separate F-117 fault.",
+   "mechanism": "Both faults change behaviour only on unusual shapes. Issue 79874 needs a slice start of 2^32 or more that the compiler has proved in bounds. The interpreter never slices calldata, code, memory or return data with such an index: a copy or load with a larger offset is clamped to the data length or charged for memory expansion first, and a zero-length copy or hash at a large offset touches no slice. The new offsets.py vectors aim at exactly that region (offsets from 2^31 to 2^256-1 for CALLDATALOAD, CALLDATACOPY, CODECOPY, KECCAK256, MCOPY and RETURNDATACOPY) and Elysium returns the specified word or failure on every one. Issue 80517 removes a bounds check whose failure would otherwise panic; on a correct program the check never fires, so it can only turn an existing out-of-range bug of the node into a silent read. The PoolManager paths that depend on these copies are the hook result copy (src/libraries/Hooks.sol:148), the revert bubbling copy (src/libraries/CustomRevert.sol:109), and the arithmetic in src/libraries/FullMath.sol:21-54; all match on the battery, the targeted set, the script sets and 3,515 mined swaps. The settled state is computed by the consensus-v61 WebAssembly machine built with go1.25.9 (F-119), which predates both fixes as well but runs on a different target.",
+   "impact": "None found. A miscompile in the node would make the Elysium operator's node disagree with an honest validator, which with one whitelisted validator (cycle 11) is the operator agreeing with itself.",
+   "preconditions": "The Elysium operator keeps building from go1.25.12, and some function on the interpreter or state path has one of the two shapes. Neither shape was found; the Go source of the node build is not public, so the check is by its answers.",
+   "mitigations": "The deployer can ask Kinetiq to rebuild the node with a supported Go release and to publish the version and commit of the build. LPs need do nothing.",
+   "coreRefs": [
+    "src/libraries/Hooks.sol:130-153",
+    "src/libraries/CustomRevert.sol:95-118",
+    "src/libraries/FullMath.sol:14-54",
+    "src/types/Currency.sol:44-75"
+   ],
+   "sources": [
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz web3_clientVersion, queried 2026-11-25",
+     "supports": "nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12"
+    },
+    {
+     "url": "https://go.dev/doc/devel/release",
+     "supports": "go1.25.12 released 2026-07-07, go1.25.13 on 2026-08-13 with compiler bug fixes, go1.27.0 on 2026-08-19"
+    },
+    {
+     "url": "https://github.com/golang/go/issues?q=milestone%3AGo1.25.13+label%3Acompiler%2Fruntime+is%3Aclosed",
+     "supports": "the eleven compiler and runtime fixes of go1.25.13, including backports 79875 and 80618"
+    },
+    {
+     "url": "https://github.com/golang/go/issues/79874",
+     "supports": "slicemask fault, amd64 and s390x, needs a slice index of 2^32 or more"
+    },
+    {
+     "url": "https://github.com/golang/go/issues/80517",
+     "supports": "prove time-travel fault on amd64 that drops a bounds check; tests fail on 1.25 and 1.26"
+    },
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz, https://arb1.arbitrum.io/rpc and https://rpc.mainnet.chain.robinhood.com eth_call with state override, results in research/network-risk/cycles/016/arbitrum-family.work/raw/offsets.json",
+     "supports": "the large-offset vectors on all three chains"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 16,
+    "factCheck": "web3_clientVersion queried on 2026-11-25 returns nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12 on https://rpc.elysium.kinetiq.xyz, nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3 on https://arb1.arbitrum.io/rpc and the same version on linux-amd64 on https://rpc.mainnet.chain.robinhood.com. The Go release history page lists go1.25.12 on 2026-07-07, go1.25.13 on 2026-08-13 with compiler and runtime fixes, go1.25.14 on 2026-08-19 and go1.27.0 on 2026-08-19. Issue 79874 describes the slicemask fold that emits a Const32 mask for a 64 bit slice operation and needs a reslice index of 2^32 or more; its 1.25 backport 79875 is listed closed in the Go1.25.13 compiler/runtime milestone. Issue 80517 describes a prove fault that drops a bounds check and makes an indirect call through an out of range table entry on amd64; the 1.25 backport 80618 was merged to release-branch.go1.25 on 2026-08-05 (commit f59f3cc) and says the tests of CL 807182 fail on 1.26 and 1.25. The other compiler fixes in that milestone are for mips, mips64le, riscv64, js/wasm, darwin and arm64 or are compile-time errors, so the two amd64 items are the ones that apply to this build. My own eth_call with a state override on Elysium and Arbitrum One ran CALLDATALOAD at offset 2^64-1, a zero-length MCOPY at offset 2^255 and a zero-length KECCAK256 at offset 2^200; both returned a zero word and the empty-input hash c5d24601...a470, as specified. offsets.log in the work directory records 200 vectors per chain with no mismatch.",
+    "codeCheck": "The PoolManager paths named do not use large offsets. src/libraries/Hooks.sol:131-153 calls the hook with output size 0, then copies return data from offset 0 for returndatasize bytes into freshly allocated memory and checks length >= 32 and the selector. src/libraries/CustomRevert.sol:91-117 copies return data from offset 0 for returndatasize bytes. src/types/Currency.sol:44-75 calls with fixed calldata of 68 bytes and copies at most 32 bytes of return data to offset 0. Any large offset would come from a memory expansion that gas makes impossible before a Go slice is formed. I found no path in src/ that reaches the slice shape of issue 79874, and issue 80517 can only turn an existing out of range access in the node into a silent read. No PoolManager result was found to depend on either fault.",
+    "corrections": "go1.25.12 is two point releases behind, since go1.25.14 also shipped on 2026-08-19; the security fixes in go1.25.13 (crypto/tls, net/http, net/url and others) are an additional operational reason to rebuild, not an EVM result. The reporter of issue 80517 says it does not reproduce on 1.26.5; the exposure of 1.25 rests on the backport note in issue 80618 that the root cause is older and the new tests fail on 1.25. Issue 79874 says the upper half of the mask register is zeroed on amd64, so on amd64 the effect is truncation of the index to 32 bits.",
+    "sources": [
+     {
+      "url": "https://rpc.elysium.kinetiq.xyz",
+      "supports": "web3_clientVersion nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12, queried 2026-11-25"
+     },
+     {
+      "url": "https://arb1.arbitrum.io/rpc",
+      "supports": "web3_clientVersion nitro/v3.13.0-rc.9+b72783f/linux-arm64/go1.27.3, queried 2026-11-25"
+     },
+     {
+      "url": "https://rpc.mainnet.chain.robinhood.com",
+      "supports": "web3_clientVersion nitro/v3.13.0-rc.9+b72783f/linux-amd64/go1.27.3, queried 2026-11-25"
+     },
+     {
+      "url": "https://go.dev/doc/devel/release",
+      "supports": "release dates of go1.25.12, go1.25.13, go1.25.14 and go1.27.0"
+     },
+     {
+      "url": "https://github.com/golang/go/issues/79874",
+      "supports": "slicemask fault, needs a reslice index of 2^32 or more, amd64 named"
+     },
+     {
+      "url": "https://github.com/golang/go/issues/80517",
+      "supports": "prove fault drops a bounds check on amd64; reporter says not reproduced on 1.26.5"
+     },
+     {
+      "url": "https://github.com/golang/go/issues/80618",
+      "supports": "1.25 backport of 80517 merged 2026-08-05, tests fail on 1.25 and 1.26"
+     },
+     {
+      "url": "https://github.com/golang/go/issues?q=milestone%3AGo1.25.13+label%3Acompiler%2Fruntime+is%3Aclosed",
+      "supports": "the closed compiler/runtime fixes of go1.25.13 including 79875 and 80618"
+     },
+     {
+      "url": "https://github.com/golang/go/issues/80578",
+      "supports": "the regalloc fix in go1.25.13 is for riscv64 only"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 16,
+   "id": "F-136",
+   "firstCycle": 16,
+   "history": [
+    {
+     "cycle": 16,
+     "unit": "arbitrum-family",
      "status": "confirmed",
      "severity": "info"
     }

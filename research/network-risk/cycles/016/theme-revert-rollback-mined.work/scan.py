@@ -20,7 +20,7 @@ SIGS = ['unlock(bytes)', 'swap((address,address,uint24,int24,address),(bool,int2
 SEL = {keccak(x.encode())[:4].hex(): x.split('(')[0] for x in SIGS}
 
 
-def R(url, m, p, timeout=90, tries=int(__import__("os").environ.get("SCAN_TRIES", "7"))):
+def R(url, m, p, timeout=int(__import__("os").environ.get("SCAN_TIMEOUT", "90")), tries=int(__import__("os").environ.get("SCAN_TRIES", "7"))):
     last = None
     for k in range(tries):
         try: return rpc(url, m, p, timeout=timeout)
