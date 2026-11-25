@@ -1,0 +1,331 @@
+{
+ "unit": "theme-go-toolchain-shapes",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "F-117",
+   "title": "Go issue 81863 dead store miscompile: go1.26.10 does not hold the backport, and a syntax tree search of seven client trees finds no reachable site",
+   "chainIds": [
+    1,
+    42161,
+    4663,
+    137,
+    56,
+    43114
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "actor": "operator",
+   "severity": "info",
+   "difference": "The 1.26 backport of issue 81863 (issue 81865, CL 845967, commit c7bed29e) was merged to release-branch.go1.26 on 2026-10-27, eight days after go1.26.10 was released on 2026-10-19, and the go1.26.10 release note lists only crypto/x509 security fixes. go1.26.11 (2026-11-10) is the first 1.26 release with the fix. bor v2.11.1 (Polygon), BNB Chain geth v1.8.2 and avalanchego 1.15.3 answered web3_clientVersion with go1.26.10 on 2026-11-25, Nitro v3.13.0-rc.9 on Arbitrum One and Robinhood Chain with go1.27.3; all are inside the affected range. The go1.26.10 sources show why: the pass order puts branchelim (compile.go line 479) before dead auto elim (line 481), and elimDeadAutosGeneric (deadstore.go lines 231-370) keeps an auto alive when its address reaches a Phi but not when it reaches a CondSelect, so a CondSelect of two auto addresses propagates only the first unused one and a store through it is attributed to that auto alone. In the installed go1.24.7, dead auto elim runs before branchelim (compile.go lines 477 and 480), so the same input compiles correctly there.",
+   "mechanism": "Exact trigger, from the issue, CL 841425 and the go1.26.10 sources: (1) after inlining and generic CSE, one function holds the addresses of two stack autos (address taken, not escaping; ABIInternal parameter spill slots count) computed before a branch; (2) a Phi of pointer type at the join of an if or if-else picks between them, and the arms hold nothing else, because canSpeculativelyExecute (branchelim.go lines 433-450) refuses arms with memory operations, calls other than inlining marks, divisions or pointer arithmetic; (3) the selected pointer is never used, directly or through arithmetic, as the address of a Load or the source of a Move (branchelim.go lines 30-60 and 72-82), so branchelim makes it a CondSelect; (4) a Store, Zero or Move writes through it; (5) the auto named by the CondSelect's first unused operand has no other read. Then the write is deleted whenever the branch picked the other auto. A variant with one auto and one non-auto pointer (a parameter or heap pointer) deletes a write to caller memory under the same conditions. The search script (shapescan, go/ast and go/types, positive controls for the issue reproducer and three variants in scripts/shapescan/testdata) covered 849 non-test files in 73 packages: holiman/uint256 v1.3.2 and v1.2.4, geth v1.17.9, bsc v1.8.2, bor v2.11.1, celo op-geth c7ed55b8, libevm d398bc4dbe41 (pinned by avalanchego v1.15.3), avalanchego graft/evm and graft/coreth v1.15.3, and Nitro's fork at 0e44603 (core/vm, core/state, core/types, trie, rlp, common/math, triedb, snapshot, params). It found 0 sites of the two-local shape (B1), 0 calls passing two local addresses to a pointer selector (B3, the two selectors are libevm common/math BigMax and BigMin), and 60 sites of the one-auto variant (B4). Every B4 site fails a precondition: in uint256 AddMod (v1.3.2 line 215, v1.2.4 line 198) the selected pointers x and y are loaded through, so branchelim keeps the Phi; in uint256 v1.2.4 Sqrt the swap is a loop Phi; in bor EVM.Run (core/vm/interpreter.go:123-126), libevm evmCallArgs.env and bigModExp.RequiredGas, the journal mutation map helpers, the rlp big integer decoders, NewBlock, NewEIP155Signer, the params and runtime helpers, the arm allocates with new or a composite literal (a zeroing store in the arm) and the pointer escapes or is loaded through. Compiled with the installed go1.24.7 and the branchelim pass dumped, the 155 functions of uint256 v1.3.2 and the 153 compiled functions of v1.2.4 contain 34 and 37 CondSelects, all of integer type (udivrem helpers, Reciprocal, Dec, WriteToSlice), none of pointer type, and the 25 arithmetic, comparison and bitwise opcode handlers (opAdd to opSAR) of geth, bsc, bor, celo op-geth and libevm, compiled verbatim with their own stack.go, contain none. The go1.26 branchelim also accepts arms whose only memory user is an inlining mark (branchelim.go lines 445-450), which go1.24.7 refuses, so go1.24.7 can show fewer CondSelects than the affected compiler; the source search above does not depend on that.",
+   "impact": "No path by which an ordinary account takes or freezes funds was found. The opcodes the PoolManager depends on (SIGNEXTEND, SDIV, SMOD, SAR, MULMOD, comparisons) are served by functions with no CondSelect of pointer type. ADDMOD, whose uint256 body has the closest shape, does not occur in the PoolManager runtime (0 occurrences in the 24,009 byte build).",
+   "preconditions": "An operator would have to run an affected build and a function outside the searched files would have to hold the shape. bor and celo op-geth were fetched file by file, so a file present only in those forks and not named in the fetch list is not covered; Nitro v3.13.0-rc.9's own go-ethereum commit could not be fetched.",
+   "mitigations": "The deployer can ask Polygon, BNB Chain and Avalanche node operators to rebuild with go1.26.11 or later and the Nitro operators with go1.27.4 or later, and to publish the toolchain in the version string. LPs need do nothing.",
+   "coreRefs": [
+    "src/libraries/TickBitmap.sol:16-30",
+    "src/libraries/FullMath.sol:14-54",
+    "src/types/Slot0.sol:49"
+   ],
+   "sources": [
+    {
+     "url": "https://github.com/golang/go/issues/81863",
+     "supports": "reproducer, bisect to the branchelim CL, fix CL 841425, backport issues 81865 (1.26) and 81866 (1.27), release-branch CLs 845967 and 845968"
+    },
+    {
+     "url": "https://github.com/golang/go/issues/81865",
+     "supports": "1.26 backport closed by merging CL 845967 (commit c7bed29e) to release-branch.go1.26 on 2026-10-27"
+    },
+    {
+     "url": "https://go.dev/doc/devel/release",
+     "supports": "go1.26.10 released 2026-10-19 with security fixes to crypto/x509 only; go1.26.11 and go1.27.4 released 2026-11-10 with compiler fixes"
+    },
+    {
+     "url": "https://go-review.googlesource.com/changes/841425",
+     "supports": "fix adds OpCondSelect to the ops that mark an auto used in elimDeadAutosGeneric; test fixedbugs/issue81863.go"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.26.10/src/cmd/compile/internal/ssa/deadstore.go",
+     "supports": "go1.26.10 elimDeadAutosGeneric marks autos used only for memory, flags, Phi and memory-arg values, and otherwise propagates only the first unused auto through a value"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.26.10/src/cmd/compile/internal/ssa/branchelim.go",
+     "supports": "go1.26.10 branchelim: loadAddr exclusion, canCondSelect, canSpeculativelyExecute with the inlining mark exception"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.26.10/src/cmd/compile/internal/ssa/compile.go",
+     "supports": "go1.26.10 pass order: prove, branchelim, late opt, dead auto elim"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/bnb-chain/bsc/@v/v1.8.2.zip",
+     "supports": "bsc v1.8.2 source searched"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/ethereum/go-ethereum/@v/v1.17.9.zip",
+     "supports": "geth v1.17.9 source searched"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/ava-labs/libevm/@v/v1.13.15-0.20261028200218-d398bc4dbe41.zip",
+     "supports": "libevm source at the version avalanchego v1.15.3 pins (go.mod at https://proxy.golang.org/github.com/ava-labs/avalanchego/@v/v1.15.3.mod)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/go.mod",
+     "supports": "bor v2.11.1 go 1.26.10 and holiman/uint256 v1.3.2; 149 files fetched from the same tag"
+    },
+    {
+     "url": "https://polygon-bor-rpc.publicnode.com",
+     "supports": "web3_clientVersion 2026-11-25: bor v2.11.1-private builds ebcfea01452d, cb3d19c5f690, a863b8e5cce1, f2a2d63e69f6, all go1.26.10"
+    },
+    {
+     "url": "https://bsc-dataseed1.bnbchain.org",
+     "supports": "web3_clientVersion 2026-11-25: Geth/v1.8.2 and Geth/v1.8.2-4e1c8247-20261104, linux-amd64, go1.26.10"
+    },
+    {
+     "url": "https://api.avax.network/ext/bc/C/rpc",
+     "supports": "web3_clientVersion 2026-11-25: avalanchego/1.15.3 commit 983815fd, go=1.26.10"
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc",
+     "supports": "web3_clientVersion 2026-11-25: nitro v3.13.0-rc.9+b72783f linux-arm64 and linux-amd64, go1.27.3"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/scan-summary.json",
+     "supports": "per package file and candidate counts of the syntax tree search"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/u256dump-v1.3.2.txt",
+     "supports": "branchelim dumps of every uint256 v1.3.2 function under go1.24.7: 34 CondSelects, all integer typed"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/harness.txt",
+     "supports": "branchelim dumps of the 25 arithmetic and bitwise opcode handlers of five client trees: no CondSelect"
+    }
+   ],
+   "evidence": "primary"
+  },
+  {
+   "ref": "F-136",
+   "title": "Go issue 82839 prove miscompile: no comparison of a widened int8, int16 or int32 with an out-of-range constant exists on the opcode or state path of seven client trees",
+   "chainIds": [
+    99901,
+    56,
+    137,
+    43114,
+    42220,
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "actor": "operator",
+   "severity": "info",
+   "difference": "Go issue 82839 (open, fix CL 858581 not merged on 2026-11-16) makes the prove pass derive a false fact. In factsTable.update of go1.26.10 (prove.go lines 1057-1145), a signed fact ext(v) > w or ext(v) >= w on a value-preserving sign extension is repeated on the narrow value v with the same constant w (lines 1150-1157). When v is x + delta with constant delta, the x+delta case truncates w to the narrow width (lines 1100-1114). If w does not fit the narrow type, the truncated bound is wrong and prove can declare a reachable branch impossible. The issue reproducer, if int32(int16(x)-513) < -536870911, takes the branch for every x on go1.26.6 to go1.26.10, go1.27.3 and master; the reporter states a variant with a run-time constant is wrong from go1.24.13. The x+delta section of prove.go is the same text in the installed go1.24.7 and in go1.26.10. Endpoints inside the range on 2026-11-25: bor v2.11.1, BNB Chain geth v1.8.2 and avalanchego 1.15.3 (go1.26.10), Celo op-geth c7ed55b8 (go1.24.13), Nitro v3.13.0-rc.9 (go1.27.3).",
+   "mechanism": "Exact trigger: a signed ordered comparison (<, <=, >, >=) whose one side is a sign extension of a signed int8, int16 or int32 value of the form x plus or minus a constant (directly or after inlining and constant propagation), and whose other side is a constant outside the narrow type. Unsigned narrow values are not affected because the x+delta step runs only in the signed domain, and equality facts do not reach it. The search script reports every such comparison (A1), every widened narrow signed value compared with a non-constant (A2), every narrow signed to wider conversion anywhere (A3), and every signed conversion whose operand type could not be resolved (A3u). Over the same 849 files and 73 packages as F-117, A1 = 0, A2 = 0, A3 = 1 and A3u = 122. The single A3 site is uint256 v1.3.2 ExtendSign (uint256.go:1275), sextByte := uint64(int64(int8(signByte))), the SIGNEXTEND handler for every client on uint256 v1.3.2. It is not compared with anything: the value is shifted and or-ed into the result word, and the only branches in the function test byteNum > 30 and switch on signWordIndex, both uint64. The prove debug output of go1.24.7 for ExtendSign (out/prove-extendsign-v1.3.2.txt) has four facts, all on uint64 shift counts and the word index (lines 1272, 1276, 1277, 1280), none on the int8 extension. uint256 v1.2.4 (libevm, Avalanche) builds the SIGNEXTEND mask with Lsh and SubUint64 and has no narrow conversion. The 122 A3u sites are conversions of len() results, int64 counters and uint64 constants from params packages that were not fetched (StackLimit, CallCreateDepth, precompile input limits) in bor's runSwitch, evm.go call depth checks, trie sync and snapshot and triedb size accounting; none has a narrow operand.",
+   "impact": "None found. The SIGNEXTEND path that the PoolManager uses for every int24 tick and int128 delta (src/types/Slot0.sol:49, src/libraries/TickBitmap.sol:20-21, src/types/BalanceDelta.sol:25-41, src/libraries/LiquidityMath.sol:12) has no comparison for prove to mistake. 2,340 vectors per network aimed at it (1,064 SIGNEXTEND over byte indexes 0 to 33, 2^64, 2^255 and 2^256-1 with sign bytes 0x00, 0x01, 0x7f, 0x80, 0x81, 0xfe, 0xff, 400 PoolManager style signextend and sar chains, and 876 ADDMOD) returned the specified word on all six Go client networks.",
+   "preconditions": "An operator runs an affected build and some function outside the searched files has the trigger. The Nitro rc.9 fork commit and files only present in bor or celo op-geth outside the fetch list are not covered.",
+   "mitigations": "Same as F-117; for 82839 no released Go version holds the fix yet, so the deployer can ask operators to rebuild once CL 858581 is released.",
+   "coreRefs": [
+    "src/types/Slot0.sol:49",
+    "src/libraries/TickBitmap.sol:16-30",
+    "src/types/BalanceDelta.sol:25-41",
+    "src/libraries/LiquidityMath.sol:12"
+   ],
+   "sources": [
+    {
+     "url": "https://github.com/golang/go/issues/82839",
+     "supports": "reproducer, affected releases go1.26.6 to go1.26.10, go1.27.3 and master, go1.24.13 variant, analysis of the look-through and x+delta steps; issue open"
+    },
+    {
+     "url": "https://go-review.googlesource.com/changes/858581",
+     "supports": "fix limits the constant computation to constants that fit the narrow type (fitsSigned); status NEW on 2026-11-16"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.26.10/src/cmd/compile/internal/ssa/prove.go",
+     "supports": "go1.26.10 factsTable.update x+delta case and look-through of value-preserving extensions, isCleanExt"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/holiman/uint256/@v/v1.3.2.zip",
+     "supports": "uint256 v1.3.2 ExtendSign at uint256.go:1260-1300"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/holiman/uint256/@v/v1.2.4.zip",
+     "supports": "uint256 v1.2.4 ExtendSign at uint256.go:1289-1304"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/op-geth/c7ed55b8/go.mod",
+     "supports": "celo op-geth c7ed55b8 go 1.24.0 and uint256 v1.3.2; 141 files fetched from the same commit"
+    },
+    {
+     "url": "https://forno.celo.org",
+     "supports": "web3_clientVersion 2026-11-25: Geth/v0.1.0-untagged-c7ed55b8-20260817/linux-amd64/go1.24.13 and reth/v2.2.0-74cc8bb behind one name; only batches answered by the Geth backend were counted"
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com",
+     "supports": "web3_clientVersion 2026-11-25: nitro v3.13.0-rc.9+b72783f linux-arm64 and linux-amd64, go1.27.3"
+    },
+    {
+     "url": "src/types/Slot0.sol:49",
+     "supports": "tick read with signextend(2, shr(TICK_OFFSET, _packed))"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/scan-summary.json",
+     "supports": "A1, A2, A3 and A3u counts per package"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/prove-extendsign-v1.3.2.txt",
+     "supports": "go1.24.7 prove facts in ExtendSign"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/shapevec-137.json",
+     "supports": "vector results per network with seed 20261125 and the build that answered each batch (files shapevec-<chainId>.json)"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    137,
+    56,
+    43114,
+    42220,
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "Task 1: precise trigger of Go issue 81863 and whether go1.26.10 holds the 1.26 backport (issue 81865).",
+   "result": "It does not. The backport CL 845967 merged on 2026-10-27, after go1.26.10 (2026-10-19, crypto/x509 fixes only); go1.26.11 and go1.27.4 (2026-11-10) carry it. The trigger needs a pointer CondSelect made by branchelim from a Phi over two auto addresses (or one auto and one other pointer) with empty arms, no load through the pointer, a store through it, and no other read of the first auto. Settles L-838.",
+   "source": "https://github.com/golang/go/issues/81865 ; https://go.dev/doc/devel/release"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114,
+    42220,
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "B4 site uint256 AddMod (v1.3.2 uint256.go:215-245, v1.2.4 uint256.go:198-225): x and y reassigned to &tmpX and &tmpY when an operand is at least the modulus.",
+   "result": "The selected pointers are read (Sub, Mod) and never written, so loadAddr in branchelim keeps the Phi and no CondSelect forms; the go1.24.7 branchelim dump of (*Int).AddMod has no CondSelect. ADDMOD is absent from the PoolManager runtime. 876 ADDMOD vectors with operands above, at and below the modulus matched on Polygon, BNB Chain, Avalanche, Celo (op-geth), Arbitrum One and Robinhood Chain.",
+   "source": "research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/u256dump-v1.3.2.txt, research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/shapevec-56.json"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114,
+    42220,
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "B4 sites outside uint256: bor EVM.Run interrupt flag (core/vm/interpreter.go:123-126), libevm evmCallArgs.env and bigModExp.RequiredGas, journal mutationStateFor, append and ripemdMagic, rlp decodeBigInt and decodeU256, NewBlock, NewEIP155Signer, EffectiveGasTip, params Rules and CheckConfigForkOrder, runtime Execute and Create, DumpToCollector, inspect and generator config helpers.",
+   "result": "Each arm allocates with new or a composite literal, which zeroes memory inside the arm, so canSpeculativelyExecute refuses the branch; in addition the pointer escapes to a map, struct, reflect value or return value, or is loaded through. None serves an opcode the PoolManager executes; bor's interrupt flag is read atomically every step, a load.",
+   "source": "research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/scan-bor-v2.11.1.json, https://go.googlesource.com/go/+/refs/tags/go1.26.10/src/cmd/compile/internal/ssa/branchelim.go"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114,
+    42220,
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "uint256 v1.2.4 Sqrt (uint256.go:1307-1325) pointer swap z1, z2 = z2, z1, flagged B4.",
+   "result": "The swap is a loop-carried Phi, which branchelim does not convert, and no opcode handler calls Sqrt.",
+   "source": "dl/src/uint256-v1.2.4/uint256.go:1307 in research/network-risk/cycles/018/theme-go-toolchain-shapes.work"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114,
+    42220,
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "A3 site uint256 v1.3.2 ExtendSign int8 to int64 conversion (uint256.go:1275), the only narrow signed widening in 849 files.",
+   "result": "Not compared with a constant or anything else, so the 82839 look-through never sees it; go1.24.7 prove facts in the function concern uint64 shifts and the index only. 1,064 SIGNEXTEND vectors over every byte index and sign byte edge matched on all six Go client networks.",
+   "source": "research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/prove-extendsign-v1.3.2.txt, research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/shapevec-137.json"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114,
+    42220,
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "122 A3u sites: signed conversions whose operand type was not resolved (params constants of unfetched packages, len results, int64 counters) in bor runSwitch, evm.go depth checks, trie sync, snapshot and triedb size accounting.",
+   "result": "Every operand is int, int64 or a uint64 constant in source; none is int8, int16 or int32, so none is a sign extension of a narrow type.",
+   "source": "research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/scan-bor-v2.11.1.json"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114,
+    42220,
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "Positive controls and the installed compiler: the issue reproducers compiled with go1.24.7.",
+   "result": "go1.24.7 prints the correct results for both reproducers and the go1.24 variant with a run-time constant, and its branchelim dump shows CondSelect v10 v8 for the 81863 reproducer, which is harmless there because dead auto elim already ran. go1.24.7 is not an affected compiler; the dumps show only whether the precondition shape forms.",
+   "source": "research/network-risk/cycles/018/theme-go-toolchain-shapes.work/build/repro/main.go, research/network-risk/cycles/018/theme-go-toolchain-shapes.work/build/repro/local_01__branchelim.dump"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "question": "Which go-ethereum commit does nitro v3.13.0-rc.9+b72783f pin, and does its core/vm, core/state and arbos code hold a pointer CondSelect over a stack auto or a widened narrow signed comparison?",
+   "why": "Arbitrum One and Robinhood Chain run go1.27.3, inside both fault ranges, and only the older fork commit 0e44603 has been searched.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    137,
+    42220
+   ],
+   "lens": "L1",
+   "question": "Do bor v2.11.1 or celo op-geth c7ed55b8 hold Go files in core/vm or core/state that are absent from the geth, bsc and libevm trees, and do they contain either shape?",
+   "why": "Both forks were fetched file by file from a name list, so fork-only files outside it were not searched.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-838",
+   "outcome": "cleared",
+   "answer": "go1.26.10 does not hold the 81863 backport: CL 845967 merged to release-branch.go1.26 on 2026-10-27 and go1.26.10 shipped on 2026-10-19 with crypto/x509 fixes only; go1.26.11 is the first fixed 1.26 release. The search of bor v2.11.1, bsc v1.8.2, libevm d398bc4dbe41, graft/evm and graft/coreth v1.15.3, uint256 v1.3.2 and v1.2.4 found no site with the two-auto shape and no one-auto site that meets the branchelim preconditions. Nitro v3.13.0-rc.9's fork commit could not be fetched (the rc.9 tag is not served by raw.githubusercontent.com); 0e44603 was rescanned with the same script and has three journal B4 sites, all cleared."
+  },
+  {
+   "leadId": "L-839",
+   "outcome": "cleared",
+   "answer": "Systematic go/ast and go/types search of uint256 v1.3.2 and v1.2.4 and the core/vm, core/state, core/types, trie, rlp, triedb and snapshot packages of bor, bsc, avalanchego (libevm, graft/evm, graft/coreth), celo op-geth c7ed55b8, geth v1.17.9 and Nitro 0e44603: zero comparisons of a widened int8, int16 or int32 with any constant or value. The one narrow widening is uint256 v1.3.2 ExtendSign, which is never compared. SIGNEXTEND, BYTE, shift and memory offset paths work on uint64 throughout."
+  },
+  {
+   "leadId": "L-829",
+   "outcome": "cleared",
+   "answer": "No function on the searched execution and state path has the 82839 shape. Issue 82839 is still open and its fix CL 858581 is unmerged, so no Go release fixes it yet; the x+delta code is the same in go1.24.7 and go1.26.10."
+  }
+ ]
+}

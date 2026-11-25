@@ -1,0 +1,33 @@
+{
+  "unit": "arbitrum-family",
+  "verdicts": [
+    {"findingIndex": 0,
+     "verdict": "confirmed",
+     "severity": "high",
+     "factCheck": "eth_getBlockByNumber on https://arb1.arbitrum.io/rpc for blocks 519,514,683 and 519,514,685 returns transactions 0x75e81a23...eeedb6 (type 0x65, from 0x3e2bf1ac...32d5, nonce 2, r 0x0, to ARB 0x912c...6548, transfer to 0x...0da0) and 0x410af166...5f70 (type 0x65, nonce 3, r 0x0, value 0x1c8c6353711cb841640 to 0x...0da0). The Security Council post (forum.arbitrum.foundation/t/31625, fetched as JSON) states that the Inbox was upgraded to add sendUnsignedTransactionOverride, two cross-chain transactions impersonated the sender, and the Inbox was restored in one atomic action. nitro master arbos/parse_l2.go:245-269 builds ArbitrumUnsignedTx and ArbitrumContractTx with From set to the poster. Fork 0e44603 core/types/arb_types.go:66 and 77 return true from skipNonceChecks and skipTransactionChecks for ArbitrumContractTx and false for ArbitrumUnsignedTx (65, 76). core/state_transition.go:748-758 of 0e44603 runs the ErrSenderNoEOA check only when SkipTransactionChecks is false. nitro-contracts main Inbox.sol:317-325 aliases every sender in _deliverToBridge, so the stock Inbox gives no unprivileged path. At block 527,442,078 the Arbitrum One PoolManager holds 4,395.53 ETH (eth_getBalance) and 9,029,518.54 USDC (balanceOf), and eth_call with from set to the PoolManager of USDC transfer(0x...0da0, whole balance) returns true.",
+     "codeCheck": "The path runs no PoolManager code. The outer call goes straight to the token with msg.sender equal to the PoolManager, so unlock (src/PoolManager.sol:103-113), the NonzeroDeltaCount check (src/PoolManager.sol:111), take and _accountDelta (src/PoolManager.sol:291-297) and settle (src/PoolManager.sol:349-366) never run and cannot guard it. A native value transfer from the PoolManager as sender also bypasses the contract. After the move, reserves recorded by pools and ERC-6909 claims exceed the real balance, and later take calls through Currency.transfer (src/types/Currency.sol:40-90) revert for lack of funds. The coreRefs name lines that the attack bypasses rather than lines that misbehave, which is accurate for a sender-forgery hazard.",
+     "corrections": "Balances moved since the finding's block: at 527,442,078 the PoolManager holds 4,395.53 ETH and 9,029,518.54 USDC. The eth_call test skips the EOA check by design and so shows only that USDC places no hurdle; the contract transaction path itself rests on the client source. The same parties can already change ArbOS state by an upgrade, so this adds a cheaper and already exercised route rather than a new class of power. For Robinhood Chain and Elysium the deployed Inbox implementations on their parent chains were not read in this check.",
+     "sources": [
+      {"url": "https://arb1.arbitrum.io/rpc", "supports": "eth_getBlockByNumber 519514683 and 519514685 show the two type 0x65 transactions with r 0; eth_getBalance and USDC balanceOf of the PoolManager at block 527442078; eth_call from the PoolManager of USDC transfer returns true."},
+      {"url": "https://forum.arbitrum.foundation/t/security-council-emergency-action-30-10-2026/31625", "supports": "The Council upgraded the Inbox with sendUnsignedTransactionOverride to impersonate a sender and restored it atomically."},
+      {"url": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/parse_l2.go", "supports": "Unsigned and contract transactions take From from the message poster (lines 245-269)."},
+      {"url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/types/arb_types.go", "supports": "ArbitrumContractTx skips nonce and transaction checks (lines 66 and 77)."},
+      {"url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/state_transition.go", "supports": "The EOA sender check sits inside the SkipTransactionChecks branch of preCheck (lines 748-758)."},
+      {"url": "https://raw.githubusercontent.com/OffchainLabs/nitro-contracts/main/src/bridge/Inbox.sol", "supports": "The stock Inbox aliases every sender in _deliverToBridge (lines 317-325)."}
+     ]}
+  ],
+  "clearedSpotChecks": [
+    {"check": "Can an ordinary account get a parent chain message executed with the PoolManager as sender?",
+     "agrees": true,
+     "note": "Inbox.sol main: _deliverToBridge applies applyL1ToL2Alias to every sender (317-325). The three ToFork functions undo the alias only for msg.sender equal to tx.origin and revert with NotForked unless the chain id changed (135-195), and they emit unsignedEOATx, whose ArbitrumUnsignedTx keeps the EOA check (arb_types.go:76, state_transition.go:748-758) that the PoolManager's 24,009 bytes of code fail. Reaching the PoolManager address needs an L1 key or a 160 bit address collision. depositEth credits a balance without running code. The check rests on nitro-contracts main; the implementation deployed behind the Robinhood and Elysium Inboxes was not read."},
+    {"check": "Jump destination analysis with the signed int8 comparison in codeBitmapInternal",
+     "agrees": true,
+     "note": "analysis_legacy.go of 0e44603 compares int8(op) < int8(PUSH1); bytes 0x60 to 0x7f give 96 to 127 and are treated as PUSH, bytes 0x00 to 0x5f and 0x80 to 0xff are not, which matches the specification. Own eth_call with code override on all three chains: a jump into PUSH2 data holding 0x5b returns invalid jump destination, a jump to a real JUMPDEST returns 1, and a jump to a JUMPDEST right after PUSH1 0x5b loops to out of gas, as specified."},
+    {"check": "Go issue 82839 shape and SIGNEXTEND in holiman/uint256 v1.3.2",
+     "agrees": true,
+     "note": "uint256.go v1.3.2 ExtendSign (1260-1285) returns x unchanged for byteNum above 30 and otherwise computes uint64(int64(int8(signByte))) with no comparison on the result. Own eth_call vectors of SIGNEXTEND at the int24, int64 and int128 sign boundaries and at byte indices 0, 30 and 31 (10 cases) match the specification on Arbitrum One, Robinhood Chain and Elysium."}
+  ],
+  "leads": [
+    {"chainIds": [4663, 99901], "lens": "L2", "question": "Does the Inbox implementation deployed for Robinhood Chain on Ethereum and for Elysium on HyperEVM alias every sender in _deliverToBridge as nitro-contracts main does?", "why": "The cleared item on unprivileged sender forgery rests on the main branch source; a custom or older Inbox without aliasing would let any parent chain contract post a contract transaction from the PoolManager address.", "priority": "medium"}
+  ]
+}

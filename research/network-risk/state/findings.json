@@ -8104,6 +8104,109 @@
    ]
   },
   {
+   "title": "Arbitrum governance can post a contract transaction whose sender is the PoolManager, and Nitro runs it without a nonce or code check, so every pooled balance can be moved without unlock",
+   "chainIds": [
+    42161,
+    4663,
+    99901
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A8",
+    "A6",
+    "A12"
+   ],
+   "effect": "both",
+   "difference": "On Ethereum only a key or the contract's own code can move what a contract holds. On Nitro chains the sender of an L1-to-L2 message is a field that the Inbox contract on the parent chain fills in, and the Inbox is upgradeable by the chain owner. On 2026-10-30 the Arbitrum Security Council (9 of 12, no delay on the emergency path) used a temporary Inbox implementation with sendUnsignedTransactionOverride to send two type 0x65 transactions from 0x3e2bf1ac6bf0934bbba6456c341c2ecbced632d5, which moved 74,559,805.2 ARB and 8,425.99 ETH. Nitro builds both unsigned user transactions and contract transactions with From set to the poster field of the message (arbos/parse_l2.go lines 245-269). The contract transaction type skips nonce checks and transaction checks (core/types/arb_types.go lines 66 and 77 of fork 0e44603), and the check that rejects a sender with code sits inside the transaction checks (core/state_transition.go preCheck), so a contract transaction may name an address that holds code.",
+   "mechanism": "An override Inbox would enqueue a message of kind ContractTx with the PoolManager address as sender, the address of a pooled token as destination and the calldata of transfer(recipient, balance), or a native value transfer with empty calldata. Nitro turns it into an ArbitrumContractTx from the PoolManager. Neither the nonce check nor the EOA check runs, so the call executes as an outer call whose msg.sender is the PoolManager. The token sees an ordinary transfer by its holder. Nothing in the PoolManager runs: no unlock, no delta accounting, no NonzeroDeltaCount check, so pools, positions and ERC-6909 claims still record balances that are gone. An eth_call from the PoolManager address to USDC with transfer(0x...0da0, whole balance) at block 527,417,705 returns true, which shows that the token itself places no hurdle on such a call. The type 0x65 path the Council used would fail for the PoolManager, because unsigned user transactions keep the EOA check (arb_types.go line 76); the contract transaction path does not. On Robinhood Chain the chain owners and the rollup admin on Ethereum hold the same path, and on Elysium the single chain owner and the Inbox admin on HyperEVM do.",
+   "impact": "Every balance the PoolManager holds on the three chains, which on Arbitrum One at block 527,417,705 includes 4,405.32 ETH and 9,252,963.77 USDC. Liquidity providers and claim holders of every pool would be left with records that cannot be paid out.",
+   "preconditions": "The Arbitrum Security Council emergency signers (9 of 12) or the DAO timelock on Arbitrum One, the chain owners or rollup admin on Robinhood Chain, or Elysium's owner. An ordinary account cannot reach it: the stock Inbox aliases the sender of every unsigned and contract message by adding 0x1111000000000000000000000000000000001111, and producing the PoolManager address would need control of a fixed parent chain address with no known key.",
+   "mitigations": "None in core. Integrators and LPs should treat these chains' upgrade path as able to spend any contract's balance, as the Binance freeze showed for an EOA. Off-chain monitors can watch for type 0x65 and 0x66 transactions whose sender is the PoolManager.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114",
+    "src/PoolManager.sol:291-297",
+    "src/types/Currency.sol:40-90"
+   ],
+   "sources": [
+    {
+     "url": "https://forum.arbitrum.foundation/t/security-council-emergency-action-30-10-2026/31625",
+     "supports": "The Council upgraded the Inbox to add sendUnsignedTransactionOverride, impersonated the sender of two cross-chain transactions and restored the Inbox in one atomic action."
+    },
+    {
+     "url": "https://defiprime.com/arbitrum-council-freezes-binance-exploit-funds",
+     "supports": "The Arbitrum One leg was transaction 0x75e81a... of type 0x65 with nonce 2 and zero signature fields."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_getBlockByNumber 519514683 and 519514685, run 2026-11-25",
+     "supports": "Type 0x65 transactions 0x75e81a23...eeedb6 (ARB transfer to 0x...0da0) and 0x410af166...5f70 (ETH to 0x...0da0) from 0x3e2bf1ac...32d5 with r = 0."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/parse_l2.go",
+     "supports": "UnsignedUserTx and ContractTx are built with From set to the message poster."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/types/arb_types.go",
+     "supports": "ArbitrumContractTx returns true from skipNonceChecks and skipTransactionChecks; ArbitrumUnsignedTx returns false for both."
+    },
+    {
+     "url": "research/network-risk/cycles/016/arbitrum-family.work/dl/st.go:748-758",
+     "supports": "Copy of the fork's core/state_transition.go read in cycle 16: the ErrSenderNoEOA check runs only when SkipTransactionChecks is false."
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc eth_call from 0x360e68fa...fb32 to USDC 0xaf88...5831 transfer(0x...0da0, 9252963766169) at block 527417705",
+     "supports": "Returns true; eth_getBalance of the PoolManager is 4,405.32 ETH."
+    }
+   ],
+   "evidence": "primary",
+   "actor": "governance",
+   "severity": "high",
+   "proposedSeverity": "high",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 18,
+    "factCheck": "eth_getBlockByNumber on https://arb1.arbitrum.io/rpc for blocks 519,514,683 and 519,514,685 returns transactions 0x75e81a23...eeedb6 (type 0x65, from 0x3e2bf1ac...32d5, nonce 2, r 0x0, to ARB 0x912c...6548, transfer to 0x...0da0) and 0x410af166...5f70 (type 0x65, nonce 3, r 0x0, value 0x1c8c6353711cb841640 to 0x...0da0). The Security Council post (forum.arbitrum.foundation/t/31625, fetched as JSON) states that the Inbox was upgraded to add sendUnsignedTransactionOverride, two cross-chain transactions impersonated the sender, and the Inbox was restored in one atomic action. nitro master arbos/parse_l2.go:245-269 builds ArbitrumUnsignedTx and ArbitrumContractTx with From set to the poster. Fork 0e44603 core/types/arb_types.go:66 and 77 return true from skipNonceChecks and skipTransactionChecks for ArbitrumContractTx and false for ArbitrumUnsignedTx (65, 76). core/state_transition.go:748-758 of 0e44603 runs the ErrSenderNoEOA check only when SkipTransactionChecks is false. nitro-contracts main Inbox.sol:317-325 aliases every sender in _deliverToBridge, so the stock Inbox gives no unprivileged path. At block 527,442,078 the Arbitrum One PoolManager holds 4,395.53 ETH (eth_getBalance) and 9,029,518.54 USDC (balanceOf), and eth_call with from set to the PoolManager of USDC transfer(0x...0da0, whole balance) returns true.",
+    "codeCheck": "The path runs no PoolManager code. The outer call goes straight to the token with msg.sender equal to the PoolManager, so unlock (src/PoolManager.sol:103-113), the NonzeroDeltaCount check (src/PoolManager.sol:111), take and _accountDelta (src/PoolManager.sol:291-297) and settle (src/PoolManager.sol:349-366) never run and cannot guard it. A native value transfer from the PoolManager as sender also bypasses the contract. After the move, reserves recorded by pools and ERC-6909 claims exceed the real balance, and later take calls through Currency.transfer (src/types/Currency.sol:40-90) revert for lack of funds. The coreRefs name lines that the attack bypasses rather than lines that misbehave, which is accurate for a sender-forgery hazard.",
+    "corrections": "Balances moved since the finding's block: at 527,442,078 the PoolManager holds 4,395.53 ETH and 9,029,518.54 USDC. The eth_call test skips the EOA check by design and so shows only that USDC places no hurdle; the contract transaction path itself rests on the client source. The same parties can already change ArbOS state by an upgrade, so this adds a cheaper and already exercised route rather than a new class of power. For Robinhood Chain and Elysium the deployed Inbox implementations on their parent chains were not read in this check.",
+    "sources": [
+     {
+      "url": "https://arb1.arbitrum.io/rpc",
+      "supports": "eth_getBlockByNumber 519514683 and 519514685 show the two type 0x65 transactions with r 0; eth_getBalance and USDC balanceOf of the PoolManager at block 527442078; eth_call from the PoolManager of USDC transfer returns true."
+     },
+     {
+      "url": "https://forum.arbitrum.foundation/t/security-council-emergency-action-30-10-2026/31625",
+      "supports": "The Council upgraded the Inbox with sendUnsignedTransactionOverride to impersonate a sender and restored it atomically."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/parse_l2.go",
+      "supports": "Unsigned and contract transactions take From from the message poster (lines 245-269)."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/types/arb_types.go",
+      "supports": "ArbitrumContractTx skips nonce and transaction checks (lines 66 and 77)."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/0e44603/core/state_transition.go",
+      "supports": "The EOA sender check sits inside the SkipTransactionChecks branch of preCheck (lines 748-758)."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/OffchainLabs/nitro-contracts/main/src/bridge/Inbox.sol",
+      "supports": "The stock Inbox aliases every sender in _deliverToBridge (lines 317-325)."
+     }
+    ]
+   },
+   "lastVerifiedCycle": 18,
+   "id": "F-138",
+   "firstCycle": 18,
+   "history": [
+    {
+     "cycle": 18,
+     "unit": "arbitrum-family",
+     "status": "confirmed",
+     "severity": "high"
+    }
+   ]
+  },
+  {
    "title": "A Stylus program used as a hook or token stops answering calls on expiry or a Stylus version change, and activation is blocked",
    "chainIds": [
     42161
@@ -12320,8 +12423,8 @@
     "A10"
    ],
    "effect": "degrade",
-   "difference": "Go issue 81863: from Go 1.26.0 through go1.26.10 and from Go 1.27.0 through go1.27.3, the dead auto elimination pass attributes a CondSelect of two local addresses to its first operand only, so a store through a pointer that a branch chose between two non-escaping locals is deleted when the first local is never read, even if the other one is. It applies on every architecture whose compiler emits CondSelect (amd64, arm64, ppc64le, loong64, wasm). The fix is go1.26.11 and go1.27.4, released 2026-11-10. Today Arbitrum One answers as nitro v3.13.0-rc.9 linux-arm64 go1.27.3, Robinhood Chain as the same release on linux-arm64 and linux-amd64 with go1.27.3, Polygon (publicnode) as five bor v2.11.1-private builds with go1.26.10, BNB Smart Chain as Geth/v1.8.2 linux-amd64 go1.26.10, and Avalanche as avalanchego 1.15.3 go=1.26.10. Elysium reports go1.25.12 and the Celo op-geth backend go1.24.13, which predate the faulty pass order. Cycle 17 addition, Ethereum: the official geth v1.17.9 and v1.17.10 builds pin Go 1.27.2 and 1.27.3, both inside the range of the same issue. These releases also run every untraced execution (eth_call, block import, block building) through a new generated switch, execUntraced, while traced calls still use the old table loop, so a step trace no longer shows the loop that produces blocks.",
-   "mechanism": "The miscompile needs four things in one function after inlining: two stack allocated locals whose address is taken, a pointer that a side effect free if or if-else picks between their addresses, a store, zeroing or copy through that pointer and no load through it (branchelim refuses a CondSelect whose result feeds a load address), and a later direct read of the second local. A scan of holiman/uint256 v1.3.2 and v1.2.4 (all of uint256.go, mod.go, div.go, conversion.go, decimal.go) and of core/vm instructions.go, interpreter.go, stack.go, memory.go, evm.go, eips.go and core/state journal.go, transient_storage.go, statedb.go, state_object.go, access_list.go of the nitro fork 0e44603, bsc v1.8.2, bor v2.11.1 and libevm d398bc4dbe41 found no such function. The only branch selected pointers are: uint256 AddMod (x = &tmpX, y = &tmpY, v1.3.2 lines 240-245), where one operand is the caller's pointer, the pointers are only loaded from, and branchelim therefore keeps the Phi; SMod and SDiv, where the branch calls Neg and so is not side effect free and the pointer is only passed to Mod or Div; DivMod (m = new(Int).Set(m)) with a side effect in the branch; bor's interrupt flag in Run, loaded atomically and passed to runSwitch; the jump table choice in evm.go, which takes addresses of globals; and journal mutation state, which is heap memory. Sqrt in v1.2.4 swaps two pointers in a loop, which branchelim does not touch, and no opcode calls Sqrt. A dropped store in these functions would change the ADDMOD, SDIV or SMOD result, so those operands were run: 6,000 ADDMOD vectors with a modulus of at least 2^192 and each operand above, equal to or below the modulus, 6,112 SDIV and SMOD vectors over all sign pairs, plus the 99,985 battery and 85,544 targeted vectors. On each of the five networks every request was a JSON-RPC batch of web3_clientVersion and eth_call. There was no mismatch on any build. The PoolManager reaches SDIV and SMOD in TickBitmap.compress and Pool.tickSpacingToMaxLiquidityPerTick and MULMOD in FullMath and SqrtPriceMath; ADDMOD appears only in the compiler's metadata trailer. Cycle 17 addition, Ethereum: a scan of geth v1.17.9 core/vm and core/state finds no function with the triggering shape, and the generated loop calls the same handler functions as the table loop. The battery, the targeted vectors and 232 PUSH, DUP and SWAP programs give the specified words on geth v1.17.9 built with go1.27.2 (blockpi endpoint). The verifier corrected two points: the fault also reaches go1.26 releases before its 1.26 backport, and the runs reported for a go1.25.14 build went through a gateway that answered only from reth and erigon in 30 samples, so only one geth toolchain has been tested. Whether go1.26.10, which bor, BNB Chain geth and avalanchego use, holds the backport is lead L-838.",
+   "difference": "Go issue 81863: from Go 1.26.0 through go1.26.10 and from Go 1.27.0 through go1.27.3, the dead auto elimination pass attributes a CondSelect of two local addresses to its first operand only, so a store through a pointer that a branch chose between two non-escaping locals is deleted when the first local is never read, even if the other one is. It applies on every architecture whose compiler emits CondSelect (amd64, arm64, ppc64le, loong64, wasm). The fix is go1.26.11 and go1.27.4, released 2026-11-10. Today Arbitrum One answers as nitro v3.13.0-rc.9 linux-arm64 go1.27.3, Robinhood Chain as the same release on linux-arm64 and linux-amd64 with go1.27.3, Polygon (publicnode) as five bor v2.11.1-private builds with go1.26.10, BNB Smart Chain as Geth/v1.8.2 linux-amd64 go1.26.10, and Avalanche as avalanchego 1.15.3 go=1.26.10. Elysium reports go1.25.12 and the Celo op-geth backend go1.24.13, which predate the faulty pass order. Cycle 17 addition, Ethereum: the official geth v1.17.9 and v1.17.10 builds pin Go 1.27.2 and 1.27.3, both inside the range of the same issue. These releases also run every untraced execution (eth_call, block import, block building) through a new generated switch, execUntraced, while traced calls still use the old table loop, so a step trace no longer shows the loop that produces blocks. Cycle 18 addition: go1.26.10 does not hold the fix. The 1.26 backport (CL 845967) was merged on 2026-10-27, eight days after go1.26.10 was released on 2026-10-19, and go1.26.11 of 2026-11-10 is the first fixed 1.26 release. bor v2.11.1, BNB Chain geth v1.8.2 and avalanchego 1.15.3 therefore run an affected compiler. In go1.26.10 the branch elimination pass runs before dead auto elimination (compile.go lines 479 and 481); in go1.24.13 the order is the reverse, so Celo's op-geth backend is outside the range. Chain 1 is listed for the official geth v1.17.9 and v1.17.10 builds only; the Ethereum endpoint in networks.json answers from reth, a Rust client, and the one geth build tested was reached through the blockpi endpoint in cycle 17.",
+   "mechanism": "The miscompile needs four things in one function after inlining: two stack allocated locals whose address is taken, a pointer that a side effect free if or if-else picks between their addresses, a store, zeroing or copy through that pointer and no load through it (branchelim refuses a CondSelect whose result feeds a load address), and a later direct read of the second local. A scan of holiman/uint256 v1.3.2 and v1.2.4 (all of uint256.go, mod.go, div.go, conversion.go, decimal.go) and of core/vm instructions.go, interpreter.go, stack.go, memory.go, evm.go, eips.go and core/state journal.go, transient_storage.go, statedb.go, state_object.go, access_list.go of the nitro fork 0e44603, bsc v1.8.2, bor v2.11.1 and libevm d398bc4dbe41 found no such function. The only branch selected pointers are: uint256 AddMod (x = &tmpX, y = &tmpY, v1.3.2 lines 240-245), where one operand is the caller's pointer, the pointers are only loaded from, and branchelim therefore keeps the Phi; SMod and SDiv, where the branch calls Neg and so is not side effect free and the pointer is only passed to Mod or Div; DivMod (m = new(Int).Set(m)) with a side effect in the branch; bor's interrupt flag in Run, loaded atomically and passed to runSwitch; the jump table choice in evm.go, which takes addresses of globals; and journal mutation state, which is heap memory. Sqrt in v1.2.4 swaps two pointers in a loop, which branchelim does not touch, and no opcode calls Sqrt. A dropped store in these functions would change the ADDMOD, SDIV or SMOD result, so those operands were run: 6,000 ADDMOD vectors with a modulus of at least 2^192 and each operand above, equal to or below the modulus, 6,112 SDIV and SMOD vectors over all sign pairs, plus the 99,985 battery and 85,544 targeted vectors. On each of the five networks every request was a JSON-RPC batch of web3_clientVersion and eth_call. There was no mismatch on any build. The PoolManager reaches SDIV and SMOD in TickBitmap.compress and Pool.tickSpacingToMaxLiquidityPerTick and MULMOD in FullMath and SqrtPriceMath; ADDMOD appears only in the compiler's metadata trailer. Cycle 17 addition, Ethereum: a scan of geth v1.17.9 core/vm and core/state finds no function with the triggering shape, and the generated loop calls the same handler functions as the table loop. The battery, the targeted vectors and 232 PUSH, DUP and SWAP programs give the specified words on geth v1.17.9 built with go1.27.2 (blockpi endpoint). The verifier corrected two points: the fault also reaches go1.26 releases before its 1.26 backport, and the runs reported for a go1.25.14 build went through a gateway that answered only from reth and erigon in 30 samples, so only one geth toolchain has been tested. Whether go1.26.10, which bor, BNB Chain geth and avalanchego use, holds the backport is lead L-838. Cycle 18 addition: a search of the syntax trees with type information (shapescan, built on go/ast and go/types, with the issue reproducer and three variants as positive controls) covered 849 non-test files in 73 packages: holiman/uint256 v1.3.2 and v1.2.4, geth v1.17.9, bsc v1.8.2, bor v2.11.1, celo op-geth c7ed55b8, libevm d398bc4dbe41, avalanchego graft/evm and graft/coreth v1.15.3, and Nitro's fork at 0e44603. It found no site where a branch picks between the addresses of two locals, no call that passes two local addresses to a pointer selector, and 60 sites of the variant with one local and one other pointer. Each of the 60 fails a precondition: the pointer is loaded through, the arm allocates, or the choice is a loop variable. Compiled with go1.24.7, the 155 functions of uint256 v1.3.2, the 153 of v1.2.4 and the 25 arithmetic, comparison and bitwise handlers of five client trees hold conditional selects of integer type only. 2,340 SIGNEXTEND, ADDMOD and sign extension chain vectors matched on Polygon, BNB Chain, Avalanche, Celo op-geth, Arbitrum One and Robinhood Chain. Not covered: the private fork commit of Nitro rc.9 (lead L-864), and files that only bor or celo op-geth hold outside the fetch list (lead L-865).",
    "impact": "No path by which an ordinary account takes or freezes funds was found. If an unread function of the node held the shape, a node built with an affected toolchain would compute another state than one built with a fixed toolchain, which is a consensus fault of the operators and not something an attacker can aim at a pool through the PoolManager.",
    "preconditions": "Block producers would have to run an affected build and some function on the state transition path outside the files read would have to contain the shape. Neither is shown. The sequencer and validator builds are not published.",
    "mitigations": "Ask the Arbitrum, Robinhood Chain, Polygon, BNB Smart Chain and Avalanche operators to rebuild with go1.26.11 or go1.27.4 or later. Rerun paired.py after their next release.",
@@ -12403,6 +12506,78 @@
     {
      "url": "rpc: web3_clientVersion on https://ethereum.public.blockpi.network/v1/rpc/public and https://eth.api.pocket.network",
      "supports": "Geth/v1.17.9-stable-9dffe6e9 with go1.27.2 and with go1.25.14."
+    },
+    {
+     "url": "https://github.com/golang/go/issues/81863",
+     "supports": "reproducer, bisect to the branchelim CL, fix CL 841425, backport issues 81865 (1.26) and 81866 (1.27), release-branch CLs 845967 and 845968"
+    },
+    {
+     "url": "https://github.com/golang/go/issues/81865",
+     "supports": "1.26 backport closed by merging CL 845967 (commit c7bed29e) to release-branch.go1.26 on 2026-10-27"
+    },
+    {
+     "url": "https://go.dev/doc/devel/release",
+     "supports": "go1.26.10 released 2026-10-19 with security fixes to crypto/x509 only; go1.26.11 and go1.27.4 released 2026-11-10 with compiler fixes"
+    },
+    {
+     "url": "https://go-review.googlesource.com/changes/841425",
+     "supports": "fix adds OpCondSelect to the ops that mark an auto used in elimDeadAutosGeneric; test fixedbugs/issue81863.go"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.26.10/src/cmd/compile/internal/ssa/deadstore.go",
+     "supports": "go1.26.10 elimDeadAutosGeneric marks autos used only for memory, flags, Phi and memory-arg values, and otherwise propagates only the first unused auto through a value"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.26.10/src/cmd/compile/internal/ssa/branchelim.go",
+     "supports": "go1.26.10 branchelim: loadAddr exclusion, canCondSelect, canSpeculativelyExecute with the inlining mark exception"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.26.10/src/cmd/compile/internal/ssa/compile.go",
+     "supports": "go1.26.10 pass order: prove, branchelim, late opt, dead auto elim"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/bnb-chain/bsc/@v/v1.8.2.zip",
+     "supports": "bsc v1.8.2 source searched"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/ethereum/go-ethereum/@v/v1.17.9.zip",
+     "supports": "geth v1.17.9 source searched"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/ava-labs/libevm/@v/v1.13.15-0.20261028200218-d398bc4dbe41.zip",
+     "supports": "libevm source at the version avalanchego v1.15.3 pins (go.mod at https://proxy.golang.org/github.com/ava-labs/avalanchego/@v/v1.15.3.mod)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/go.mod",
+     "supports": "bor v2.11.1 go 1.26.10 and holiman/uint256 v1.3.2; 149 files fetched from the same tag"
+    },
+    {
+     "url": "https://polygon-bor-rpc.publicnode.com",
+     "supports": "web3_clientVersion 2026-11-25: bor v2.11.1-private builds ebcfea01452d, cb3d19c5f690, a863b8e5cce1, f2a2d63e69f6, all go1.26.10"
+    },
+    {
+     "url": "https://bsc-dataseed1.bnbchain.org",
+     "supports": "web3_clientVersion 2026-11-25: Geth/v1.8.2 and Geth/v1.8.2-4e1c8247-20261104, linux-amd64, go1.26.10"
+    },
+    {
+     "url": "https://api.avax.network/ext/bc/C/rpc",
+     "supports": "web3_clientVersion 2026-11-25: avalanchego/1.15.3 commit 983815fd, go=1.26.10"
+    },
+    {
+     "url": "https://arb1.arbitrum.io/rpc",
+     "supports": "web3_clientVersion 2026-11-25: nitro v3.13.0-rc.9+b72783f linux-arm64 and linux-amd64, go1.27.3"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/scan-summary.json",
+     "supports": "per package file and candidate counts of the syntax tree search"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/u256dump-v1.3.2.txt",
+     "supports": "branchelim dumps of every uint256 v1.3.2 function under go1.24.7: 34 CondSelects, all integer typed"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/harness.txt",
+     "supports": "branchelim dumps of the 25 arithmetic and bitwise opcode handlers of five client trees: no CondSelect"
     }
    ],
    "evidence": "primary",
@@ -12454,7 +12629,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 17,
+   "lastVerifiedCycle": 18,
    "id": "F-117",
    "firstCycle": 10,
    "history": [
@@ -12470,6 +12645,13 @@
      "status": "confirmed",
      "severity": "info",
      "note": "ethereum-reference finding 0 (geth v1.17.9 and v1.17.10 on go1.27.2 and go1.27.3) folded in, as the cycle 17 critic asked: one item per Go issue."
+    },
+    {
+     "cycle": 18,
+     "unit": "theme-go-toolchain-shapes",
+     "status": "confirmed",
+     "severity": "info",
+     "note": "Finding 0 of the unit (ref F-117) folded in by hand: go1.26.10 lacks the backport, tree search of seven clients finds no reachable site. Verifier: chain 1 kept for the official geth builds only."
     }
    ]
   },
@@ -13802,8 +13984,8 @@
     "A10"
    ],
    "effect": "degrade",
-   "difference": "The Elysium endpoint reports nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12. Go 1.25 left support when go1.27.0 shipped on 2026-08-19. go1.25.13 fixed, among others, issue 79874, where the prove pass emits a 32 bit slice mask for a 64 bit slice operation on targets that sign-extend 32 bit constants (amd64 named), so a slice with a start index of 2^32 or more advances too little, and issue 80517, where prove applies a fact before the point where it holds and drops a bounds check, shown on amd64 as a call through an out-of-range function table entry. Arbitrum One and Robinhood Chain run go1.27.3, which is inside the range of the separate F-117 fault. Cycle 17 additions. (1) BNB Chain: 48 Club, a validator group and block builder, answers at rpc-bsc.48.club from two unpublished geth commits (132104cd and 9b93ce23), both built on 2026-11-16 with go1.25.5, a release line out of support since 2026-08-19 and missing the compiler fixes of go1.25.6 to go1.25.13. (2) Go issue 82839, opened 2026-11-03 and still open: the prove pass carries a fact through a sign extension of a narrow integer compared with a constant that does not fit the narrow type, and takes a branch that cannot be taken. The report names go1.26.6 to go1.26.10, go1.27.3 and master, and a variant from go1.24.13. Inside that range: bor v2.11.1 (go1.26.10), BNB Chain geth v1.8.2 (go1.26.10), avalanchego 1.15.3 (go1.26.10), Celo's op-geth backend (go1.24.13), Nitro on Arbitrum One and Robinhood Chain (go1.27.3) and Elysium (go1.25.12).",
-   "mechanism": "Both faults change behaviour only on unusual shapes. Issue 79874 needs a slice start of 2^32 or more that the compiler has proved in bounds. The interpreter never slices calldata, code, memory or return data with such an index: a copy or load with a larger offset is clamped to the data length or charged for memory expansion first, and a zero-length copy or hash at a large offset touches no slice. The new offsets.py vectors aim at exactly that region (offsets from 2^31 to 2^256-1 for CALLDATALOAD, CALLDATACOPY, CODECOPY, KECCAK256, MCOPY and RETURNDATACOPY) and Elysium returns the specified word or failure on every one. Issue 80517 removes a bounds check whose failure would otherwise panic; on a correct program the check never fires, so it can only turn an existing out-of-range bug of the node into a silent read. The PoolManager paths that depend on these copies are the hook result copy (src/libraries/Hooks.sol:148), the revert bubbling copy (src/libraries/CustomRevert.sol:109), and the arithmetic in src/libraries/FullMath.sol:21-54; all match on the battery, the targeted set, the script sets and 3,515 mined swaps. The settled state is computed by the consensus-v61 WebAssembly machine built with go1.25.9 (F-119), which predates both fixes as well but runs on a different target. Cycle 17 additions: the EVM paths the PoolManager depends on work on 64 bit words in holiman/uint256 and the interpreter, and no comparison of the issue 82839 shape was located there, though the source was not searched systematically (lead L-839) and no binary was decompiled. The answers were tested instead on 2026-11-25: the battery (99,985 vectors), the targeted set (85,544) and the large-offset vectors match the specification on Polygon, BNB Chain, Avalanche and Celo (Celo pinned to its op-geth backend), and on the 48 Club endpoint the battery, the targeted set, the call semantics words, the slot reads and the script sets match too. Which of the two 48 Club builds answered each batch is not known (lead L-844). bor, BNB Chain geth and avalanchego at go1.26.10 already contain the fixes for issues 79874 and 80517.",
+   "difference": "The Elysium endpoint reports nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12. Go 1.25 left support when go1.27.0 shipped on 2026-08-19. go1.25.13 fixed, among others, issue 79874, where the prove pass emits a 32 bit slice mask for a 64 bit slice operation on targets that sign-extend 32 bit constants (amd64 named), so a slice with a start index of 2^32 or more advances too little, and issue 80517, where prove applies a fact before the point where it holds and drops a bounds check, shown on amd64 as a call through an out-of-range function table entry. Arbitrum One and Robinhood Chain run go1.27.3, which is inside the range of the separate F-117 fault. Cycle 17 additions. (1) BNB Chain: 48 Club, a validator group and block builder, answers at rpc-bsc.48.club from two unpublished geth commits (132104cd and 9b93ce23), both built on 2026-11-16 with go1.25.5, a release line out of support since 2026-08-19 and missing the compiler fixes of go1.25.6 to go1.25.13. (2) Go issue 82839, opened 2026-11-03 and still open: the prove pass carries a fact through a sign extension of a narrow integer compared with a constant that does not fit the narrow type, and takes a branch that cannot be taken. The report names go1.26.6 to go1.26.10, go1.27.3 and master, and a variant from go1.24.13. Inside that range: bor v2.11.1 (go1.26.10), BNB Chain geth v1.8.2 (go1.26.10), avalanchego 1.15.3 (go1.26.10), Celo's op-geth backend (go1.24.13), Nitro on Arbitrum One and Robinhood Chain (go1.27.3) and Elysium (go1.25.12). Cycle 18 addition: the fix for issue 82839 (CL 858581) is still unmerged, so no Go release holds it. The faulty step is in factsTable.update of the prove pass (go1.26.10 prove.go lines 1101-1117 and 1147-1157) and reads the same in go1.24.7. Whether go1.25.12, which Elysium reports, lies inside the range of issue 82839 was not established (lead L-876), and Elysium's build names no source commit, so the tree search below does not speak for it.",
+   "mechanism": "Both faults change behaviour only on unusual shapes. Issue 79874 needs a slice start of 2^32 or more that the compiler has proved in bounds. The interpreter never slices calldata, code, memory or return data with such an index: a copy or load with a larger offset is clamped to the data length or charged for memory expansion first, and a zero-length copy or hash at a large offset touches no slice. The new offsets.py vectors aim at exactly that region (offsets from 2^31 to 2^256-1 for CALLDATALOAD, CALLDATACOPY, CODECOPY, KECCAK256, MCOPY and RETURNDATACOPY) and Elysium returns the specified word or failure on every one. Issue 80517 removes a bounds check whose failure would otherwise panic; on a correct program the check never fires, so it can only turn an existing out-of-range bug of the node into a silent read. The PoolManager paths that depend on these copies are the hook result copy (src/libraries/Hooks.sol:148), the revert bubbling copy (src/libraries/CustomRevert.sol:109), and the arithmetic in src/libraries/FullMath.sol:21-54; all match on the battery, the targeted set, the script sets and 3,515 mined swaps. The settled state is computed by the consensus-v61 WebAssembly machine built with go1.25.9 (F-119), which predates both fixes as well but runs on a different target. Cycle 17 additions: the EVM paths the PoolManager depends on work on 64 bit words in holiman/uint256 and the interpreter, and no comparison of the issue 82839 shape was located there, though the source was not searched systematically (lead L-839) and no binary was decompiled. The answers were tested instead on 2026-11-25: the battery (99,985 vectors), the targeted set (85,544) and the large-offset vectors match the specification on Polygon, BNB Chain, Avalanche and Celo (Celo pinned to its op-geth backend), and on the 48 Club endpoint the battery, the targeted set, the call semantics words, the slot reads and the script sets match too. Which of the two 48 Club builds answered each batch is not known (lead L-844). bor, BNB Chain geth and avalanchego at go1.26.10 already contain the fixes for issues 79874 and 80517. Cycle 18 addition: the systematic search that lead L-839 asked for was done over the same 849 files and 73 packages as F-117. The trigger is a signed ordered comparison where one side is a sign extension of an int8, int16 or int32 value of the form x plus or minus a constant and the other side is a constant outside the narrow type. The search found no such comparison, no widened narrow signed value compared with anything, and one narrow signed widening in total: uint256 v1.3.2 ExtendSign (uint256.go:1275), the SIGNEXTEND handler. That value is shifted and or-ed into the result and never compared; the branches of the function test uint64 values. uint256 v1.2.4 (Avalanche) builds the mask without a narrow conversion. 122 conversions whose operand type could not be resolved were read by hand and none has a narrow operand. 2,340 vectors per network aimed at SIGNEXTEND, sign extension chains and ADDMOD returned the specified word on the six Go client networks.",
    "impact": "None found. A miscompiled routine in one operator's build would make that node disagree with the others, which shows up as a missed or reorganised block. On Elysium, with one whitelisted validator, the operator would be agreeing with itself.",
    "preconditions": "An operator keeps building from an affected or unsupported Go release, and some function on the interpreter or state path has one of the faulty shapes. No such shape was found. The Elysium, 48 Club and Nitro rc.9 builds are private, so those checks are by their answers.",
    "mitigations": "The deployer can ask the operators (Kinetiq for Elysium, 48 Club, and the client teams of bor, BNB Chain geth, avalanchego, Celo op-geth and Nitro) to build with a supported Go release that holds the fixes, and to publish the version and commit of each build. LPs need do nothing.",
@@ -13905,6 +14087,54 @@
     {
      "url": "eth_call with state override on https://polygon-bor-rpc.publicnode.com, https://bsc-dataseed1.bnbchain.org, https://api.avax.network/ext/bc/C/rpc and https://forno.celo.org, 2026-11-25 (results in research/network-risk/cycles/017/theme-library-paths.work/go/)",
      "supports": "battery, targeted and offsets vectors: no mismatch on the four networks"
+    },
+    {
+     "url": "https://github.com/golang/go/issues/82839",
+     "supports": "reproducer, affected releases go1.26.6 to go1.26.10, go1.27.3 and master, go1.24.13 variant, analysis of the look-through and x+delta steps; issue open"
+    },
+    {
+     "url": "https://go-review.googlesource.com/changes/858581",
+     "supports": "fix limits the constant computation to constants that fit the narrow type (fitsSigned); status NEW on 2026-11-16"
+    },
+    {
+     "url": "https://go.googlesource.com/go/+/refs/tags/go1.26.10/src/cmd/compile/internal/ssa/prove.go",
+     "supports": "go1.26.10 factsTable.update x+delta case and look-through of value-preserving extensions, isCleanExt"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/holiman/uint256/@v/v1.3.2.zip",
+     "supports": "uint256 v1.3.2 ExtendSign at uint256.go:1260-1300"
+    },
+    {
+     "url": "https://proxy.golang.org/github.com/holiman/uint256/@v/v1.2.4.zip",
+     "supports": "uint256 v1.2.4 ExtendSign at uint256.go:1289-1304"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/op-geth/c7ed55b8/go.mod",
+     "supports": "celo op-geth c7ed55b8 go 1.24.0 and uint256 v1.3.2; 141 files fetched from the same commit"
+    },
+    {
+     "url": "https://forno.celo.org",
+     "supports": "web3_clientVersion 2026-11-25: Geth/v0.1.0-untagged-c7ed55b8-20260817/linux-amd64/go1.24.13 and reth/v2.2.0-74cc8bb behind one name; only batches answered by the Geth backend were counted"
+    },
+    {
+     "url": "https://rpc.mainnet.chain.robinhood.com",
+     "supports": "web3_clientVersion 2026-11-25: nitro v3.13.0-rc.9+b72783f linux-arm64 and linux-amd64, go1.27.3"
+    },
+    {
+     "url": "src/types/Slot0.sol:49",
+     "supports": "tick read with signextend(2, shr(TICK_OFFSET, _packed))"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/scan-summary.json",
+     "supports": "A1, A2, A3 and A3u counts per package"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/prove-extendsign-v1.3.2.txt",
+     "supports": "go1.24.7 prove facts in ExtendSign"
+    },
+    {
+     "url": "file:research/network-risk/cycles/018/theme-go-toolchain-shapes.work/out/shapevec-137.json",
+     "supports": "vector results per network with seed 20261125 and the build that answered each batch (files shapevec-<chainId>.json)"
     }
    ],
    "evidence": "primary",
@@ -13956,7 +14186,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 17,
+   "lastVerifiedCycle": 18,
    "id": "F-136",
    "firstCycle": 16,
    "history": [
@@ -13972,6 +14202,13 @@
      "status": "confirmed",
      "severity": "info",
      "note": "established-l1 finding 0 (48 Club build on go1.25.5) and theme-library-paths finding 0 (Go issue 82839) folded in, as the cycle 17 critic asked."
+    },
+    {
+     "cycle": 18,
+     "unit": "theme-go-toolchain-shapes",
+     "status": "confirmed",
+     "severity": "info",
+     "note": "Finding 1 of the unit (ref F-136) folded in by hand: no comparison of the issue 82839 shape on the opcode or state path of seven client trees. Verifier: Elysium's go1.25.12 not placed in or out of the range (L-876)."
     }
    ]
   }

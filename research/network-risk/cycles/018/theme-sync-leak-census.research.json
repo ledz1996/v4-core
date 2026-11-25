@@ -1,0 +1,190 @@
+{
+ "unit": "theme-sync-leak-census",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "L-842, task 1: every MegaETH PoolManager transaction that ends successfully with an ERC-20 still synced, and every later transaction of the same block that calls settle, settleFor or take.",
+   "result": "None found. debug_traceTransaction with callTracer (https://mainnet.megaeth.com/rpc, mega-reth/v2.3.1-4499c42 at start and end) was run on 72,184 transactions: the 51,233 of the cycle 15 list (PoolManager logs or an ERC-20 Transfer to the PoolManager, blocks 7,009,653 to 32,770,383), 93 found by eth_getLogs for PoolManager logs and Transfers from or to the PoolManager from 32,770,384 to 32,814,962, and 20,858 more that appear only in Blockscout's internal transaction list (frames without a log, mostly failed). Every trace returned. The PoolManager frames were put in execution order with the reverted flag of the frame or an ancestor, and the source's transient model was replayed: sync(X) sets the synced currency and the reserves from the PoolManager's own balanceOf child call (src/libraries/CurrencyReserves.sol:27-32, src/PoolManager.sol:279-288), sync(0) and settle reset it (src/PoolManager.sol:283, 362), the state is empty at the start of each transaction. 36,875 completed ERC-20 syncs and 12,598 native ones; 54,803 completed settle calls each returned exactly what the model predicts (msg.value with nothing synced, balance rise since the sync otherwise, src/PoolManager.sol:349-364): zero mismatches. No successful transaction ends with an ERC-20 synced, so there is no later same-block settle to examine; 8,312 of 46,201 blocks hold several of these transactions. A settle credited from another transaction's sync would also show as a mismatch here, independently of finding the first transaction. Planted check (seed 18018, 200 sampled traces): dropping the first ERC-20 sync was detected 200 of 200 times, dropping the last settle left an ERC-20 synced or a mismatch 197 of 200 times (the other 3 end with a native settle). Not covered: a transaction that calls only sync and emits no log, makes no token transfer and is outside the Blockscout ranges read; it changes nothing unless a later settle is credited, and every later settle in the set was checked.",
+   "source": "research/network-risk/cycles/018/theme-sync-leak-census.work/census.py, analyse.py, plant.py, raw/census-4326*.jsonl, raw/analysis.json, raw/plant-4326.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "check": "L-842, task 1 on Monad: PoolManager transactions that end with an ERC-20 synced, and settles of later transactions of the same block.",
+   "result": "None found in a contiguous sample. Monad has about 650 PoolManager transactions per 1,000 blocks and eth_getLogs is limited to 100 blocks, so a full census was not possible from public endpoints. All 30,092 transactions with a PoolManager log or an ERC-20 Transfer from or to the PoolManager in blocks 125,250,001 to 125,295,000 (eth_getLogs in 450 windows of 100 blocks, https://rpc.monad.xyz and https://rpc-mainnet.monadinfra.com, Monad/0.16.7 at start and end) were traced with callTracer. 33,893 completed ERC-20 syncs, 24,580 syncs inside reverted frames, 42,244 completed settles, all equal to the model's value; no transaction ends with an ERC-20 synced; 6,771 of 16,675 blocks hold several. The client source explains why: every transaction, and every re-execution after a failed optimistic merge, runs on a fresh State built over the block state (execute_transaction.cpp lines 458 to 497), transient storage lives in AccountState::transient_storage_ (account_state.hpp line 70), and BlockState::merge copies only the account and storage_ of each address (block_state.cpp lines 194 to 250), so transient storage never reaches the next transaction.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/ethereum/execute_transaction.cpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/ethereum/state2/block_state.cpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/ethereum/state3/account_state.hpp ; research/network-risk/cycles/018/theme-sync-leak-census.work/raw/census-143.jsonl, raw/logs-143.json"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "MegaETH client source: where transient storage is cleared between transactions.",
+   "result": "mega-evm (main, version 1.7.4; crates.io 1.7.2) pins revm 40.0.3, which uses revm-context 18.0.3. TLOAD and TSTORE are the stock host handlers wrapped for compute gas (mega-evm src/evm/instructions.rs lines 611-612 and 2205-2206) and the host delegates tstore and tload to the stock journal (src/evm/host.rs lines 90-91). That journal clears transient_storage in commit_tx, discard_tx and finalize (revm-context 18.0.3 src/journal/inner.rs lines 154, 188, 246). The sandbox that mega-evm uses for keyless deploys merges accounts and storage only, and its own path calls commit_tx (src/evm/execution.rs line 1023). EIP-1153 requires all transient values to be discarded at the end of the transaction. The producer itself is closed; the mined census above is the evidence that it behaves this way.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/Cargo.toml ; https://static.crates.io/crates/mega-evm/mega-evm-1.7.2.crate ; https://static.crates.io/crates/revm-context/revm-context-18.0.3.crate ; https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-1153.md"
+  },
+  {
+   "chainIds": [
+    130
+   ],
+   "lens": "L2",
+   "check": "Task 2 control on an OP Stack network with flashblocks: Unichain, sync leak census over at least 20,000 PoolManager transactions.",
+   "result": "None found. 28,261 transactions, every one with a PoolManager log or an ERC-20 Transfer from or to the PoolManager 0x1f98400000000000000000000000000000000004 in blocks 64,813,001 to 64,863,000 (eth_getLogs, https://mainnet.unichain.org, op-reth/v2.10.0-rc.4-65e80332), traced with callTracer at https://unichain.drpc.org. 22,078 completed ERC-20 syncs, 28,420 settles all equal to the model, none ending with an ERC-20 synced, 6,088 of 13,788 blocks with several.",
+   "source": "research/network-risk/cycles/018/theme-sync-leak-census.work/raw/census-130.jsonl, raw/logs-130.json, raw/clientver-ctrl-start.txt"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L2",
+   "check": "Task 2 control on BNB Chain: sync leak census.",
+   "result": "None found, on 8,716 transactions, short of the 20,000 asked. Public full nodes keep state for about 128 blocks and the one archive endpoint with tracing (nodereal's public key) returned HTTP 429 after a few hundred calls, so the census followed the head: every block from 135,661,330 to 135,666,357 (5,028 consecutive blocks) was read with eth_getBlockReceipts at the bnbchain, defibit and ninicoin dataseeds (Geth/v1.8.2), its 8,347 transactions with a PoolManager log or a Transfer from or to the PoolManager were traced with callTracer at https://bsc.api.pocket.network while state was held, and 369 more from blocks 135,642,001 to 135,660,000 were traced at nodereal (11 failed with missing trie node). 10,449 ERC-20 syncs, 11,559 settles and 11 settleFor all equal to the model, none ending with an ERC-20 synced.",
+   "source": "research/network-risk/cycles/018/theme-sync-leak-census.work/live56.py, raw/live-56.jsonl, raw/live-56.jsonl.blocks, raw/census-56.jsonl"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "check": "L-830, task 4: zero-value failed PoolManager calls on MegaETH before block 31,861,608.",
+   "result": "Enumerated for 22,394,727 of the 24,851,956 blocks from deployment (7,009,653, eth_getCode bisection) to 31,861,608: Blockscout's v2 internal transaction list of the PoolManager, which includes zero-value and failed frames, was read backwards from 20 starting points to the previous one. Read completely: 7,009,653-19,435,630, 19,903,707-29,376,412, 30,372,022-30,619,010, 31,612,555-31,861,608. Not read: 19,435,631-19,903,706, 29,376,413-30,372,021, 30,619,011-31,612,554. In the ranges read, 181,581 frames in 40,972 transactions; 19,407 zero-value failed calls into the PoolManager in 8,959 transactions and 1,355 blocks (Parent reverted: 10,573, execution reverted: 8,823, out of gas: 11). All 8,959 of those transactions were traced: 1,035 failed at top level, the rest completed with the failure inside a caught frame; the reverted PoolManager frames are unlock 9,155, 0xf3cd914c 9,022, take 659, settle 337, sync 218, 0x1e2eaeaf 144. None of the completed ones ends with an ERC-20 synced and every completed settle in them equals the model. Their blocks were not re-run in the stateless validator in this cycle; the list is in raw/task4.json.",
+   "source": "https://megaeth.blockscout.com/api/v2/addresses/0xacb7e78fa05d562e0a5d3089ec896d57d057d38e/internal-transactions ; research/network-risk/cycles/018/theme-sync-leak-census.work/itxseg.py, task4.py, raw/task4.json, raw/itxseg*/"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L2",
+   "check": "Task 3, L-845 and L-464: silent eth_getLogs gaps for PoolManager Swap and ModifyLiquidity logs on BNB Chain, ten windows of 2,000 blocks from deployment to head, 20 sampled blocks per window compared with eth_getBlockReceipts (seed '<chainId>-<window>').",
+   "result": "BNB Chain: deployment block 45,970,610, 10 of 10 windows read. https://bsc-mainnet.nodereal.io/v1/64a9df0874fb4a93b9d0a3849de012d3 answered 10 windows with 35,532 logs and matched the receipts on 190 of 190 sampled blocks (474 logs in receipts). https://bsc.api.pocket.network answered 10 windows with 35,532 logs and matched the receipts on 190 of 190 sampled blocks (474 logs in receipts). https://bsc-rpc.publicnode.com could not be tested (error: HTTP Error 403: Forbidden; error: HTTP Error 403: Forbidden (endpoint refused this client three times; skipped)). The cycle 17 window 135,480,000 to 135,489,999 gives 24,459 PoolManager logs on bsc.api.pocket.network (which answered as reth-bsc/v0.1.4-hotfix-23b510f/linux) and 24,459 on nodereal, the count cycle 17 got from rpc-bsc.48.club. No endpoint that answered returned fewer logs than the receipts on any sampled block. The publicnode endpoints refused this client with HTTP 403 (a Cloudflare challenge) on every window, except Avalanche's on window 0, so they were not tested.",
+   "source": "research/network-risk/cycles/018/theme-sync-leak-census.work/gapcheck.py, gapsum.py, raw/gap/56.json, raw/gap-summary.json"
+  },
+  {
+   "chainIds": [
+    4663
+   ],
+   "lens": "L2",
+   "check": "Task 3, L-845 and L-464: silent eth_getLogs gaps for PoolManager Swap and ModifyLiquidity logs on Robinhood Chain, ten windows of 2,000 blocks from deployment to head, 20 sampled blocks per window compared with eth_getBlockReceipts (seed '<chainId>-<window>').",
+   "result": "Robinhood Chain: deployment block 9,070, 10 of 10 windows read. https://rpc.mainnet.chain.robinhood.com answered 10 windows with 43,940 logs and matched the receipts on 192 of 192 sampled blocks (468 logs in receipts). https://robinhood-rpc.publicnode.com could not be tested (error: HTTP Error 403: Forbidden; error: HTTP Error 403: Forbidden (endpoint refused this client three times; skipped)). No endpoint that answered returned fewer logs than the receipts on any sampled block. The publicnode endpoints refused this client with HTTP 403 (a Cloudflare challenge) on every window, except Avalanche's on window 0, so they were not tested.",
+   "source": "research/network-risk/cycles/018/theme-sync-leak-census.work/gapcheck.py, gapsum.py, raw/gap/4663.json, raw/gap-summary.json"
+  },
+  {
+   "chainIds": [
+    42161
+   ],
+   "lens": "L2",
+   "check": "Task 3, L-845 and L-464: silent eth_getLogs gaps for PoolManager Swap and ModifyLiquidity logs on Arbitrum One, ten windows of 2,000 blocks from deployment to head, 20 sampled blocks per window compared with eth_getBlockReceipts (seed '<chainId>-<window>').",
+   "result": "Arbitrum One: deployment block 297,842,872, 10 of 10 windows read. https://arb1.arbitrum.io/rpc answered 10 windows with 4,319 logs and matched the receipts on 190 of 190 sampled blocks (193 logs in receipts). https://arb-one.api.pocket.network answered 10 windows with 4,319 logs and matched the receipts on 190 of 190 sampled blocks (193 logs in receipts). https://arbitrum-one-rpc.publicnode.com could not be tested (error: HTTP Error 403: Forbidden; error: HTTP Error 403: Forbidden (endpoint refused this client three times; skipped)). No endpoint that answered returned fewer logs than the receipts on any sampled block. The publicnode endpoints refused this client with HTTP 403 (a Cloudflare challenge) on every window, except Avalanche's on window 0, so they were not tested.",
+   "source": "research/network-risk/cycles/018/theme-sync-leak-census.work/gapcheck.py, gapsum.py, raw/gap/42161.json, raw/gap-summary.json"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "check": "Task 3, L-845 and L-464: silent eth_getLogs gaps for PoolManager Swap and ModifyLiquidity logs on Polygon, ten windows of 2,000 blocks from deployment to head, 20 sampled blocks per window compared with eth_getBlockReceipts (seed '<chainId>-<window>').",
+   "result": "Polygon: deployment block 66,980,384, 10 of 10 windows read. https://poly.api.pocket.network answered 10 windows with 16,284 logs and matched the receipts on 189 of 189 sampled blocks (285 logs in receipts). https://polygon-bor-rpc.publicnode.com could not be tested (error: HTTP Error 403: Forbidden (endpoint refused this client three times; skipped)). https://polygon.drpc.org could not be tested (error: HTTP Error 400: Bad Request). No endpoint that answered returned fewer logs than the receipts on any sampled block. The publicnode endpoints refused this client with HTTP 403 (a Cloudflare challenge) on every window, except Avalanche's on window 0, so they were not tested.",
+   "source": "research/network-risk/cycles/018/theme-sync-leak-census.work/gapcheck.py, gapsum.py, raw/gap/137.json, raw/gap-summary.json"
+  },
+  {
+   "chainIds": [
+    10
+   ],
+   "lens": "L2",
+   "check": "Task 3, L-845 and L-464: silent eth_getLogs gaps for PoolManager Swap and ModifyLiquidity logs on OP Mainnet, ten windows of 2,000 blocks from deployment to head, 20 sampled blocks per window compared with eth_getBlockReceipts (seed '<chainId>-<window>').",
+   "result": "OP Mainnet: deployment block 130,947,675, 10 of 10 windows read. https://mainnet.optimism.io answered 1 windows with 0 logs and matched the receipts on 1 of 1 sampled blocks (0 logs in receipts), and failed on 9 windows (error: HTTP Error 403: Forbidden (endpoint refused this client three times; skipped)). https://op.api.pocket.network answered 10 windows with 16,162 logs and matched the receipts on 60 of 60 sampled blocks (118 logs in receipts). https://optimism-rpc.publicnode.com could not be tested (error: HTTP Error 403: Forbidden (endpoint refused this client three times; skipped)). A second run on https://mainnet.optimism.io alone answered window 0 with 0 logs and refused the other nine with HTTP 403. No endpoint that answered returned fewer logs than the receipts on any sampled block. The publicnode endpoints refused this client with HTTP 403 (a Cloudflare challenge) on every window, except Avalanche's on window 0, so they were not tested.",
+   "source": "research/network-risk/cycles/018/theme-sync-leak-census.work/gapcheck.py, gapsum.py, raw/gap/10.json, raw/gap-summary.json"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L2",
+   "check": "Task 3, L-845 and L-464: silent eth_getLogs gaps for PoolManager Swap and ModifyLiquidity logs on Base, ten windows of 2,000 blocks from deployment to head, 20 sampled blocks per window compared with eth_getBlockReceipts (seed '<chainId>-<window>').",
+   "result": "Base: deployment block 25,350,988, 6 of 10 windows read. https://base.api.pocket.network answered 6 windows with 861,719 logs and matched the receipts on 110 of 110 sampled blocks (9,847 logs in receipts). https://mainnet.base.org could not be tested (error: HTTP Error 429: Too Many Requests). https://base-rpc.publicnode.com could not be tested (error: HTTP Error 403: Forbidden; error: HTTP Error 403: Forbidden (endpoint refused this client three times; skipped)). No endpoint that answered returned fewer logs than the receipts on any sampled block. The publicnode endpoints refused this client with HTTP 403 (a Cloudflare challenge) on every window, except Avalanche's on window 0, so they were not tested.",
+   "source": "research/network-risk/cycles/018/theme-sync-leak-census.work/gapcheck.py, gapsum.py, raw/gap/8453.json, raw/gap-summary.json"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Task 3, L-845 and L-464: silent eth_getLogs gaps for PoolManager Swap and ModifyLiquidity logs on Avalanche, ten windows of 2,000 blocks from deployment to head, 20 sampled blocks per window compared with eth_getBlockReceipts (seed '<chainId>-<window>').",
+   "result": "Avalanche: deployment block 56,195,376, 7 of 10 windows read. https://api.avax.network/ext/bc/C/rpc answered 7 windows with 1,326 logs and matched the receipts on 89 of 89 sampled blocks (64 logs in receipts). https://avax.api.pocket.network answered 7 windows with 1,326 logs and matched the receipts on 89 of 89 sampled blocks (64 logs in receipts). https://avalanche-c-chain-rpc.publicnode.com answered 1 windows with 0 logs and matched the receipts on 7 of 7 sampled blocks (0 logs in receipts), and failed on 6 windows (error: HTTP Error 403: Forbidden (endpoint refused this client three times; skipped)). No endpoint that answered returned fewer logs than the receipts on any sampled block. The publicnode endpoints refused this client with HTTP 403 (a Cloudflare challenge) on every window, except Avalanche's on window 0, so they were not tested.",
+   "source": "research/network-risk/cycles/018/theme-sync-leak-census.work/gapcheck.py, gapsum.py, raw/gap/43114.json, raw/gap-summary.json"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    56,
+    8453,
+    137,
+    43114,
+    42161,
+    4663,
+    10
+   ],
+   "lens": "L2",
+   "question": "Repeat the ten-window receipt comparison (gapcheck.py) on the publicnode endpoints of Base, Polygon, Avalanche, Arbitrum One, Robinhood Chain, OP Mainnet and BNB Chain from a client they do not refuse, and on mainnet.optimism.io and mainnet.base.org at a pace their rate limits allow.",
+   "why": "These endpoints answered HTTP 403 or 429 here, so the one known silent gap (bsc-rpc.publicnode.com, OPCODES.md:347) is neither confirmed nor ruled out for the other publicnode hosts, which earlier log scans used (cycles 4 to 6: theme-balance-reconcile, theme-claim-operators, theme-shared-hooks, theme-unbacked-claims, theme-currency-lists; networks.json lists polygon-bor-rpc.publicnode.com as Polygon's RPC).",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L2",
+   "question": "Extend the BNB Chain sync leak census from 8,716 to at least 20,000 transactions, by following the head for about two more hours or through an archive endpoint with tracing.",
+   "why": "The control fell short of the size asked; nothing in the sample suggests a leak.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "question": "Read Blockscout's internal transaction list for MegaETH blocks 19,435,631-19,903,706, 29,376,413-30,372,021 and 30,619,011-31,612,554, trace the transactions with zero-value failed PoolManager calls, and re-run the blocks of raw/task4.json in the stateless validator.",
+   "why": "These three ranges close L-830; the validator step of L-830 was not done in this cycle.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "question": "Run census.py on further Monad windows spread over the PoolManager's history, for example 20 windows of 2,000 blocks.",
+   "why": "The Monad census is one contiguous window of 45,000 blocks; the history holds several million PoolManager transactions and public endpoints limit eth_getLogs to 100 blocks.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-842",
+   "outcome": "cleared",
+   "answer": "MegaETH: 72,184 PoolManager transactions traced (the 51,233 of cycle 15, all later ones to block 32,814,962, and those Blockscout lists without a log), Monad: 30,092 in blocks 125,250,001-125,295,000. None ends with an ERC-20 synced and every completed settle (54,803 and 42,244) returned what the source's transient model predicts, so no settle was credited from another transaction's sync. Controls: Unichain 28,261, BNB Chain 8,716, same result."
+  },
+  {
+   "leadId": "L-845",
+   "outcome": "inconclusive",
+   "answer": "Pocket endpoints on all seven networks, the official Arbitrum One, Avalanche and Robinhood endpoints and nodereal on BNB Chain returned exactly the receipt count on every sampled block of every window they answered. The publicnode endpoints refused this client with HTTP 403, mainnet.optimism.io with 403 after one window and mainnet.base.org with 429, so those were not tested."
+  },
+  {
+   "leadId": "L-464",
+   "outcome": "cleared",
+   "answer": "For PoolManager logs, bsc.api.pocket.network returned the same count as nodereal on all ten windows from block 45,970,610 to head (35,532 logs) and matched the receipts on every sampled block; on the cycle 17 window it returned 24,459 logs, as rpc-bsc.48.club did. The sNVB rebase history and the cycle 5 rows were not redone."
+  },
+  {
+   "leadId": "L-830",
+   "outcome": "inconclusive",
+   "answer": "19,407 zero-value failed PoolManager calls in 8,959 transactions and 1,355 blocks enumerated over about 90% of the blocks before 31,861,608; three ranges remain and the blocks were traced but not re-run in the validator."
+  }
+ ]
+}
