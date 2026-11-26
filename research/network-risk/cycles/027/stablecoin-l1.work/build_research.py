@@ -1,0 +1,138 @@
+"""Write cycles/027/stablecoin-l1.research.json from this cycle's outputs. Usage: python3 -I build_research.py"""
+import os, json
+W = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(os.path.dirname(W), 'stablecoin-l1.research.json')
+WD = 'research/network-risk/cycles/027/stablecoin-l1.work'
+
+EVM2_NEW = 'https://raw.githubusercontent.com/DaniPopes/evm2/7c9f3b6deb23005fc84596ba1b13a6492d942014/crates/evm2/src'
+EVM2_OLD = 'https://raw.githubusercontent.com/DaniPopes/evm2/35aa32800b147b00e616d4e1869a3835aa86701f/crates/evm2/src'
+TEMPO_LOCK = 'https://raw.githubusercontent.com/tempoxyz/tempo/main/Cargo.lock'
+RETH_NEW = 'https://raw.githubusercontent.com/paradigmxyz/reth/5537d6927c14d0be2d3b1505fd305097014233d0'
+TIP1060 = 'https://raw.githubusercontent.com/tempoxyz/tempo/main/tips/tip-1060.md'
+TIP1000 = 'https://tempo.com/developers/docs/protocol/tips/tip-1000.md'
+ARC_LOCK = 'https://raw.githubusercontent.com/circlefin/arc-node/main/Cargo.lock'
+
+profiles = [
+    {"chainId": 4217, "lens": "L1",
+     "summary": "The endpoint still answers tempo/v1.19.1-a9d6748 (block 50,959,588 on 2026-11-26) and no later tag exists. tempo main now pins evm2 7c9f3b6d instead of 35aa3280 and reth 5537d69 instead of 167933d, so the next release will carry them. The 14 evm2 instruction and jump analysis files are byte identical between the two evm2 commits; the changed files touch EIP-7702 caller checks, the per frame memory limit, MODEXP with a missing modulus and block access list code hashes. All reruns match, and the long stateful sequences of cycle 26 now give word level matches on Tempo.",
+     "deltas": [
+         {"delta": "tempo main's Cargo.lock pins evm2 7c9f3b6deb23005fc84596ba1b13a6492d942014 (was 35aa3280 in a9d6748 and in cycle 25's copy of main), reth 5537d6927c14d0be2d3b1505fd305097014233d0 (was 167933d) and reth-core 15c627da; ruint 1.21.1, alloy-primitives 1.7.3, fixed-cache 0.1.10 and keccak-asm 0.1.9 are unchanged. No tempo tag after v1.19.1 exists (v1.19.2, v1.20.0 and their rc tags return 404), so the endpoint still runs 35aa3280.",
+          "source": TEMPO_LOCK + " ; https://raw.githubusercontent.com/tempoxyz/tempo/v1.19.2/Cargo.lock (404)", "relevance": "low"},
+         {"delta": "A crawl of the evm2 crate module tree at both commits (137 and 138 files) shows 14 changed files and 1 new test file. interpreter/instructions/{arithmetic,bitwise,control,crypto,host,i256,memory,stack,system}.rs, bytecode/analysis.rs, bytecode/analysis/x86.rs and bytecode/analysis/aarch64.rs are byte identical. Changed: version/mod.rs (default memory limit per frame from 2^32-1 bytes to 100 MiB), precompiles/modexp.rs (an input that ends before the modulus returns mod_len zero bytes without padding), ethereum/mod.rs (EIP-3607 exempts a delegation designator only when EIP7702 is enabled), evm/bal/changes.rs (a block access list code change seeds the bytecode hash from CodeChange::code_hash), evm/mod.rs, evm/system.rs, evm/inspector.rs, evm/precompile.rs (inspector and refund bookkeeping), evm/state/mod.rs (log buffer reuse), bytecode/mod.rs and precompiles/kzg and bn254 (tests).",
+          "source": EVM2_NEW + "/version/mod.rs ; " + EVM2_OLD + "/version/mod.rs ; " + EVM2_NEW + "/precompiles/modexp.rs ; " + EVM2_NEW + "/interpreter/instructions/arithmetic.rs ; " + WD + "/crawl.py, dl/evm2-35aa328, dl/evm2-7c9f3b6", "relevance": "low"},
+         {"delta": "The release workflow on main still builds x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu and aarch64-apple-darwin with features asm-keccak,jemalloc,otlp and without the jit feature (release.yml lines 131-138); bin/tempo keeps keccak-cache-global in its default features (Cargo.toml line 155).",
+          "source": "https://raw.githubusercontent.com/tempoxyz/tempo/main/.github/workflows/release.yml ; https://raw.githubusercontent.com/tempoxyz/tempo/main/bin/tempo/Cargo.toml", "relevance": "low"},
+         {"delta": "Under TIP-1060 Refund mode, the default, every zero to nonzero SSTORE pays the 245,000 gas creditable portion upfront whatever the slot's transaction-original value, and the refund is settled only after the top-level frame returns. A dirty recreation X to 0 to Y inside one transaction, which costs about 100 gas on Ethereum under EIP-2200, costs 245,000 gas of gross budget on Tempo. debug_traceCall showed one 16-pool swap round using 12.8 million gross gas in its frame against 7.05 million net for the call.",
+          "source": TIP1060 + " (lines 44-51, 185-220) ; " + WD + "/out/trace-a64-r0r1.json (debug_traceCall on https://rpc.mainnet.tempo.xyz, 2026-11-26)", "relevance": "low"},
+     ]},
+    {"chainId": 4217, "lens": "L2",
+     "summary": "The new reth pin on tempo main keeps both switches that cycle 25 found off for speculative prewarm result reuse, so the next Tempo release still re-executes every transaction. The block access list change in evm2 7c9f3b6d computes the code hash from the code bytes.",
+     "deltas": [
+         {"delta": "reth 5537d69's payload processor reuses prewarm results only when prewarm_reuse is set (default false in both TreeConfig constructors, config.rs lines 289 and 380), the block has no decoded access list, and the EVM config's reuses_prewarm_results returns true (payload_processor/mod.rs lines 456-461); the trait default is false (crates/evm/evm/src/lib.rs lines 684-686) and tempo main's crates/evm/src/lib.rs does not override it. The parallel builder is still behind the hidden --builder.parallel flag (crates/node/src/node.rs lines 137-139).",
+          "source": RETH_NEW + "/crates/engine/tree/src/tree/payload_processor/mod.rs ; " + RETH_NEW + "/crates/engine/primitives/src/config.rs ; " + RETH_NEW + "/crates/evm/evm/src/lib.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/evm/src/lib.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/node/src/node.rs", "relevance": "none"},
+         {"delta": "alloy-eip7928 0.4.13 (the version tempo main pins) keeps CodeChange's hash in a private OnceLock that serde and borsh skip and fills it only with keccak256 of new_code (src/code_change.rs lines 27-65), so the hash evm2 7c9f3b6d seeds into a bytecode from a block access list cannot differ from the code.",
+          "source": "https://static.crates.io/crates/alloy-eip7928/alloy-eip7928-0.4.13.crate (sha256 matches the lock checksum bec2b63e)", "relevance": "none"},
+     ]},
+    {"chainId": 4217, "lens": "L3",
+     "summary": "Nothing new on tokens or the fee token; they were not swept, as the cycle plan asks. The TIP-1060 upfront charge is recorded under L1.",
+     "deltas": []},
+    {"chainId": 4217, "lens": "L4",
+     "summary": "Nothing new on system contracts. MODEXP vectors aimed at the path evm2 7c9f3b6d rewrites (input that ends before or inside the modulus) all match EIP-198 on the current release. T14 activates 2026-12-08 15:00 UTC and T15 still has a target date only.",
+     "deltas": [
+         {"delta": "The T14 and T15 upgrade pages and the node release notes are byte identical to cycle 25's copies: T14 mainnet activation 1796742000, T15 planned for 2026-12-15 with no timestamp and only TIP-1166 in scope. No T16 page exists.",
+          "source": "https://tempo.com/developers/docs/protocol/upgrades/t14.md ; https://tempo.com/developers/docs/protocol/upgrades/t15.md ; https://tempo.com/developers/docs/changelog.md", "relevance": "low"},
+     ]},
+    {"chainId": 5042, "lens": "L1",
+     "summary": "rpc.mainnet.arc.io still answers v0.8.6-rc1 (37812c61) and arc.drpc.org v0.8.6 (8e8edb7a); neither commit nor any later tag is public. arc-node main's Cargo.lock and CHANGELOG.md are byte identical to cycle 25. All reruns, the keccak cache vectors, the MODEXP vectors and the cycle 26 stateful sequences in their long form match.",
+     "deltas": []},
+    {"chainId": 5042, "lens": "L2",
+     "summary": "Still no trace access. One more public gateway was found: arc.gateway.tenderly.co serves chain 0x13b2 and answers debug_traceTransaction and trace_transaction with a rate limit error rather than method not found. The execution cache and precompile cache of reth v2.2.0, the engine crates arc-node pins, compare full keys.",
+     "deltas": [
+         {"delta": "arc.gateway.tenderly.co answers eth_chainId 0x13b2 and web3_clientVersion Tenderly/1.0, and returns code -32005 rate limit exceeded to debug_traceTransaction and trace_transaction; 5042.rpc.thirdweb.com rejects debug_traceTransaction as an invalid method and asks for a key for trace_transaction; arc-rpc.publicnode.com returns a Cloudflare challenge; rpc.ankr.com/arc needs a key.",
+          "source": "JSON-RPC queries on 2026-11-26 to https://arc.gateway.tenderly.co, https://5042.rpc.thirdweb.com, https://arc-rpc.publicnode.com, https://rpc.ankr.com/arc", "relevance": "low"},
+     ]},
+    {"chainId": 5042, "lens": "L3",
+     "summary": "Nothing new. Token paths were not swept, as the cycle plan asks.",
+     "deltas": []},
+    {"chainId": 5042, "lens": "L4",
+     "summary": "No hardfork is scheduled: hardforks.rs on arc-node main ends at Zero8 and the run-a-node page lists v0.8.6 as latest with v0.9.0 announced. MODEXP vectors on both endpoints match EIP-198.",
+     "deltas": []},
+]
+
+cleared = [
+    {"chainIds": [4217, 5042], "lens": "L1",
+     "check": "Reruns on 2026-11-26 of battery.py (99,985 vectors), targeted.py (85,544), pmdiff.py (250 scripts), pmdiff2.py (300 scripts), swaps.py (1,033 Tempo and 6,177 Arc mined swaps) and replay.py against tempo/v1.19.1-a9d6748 and arc v0.8.6-rc1 37812c61.",
+     "result": "Battery and targeted: 0 mismatches and 0 errors on both. pmdiff: Arc 250 of 250 identical, Tempo 240 of 250, and pmdiff_explain shows the 10 differences are calls that ran out of gas (7 initialize, 3 swap), 8 of them identical with more gas, as in cycle 25. pmdiff2: Arc 300 of 300, Tempo 294 of 300 with the same gas-only differences. Swaps: every tick equals the source's TickMath (Arc has 1 boundary case) and the 9 Arc multi and other rows replay without failure.",
+     "source": WD + "/battery.log, targeted.log, pmdiff.log, pmdiff_explain.log, pmdiff2.log, swaps.log, replay.log; src/libraries/TickMath.sol, src/libraries/SwapMath.sol:51"},
+    {"chainIds": [4217], "lens": "L1",
+     "check": "L-1126: the cycle 26 stateful sequences on Tempo at word level. a64 (16 pools of alternating liquidity denominators, 4 swap rounds) with the 16-pool setup state computed in the reference interpreter and passed as stateDiff (114 slots), so all four rounds run in one eth_call and one EVM instance; a512 (32 rounds) the same way; b (reverted unlock between two identical swaps) with its steps 5 to 9 in one call; c and c2 (nested writes in afterSwap and beforeSwap); d300 (300 currencies of transient deltas, mint and reverted inner mint in one frame); e (hook code replaced at one CREATE2 address).",
+     "result": "Every returned word equals the reference interpreter: a64 128 words in one call (5.19 million gas), a512 1,024 words in one call (16.59 million gas), b in three calls, c and c2 32 words each, d300 27 words in one frame (9.17 million gas, original cycle 26 driver, ERC-6909 balance slots at mapping slot 4 and the driver's output slots pre-set to 1, which the reference shows changes no word). e gives the same ten words on Tempo, on both Arc endpoints and on Ethereum (reth): the second CREATE2 returns address 0, the old code still runs (mark 0xA) and the code hash is unchanged. The same a64, a512, c, c2 and e words come back under T14 rules (eth_simulateV1 at block time 1796745600). The cycle 26 failures were gas: Tempo grants 25,000,000 gas to eth_call, TIP-1060 Refund mode charges 245,000 gas upfront for every zero to nonzero write including the driver's recreated output slots, and a CREATE2 address collision consumes the gas passed to it, leaving the step 1/64 of its budget. The driver used for a, b, c, c2 and e (src/Seq27.sol) keeps outputs in transient storage and bounds the second CREATE2 to 2,000,000 gas; what it asks of the PoolManager is unchanged. The FullMath.mulDiv (src/libraries/FullMath.sol:14) and mulDivRoundingUp (line 109) calls of SqrtPriceMath (src/libraries/SqrtPriceMath.sol:31, 86, 188, 234) and SwapMath.computeSwapStep (src/libraries/SwapMath.sol:51) in those rounds, and the transient delta accounting (src/libraries/CurrencyDelta.sol:21-39, NonzeroDeltaCount.sol:14-32), compute the same values as the specification.",
+     "source": WD + "/l1126.py, run27.py, t14_run27.py, src/Seq27.sol, out/run27-4217.json, out/l1126-d300.json, out_t14/run27-4217.json, out_1_eth.api.pocket.network/run27-1.json; eth_call on https://rpc.mainnet.tempo.xyz blocks 50,958,617 to 50,959,588, client tempo/v1.19.1-a9d6748"},
+    {"chainIds": [5042], "lens": "L1",
+     "check": "The cycle 27 driver's a512 (32 rounds in one call) and b (all 10 steps in one call) on rpc.mainnet.arc.io.",
+     "result": "a512 returns 1,024 words and b 50 words, all equal to the reference interpreter.",
+     "source": WD + "/out_5042_rpc.mainnet.arc.io/run27-5042.json (eth_call on https://rpc.mainnet.arc.io at block 33,299,082, arc/v1)"},
+    {"chainIds": [4217], "lens": "L1",
+     "check": "evm2 7c9f3b6d, which tempo main pins for the next release: do any of its changes alter the opcodes the PoolManager uses or the jump destination analysis?",
+     "result": "No. The arithmetic, bitwise, control, crypto, host, i256, memory, stack and system instruction files and the three analysis files are byte identical to 35aa3280. The new 100 MiB per frame memory limit cannot be reached with gas: 3,276,800 words of memory cost about 2.1 times 10^10 gas against a 500,000,000 block gas limit, and the PoolManager's frames use kilobytes. The EIP-3607 change concerns transaction senders with delegation code, not contract calls. The PoolManager makes no MODEXP call.",
+     "source": EVM2_NEW + "/version/mod.rs ; " + EVM2_NEW + "/ethereum/mod.rs ; " + EVM2_NEW + "/interpreter/memory.rs ; " + WD + "/dl/evm2-35aa328, dl/evm2-7c9f3b6"},
+    {"chainIds": [4217, 5042], "lens": "L4",
+     "check": "MODEXP at 0x05 with 60 inputs that end at the header, inside the base, at the end of the exponent, one byte into the modulus, one byte short of the end, or complete (the path evm2 7c9f3b6d rewrites), compared with EIP-198 zero padding.",
+     "result": "0 mismatches and 0 errors on rpc.mainnet.tempo.xyz, rpc.mainnet.arc.io and arc.drpc.org.",
+     "source": WD + "/modexp.py, out/modexp.json (eth_call on 2026-11-26)"},
+    {"chainIds": [4217, 5042], "lens": "L1",
+     "check": "The 766 KECCAK256 vectors of cycle 10 aimed at the process-global keccak cache (inputs of 1 to 96 bytes, both sides of the 87 byte bypass), sent three times so later rounds meet cache hits.",
+     "result": "0 mismatches on both chains in all three rounds. Tempo main still pins alloy-primitives 1.7.3 and fixed-cache 0.1.10 and keeps keccak-cache-global on by default, so the next release carries the cache text already read.",
+     "source": WD + "/keccak_cache.json (cycles/010/stablecoin-l1.work/keccak_cache.py); " + TEMPO_LOCK},
+    {"chainIds": [4217], "lens": "L2",
+     "check": "Does the reth commit tempo main pins for the next release (5537d69) commit speculative prewarm results without re-running a transaction?",
+     "result": "No. Reuse still needs prewarm_reuse (default false), no decoded block access list, and reuses_prewarm_results from the EVM config (default false, not overridden by tempo main), so settle (src/PoolManager.sol:349-364) always measures a balance on state the validator executed.",
+     "source": RETH_NEW + "/crates/engine/tree/src/tree/payload_processor/mod.rs (lines 456-461) ; " + RETH_NEW + "/crates/engine/primitives/src/config.rs (lines 289, 380)"},
+    {"chainIds": [4217], "lens": "L3",
+     "check": "TIP-1060 Refund mode charges 245,000 gas upfront for every zero to nonzero write in a transaction, including slots cleared earlier in the same transaction, and refunds only after the top-level frame. Can an ordinary account use this to make other users' PoolManager calls fail?",
+     "result": "No loss or freeze path. The PoolManager forwards all remaining gas to hooks and native recipients (src/libraries/Hooks.sol:134, src/types/Currency.sol:48) and never caps a sub-call, so the charge only raises the gas limit a user's own transaction must carry. The writes that can go from zero to nonzero in a swap (feeGrowthGlobal at src/libraries/Pool.sol:446-448, tick crossings at Pool.sol:602, liquidity at Pool.sol:427) are the ones F-064 already prices at TIP-1000 rates; ERC-6909 balances (src/ERC6909.sol:17, PoolManager.sol:322-336) are the caller's own. A withdrawal clears slots and mints credits rather than creating them.",
+     "source": TIP1060 + " ; " + TIP1000 + " ; " + WD + "/out/trace-a64-r0r1.json, trace-a64-r1r3.json, trace-a64-r2r3.json"},
+    {"chainIds": [5042], "lens": "L1",
+     "check": "L-1071 for Arc: cache library and key of the execution cache and precompile cache in reth v2.2.0 (88505c7f), which arc-node main pins for reth-engine-tree and reth-execution-cache.",
+     "result": "The execution cache (crates/engine/execution-cache/src/cached_state.rs lines 84 and 669-675) uses fixed-cache 0.1.8 with keys B256 code hash, (Address, StorageKey) and Address; fixed-cache's get compares the stored key with key.equivalent before returning a value (src/lib.rs lines 314-339), so a hash collision returns a miss, not another slot's value. The precompile cache (crates/engine/tree/src/tree/precompile_cache.rs lines 44 and 184-186) is a moka cache per precompile address keyed by the whole input bytes plus the spec, and caches only successful outputs. The fixed-cache crate checksum c41c7aa6 matches arc-node's lock. Arc's endpoints run unpublished commits, so this reads the closest published source.",
+     "source": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.2.0/crates/engine/execution-cache/src/cached_state.rs ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.2.0/crates/engine/tree/src/tree/precompile_cache.rs ; https://static.crates.io/crates/fixed-cache/fixed-cache-0.1.8.crate ; " + ARC_LOCK},
+    {"chainIds": [5042], "lens": "L1",
+     "check": "Arc release state: arc_getVersion on both endpoints, tags v0.8.7, v0.8.7-rc1, v0.9.0, v0.9.0-rc1 and v0.8.6-rc2, arc-node main Cargo.lock, CHANGELOG.md and hardforks.rs.",
+     "result": "Endpoints unchanged (37812c61 and 8e8edb7a, both 404 on raw.githubusercontent.com), all five tags 404, lock and changelog byte identical to cycle 25, hardforks end at Zero8. Nothing to rerun beyond the standing set.",
+     "source": "arc_getVersion on https://rpc.mainnet.arc.io and https://arc.drpc.org (2026-11-26); " + ARC_LOCK + " ; https://raw.githubusercontent.com/circlefin/arc-node/main/crates/execution-config/src/hardforks.rs ; https://docs.arc.io/arc/tutorials/run-an-arc-node"},
+]
+
+leads = [
+    {"chainIds": [4217], "lens": "L1",
+     "question": "When a Tempo release past v1.19.1 is tagged (expected to carry evm2 7c9f3b6d and reth 5537d69, likely the T15 release), confirm its lock pins those commits, rerun battery.py, targeted.py, keccak_cache.py, modexp.py and run27.py (a512, b, c, c2, e) plus l1126.py d300 on the endpoint once it reports that release, and diff the evm2 crate tree again with crawl.py if the pin moved.",
+     "why": "Tempo has one client, and this cycle read the next release's evm2 and reth only from main, not from a tag.",
+     "priority": "medium"},
+    {"chainIds": [5042], "lens": "L2",
+     "question": "Does arc.gateway.tenderly.co serve debug_traceTransaction for Arc mainnet with an access key, and if so, can PoolManager frames without an unlock frame above them (L-1004) be listed from it?",
+     "why": "It is the only public Arc endpoint found that does not reject trace methods as unsupported; it answered with a rate limit error.",
+     "priority": "low"},
+]
+
+lead_results = [
+    {"leadId": "L-1126", "outcome": "cleared",
+     "answer": "All match. With the setup storage computed in the reference interpreter and passed as stateDiff, a64 ran its four rounds in one eth_call (128 words) and a512 its 32 rounds in one call (1,024 words); b's reverted unlock between two identical swaps ran in one call; c, c2 and d300 (27 words, 300 currencies in one frame) matched; e gave the same ten words as Ethereum and both Arc endpoints. a64, a512, c, c2 and e also match under T14 rules. The cycle 26 failures came from Tempo's 25,000,000 gas eth_call cap, TIP-1060's 245,000 gas upfront charge on every zero to nonzero write (the driver's output array is cleared and recreated each step) and the all-gas cost of a CREATE2 collision, not from the interpreter. Files: cycles/027/stablecoin-l1.work/out/run27-4217.json, out/l1126-d300.json, out_t14/run27-4217.json."},
+    {"leadId": "L-1096", "outcome": "inconclusive",
+     "answer": "No keyless endpoint serves traces. rpc.mainnet.arc.io and arc.drpc.org reject debug_traceTransaction as unsupported, 5042.rpc.thirdweb.com calls it an invalid method and wants a key for trace_transaction, arc-rpc.publicnode.com returns a Cloudflare challenge, rpc.ankr.com/arc needs a key. arc.gateway.tenderly.co (chain 0x13b2) answers both trace methods with a rate limit error, which suggests they exist behind a key; a new lead records it."},
+    {"leadId": "L-958", "outcome": "inconclusive",
+     "answer": "No new build: rpc.mainnet.arc.io still answers v0.8.6-rc1 at 37812c61 and arc.drpc.org v0.8.6 at 8e8edb7a, both 404 on raw.githubusercontent.com, and no later tag exists. The standing probe set (battery, targeted, both script sets, swaps, replay, keccak cache) and this cycle's stateful sequences match on the official endpoint, and e and MODEXP match on both."},
+    {"leadId": "L-925", "outcome": "inconclusive",
+     "answer": "Still not run on aarch64: this machine has only the x86_64-unknown-linux-gnu Rust target and no emulator, and the review forbids installing one. The question stays live because the release workflow ships aarch64-unknown-linux-gnu and aarch64-apple-darwin binaries (release.yml lines 134-138 at a9d6748 and on main). The analysis/aarch64.rs and ruint 1.21.1 that the next release pins are unchanged."},
+    {"leadId": "L-989", "outcome": "inconclusive",
+     "answer": "No T15 release is tagged (v1.19.2 and v1.20.0 404) and the T15 page is byte identical, so the channel reserve open path at T15 still cannot be checked against a scheduled release. Cycle 25's reading of a9d6748 stands: the PoolManager can never be a channel signer or payer."},
+    {"leadId": "L-1071", "outcome": "cleared",
+     "answer": "Arc half: reth v2.2.0's execution cache uses fixed-cache 0.1.8 keyed by full (Address, StorageKey), Address and code hash, and its get checks key equivalence before returning a value; its precompile cache is a moka cache per address keyed by the whole input and the spec. A hash collision gives a miss. The OP Stack, Celo and X Layer releases in this lead belong to other units and were not read."},
+    {"leadId": "L-104", "outcome": "inconclusive",
+     "answer": "Not worked: it concerns the Arc PositionManager and Universal Router, not src/, and this cycle's plan sets token and periphery sweeps aside."},
+    {"leadId": "L-112", "outcome": "inconclusive",
+     "answer": "Not worked: it concerns Tempo's periphery and TIP-20 receive policies, outside src/ and outside this cycle's focus. F-033 covers the direct PoolManager case."},
+]
+
+doc = {"unit": "stablecoin-l1", "_lenses": ["L1", "L2", "L3", "L4"], "profiles": profiles, "findings": [],
+       "cleared": cleared, "leads": leads, "leadResults": lead_results}
+json.dump(doc, open(OUT, 'w'), indent=1, ensure_ascii=False)
+print(OUT)

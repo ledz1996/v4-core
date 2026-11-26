@@ -1,0 +1,22 @@
+{
+ "unit": "theme-monad-engine-agreement",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "The build compared is the code that Monad mainnet holds. web3_clientVersion on https://rpc.monad.xyz answered Monad/0.16.7, and eth_getCode of 0x188d586ddcf52439676ca21a244753fa19f9ea8e returned 24,009 bytes equal to this checkout's build with its immutable set to that address.",
+   "agrees": true,
+   "note": "Rerun in this session. web3_clientVersion on https://rpc.monad.xyz returned \"Monad/0.16.7\". eth_getCode of 0x188d586ddcf52439676ca21a244753fa19f9ea8e at latest returned 24,009 bytes, byte-equal to out/pm-runtime.hex, with sha256 prefix 288b97729c9e4f34, which matches codeSha256 in state/networks.json. The harness therefore ran the deployed bytes against the release the RPC node reports. Whether the shipped validator package was built from the tagged source stays open as lead L-1123, as the unit says."
+  },
+  {
+   "check": "Task 4 (a), SHL, SHR and SAR of a literal value by a non-literal count load the result from a 96-byte read-only window (shift_literal_by_non_literal, emitter.cpp:5254-5326 at v0.16.7). This path is reached by the BitMath and TickBitmap constants and masks.",
+   "agrees": true,
+   "note": "Fetched https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/compiler/ir/x86/emitter.cpp and read lines 5254-5326, RoData::add96 at 360-384, add<N> at 414-460 and destructive_mov_stack_elem_to_bounded_rax at 4122-4190. The count is clamped to 256 in all three location branches: general register (cmp, cmova, or, cmovz), AVX (vpsubusw against 255 and vptest, which is zero only when the word is below 256) and stack slot (an OR of the upper limbs, then cmovz and cmova). With s = 8k + b, a per-qword shift by b of the load at byte k combined with the per-qword shift by 8 of the load at k+1 (or k-1 for SHL) produces every result bit p of lane j. The first load supplies the bits with p+b < 64 (SHR) or p >= b (SHL). The carry load supplies 8 <= p <= 63 (SHR) or 0 <= p <= 55 (SHL). Since b <= 7 the two ranges cover the whole lane, and both give the same bit where they overlap. At s = 256, b = 256 & 7 = 0 and both loads read only fill: SHR and SAR read bytes 32 to 64, where byte 64 is fill[0], and SHL reads down to byte 31 of the window, which is the zero top byte of {7,0,0,0}. Neither load reaches the mask qwords. The SAR fill is all ones only when value[3] >> 63 is set. Small constants are packed only into a chunk that add<N> itself allocates, so they cannot overwrite a 96-byte window. The unit's 151,632 test words (out/shift/summary.json: 0 mismatches at both tags) agree with this reading. The BitMath.sol and TickBitmap.sol shifts that reach this path compute the same values as on Ethereum."
+  },
+  {
+   "check": "Task 4, uint256 countl_zero at v0.16.7 (uint256.hpp:1063-1074), which now scans the limbs from least to most significant and keeps the last nonzero limb, against the early-exit loop of v0.16.5.",
+   "agrees": true,
+   "note": "Fetched uint256.hpp from raw.githubusercontent.com/category-labs/monad at v0.16.5 and v0.16.7. Both functions start at line 1063. v0.16.7 sets cnt = 256, then for each limb i from 0 to 3 with x[i] != 0 sets cnt = 192 - 64*i + countl_zero(x[i]), so the most significant nonzero limb wins: i = 3 gives clz(x[3]) and i = 0 gives 192 + clz(x[0]). v0.16.5 counts down from x[3] and returns at the first limb that is not all zero. The two are equal for every input, and zero gives 256 in both. The PoolManager has no CLZ, and its MULMOD moduli are not powers of two chosen at compile time, so nothing in src/libraries depends on this function beyond what the identity already settles."
+  }
+ ],
+ "leads": []
+}

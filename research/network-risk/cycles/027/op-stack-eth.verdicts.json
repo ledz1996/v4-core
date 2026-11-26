@@ -1,0 +1,40 @@
+{
+  "unit": "op-stack-eth",
+  "verdicts": [
+    {"findingIndex": 0,
+     "verdict": "confirmed",
+     "severity": "info",
+     "factCheck": "On 2026-11-26 I sent 10 JSON-RPC batches of three web3_clientVersion calls to https://mainnet.optimism.io. 9 of the 10 batches mixed op-reth/v2.8.1-72207294/x86_64-linux and op-reth/v0.0.0-dev-unknown/x86_64-linux, and 1 named only the unversioned build. This matches the finding's record of 18 mixed batches in 30 (cycles/027/op-stack-eth.work/batch-clientver.txt). A batch bracket therefore does not pin an eth_call to one build. I did not find a published source for the unversioned build.",
+     "codeCheck": "No line in src/ depends on which RPC backend answers a read. The cited FullMath.sol:24-48 and TickMath.sol:61-111 are the paths whose per-build coverage is unpinned. The PoolManager state is computed by the block producer and validated by derivation, so the routing affects only the evidence of this review and the answers that integrators read.",
+     "corrections": "",
+     "sources": [
+      {"url": "rpc:https://mainnet.optimism.io batched web3_clientVersion x3, 10 batches, 2026-11-26", "supports": "9 of 10 batches answered by both op-reth/v2.8.1-72207294 and op-reth/v0.0.0-dev-unknown"}
+     ]},
+    {"findingIndex": 1,
+     "verdict": "confirmed",
+     "severity": "low",
+     "factCheck": "Fetched https://specs.optimism.io/interop/eth-liquidity.html. It says the contract is initialized with type(uint128).max wei at 0x4200000000000000000000000000000000000025, that only SuperchainETHBridge may call mint and burn (iEL-002), and that minting serves relays and refunds of expired sends. Fetched ETHLiquidity.sol at op-contracts/v10.0.0. mint and burn check msg.sender against SUPERCHAIN_ETH_BRIDGE and the pause (lines 63-76), fund is payable (80-83), and the contract has no receive or fallback, so a value call with empty calldata reverts. Fetched https://docs.optimism.io/notices/upgrade-22.md. It lists Lagoon at Monday 11 January 2027 16:00:01 UTC (1799683201) on mainnet, interop between OP Mainnet and Unichain only, Ink and Soneium activating Lagoon without interop, and says the mainnet dates depend on governance approval and can move. Fetched https://specs.optimism.io/interop/derivation.html. It says blocks with invalid executing messages must not become safe and are replaced by a deposits-only block at the same height. On-chain on 2026-11-26: 0x4200..0025 and 0x4200..0024 on OP Mainnet and Unichain have proxy code, a zero EIP-1967 implementation slot and a balance of 0; 0x4200..0025 on Ink (rpc-gel.inkonchain.com) and Soneium (rpc.soneium.org) also has a zero implementation slot and a balance of 0.",
+     "codeCheck": "_settle (src/PoolManager.sol:349-365) credits msg.value for native currency with no view of where the ETH came from, and take (src/PoolManager.sol:291-297) pays native currency through call(gas(), to, amount, 0, 0, 0, 0) at src/types/Currency.sol:48. ETH from an unbacked relay would settle and swap like any other ETH. The delta check at the end of unlock (src/PoolManager.sol:104-114) still holds, since the attacker would pay real (if unbacked) ETH. Derivation replacing the whole block removes the relay and the swaps together, so the canonical PoolManager state stays consistent. The hazard needs an interop validation, derivation or proof fault; an ordinary account cannot cause one, and the sequencer alone cannot make an invalid message safe.",
+     "corrections": "The difference with Ethereum is narrower than stated: OP Stack chains already credit native ETH through deposit transactions from OptimismPortal, so native pools there already rest on a bridge. ETHLiquidity adds a second such source. The Lagoon mainnet date depends on governance approval and can move, as the notice says.",
+     "sources": [
+      {"url": "https://specs.optimism.io/interop/eth-liquidity.html", "supports": "initial balance type(uint128).max wei; mint and burn only by SuperchainETHBridge; mint serves relays and expired refunds"},
+      {"url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-contracts/v10.0.0/packages/contracts-bedrock/src/L2/ETHLiquidity.sol", "supports": "burn, mint, fund and setPaused; no receive or fallback"},
+      {"url": "https://docs.optimism.io/notices/upgrade-22.md", "supports": "Lagoon mainnet activation 1799683201, interop OP Mainnet and Unichain only, dates can move"},
+      {"url": "https://specs.optimism.io/interop/derivation.html", "supports": "invalid executing messages are never safe and their block is replaced by a deposits-only block"},
+      {"url": "rpc:https://mainnet.optimism.io and https://mainnet.unichain.org eth_getBalance, eth_getStorageAt(EIP-1967 slot), eth_getCode on 0x4200..0024 and 0x4200..0025, 2026-11-26", "supports": "proxy code, zero implementation, balance 0"},
+      {"url": "rpc:https://rpc-gel.inkonchain.com and https://rpc.soneium.org eth_getBalance and eth_getStorageAt on 0x4200..0025, 2026-11-26", "supports": "zero implementation, balance 0"}
+     ]}
+  ],
+  "clearedSpotChecks": [
+    {"check": "In revm-interpreter 42.0.0 and 43.0.2 SHL, SHR, SAR and BYTE clamp the index with usize::try_from over the whole word before calling ruint, and SIGNEXTEND compares the whole word with 31, so the ruint 1.19.0 fast-path truncation on Base cannot be reached.",
+     "agrees": true,
+     "note": "Downloaded revm-interpreter-43.0.2.crate from static.crates.io. bitwise.rs byte, shl, shr and sar each call as_usize_saturated on the whole U256 and compare with 32 or 256 before shifting; sar returns all ones or zero by the sign bit for large shifts. macros.rs defines as_usize_saturated as usize::try_from(v).unwrap_or(usize::MAX), which rejects any word with high limbs set. arithmetic.rs signextend compares the full ext word with U256::from(31) before reading limb 0. A large high-limb operand therefore cannot alias a small shift. I did not read 42.0.0 separately."},
+    {"check": "Execution cache of the reth branches keys storage by the full (Address, StorageKey) pair, accounts by full Address and code by full code hash, and fixed-cache compares the stored key before returning a value.",
+     "agrees": true,
+     "note": "Fetched cached_state.rs at ethereum-optimism/reth op-v2.7.0-2. Lines 965-971 declare code_cache keyed by B256, storage_cache keyed by (Address, StorageKey) and account_cache keyed by Address. Downloaded fixed-cache-0.1.10.crate. get_inner (lib.rs:321-351) returns the value only when key.equivalent(ck) holds for the stored key, so a bucket collision is a miss. I did not fetch the base-v2.5.2.11 copy."},
+    {"check": "Jump destination analysis in revm-bytecode 43.0.0 marks JUMPDEST bytes and skips PUSH1 to PUSH32 immediates, so JUMPDEST bytes inside PoolManager push data stay invalid targets.",
+     "agrees": true,
+     "note": "Downloaded revm-bytecode-43.0.0.crate. legacy/analysis.rs:10-62 is a scalar loop that sets a bit for 0x5b and advances by push_offset + 2 for PUSH1 to PUSH32, so push data is never marked. DUPN, SWAPN and EXCHANGE immediates are not skipped, only padded at the end; the PoolManager (solc 0.8.26) contains none of those opcodes and they are not active on these chains, so this does not change any PoolManager jump target. I also re-ran the L-127 L1BlockNumber case: eth_call of transfer(0xdead,1) from the PoolManager to 0x4200..0013 on OP Mainnet returns 0x194638f, which Currency.transfer rejects at src/types/Currency.sol:68, which requires a returned word equal to 1."}
+  ],
+  "leads": []
+}

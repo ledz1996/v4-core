@@ -1,6 +1,6 @@
 # All findings
 
-154 findings on record after cycle 26, in-scope ones first.
+157 findings on record after cycle 27, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -3340,6 +3340,59 @@ Sources:
 - theme-deferred-verification.work/raw/monad_heads.json and monad_heads_recheck.json (eth_getBlockByNumber on https://rpc.monad.xyz, Monad/0.16.7 at start, middle and end) (2,000 distinct blocks 125,644,933 to 125,648,318 recorded at latest all have the same hash after finality; latest minus finalized was 1 or 2 blocks in 41 of 43 snapshots; 245 requests were refused with HTTP 429 and retried later)
 - theme-deferred-verification.work/raw/monad_pm_receipts.json (eth_getLogs and eth_getTransactionReceipt on https://rpc.monad.xyz, Monad/0.16.7) (70 PoolManager transactions were read at latest, 69 of them before their block was finalized; none of the 70 receipts changed block hash, status or log count after finality)
 
+## F-155. MegaETH serves call results and balances at latest from mini-block state that the sequencer can still drop
+
+Low severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: MegaETH.
+
+What differs on the network: On MegaETH the latest block selector returns the streaming state with committed mini-blocks. That state is ahead of the safe head, and finality depends on the containing EVM block being posted to and finalized on L1. On Ethereum, latest is a proposed block that a reorg can also drop, and OP Stack chains serve an unsafe head at latest as well. MegaETH differs in that latest includes mini-block state inside the current EVM block. The lead varies: two reads on 2026-11-26 gave 168 and 416 one-second blocks over safe, and 2,087 and 1,953 over finalized. Monad (F-153) and Avalanche (F-152) have the same class of hazard.
+
+How it meets the code: An integrator that reads a swap result, a take, or an ERC-6909 balance at latest and then acts off chain (pays out on another chain, releases goods) acts on state that only the sequencer has signed. If the sequencer drops or rewrites unsafe blocks, the PoolManager state rolls back with them. No PoolManager code path reads the selector; its accounting inside one transaction (PoolManager.sol:349-365 for settle, :291-297 for take) is unaffected. The hazard is the same shape as the Monad proposed-block finding of theme-deferred-verification and needs the operator to act.
+
+What is at risk: Integrators that treat latest as final can be double spent by whoever controls the sequencer. LPs and claim holders inside the PoolManager lose nothing from this alone.
+
+What it takes: The sequencer drops or reorders unsafe blocks, and an off-chain party acted on latest.
+
+What can be done: Integrators wait for safe or finalized before acting off chain on PoolManager results.
+
+This entry adds to F-153.
+
+Second reviewer's corrections: The lead of latest over safe and finalized varies; at 2026-11-26 it was 416 and 1,953 blocks when re-queried. The comparison with Ethereum holds for OP Stack style chains too, which also serve an unsafe head at latest; the MegaETH difference is that latest includes mini-block state inside the current EVM block.
+
+Code: `src/PoolManager.sol:349-365`, `src/PoolManager.sol:291-297`.
+
+Sources:
+
+- https://docs.megaeth.com/developer-docs/rpc/types.md (latest is the streaming state including committed mini-blocks; safe and finalized are EVM blocks)
+- https://docs.megaeth.com/mini-block.md (a mini-block signature does not prove finality; finality depends on L1 posting)
+- rpc:https://mainnet.megaeth.com/rpc eth_getBlockByNumber latest/safe/finalized 2026-11-26 (latest 32,924,634, safe 32,924,466, finalized 32,922,547)
+
+## F-157. From Lagoon a predeploy on OP Mainnet and Unichain holds type(uint128).max wei that the interop bridge releases, so native pools rest on interop message validity
+
+Low severity, confirmed. Effect: siphon. Who can trigger it: sequencer, validator or bridge committee. Networks: Optimism, Unichain.
+
+What differs on the network: Ethereum has no contract that can mint native ETH. OP Stack chains already credit native ETH through deposit transactions from OptimismPortal, so native pools there already rest on a bridge, and ETHLiquidity adds a second source. From Lagoon (11 January 2027, a date that depends on governance approval and can move) the ETHLiquidity predeploy on OP Mainnet and Unichain starts with type(uint128).max wei and pays ETH to SuperchainETHBridge whenever a cross-chain ETH message from the other chain is relayed, or when an expired send is refunded.
+
+How it meets the code: Native pools settle with msg.value and pay out with a plain value call (src/PoolManager.sol:349-364, src/types/Currency.sol:44-52). The PoolManager cannot tell where the ETH it receives came from. A relayETH on a destination chain mints from ETHLiquidity against an initiating sendETH on the source chain, and the protocol checks that link through the CrossL2Inbox access list at sequencing and through derivation. If a relay of a message that was never initiated were accepted into a canonical block, its recipient would hold ETH that no burn backs, could pay it into native pools as a normal settle and take out the other currency of every native pool up to its liquidity. Derivation replaces a block that holds an invalid executing message with a deposits-only block, which also removes the swaps made with the ETH, so in the canonical chain the ETH and the swaps vanish together. An ordinary account can send a relay transaction, but cannot make an invalid one canonical: that needs the sequencer to include it and the derivation or proof system to accept it. Before Lagoon the proxy at 0x4200..0025 has no implementation and a balance of 0 on all four Lagoon chains (queried 2026-11-26). The contract has no receive or fallback, so a native take to it reverts (ETHLiquidity.sol:63-82). F-148 records the other face of the same dependency: an unsafe reorg on one of the two chains replaces dependent blocks on the other.
+
+What is at risk: Up to every native ETH pool on OP Mainnet and Unichain, but only through a fault in interop validation or in derivation. No path for an ordinary account was found.
+
+What it takes: Lagoon active on 11 January 2027 and a fault that lets an unbacked relayETH or refundETH become canonical, or off-chain parties acting on an unsafe block that is later replaced.
+
+What can be done: Treat interop ETH like a bridge: integrations that act on PoolManager payouts should wait for safe blocks after Lagoon. Governance can pause ETHLiquidity through the L1 pause.
+
+This entry adds to F-148.
+
+Second reviewer's corrections: The difference with Ethereum is narrower than stated: OP Stack chains already credit native ETH through deposit transactions from OptimismPortal, so native pools there already rest on a bridge. ETHLiquidity adds a second such source. The Lagoon mainnet date depends on governance approval and can move, as the notice says.
+
+Code: `src/PoolManager.sol:349-364`, `src/types/Currency.sol:44-52`.
+
+Sources:
+
+- https://specs.optimism.io/interop/eth-liquidity.html (initial balance type(uint128).max wei and mint only by SuperchainETHBridge)
+- https://raw.githubusercontent.com/ethereum-optimism/optimism/op-contracts/v10.0.0/packages/contracts-bedrock/src/L2/ETHLiquidity.sol (burn, mint, fund and setPaused, no receive or fallback)
+- https://docs.optimism.io/notices/upgrade-22.md (Lagoon activation dates and ETHLiquidity pause)
+- https://specs.optimism.io/interop/derivation.html (a block with an invalid executing message is replaced by a deposits-only block)
+
 ## F-117. Six go-ethereum family nodes run a Go toolchain with a published silent dead store miscompile, and no function on the opcode or state path has the triggering shape
 
 Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Ethereum, Arbitrum One, Robinhood Chain, Polygon, BNB Smart Chain, Avalanche.
@@ -3911,6 +3964,26 @@ Sources:
 - https://tempo.com/developers/docs/changelog (v1.19.0 is required for T14 at 1796742000 and the verification mode defaults to hardfork)
 - https://tempo.com/developers/docs/protocol/tips/tip-1031 (the consensus context in the header exists for deferred verification, and a validator may keep synchronous verification)
 - theme-deferred-verification.work/raw/tempo_heads.json (eth_getBlockByNumber on https://rpc.mainnet.tempo.xyz, tempo/v1.19.1-a9d6748 before and after) (400 blocks 50,949,238 to 50,949,638 read at latest kept their hash; latest never ran ahead of finalized by more than the time between two queries)
+
+## F-156. The public OP Mainnet endpoint answers the elements of one batch from two op-reth builds, so a batch bracket does not pin an eth_call to a build
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Optimism.
+
+What differs on the network: Ethereum reference endpoints used in this review answer from one build per request. mainnet.optimism.io routes each element of a JSON-RPC batch on its own, between op-reth/v2.8.1-72207294 and an unversioned op-reth/v0.0.0-dev-unknown.
+
+How it meets the code: In 30 batches of three web3_clientVersion calls sent on 2026-11-26, 18 batches mixed the two builds, 11 named only the unversioned build and 1 named only v2.8.1. A batch that puts web3_clientVersion before and after an eth_call therefore does not show which build ran the call. Every opcode vector and script on OP Mainnet in this and earlier cycles ran on one of the two builds, and every one returned the specified word, so neither build was seen to compute FullMath, TickMath, BitMath or the settlement path differently. What is not shown is that each build alone ran every vector. The four rounds of the new 15,510 vector set reduce the chance that a batch never reached one build, but do not exclude it. The PoolManager computes what the block producer computes; the endpoint builds only answer reads.
+
+What is at risk: No funds are at risk. The evidence for OP Mainnet is unpinned per build, and the unversioned build has no published source to read.
+
+What it takes: None for the routing itself. A fault would also need one of the two builds to compute an opcode differently and to be the one that produces or validates blocks.
+
+What can be done: Run pinned checks against a single-backend endpoint or a self-hosted op-reth of each version, and ask the operator which commit the unversioned build carries.
+
+Code: `src/libraries/FullMath.sol:24-48`, `src/libraries/TickMath.sol:61-111`.
+
+Sources:
+
+- https://mainnet.optimism.io (batched web3_clientVersion answers recorded in cycles/027/op-stack-eth.work/batch-clientver.txt)
 
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 

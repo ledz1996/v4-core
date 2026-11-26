@@ -1,0 +1,22 @@
+{
+  "unit": "theme-caller-and-callee-identity",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "L-1129, the rule. How the HyperEVM archive client nanoreth (tag nb-20261125-2) decides that a transaction is a system transaction and where it takes the sender from.",
+      "agrees": true,
+      "note": "I fetched https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/primitives/transaction.rs (271 lines) and src/node/evm/executor.rs at the same tag. is_system_transaction is gas_price() == Some(0) in both files, and recover_signer, recover_signer_unchecked and recover_unchecked_with_buf return s_to_address(s), which maps s == 1 to 0x2222..2222, s == (1<<160)|1 to 0x00..01 and any other s to its low 20 bytes. This is the replica decoding what the producer wrote. A user transaction with gas price 0 cannot be valid on the official chain because the base fee is nonzero: on rpc.hyperliquid.xyz/evm eth_gasPrice returned 0x5f5e100 (100,000,000 wei), and latest blocks 52329682 and 52329685 had base fees 122,750,670 and 128,793,531. PoolManager nonce is 0x1 on the same endpoint. One small point in the item: eth_feeHistory gave a predicted next-block base fee of 96,659,059 and once 89,439,317, below the stated floor of 100,000,000, so the claim that every block has at least 100,000,000 wei rests on the cycle 23 census of mined blocks and not on a protocol floor I could confirm. Any nonzero base fee is enough for the clearance. The producer's admission rule is closed, as the item says, and its lead stays open at low priority."
+    },
+    {
+      "check": "Task 1 across networks: which senders the PoolManager trusts and whether any network-level sender can be made equal to the PoolManager, a router or a holder of claims or positions by an ordinary account.",
+      "agrees": true,
+      "note": "Code: deltas are keyed on msg.sender in take, settle, clear, mint, burn and donate (src/PoolManager.sol:291-342, 270), settle credits the given recipient only from msg.value or a balance rise (src/PoolManager.sol:349-364), unlock calls back msg.sender and requires NonzeroDeltaCount to be zero (src/PoolManager.sol:104-114), ERC-6909 transfer, transferFrom, approve and setOperator use msg.sender (src/ERC6909.sol:26-61), and the position key starts with the owner passed from msg.sender (src/libraries/Position.sol:48-56). Chain facts I checked: EIP-7702 step 5 requires the code of the authority to be empty or already delegated (https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md line 114), so the PoolManager with 24,009 bytes of code cannot be an authority. OP Stack EOA.isSenderEOA accepts only msg.sender == tx.origin or 23 bytes of code starting with 0xEF0100 (EOA.sol on develop, fetched). The Base PoolManager 0x4985..2b2b and its alias preimage 0x3874..1a1a have code 0x and nonce 0 on Ethereum (eth.drpc.org eth_getCode and eth_getTransactionCount). I did not re-read the Arc CallFrom and HyperEVM CoreWriter sources in this session; those parts rest on earlier cycles."
+    },
+    {
+      "check": "Task 2: what one party of a shared transaction can leave for a later party through the transient state of sync (src/libraries/CurrencyReserves.sol:17-36), and whether any of it moves funds.",
+      "agrees": true,
+      "note": "sync has no lock modifier and writes currency and reserves together (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32). resetCurrency clears only the currency slot (CurrencyReserves.sol:21-25), so after any settle the reserve slot is stale but unreachable, because _settle reads reserves only when the currency slot is nonzero (src/PoolManager.sol:350-361). A stale synced currency makes a native settle revert with NonzeroNativeValue (line 356). paid = reservesNow - reservesBefore is checked arithmetic and reverts if the balance fell (line 360). A balance rise between a stale sync and a settle is a payment made into the PoolManager without its own sync and settle, which only the payer or the F-137 pattern can supply. The analysis holds within one transaction. Between transactions it depends on transient storage being cleared, which the item correctly says rests on client readings for Avalanche, Monad, MegaETH, Arc and HyperEVM."
+    }
+  ],
+  "leads": []
+}

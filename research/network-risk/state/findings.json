@@ -13057,6 +13057,166 @@
    ]
   },
   {
+   "title": "MegaETH serves call results and balances at latest from mini-block state that the sequencer can still drop",
+   "chainIds": [
+    4326
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A14"
+   ],
+   "effect": "degrade",
+   "difference": "On MegaETH the latest block selector returns the streaming state with committed mini-blocks. That state is ahead of the safe head, and finality depends on the containing EVM block being posted to and finalized on L1. On Ethereum, latest is a proposed block that a reorg can also drop, and OP Stack chains serve an unsafe head at latest as well. MegaETH differs in that latest includes mini-block state inside the current EVM block. The lead varies: two reads on 2026-11-26 gave 168 and 416 one-second blocks over safe, and 2,087 and 1,953 over finalized. Monad (F-153) and Avalanche (F-152) have the same class of hazard.",
+   "mechanism": "An integrator that reads a swap result, a take, or an ERC-6909 balance at latest and then acts off chain (pays out on another chain, releases goods) acts on state that only the sequencer has signed. If the sequencer drops or rewrites unsafe blocks, the PoolManager state rolls back with them. No PoolManager code path reads the selector; its accounting inside one transaction (PoolManager.sol:349-365 for settle, :291-297 for take) is unaffected. The hazard is the same shape as the Monad proposed-block finding of theme-deferred-verification and needs the operator to act.",
+   "impact": "Integrators that treat latest as final can be double spent by whoever controls the sequencer. LPs and claim holders inside the PoolManager lose nothing from this alone.",
+   "preconditions": "The sequencer drops or reorders unsafe blocks, and an off-chain party acted on latest.",
+   "mitigations": "Integrators wait for safe or finalized before acting off chain on PoolManager results.",
+   "coreRefs": [
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "https://docs.megaeth.com/developer-docs/rpc/types.md",
+     "supports": "latest is the streaming state including committed mini-blocks; safe and finalized are EVM blocks"
+    },
+    {
+     "url": "https://docs.megaeth.com/mini-block.md",
+     "supports": "a mini-block signature does not prove finality; finality depends on L1 posting"
+    },
+    {
+     "url": "rpc:https://mainnet.megaeth.com/rpc eth_getBlockByNumber latest/safe/finalized 2026-11-26",
+     "supports": "latest 32,924,634, safe 32,924,466, finalized 32,922,547"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 27,
+    "factCheck": "Fetched https://docs.megaeth.com/developer-docs/rpc/types.md on 2026-11-26. Lines 52-55 say latest is 'The latest streaming state, including committed mini-blocks', while safe and finalized are the latest safe and finalized EVM blocks known to the node. Fetched https://docs.megaeth.com/mini-block.md. Line 143 says a valid sequencer signature 'does not by itself prove finality. Full finality still depends on the containing EVM block being posted to and finalized on the L1.' Line 62 says a signed mini-block is a binding commitment whose contradiction can be proven, which deters but does not prevent a rollback. Queried eth_getBlockByNumber on https://mainnet.megaeth.com/rpc myself: latest 32,931,024 (timestamp 1795728035), safe 32,930,608 (1795727619), finalized 32,929,071 (1795726082). The lead was 416 blocks over safe and 1,953 over finalized at that moment, against 168 and 2,087 in the finding; the gap moves, and the mechanism does not depend on its size. findings.json has F-153 for the same shape on Monad and no 4326 entry for it, so this is not a duplicate.",
+    "codeCheck": "src/PoolManager.sol:349-365 (_settle) and :291-297 (take) read no block tag; they compute from msg.value, transient synced reserves and balanceOfSelf inside one transaction. No line in src/ reads a block number, a block hash or a finality signal, so a rollback of unsafe blocks rolls the PoolManager state back as a whole and leaves its internal accounting consistent. The hazard exists only for off-chain parties acting on latest, as the finding says.",
+    "corrections": "The lead of latest over safe and finalized varies; at 2026-11-26 it was 416 and 1,953 blocks when re-queried. The comparison with Ethereum holds for OP Stack style chains too, which also serve an unsafe head at latest; the MegaETH difference is that latest includes mini-block state inside the current EVM block.",
+    "sources": [
+     {
+      "url": "https://docs.megaeth.com/developer-docs/rpc/types.md",
+      "supports": "latest is the streaming state including committed mini-blocks; safe and finalized are EVM blocks"
+     },
+     {
+      "url": "https://docs.megaeth.com/mini-block.md",
+      "supports": "the sequencer signature does not by itself prove finality; finality depends on L1 posting"
+     },
+     {
+      "url": "rpc:https://mainnet.megaeth.com/rpc eth_getBlockByNumber latest/safe/finalized 2026-11-26",
+      "supports": "latest 32,931,024, safe 32,930,608, finalized 32,929,071"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 27,
+   "extends": "F-153",
+   "id": "F-155",
+   "firstCycle": 27,
+   "history": [
+    {
+     "cycle": 27,
+     "unit": "high-throughput",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
+   "title": "From Lagoon a predeploy on OP Mainnet and Unichain holds type(uint128).max wei that the interop bridge releases, so native pools rest on interop message validity",
+   "chainIds": [
+    10,
+    130
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A3",
+    "A14"
+   ],
+   "effect": "siphon",
+   "difference": "Ethereum has no contract that can mint native ETH. OP Stack chains already credit native ETH through deposit transactions from OptimismPortal, so native pools there already rest on a bridge, and ETHLiquidity adds a second source. From Lagoon (11 January 2027, a date that depends on governance approval and can move) the ETHLiquidity predeploy on OP Mainnet and Unichain starts with type(uint128).max wei and pays ETH to SuperchainETHBridge whenever a cross-chain ETH message from the other chain is relayed, or when an expired send is refunded.",
+   "mechanism": "Native pools settle with msg.value and pay out with a plain value call (src/PoolManager.sol:349-364, src/types/Currency.sol:44-52). The PoolManager cannot tell where the ETH it receives came from. A relayETH on a destination chain mints from ETHLiquidity against an initiating sendETH on the source chain, and the protocol checks that link through the CrossL2Inbox access list at sequencing and through derivation. If a relay of a message that was never initiated were accepted into a canonical block, its recipient would hold ETH that no burn backs, could pay it into native pools as a normal settle and take out the other currency of every native pool up to its liquidity. Derivation replaces a block that holds an invalid executing message with a deposits-only block, which also removes the swaps made with the ETH, so in the canonical chain the ETH and the swaps vanish together. An ordinary account can send a relay transaction, but cannot make an invalid one canonical: that needs the sequencer to include it and the derivation or proof system to accept it. Before Lagoon the proxy at 0x4200..0025 has no implementation and a balance of 0 on all four Lagoon chains (queried 2026-11-26). The contract has no receive or fallback, so a native take to it reverts (ETHLiquidity.sol:63-82). F-148 records the other face of the same dependency: an unsafe reorg on one of the two chains replaces dependent blocks on the other.",
+   "impact": "Up to every native ETH pool on OP Mainnet and Unichain, but only through a fault in interop validation or in derivation. No path for an ordinary account was found.",
+   "preconditions": "Lagoon active on 11 January 2027 and a fault that lets an unbacked relayETH or refundETH become canonical, or off-chain parties acting on an unsafe block that is later replaced.",
+   "mitigations": "Treat interop ETH like a bridge: integrations that act on PoolManager payouts should wait for safe blocks after Lagoon. Governance can pause ETHLiquidity through the L1 pause.",
+   "coreRefs": [
+    "src/PoolManager.sol:349-364",
+    "src/types/Currency.sol:44-52"
+   ],
+   "sources": [
+    {
+     "url": "https://specs.optimism.io/interop/eth-liquidity.html",
+     "supports": "initial balance type(uint128).max wei and mint only by SuperchainETHBridge"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-contracts/v10.0.0/packages/contracts-bedrock/src/L2/ETHLiquidity.sol",
+     "supports": "burn, mint, fund and setPaused, no receive or fallback"
+    },
+    {
+     "url": "https://docs.optimism.io/notices/upgrade-22.md",
+     "supports": "Lagoon activation dates and ETHLiquidity pause"
+    },
+    {
+     "url": "https://specs.optimism.io/interop/derivation.html",
+     "supports": "a block with an invalid executing message is replaced by a deposits-only block"
+    }
+   ],
+   "evidence": "secondary",
+   "actor": "operator",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 27,
+    "factCheck": "Fetched https://specs.optimism.io/interop/eth-liquidity.html. It says the contract is initialized with type(uint128).max wei at 0x4200000000000000000000000000000000000025, that only SuperchainETHBridge may call mint and burn (iEL-002), and that minting serves relays and refunds of expired sends. Fetched ETHLiquidity.sol at op-contracts/v10.0.0. mint and burn check msg.sender against SUPERCHAIN_ETH_BRIDGE and the pause (lines 63-76), fund is payable (80-83), and the contract has no receive or fallback, so a value call with empty calldata reverts. Fetched https://docs.optimism.io/notices/upgrade-22.md. It lists Lagoon at Monday 11 January 2027 16:00:01 UTC (1799683201) on mainnet, interop between OP Mainnet and Unichain only, Ink and Soneium activating Lagoon without interop, and says the mainnet dates depend on governance approval and can move. Fetched https://specs.optimism.io/interop/derivation.html. It says blocks with invalid executing messages must not become safe and are replaced by a deposits-only block at the same height. On-chain on 2026-11-26: 0x4200..0025 and 0x4200..0024 on OP Mainnet and Unichain have proxy code, a zero EIP-1967 implementation slot and a balance of 0; 0x4200..0025 on Ink (rpc-gel.inkonchain.com) and Soneium (rpc.soneium.org) also has a zero implementation slot and a balance of 0.",
+    "codeCheck": "_settle (src/PoolManager.sol:349-365) credits msg.value for native currency with no view of where the ETH came from, and take (src/PoolManager.sol:291-297) pays native currency through call(gas(), to, amount, 0, 0, 0, 0) at src/types/Currency.sol:48. ETH from an unbacked relay would settle and swap like any other ETH. The delta check at the end of unlock (src/PoolManager.sol:104-114) still holds, since the attacker would pay real (if unbacked) ETH. Derivation replacing the whole block removes the relay and the swaps together, so the canonical PoolManager state stays consistent. The hazard needs an interop validation, derivation or proof fault; an ordinary account cannot cause one, and the sequencer alone cannot make an invalid message safe.",
+    "corrections": "The difference with Ethereum is narrower than stated: OP Stack chains already credit native ETH through deposit transactions from OptimismPortal, so native pools there already rest on a bridge. ETHLiquidity adds a second such source. The Lagoon mainnet date depends on governance approval and can move, as the notice says.",
+    "sources": [
+     {
+      "url": "https://specs.optimism.io/interop/eth-liquidity.html",
+      "supports": "initial balance type(uint128).max wei; mint and burn only by SuperchainETHBridge; mint serves relays and expired refunds"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-contracts/v10.0.0/packages/contracts-bedrock/src/L2/ETHLiquidity.sol",
+      "supports": "burn, mint, fund and setPaused; no receive or fallback"
+     },
+     {
+      "url": "https://docs.optimism.io/notices/upgrade-22.md",
+      "supports": "Lagoon mainnet activation 1799683201, interop OP Mainnet and Unichain only, dates can move"
+     },
+     {
+      "url": "https://specs.optimism.io/interop/derivation.html",
+      "supports": "invalid executing messages are never safe and their block is replaced by a deposits-only block"
+     },
+     {
+      "url": "rpc:https://mainnet.optimism.io and https://mainnet.unichain.org eth_getBalance, eth_getStorageAt(EIP-1967 slot), eth_getCode on 0x4200..0024 and 0x4200..0025, 2026-11-26",
+      "supports": "proxy code, zero implementation, balance 0"
+     },
+     {
+      "url": "rpc:https://rpc-gel.inkonchain.com and https://rpc.soneium.org eth_getBalance and eth_getStorageAt on 0x4200..0025, 2026-11-26",
+      "supports": "zero implementation, balance 0"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 27,
+   "extends": "F-148",
+   "id": "F-157",
+   "firstCycle": 27,
+   "history": [
+    {
+     "cycle": 27,
+     "unit": "op-stack-eth",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
    "title": "BNB Smart Chain runs a call from the system address with its stated value and moves no balance, and no ordinary sender can be that address",
    "chainIds": [
     56
@@ -16043,6 +16203,60 @@
     {
      "cycle": 26,
      "unit": "theme-deferred-verification",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
+   "title": "The public OP Mainnet endpoint answers the elements of one batch from two op-reth builds, so a batch bracket does not pin an eth_call to a build",
+   "chainIds": [
+    10
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "difference": "Ethereum reference endpoints used in this review answer from one build per request. mainnet.optimism.io routes each element of a JSON-RPC batch on its own, between op-reth/v2.8.1-72207294 and an unversioned op-reth/v0.0.0-dev-unknown.",
+   "mechanism": "In 30 batches of three web3_clientVersion calls sent on 2026-11-26, 18 batches mixed the two builds, 11 named only the unversioned build and 1 named only v2.8.1. A batch that puts web3_clientVersion before and after an eth_call therefore does not show which build ran the call. Every opcode vector and script on OP Mainnet in this and earlier cycles ran on one of the two builds, and every one returned the specified word, so neither build was seen to compute FullMath, TickMath, BitMath or the settlement path differently. What is not shown is that each build alone ran every vector. The four rounds of the new 15,510 vector set reduce the chance that a batch never reached one build, but do not exclude it. The PoolManager computes what the block producer computes; the endpoint builds only answer reads.",
+   "impact": "No funds are at risk. The evidence for OP Mainnet is unpinned per build, and the unversioned build has no published source to read.",
+   "preconditions": "None for the routing itself. A fault would also need one of the two builds to compute an opcode differently and to be the one that produces or validates blocks.",
+   "mitigations": "Run pinned checks against a single-backend endpoint or a self-hosted op-reth of each version, and ask the operator which commit the unversioned build carries.",
+   "coreRefs": [
+    "src/libraries/FullMath.sol:24-48",
+    "src/libraries/TickMath.sol:61-111"
+   ],
+   "sources": [
+    {
+     "url": "https://mainnet.optimism.io",
+     "supports": "batched web3_clientVersion answers recorded in cycles/027/op-stack-eth.work/batch-clientver.txt"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 27,
+    "factCheck": "On 2026-11-26 I sent 10 JSON-RPC batches of three web3_clientVersion calls to https://mainnet.optimism.io. 9 of the 10 batches mixed op-reth/v2.8.1-72207294/x86_64-linux and op-reth/v0.0.0-dev-unknown/x86_64-linux, and 1 named only the unversioned build. This matches the finding's record of 18 mixed batches in 30 (cycles/027/op-stack-eth.work/batch-clientver.txt). A batch bracket therefore does not pin an eth_call to one build. I did not find a published source for the unversioned build.",
+    "codeCheck": "No line in src/ depends on which RPC backend answers a read. The cited FullMath.sol:24-48 and TickMath.sol:61-111 are the paths whose per-build coverage is unpinned. The PoolManager state is computed by the block producer and validated by derivation, so the routing affects only the evidence of this review and the answers that integrators read.",
+    "corrections": "",
+    "sources": [
+     {
+      "url": "rpc:https://mainnet.optimism.io batched web3_clientVersion x3, 10 batches, 2026-11-26",
+      "supports": "9 of 10 batches answered by both op-reth/v2.8.1-72207294 and op-reth/v0.0.0-dev-unknown"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 27,
+   "id": "F-156",
+   "firstCycle": 27,
+   "history": [
+    {
+     "cycle": 27,
+     "unit": "op-stack-eth",
      "status": "confirmed",
      "severity": "info"
     }

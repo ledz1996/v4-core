@@ -1,0 +1,22 @@
+{
+  "unit": "ethereum-reference",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Lead L-1125, reading: every interpreter file of evm2 01df8f6a (reth v2.10.1) compared with 66687c18; the SIGNEXTEND index is read from the low limb behind a whole-word test against 31 (arithmetic.rs lines 57-63).",
+      "agrees": true,
+      "note": "I fetched https://raw.githubusercontent.com/alloy-rs/evm2/01df8f6a396d0250da286cb763faa6ec292d65b5/crates/evm2/src/interpreter/instructions/arithmetic.rs. Line 58 tests the whole word with `*ext < 31` before line 59 reads `ext.as_limbs()[0]`, so a word with a small low limb and nonzero higher limbs leaves the value unchanged, as the specification requires. DIV and MOD return zero for a zero divisor, and SDIV and SMOD go to i256_div and i256_mod. I ran one eth_call of my own with a state override on https://eth-mainnet.public.blastapi.io (reth/v2.10.0-f5192ac in the same batch): SIGNEXTEND(0x1f, 0x100) returned 0x...0100, the specified word. src/libraries/TickMath.sol:61 runs signextend(2, tick) with an index far below 31, so it takes the low-limb branch. On the Pocket gateway, 4 of 6 web3_clientVersion reads I made returned reth/v2.10.1-58ebce1, one reth v2.11.0 and one erigon 3.8.1. That confirms the mixed backend the pinning method has to handle. The before and after pin is a heuristic and does not prove which backend answered the eth_call in between. The byte-level reading of the interpreter does not depend on it."
+    },
+    {
+      "check": "Zero-copy call input of evm2 01df8f6a: can the callee's calldata change or dangle while it is read, so that a hook or token sees other bytes than the PoolManager wrote?",
+      "agrees": true,
+      "note": "I fetched runtime.rs, memory.rs and evm/mod.rs at 01df8f6a. call_input (runtime.rs about lines 273-287) lends a slice of the caller frame's own Memory, and Memory holds one Vec per frame (memory.rs lines 6-10). It copies when the frame does not lend memory. execute_message_inspected calls message.input.make_owned() before any inspector hook runs (evm/mod.rs lines 1306-1308). The caller frame is suspended while the child runs, and its memory is written again only after execute_message returns, for example by the return data copy. A hook call (src/libraries/Hooks.sol:134) or a token transfer (src/types/Currency.sol:73) that reenters the PoolManager runs in a new frame with its own Memory, so it cannot change the parent's input bytes. I found no path where the borrowed bytes change while the callee reads them."
+    },
+    {
+      "check": "Upcoming forks within six months: Glamsterdam's 20 scheduled EIPs are the ones earlier cycles cleared, and the PoolManager bytecode has no 0x4b, 0xe6, 0xe7 or 0xe8 byte at an instruction boundary.",
+      "agrees": true,
+      "note": "I fetched https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7773.md. It lists 20 EIPs as scheduled, including EIP-7843 (SLOTNUM) and EIP-8024 (DUPN, SWAPN, EXCHANGE). I fetched the mainnet code of 0x000000000004444c5dc75cB358380D2e3dE08A90 with eth_getCode on https://ethereum-rpc.publicnode.com: 24,009 bytes, sha256 prefix 3316c7b1c67095ef, which matches networks.json. A linear decode that skips PUSH immediates found no 0x4b, 0xe6, 0xe7, 0xe8, 0x1e, 0x49, 0x4a, 0xf6 to 0xf9 or 0xfb at an instruction boundary. A byte that becomes a valid opcode therefore changes no reachable instruction. The scheduled gas changes (EIP-2780, 8037, 8038) do not change what a PoolManager call returns, because every external call in src/ forwards gas() (src/types/Currency.sol:48 and 73, src/libraries/Hooks.sol:134) and src/ has no gasleft or fixed-stipend check. I did not re-read the Hegota list (EIP-8081)."
+    }
+  ],
+  "leads": []
+}

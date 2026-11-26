@@ -1,0 +1,28 @@
+{
+  "unit": "high-throughput",
+  "verdicts": [
+    {"findingIndex": 0,
+     "verdict": "confirmed",
+     "severity": "low",
+     "factCheck": "Fetched https://docs.megaeth.com/developer-docs/rpc/types.md on 2026-11-26. Lines 52-55 say latest is 'The latest streaming state, including committed mini-blocks', while safe and finalized are the latest safe and finalized EVM blocks known to the node. Fetched https://docs.megaeth.com/mini-block.md. Line 143 says a valid sequencer signature 'does not by itself prove finality. Full finality still depends on the containing EVM block being posted to and finalized on the L1.' Line 62 says a signed mini-block is a binding commitment whose contradiction can be proven, which deters but does not prevent a rollback. Queried eth_getBlockByNumber on https://mainnet.megaeth.com/rpc myself: latest 32,931,024 (timestamp 1795728035), safe 32,930,608 (1795727619), finalized 32,929,071 (1795726082). The lead was 416 blocks over safe and 1,953 over finalized at that moment, against 168 and 2,087 in the finding; the gap moves, and the mechanism does not depend on its size. findings.json has F-153 for the same shape on Monad and no 4326 entry for it, so this is not a duplicate.",
+     "codeCheck": "src/PoolManager.sol:349-365 (_settle) and :291-297 (take) read no block tag; they compute from msg.value, transient synced reserves and balanceOfSelf inside one transaction. No line in src/ reads a block number, a block hash or a finality signal, so a rollback of unsafe blocks rolls the PoolManager state back as a whole and leaves its internal accounting consistent. The hazard exists only for off-chain parties acting on latest, as the finding says.",
+     "corrections": "The lead of latest over safe and finalized varies; at 2026-11-26 it was 416 and 1,953 blocks when re-queried. The comparison with Ethereum holds for OP Stack style chains too, which also serve an unsafe head at latest; the MegaETH difference is that latest includes mini-block state inside the current EVM block.",
+     "sources": [
+      {"url": "https://docs.megaeth.com/developer-docs/rpc/types.md", "supports": "latest is the streaming state including committed mini-blocks; safe and finalized are EVM blocks"},
+      {"url": "https://docs.megaeth.com/mini-block.md", "supports": "the sequencer signature does not by itself prove finality; finality depends on L1 posting"},
+      {"url": "rpc:https://mainnet.megaeth.com/rpc eth_getBlockByNumber latest/safe/finalized 2026-11-26", "supports": "latest 32,931,024, safe 32,930,608, finalized 32,929,071"}
+     ]}
+  ],
+  "clearedSpotChecks": [
+    {"check": "The v0.16.6 countl_zero rewrite and its reach into PoolManager code through bit_width in modop_optimized (MULMOD with a literal 2^96 or 2^128 modulus, from FullMath.sol:48 and :112 inlined with Q96 or Q128).",
+     "agrees": true,
+     "note": "Fetched uint256.hpp at 0.16.7 from jsDelivr. countl_zero (lines 1063-1074) loops over all four little-endian words and keeps 192 - 64*i + clz(x[i]) for the highest nonzero word, 256 for zero; bit_width (1164-1168) is 256 minus that. For 2^96 this gives 97 and exponent 96, for 2^128 129 and exponent 128. emitter.cpp 7774-7863 takes the modulus as the third stack element and calls mul_mod2 only when it is a literal with popcount 1. The site list is partly wrong. Disassembling eth_getCode of both PoolManagers (24,009 bytes, same result on 143 and 4326), the literal is the modulus only at pc 22378 (PUSH17 2^128, SWAP2, MULMOD) and pc 22639 (PUSH13 2^96, SWAP2, MULMOD). At pc 20958 (PUSH13 2^96, DUP8, MULMOD) and pc 22763 (PUSH13 2^96, DUP3, SWAP2, MULMOD) 2^96 is the second operand and the modulus comes from the block entry stack, and at pc 22721 the modulus is the PUSH32 all-ones word with 2^96 as the second operand. Those three sites take the general runtime mulmod, which the battery covers. The conclusion that no wrong exponent reaches mul_mod2 stands."},
+    {"check": "Compiled paths for EXP with a literal power-of-two base, ADDMOD by mask and CLZ: the deployed PoolManager contains no EXP, ADDMOD or CLZ instruction outside push data.",
+     "agrees": true,
+     "note": "My linear sweep of the deployed code on 143 and 4326 finds one 0x08 at pc 24005 and one 0x0a at pc 24008, both inside the CBOR metadata a164736f6c634300081a000a that starts at pc 23997 after the INVALID at pc 23996, so neither is reachable. No 0x1e, 0xae, 0xe6, 0xe7, 0xe8 or 0x4b appears as an instruction, which also supports the cleared item on upcoming Monad opcodes."},
+    {"check": "Opcode battery (99,985 vectors) and targeted set (85,544) rerun on 2026-11-26 at Monad/0.16.7 and mega-reth/v2.3.1-4499c42.",
+     "agrees": true,
+     "note": "cycles/027/high-throughput.work/battery.json and targeted.json record ran equal to vectors, mismatchCount 0 and no errors for both chain ids. The dispatcher feeds operands at run time, so the battery does not exercise Monad compiler paths that need literal operands; those are covered by the reading checked in the first spot check."}
+  ],
+  "leads": []
+}
