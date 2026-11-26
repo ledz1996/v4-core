@@ -6409,6 +6409,89 @@
    ]
   },
   {
+   "title": "A transaction that failed validation in Base's block builder halted every exit on Base for 116 minutes in June 2026, and the fault is fixed in every builder and node handler read",
+   "chainIds": [
+    8453
+   ],
+   "lens": "L2",
+   "assumptions": [
+    "A1",
+    "A9"
+   ],
+   "effect": "freeze",
+   "difference": "Ethereum clients drop the journal of a transaction that fails validation. Base's builder kept it, so the warm accounts and slots of the excluded transaction leaked into the next one.",
+   "mechanism": "On 25 June 2026 an invalid transaction reached the builder of block 47806543 and failed validation. The builder did not clear the journal, the next valid transaction ran against the dirty access set and was charged different gas, and the receipts root of the sealed block differed from what validators computed. Validators rejected the block and the chain stopped at 47806542 for 116 minutes, and for 20 minutes on 26 June. Any account can send a transaction that fails validation in the builder; the PR's tests use a sender with code and a stale nonce. Because validation fails before any frame runs, no TSTORE of the failed transaction existed, so the PoolManager's lock, deltas and synced currency (src/libraries/Lock.sol, src/libraries/CurrencyDelta.sol, src/libraries/CurrencyReserves.sol) could not have been carried into the next transaction. Had a leak reached state, validators would have rejected that block too. The fix adds discard_tx to the non-deposit branch of catch_error (base/base PR 3806), present in v1.5.6 at handler.rs:385-387 and in v1.6.0-rc.3; op-revm, which the other six chains and op-rbuilder use, discards the journal on both the transaction error and other error paths, and revm's inspector run path calls the same catch_error.",
+   "impact": "While halted no PoolManager exit on Base could be included, so every liquidity provider and claim holder on Base was frozen for the duration. No funds were lost and no wrong state was accepted.",
+   "preconditions": "A builder whose error path keeps the journal. None of the builds read today has that fault.",
+   "mitigations": "None needed in core. Deployers on single-sequencer chains should expect temporary halts triggered by public transactions and keep withdrawals free of deadlines shorter than such halts.",
+   "coreRefs": [
+    "src/libraries/Lock.sol:13-25",
+    "src/PoolManager.sol:104-114"
+   ],
+   "sources": [
+    {
+     "url": "https://www.base.org/blog/postmortem-june-25th-block-production-outage.md",
+     "supports": "root cause: stale journal after a transaction validation failure; block 47806543 rejected by validators; 116 and 20 minute halts"
+    },
+    {
+     "url": "https://patch-diff.githubusercontent.com/raw/base/base/pull/3806.diff",
+     "supports": "the fix adds discard_tx in catch_error and tests EIP-3607 and nonce failures"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/handler.rs",
+     "supports": "the running build carries the fix at lines 385-387"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/85f7c13d7470a66254081f0177fc297201c07459/rust/op-revm/src/handler.rs",
+     "supports": "the op-revm revision op-rbuilder pins discards the journal on every non-deposit error"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 24,
+    "factCheck": "The Base postmortem (fetched) says block building kept stale journal state after a transaction validation failure, the next valid transaction was charged different gas, validators rejected block 47806543, the chain halted at 47806542, and the outages lasted 116 and 20 minutes. PR 3806's diff (fetched) adds evm.ctx().journal_mut().discard_tx() in the non-deposit branch of catch_error and adds tests with a caller that has code and with nonce failures. base v1.5.6 handler.rs has discard_tx at lines 385-387, and web3_clientVersion recorded in the work directory shows mainnet.base.org on base/v1.5.6. op-revm at op-reth/v2.10.0-rc.4 (Unichain's build) routes Legacy, 2930, 1559, 7702 and PostExec transaction errors to discard_and_surface_error, which calls discard_tx (handler.rs:480-503), and the revision 85f7c13d routes non-transaction errors to the same function (handler.rs:396-407). The postmortem itself says the invalid transaction failed during execution; the claim that it failed before any frame ran rests on the PR's tests, which use pre-execution validation failures.",
+    "codeCheck": "src/libraries/Lock.sol:10-27 keeps the unlock flag only in transient storage, and src/PoolManager.sol:103-113 requires the flag to be cleared and the delta count to be zero at the end of each unlock. A validation failure runs no frame, so no TSTORE of the failed transaction existed to leak. A leaked warm set changes gas only, and validators would reject any block whose state differed, as they did. The halt froze exits on Base for its duration and moved no funds.",
+    "corrections": "The postmortem describes the bad transaction as failing during execution; that no frame ran is inferred from PR 3806's tests, not stated by Base. The actor is right for the historical event: a stale nonce transaction is something any account can send.",
+    "sources": [
+     {
+      "url": "https://www.base.org/blog/postmortem-june-25th-block-production-outage.md",
+      "supports": "stale journal after a transaction validation failure; block 47806543 rejected; 116 and 20 minute halts"
+     },
+     {
+      "url": "https://patch-diff.githubusercontent.com/raw/base/base/pull/3806.diff",
+      "supports": "fix adds discard_tx in the non-deposit branch of catch_error"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/handler.rs",
+      "supports": "the running Base build has discard_tx at lines 385-387"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.10.0-rc.4/rust/op-revm/src/handler.rs",
+      "supports": "every non-deposit transaction error calls discard_and_surface_error, which discards the journal"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/85f7c13d7470a66254081f0177fc297201c07459/rust/op-revm/src/handler.rs",
+      "supports": "non-transaction errors also discard the journal"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 24,
+   "id": "F-149",
+   "firstCycle": 24,
+   "history": [
+    {
+     "cycle": 24,
+     "unit": "op-stack-eth",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
    "title": "Operator transaction filtering on Robinhood Chain can fail any exit from the PoolManager, including force-included ones",
    "chainIds": [
     4663
@@ -12730,6 +12813,76 @@
    ]
   },
   {
+   "title": "After Lagoon an unsafe reorg on OP Mainnet or Unichain replaces dependent blocks on the other chain with deposits-only blocks",
+   "chainIds": [
+    10,
+    130
+   ],
+   "lens": "L6",
+   "assumptions": [
+    "A14"
+   ],
+   "effect": "degrade",
+   "difference": "From 11 January 2027 OP Mainnet and Unichain form an interop dependency set. The sequencer may include an executing message that consumes an initiating message from an unsafe block of the other chain, and a block whose executing message turns out invalid is replaced by a block that holds only its deposits.",
+   "mechanism": "An account emits a log on OP Mainnet in an unsafe block and, within seconds, sends a Unichain transaction that executes it; other users' swaps, liquidity removals and takes against the Unichain PoolManager follow in the same Unichain block. If the OP Mainnet block is later reorganised (sequencer equivocation, a batch not posted within the sequencing window, or an L1 reorg), cross-chain validation marks the executing message invalid and derivation replaces the whole Unichain block with a deposits-only block. Each removed unlock is atomic (src/PoolManager.sol:104-114), so the PoolManager's balances and deltas stay consistent; what disappears is every user transaction of that block, which users and integrators may already have treated as done from the unsafe receipt.",
+   "impact": "No PoolManager funds move or freeze. Users whose exits sat in a replaced block must resend them; bridges, exchanges or solvers that released value on the strength of an unsafe receipt of a swap or take can be left short. The width of the effect is one block per invalid message, and a cascade is possible when the replaced block itself held initiating messages consumed on the other chain.",
+   "preconditions": "Lagoon active with interop between OP Mainnet and Unichain, a sequencer policy that admits messages from unsafe remote blocks, and an unsafe reorg on the remote chain. The last needs the sequencer, the batcher operator or an Ethereum reorg; an ordinary account cannot cause it, and deposits cannot carry executing messages.",
+   "mitigations": "Integrators should treat only safe heads as final for value released off chain on these two chains after Lagoon. Sequencers can restrict executing messages to safe remote blocks. Nothing in core needs to change.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114"
+   ],
+   "sources": [
+    {
+     "url": "https://specs.optimism.io/interop/derivation.html",
+     "supports": "invalid executing messages invalidate a block, which is replaced by a deposits-only block; deposits are prevented from executing messages"
+    },
+    {
+     "url": "https://specs.optimism.io/interop/sequencer.html",
+     "supports": "the sequencer may include executing messages with any level of confirmation safety, at higher risk of an invalid block"
+    },
+    {
+     "url": "https://docs.optimism.io/notices/upgrade-22.md",
+     "supports": "interop between OP Mainnet and Unichain activates with Lagoon on 11 January 2027, subject to governance"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 24,
+    "factCheck": "The interop derivation spec says a block built with an invalid executing message is invalid, may exist only as an unsafe block, and is replaced by a deposits-only block at the same height; it also says deposits are prevented from triggering executing messages. The interop sequencer spec says the sequencer may include an executing message with any level of confirmation safety, at higher risk of an invalid block. The Upgrade 22 notice says Lagoon turns on interop between OP Mainnet and Unichain, lists mainnet Lagoon activation on Monday, January 11, 2027, 16:00:01 UTC (1799683201), and says mainnet dates depend on Optimism Governance approval. All three pages were fetched in this session and match the finding.",
+    "codeCheck": "src/PoolManager.sol:103-113 sets the transient lock, calls unlockCallback on msg.sender, reverts with CurrencyNotSettled unless NonzeroDeltaCount is zero, and relocks. Each unlock is atomic inside one transaction, so dropping a whole block removes complete unlocks and leaves balances and deltas consistent. No PoolManager state of a replaced block survives. The finding correctly reports no fund movement.",
+    "corrections": "",
+    "sources": [
+     {
+      "url": "https://specs.optimism.io/interop/derivation.html",
+      "supports": "invalid executing messages invalidate a block, which is replaced by a deposits-only block; deposits cannot trigger executing messages"
+     },
+     {
+      "url": "https://specs.optimism.io/interop/sequencer.html",
+      "supports": "the sequencer may include executing messages at any confirmation safety level, at higher risk of an invalid block"
+     },
+     {
+      "url": "https://docs.optimism.io/notices/upgrade-22.md",
+      "supports": "Lagoon activates interop between OP Mainnet and Unichain on 11 January 2027 at 16:00:01 UTC, subject to governance"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 24,
+   "id": "F-148",
+   "firstCycle": 24,
+   "history": [
+    {
+     "cycle": 24,
+     "unit": "op-stack-eth",
+     "status": "confirmed",
+     "severity": "low"
+    }
+   ]
+  },
+  {
    "title": "BNB Smart Chain runs a call from the system address with its stated value and moves no balance, and no ordinary sender can be that address",
    "chainIds": [
     56
@@ -13312,7 +13465,7 @@
    ],
    "effect": "both",
    "difference": "On Ethereum every node re-executes every block with an interpreter whose source is public. On MegaETH the sequencer runs a parallel, JIT-compiled executor whose source is not published. The default RPC nodes are replicas that apply the sequencer's results without re-execution. Only stateless validators, full nodes and provers re-execute, and the public stateless validator does so with the stock revm 40.0.3 interpreter, mega-evm v1.7.3 and ruint 1.17.2.",
-   "mechanism": "1. The stateless-validator README says the validator uses a single-threaded executor based on the vanilla revm interpreter, and that, together with the K-semantics executor and the JIT-compiled executor on sequencer nodes, this makes three MegaETH client implementations. 2. The architecture page says replica nodes receive blocks and execution results from the sequencer and apply them without re-execution, and that this is the default RPC mode. eth_call and debug_traceTransaction on such a node therefore run that node's local EVM on state that the sequencer wrote. 3. The only public compiler from megaeth-labs is the evmone-compiler prototype. Its PUSHnJUMPI tests the whole 256 bit condition through intx's explicit operator bool and falls through when the word is zero (evmone_aot_compiler.hpp lines 84-96, intx v0.10.1 line 997). It checks gas only before jumps, but a frame that ends out of gas is undone as a whole, so the late check changes gas use and not state. Nothing ties this prototype to the production build. 4. If the production executor computed MULMOD, a shift, a comparison or a jump differently from the specification, every pool's swap and liquidity amounts in src/libraries (FullMath, SqrtPriceMath, TickMath, TickBitmap) would differ in blocks only. A replica would store the wrong result. A stateless validator would see a state root mismatch. 5. This cycle found no such divergence. 2,885 mined swaps that crossed initialized ticks or took several steps reproduce to the unit. 53,811 mined swaps satisfy the tick relation. For 7,627 mined PoolManager transactions, the receipts the sequencer wrote equal the replica's re-execution in status and in every surviving log.",
+   "mechanism": "1. The stateless-validator README says the validator uses a single-threaded executor based on the vanilla revm interpreter, and that, together with the K-semantics executor and the JIT-compiled executor on sequencer nodes, this makes three MegaETH client implementations. 2. The architecture page says replica nodes receive blocks and execution results from the sequencer and apply them without re-execution, and that this is the default RPC mode. eth_call and debug_traceTransaction on such a node therefore run that node's local EVM on state that the sequencer wrote. 3. The only public compiler from megaeth-labs is the evmone-compiler prototype. Its PUSHnJUMPI tests the whole 256 bit condition through intx's explicit operator bool and falls through when the word is zero (evmone_aot_compiler.hpp lines 84-96, intx v0.10.1 line 997). It checks gas only before jumps, but a frame that ends out of gas is undone as a whole, so the late check changes gas use and not state. Nothing ties this prototype to the production build. 4. If the production executor computed MULMOD, a shift, a comparison or a jump differently from the specification, every pool's swap and liquidity amounts in src/libraries (FullMath, SqrtPriceMath, TickMath, TickBitmap) would differ in blocks only. A replica would store the wrong result. A stateless validator would see a state root mismatch. 5. This cycle found no such divergence. 2,885 mined swaps that crossed initialized ticks or took several steps reproduce to the unit. 53,811 mined swaps satisfy the tick relation. For 7,627 mined PoolManager transactions, the receipts the sequencer wrote equal the replica's re-execution in status and in every surviving log. Cycle 24 addition: the 20,000 MegaETH transactions that cycle 23 traced were rerun instruction by instruction with a counter on each side of every conditional jump (117,100 PoolManager frames). Of the 387 conditional jumps of the build, the closed producer executed both sides of 116, one side of 193 and neither side of 78. In 129 of the 193 the missing side reverts. Never executed by the producers of MegaETH, Monad or HyperEVM in the replayed windows: donate (src/libraries/Pool.sol:466-480), clear (src/PoolManager.sol:310-319), settleFor (src/PoolManager.sol:305-307), ERC-6909 transfer, transferFrom and approve (src/ERC6909.sol:25-56), the 512-bit path of four of the five compiled copies of FullMath.mulDiv, and the overflow fallback of getNextSqrtPriceFromAmount0RoundingUp (src/libraries/SqrtPriceMath.sol:43-52). Three of those 512-bit paths cannot return to a caller at all, because the int128 casts at src/libraries/Pool.sol:192, :455 and :459 revert first. The protocol fee branch is also unexecuted, and it needs governance, because the fee controller is zero on all three networks. Every frame that the producers did execute gave the source's words when rerun instruction by instruction. No fault was found; the entry records which sides rest on eth_call and source reading alone. On MegaETH, logs over the whole chain (blocks 0 to 32,890,347) hold no Donate event and no ERC-6909 event other than 47 mints and 140 burns by the owner. Six swaps before the window ended at the MIN or MAX tick clamp, and all six replay exactly.",
    "impact": "None found. The record exists so that deployers know where the assurance comes from. A fault in the closed executor would hit every pool, an ordinary transaction could trigger it, and the only checks are the stateless validators and the fault proof path.",
    "preconditions": "A fault in the closed production executor or in a future release of it. No fault is known.",
    "mitigations": "Run the public stateless validator against MegaETH blocks that contain PoolManager transactions, and rerun tools/opdiff/swaps.py, replay.py and this unit's frames.py after each mega-reth release.",
@@ -13345,6 +13498,14 @@
     {
      "url": "rpc https://mainnet.megaeth.com/rpc web3_clientVersion on 2026-11-24",
      "supports": "The endpoint reports mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2."
+    },
+    {
+     "url": "https://mainnet.megaeth.com/rpc",
+     "supports": "eth_getLogs on the PoolManager over blocks 0 to 32,890,347 on 2026-11-26: 0 Donate logs; 187 ERC-6909 logs, 47 mints and 140 burns by the owner (cycles/024/theme-producer-branch-coverage.work/out/megaeth-6909.json)."
+    },
+    {
+     "url": "research/network-risk/cycles/024/theme-producer-branch-coverage.work/out/4326/branches.json",
+     "supports": "Per-side JUMPI counts with source lines for the 20,000 MegaETH transactions."
     }
    ],
    "evidence": "primary",
@@ -13384,7 +13545,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 10,
+   "lastVerifiedCycle": 24,
    "id": "F-118",
    "firstCycle": 10,
    "history": [
@@ -13393,6 +13554,13 @@
      "unit": "theme-megaeth-executor",
      "status": "confirmed",
      "severity": "info"
+    },
+    {
+     "cycle": 24,
+     "unit": "theme-producer-branch-coverage",
+     "status": "confirmed",
+     "severity": "info",
+     "note": "Branch sides the closed producer has executed, measured on 20,000 mined transactions. Folded in by hand. The verifier corrected two points: the MIN and MAX clamps did run in six earlier swaps, and the protocol fee branch needs governance."
     }
    ]
   },
@@ -13509,7 +13677,7 @@
    ],
    "effect": "both",
    "difference": "On Ethereum every full node recomputes the state root of each block and rejects a block whose root differs. HyperEVM blocks are produced by the closed hl-node validator, and the headers it publishes have stateRoot 0x00..00. The public archive client nanoreth (the build served at rpc.purroofgroup.com reports reth/v0.1.0-f0cad31) replaces its computed state root with B256::ZERO before the comparison with the header, so the comparison always passes. hyper-evm-sync computes a private blake3 hash of its state for snapshots and compares it with nothing. Both clients do re-execute every transaction and stop on a different receipt: nanoreth checks gas used, the receipts root and the logs bloom against the header, and hyper-evm-sync asserts that its computed receipts equal the validator's receipts.",
-   "mechanism": "The PoolManager keeps pool state, positions, ERC-6909 balances and protocol fees in persistent storage (src/libraries/Pool.sol, src/libraries/Position.sol, src/ERC6909.sol, src/ProtocolFees.sol). A state root would commit to exactly those slots. Transient storage is cleared at the end of each transaction and is in no state root on any network, so the missing check has no bearing on it. A validator fault that changed a persistent storage write without changing gas, status or logs of that transaction would not stop either public client. It would show up only once a later transaction reads the slot and its receipt differs, and then the client halts instead of correcting anything. The validator's receipts are therefore checked publicly, its storage writes only indirectly. This needs a fault or a deliberate change in the validator, which only its operator controls. No mismatch was observed: 2,762 mined PoolManager transactions over the whole history agree in status and logs with nanoreth's re-execution, 485 storage slots from prestateTracer agree with nanoreth's state at the block, and 222 touched PoolManager slots read at latest agree between the official endpoint and nanoreth.",
+   "mechanism": "The PoolManager keeps pool state, positions, ERC-6909 balances and protocol fees in persistent storage (src/libraries/Pool.sol, src/libraries/Position.sol, src/ERC6909.sol, src/ProtocolFees.sol). A state root would commit to exactly those slots. Transient storage is cleared at the end of each transaction and is in no state root on any network, so the missing check has no bearing on it. A validator fault that changed a persistent storage write without changing gas, status or logs of that transaction would not stop either public client. It would show up only once a later transaction reads the slot and its receipt differs, and then the client halts instead of correcting anything. The validator's receipts are therefore checked publicly, its storage writes only indirectly. This needs a fault or a deliberate change in the validator, which only its operator controls. No mismatch was observed: 2,762 mined PoolManager transactions over the whole history agree in status and logs with nanoreth's re-execution, 485 storage slots from prestateTracer agree with nanoreth's state at the block, and 222 touched PoolManager slots read at latest agree between the official endpoint and nanoreth. Cycle 24 addition: all 2,833 PoolManager transactions in HyperEVM's history to block 52,268,606 were rerun instruction by instruction with a counter on each side of every conditional jump (20,018 PoolManager frames). Of the 387 conditional jumps of the build, the closed validator executed both sides of 121, one side of 184 and neither side of 82. In 131 of the 184 the missing side reverts. Never executed by the producers of MegaETH, Monad or HyperEVM in the replayed windows: donate (src/libraries/Pool.sol:466-480), clear (src/PoolManager.sol:310-319), settleFor (src/PoolManager.sol:305-307), ERC-6909 transfer, transferFrom and approve (src/ERC6909.sol:25-56), the 512-bit path of four of the five compiled copies of FullMath.mulDiv, and the overflow fallback of getNextSqrtPriceFromAmount0RoundingUp (src/libraries/SqrtPriceMath.sol:43-52). Three of those 512-bit paths cannot return to a caller at all, because the int128 casts at src/libraries/Pool.sol:192, :455 and :459 revert first. The protocol fee branch is also unexecuted, and it needs governance, because the fee controller is zero on all three networks. Every frame that the producers did execute gave the source's words when rerun instruction by instruction. No fault was found; the entry records which sides rest on eth_call and source reading alone. HyperEVM has in addition never run an exact-output swap: SwapMath.computeSwapStep lines 88-104, getNextSqrtPriceFromOutput (src/libraries/SqrtPriceMath.sol:158-178) and the subtracting sides of both next-price functions have 0 executions. It took the MAX tick clamp 8 times and never the MIN side. The official endpoint answers eth_call like revm behind reth's RPC types on all 38 probes where client families differ, and it agrees with a nanoreth replica on 8,867 PoolManager storage items. Whether that endpoint runs the code that produces blocks is still unstated by Hyperliquid.",
    "impact": "No loss path for an ordinary account. The hazard is on evidence: clearances of HyperEVM that rest on storage, as opposed to receipts, are backed by nanoreth's own state and by the official endpoint, not by a check against the validator's commitment.",
    "preconditions": "A fault or change in the closed hl-node validator that alters a storage write but not the receipt of the same transaction. Only the validator operator can cause it.",
    "mitigations": "The deployer can run nanoreth or hyper-evm-sync and keep it at head, since a later receipt mismatch halts it, and can compare PoolManager slots between the official endpoint and nanoreth at regular intervals with eth_getStorageAt.",
@@ -13550,6 +13718,14 @@
     {
      "url": "https://rpc.hyperliquid.xyz/evm",
      "supports": "eth_getStorageAt at latest of 222 touched PoolManager slots equals nanoreth (theme-closed-producers.work/raw/hyper_slots.json)"
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm",
+     "supports": "eth_getCode of the PoolManager equals the build with its immutable on 2026-11-26; 39 read-only probes answered with reth's error texts and code -32003 (cycles/024/theme-hyperevm-call-path.work)."
+    },
+    {
+     "url": "research/network-risk/cycles/024/theme-producer-branch-coverage.work/out/999/branches.json",
+     "supports": "Per-side JUMPI counts for all 2,833 HyperEVM transactions; the JUMPI at pc 20618 (src/libraries/SwapMath.sol:88) has 0 executions on the exact-output side."
     }
    ],
    "evidence": "primary",
@@ -13589,7 +13765,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 11,
+   "lastVerifiedCycle": 24,
    "id": "F-120",
    "firstCycle": 11,
    "history": [
@@ -13598,6 +13774,13 @@
      "unit": "theme-closed-producers",
      "status": "confirmed",
      "severity": "info"
+    },
+    {
+     "cycle": 24,
+     "unit": "theme-producer-branch-coverage",
+     "status": "confirmed",
+     "severity": "info",
+     "note": "Branch sides the closed validator has executed over the PoolManager's whole history, and the call path probes of theme-hyperevm-call-path. Folded in by hand."
     }
    ]
   },
@@ -14330,7 +14513,7 @@
    ],
    "effect": "degrade",
    "difference": "Monad v0.16.7 runs two execution engines. The execution daemon builds its VM as InterpreterOnly when it is started with --trace-calls and as Dual (interpreter plus native x86 compiler) otherwise (cmd/monad/main.cpp lines 146, 214 and 484-488). Call frames are recorded and committed only when tracing is enabled (runloop_monad.cpp lines 233-245 and 330-337). Every RPC method that executes code uses a second, InterpreterOnly VM (rpc/monad_executor.cpp lines 1306-1309, used at 1525, 1547, 1824 and 1969; monad-rpc debug_replay.rs lines 61-64 and 236-237). Ethereum has one execution semantics per client and every serving node runs it.",
-   "mechanism": "Every public Monad endpoint that answers debug_traceTransaction with the call tracer (rpc.monad.xyz, rpc1, rpc2 via eRPC, rpc-mainnet.monadinfra.com, monad-mainnet.gateway.tatum.io) returns stored frames, so those nodes ran their block execution with --trace-calls and therefore with the interpreter. Their receipts and logs, among them every Swap and ModifyLiquidity event earlier cycles and this unit checked, are interpreter output. The only link between those nodes and validators that may run compiled code is the delayed merkle root of the state, checked D = 3 blocks later. On chain this is visible: in blocks 125,115,001 to 125,118,000 all 689 out-of-gas frames of 1,582 failed transactions, 19 of them PoolManager frames (swap with 94,784 gas, take with 1,844 to 18,922 gas), carry status 3 \"out of gas\", which is what the interpreter writes (interpreter/stack.hpp line 44); compiled code would end a static gas shortfall through error_label_ with StatusCode::Error (emitter.cpp lines 636, 679, 1054-1069), which debug.rs lines 381-388 map to \"error\". A compiled-only fault in a PoolManager branch that no block has taken yet (the overflow fallback of src/libraries/SqrtPriceMath.sol:52, the amount above 2^160 branch at src/libraries/SqrtPriceMath.sol:97 and 105, the 512 bit branch of the Q128 mulDiv at src/libraries/Position.sol:94-96) could be triggered by an ordinary swap or removal, and nobody can test it in advance through RPC. If two thirds of validators ran such a build, the canonical PoolManager state would follow the compiled result and the tracing RPC fleet would fall out of consensus. No such fault was found: the compiled paths for MULMOD, shifts, comparisons, sign extension and jumps were transcribed in cycles 9 to 13 without a mismatch, and the state roots of the tracing nodes agree with consensus at the finalized tip (block 125,124,132 on 2026-11-24).",
+   "mechanism": "Every public Monad endpoint that answers debug_traceTransaction with the call tracer (rpc.monad.xyz, rpc1, rpc2 via eRPC, rpc-mainnet.monadinfra.com, monad-mainnet.gateway.tatum.io) returns stored frames, so those nodes ran their block execution with --trace-calls and therefore with the interpreter. Their receipts and logs, among them every Swap and ModifyLiquidity event earlier cycles and this unit checked, are interpreter output. The only link between those nodes and validators that may run compiled code is the delayed merkle root of the state, checked D = 3 blocks later. On chain this is visible: in blocks 125,115,001 to 125,118,000 all 689 out-of-gas frames of 1,582 failed transactions, 19 of them PoolManager frames (swap with 94,784 gas, take with 1,844 to 18,922 gas), carry status 3 \"out of gas\", which is what the interpreter writes (interpreter/stack.hpp line 44); compiled code would end a static gas shortfall through error_label_ with StatusCode::Error (emitter.cpp lines 636, 679, 1054-1069), which debug.rs lines 381-388 map to \"error\". A compiled-only fault in a PoolManager branch that no block has taken yet (the overflow fallback of src/libraries/SqrtPriceMath.sol:52, the amount above 2^160 branch at src/libraries/SqrtPriceMath.sol:97 and 105, the 512 bit branch of the Q128 mulDiv at src/libraries/Position.sol:94-96) could be triggered by an ordinary swap or removal, and nobody can test it in advance through RPC. If two thirds of validators ran such a build, the canonical PoolManager state would follow the compiled result and the tracing RPC fleet would fall out of consensus. No such fault was found: the compiled paths for MULMOD, shifts, comparisons, sign extension and jumps were transcribed in cycles 9 to 13 without a mismatch, and the state roots of the tracing nodes agree with consensus at the finalized tip (block 125,124,132 on 2026-11-24). Cycle 24 addition: the 20,000 Monad transactions that cycle 23 traced (blocks 125,440,776 to 125,484,771) were rerun instruction by instruction with a counter on each side of every conditional jump (188,569 PoolManager frames). Of the 387 conditional jumps of the build, mined transactions executed both sides of 110, one side of 206 and neither side of 71. In 136 of the 206 the missing side reverts. Never executed by the producers of MegaETH, Monad or HyperEVM in the replayed windows: donate (src/libraries/Pool.sol:466-480), clear (src/PoolManager.sol:310-319), settleFor (src/PoolManager.sol:305-307), ERC-6909 transfer, transferFrom and approve (src/ERC6909.sol:25-56), the 512-bit path of four of the five compiled copies of FullMath.mulDiv, and the overflow fallback of getNextSqrtPriceFromAmount0RoundingUp (src/libraries/SqrtPriceMath.sol:43-52). Three of those 512-bit paths cannot return to a caller at all, because the int128 casts at src/libraries/Pool.sol:192, :455 and :459 revert first. The protocol fee branch is also unexecuted, and it needs governance, because the fee controller is zero on all three networks. Every frame that the producers did execute gave the source's words when rerun instruction by instruction. No fault was found; the entry records which sides rest on eth_call and source reading alone. On Monad the window also holds no swap that took the MIN or MAX tick clamp, and the 249,215 Swap logs of the 200,000 blocks before it hold none ending near a price bound. Public Monad endpoints refuse log ranges over 100 blocks, so the earlier 125 million blocks were not searched. The compiler harness of cycle 23 entered 899 of the 913 compiled blocks with test inputs, so the compiled code of these sides was run in the harness and matched the interpreter; it was never run by a validator.",
    "impact": "No loss path was found. The finding corrects the evidence base: OPCODES.md says the Monad mined swaps \"ran as compiled code\", and cycle 11 says call frames are what block execution recorded. Both are true only of an interpreter run on the tracing node. Compiled execution is covered by reading and by state root agreement, not by any served receipt, log or frame.",
    "preconditions": "A fault in the native compiler of the release that validators run, on an input that no mined block has produced yet. It needs no role from the attacker, but it needs a client defect that no reading has found.",
    "mitigations": "Before liquidity arrives, run one non-tracing Dual mode node (a local monad build replaying mainnet blocks without --trace-calls) and compare its receipts with a tracing node for transactions that take each untaken branch. Ask Monad which execution mode validators run. Treat Monad state root agreement, not RPC answers, as the producer evidence.",
@@ -14372,6 +14555,14 @@
     {
      "url": "rpc https://rpc.monad.xyz web3_clientVersion and debug_traceTransaction 0xd5d7b9bf9dc21f66a1186a11f4637a0c0acff3bb859e0e698d01ed891a027ebd on 2026-11-24",
      "supports": "Monad/0.16.7; stored frames returned by rpc.monad.xyz, rpc1, rpc2, rpc-mainnet.monadinfra.com and monad-mainnet.gateway.tatum.io; rpc3 and rpc.ankr.com refuse the method"
+    },
+    {
+     "url": "https://rpc.monad.xyz",
+     "supports": "eth_getLogs on 2026-11-26: Swap logs of blocks 125,340,776 to 125,440,775 (110,275 logs) and Donate logs of 125,240,776 to 125,440,775 (0 logs); a 1,000 block range is refused."
+    },
+    {
+     "url": "research/network-risk/cycles/024/theme-producer-branch-coverage.work/out/143/branches.json",
+     "supports": "Per-side JUMPI counts for the 20,000 Monad transactions."
     }
    ],
    "evidence": "primary",
@@ -14411,7 +14602,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 14,
+   "lastVerifiedCycle": 24,
    "id": "F-130",
    "firstCycle": 14,
    "history": [
@@ -14420,6 +14611,13 @@
      "unit": "theme-monad-native-path",
      "status": "confirmed",
      "severity": "info"
+    },
+    {
+     "cycle": 24,
+     "unit": "theme-producer-branch-coverage",
+     "status": "confirmed",
+     "severity": "info",
+     "note": "Branch sides that mined Monad transactions have executed. Folded in by hand."
     }
    ]
   },
@@ -15210,6 +15408,180 @@
     {
      "cycle": 23,
      "unit": "arbitrum-family",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
+   "title": "Polygon's publicnode endpoint answers from at least five unpublished bor commits, and several of them answer within the same seconds",
+   "chainIds": [
+    137
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "difference": "Ethereum endpoints serve tagged client releases. polygon-bor-rpc.publicnode.com, the RPC that networks.json lists for Polygon, reported bor/cb3d19c5f690/v2.11.1-private at 09:15 UTC and bor/280514fa9fb7/v2.11.1-private at 09:23 and 09:26 UTC on 2026-11-26. Neither commit, nor the three seen in earlier cycles, exists on raw.githubusercontent.com.",
+   "mechanism": "An eth_call answer from this endpoint can come from any of these private builds. The battery and the targeted set ran unpinned against it and matched every vector, so the builds in rotation during the run compute the opcodes the pool math uses as specified. No source can be read for them, so a change to core/vm in any of them is known only through its answers.",
+   "impact": "No loss. Results from this endpoint cannot be tied to one build unless each batch is bracketed with web3_clientVersion.",
+   "preconditions": "Only the endpoint operator decides which build serves a request.",
+   "mitigations": "Pin opcode and script runs to a build string, or use an endpoint that reports a tagged release such as QuikNode's v2.11.1 builds.",
+   "coreRefs": [
+    "src/libraries/FullMath.sol:24",
+    "src/libraries/FullMath.sol:48"
+   ],
+   "sources": [
+    {
+     "url": "https://polygon-bor-rpc.publicnode.com",
+     "supports": "web3_clientVersion answers cb3d19c5f690 and 280514fa9fb7 on 2026-11-26 (research/network-risk/cycles/024/established-l1.work/clientversions.txt, clientversions-after.txt, gap137-partial.json)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/0xPolygon/bor/cb3d19c5f690/params/version.go",
+     "supports": "HTTP 404: the commit is not in the public repository"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 24,
+    "factCheck": "Six web3_clientVersion calls to https://polygon-bor-rpc.publicnode.com at about 11:56 UTC on 2026-11-26 answered bor/ebcfea01452d, bor/a863b8e5cce1, bor/cb3d19c5f690 three times and bor/280514fa9fb7, each v2.11.1-private/linux-amd64/go1.26.10. raw.githubusercontent.com/0xPolygon/bor/<ref>/params/version.go returned 404 for cb3d19c5f690 and 280514fa9fb7 and 200 for v2.11.1 and develop, so the commits are not in the public repository. rpc-mainnet.matic.quiknode.pro answered bor/qn-lsn-fra-12486/v2.11.1/linux-amd64/go1.26.11, a named release build. The work files show the battery and targeted set matched on the endpoint, and the BSC pinned runs in the same directory show 0 mismatches for both builds there.",
+    "codeCheck": "FullMath.mulDiv calls mulmod(a, b, not(0)) at src/libraries/FullMath.sol:24 and mulmod(a, b, denominator) at src/libraries/FullMath.sol:48, so a wrong MULMOD in an unreadable build would move prod1 and the remainder. The finding claims no such fault and only notes that results cannot be tied to a build. That holds. No code path is changed by which build answers when both compute as specified.",
+    "corrections": "The endpoint rotates among at least four private builds, not two: in this check ebcfea01452d and a863b8e5cce1 answered within the same few seconds as cb3d19c5f690 and 280514fa9fb7. The mitigation of bracketing batches with web3_clientVersion therefore needs to handle four or more tags.",
+    "sources": [
+     {
+      "url": "https://polygon-bor-rpc.publicnode.com",
+      "supports": "web3_clientVersion answered four distinct private bor commits in six consecutive calls on 2026-11-26"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/0xPolygon/bor/cb3d19c5f690/params/version.go",
+      "supports": "HTTP 404, commit not public"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/0xPolygon/bor/280514fa9fb7/params/version.go",
+      "supports": "HTTP 404, commit not public"
+     },
+     {
+      "url": "https://rpc-mainnet.matic.quiknode.pro",
+      "supports": "answers a tagged v2.11.1 QuikNode build"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 24,
+   "id": "F-146",
+   "firstCycle": 24,
+   "history": [
+    {
+     "cycle": 24,
+     "unit": "established-l1",
+     "status": "confirmed",
+     "severity": "info",
+     "note": "Title corrected after the verifier and the critic: four builds answered within seconds of each other during verification, and a fifth (f2a2d63e69f6) answered the critic the same day. A pinned run has to allow for any of five builds on each call."
+    }
+   ]
+  },
+  {
+   "title": "Minority Ethereum execution clients run CPU-selected jump destination kernels and an erigon storage read cache that no public endpoint can be pinned to",
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "difference": "Erigon 3.8 (about 3 percent of reporting validators) and Nethermind 2.2 (about 43 percent) compute the jump destination bitmap with SIMD kernels chosen from the CPU at start, so validators running one release on different hardware run different code for it. Erigon 3.8 also answers SLOAD from a two-entry per-frame cache whose invalidation rests on a read stamp of its state object. Geth and reth, which earlier cycles tested, do neither of the erigon changes. No public endpoint serves eth_call from Nethermind, and the only one that reaches erigon rotates its backend on every request.",
+   "mechanism": "Every branch of the PoolManager is a JUMP or JUMPI to one of its 610 JUMPDEST bytes. A kernel that dropped one of them would make that branch fail on the affected client. A kernel that marked a 0x5b byte inside push data would change nothing, because the PoolManager never jumps to a computed target taken from input. The storage cache matters at PoolManager.sol:196 and 202-206 and at 154-159: the frame reads slot0 for checkPoolInitialized, calls the hook, and reads slot0 and the liquidity again inside Pool.swap or Pool.modifyLiquidity. If the stamp did not change when a hook reentered the PoolManager and moved the price, or when a nested write was reverted, the outer frame would swap from the old price. The erigon SSE4 kernel and its scalar fallback were built here from the v3.8.1 source and matched an independent scalar rule on the PoolManager bytecode (build and mainnet code, 610 destinations), on all 192 prefix and suffix cuts of each, on 400,000 random strings and on 289,510 single-push strings; a one-byte change to the kernel's JUMPDEST constant gave 1.2 million mismatches, so the harness sees a fault. The NEON kernel and the four Nethermind kernels were not run. The cache probe gave the specified words on every answer.",
+   "impact": "None found. A fault in a client below one third of the stake makes its nodes reject canonical blocks; it does not change what the canonical chain records for pool funds. Nethermind is above one third, so a Nethermind fault on a PoolManager path would stall finality until fixed, and funds would wait without loss. Changing the recorded state needs a fault in clients holding two thirds of the stake.",
+   "preconditions": "A fault in one of the unrun kernels or in the read stamp logic, reached by a PoolManager path, on clients that together hold enough stake to matter. Nobody has to hold a role to send the transaction that reaches it, but the effect on funds needs the faulty client to dominate block production and attestation.",
+   "mitigations": "Run the Nethermind JumpDestinationAnalyzer kernels and the erigon NEON kernel against the PoolManager bytecode and the scalar rule. Read the erigon ReadStamp source. Operators with a choice can keep a geth or reth node beside an erigon or Nethermind validator.",
+   "coreRefs": [
+    "src/PoolManager.sol:187-206",
+    "src/PoolManager.sol:145-159",
+    "src/libraries/Hooks.sol:134"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/analysis_amd64.s",
+     "supports": "erigon v3.8.1 jump destination kernel in SSSE3 and SSE4.1 assembly"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/interpreter.go",
+     "supports": "per-frame two-entry SLOAD cache keyed by ReadStamp"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/contract.go",
+     "supports": "jump validity read from the bitmap alone, cached by code hash"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/NethermindEth/nethermind/2.2.2/src/Nethermind/Nethermind.Evm/CodeAnalysis/JumpDestinationAnalyzer.cs",
+     "supports": "Nethermind selects AVX-512 VBMI, AVX2, SSSE3 or AdvSimd kernels at run time"
+    },
+    {
+     "url": "https://clientdiversity.org/",
+     "supports": "execution client shares of reporting validators: Nethermind about 43 percent, geth 43, Besu 8, reth 3, erigon 3"
+    },
+    {
+     "url": "file:research/network-risk/cycles/024/ethereum-reference.work/jdtest/jdtest.out",
+     "supports": "harness result: 689,896 cases, 0 mismatches"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 24,
+    "factCheck": "Fetched erigon v3.8.1 execution/vm/analysis_amd64.go, analysis_amd64.s, analysis.go, interpreter.go and instructions.go from raw.githubusercontent.com. analysis_amd64.go selects codeBitmapSSE4 at start when cpu.X86.HasSSSE3 and HasSSE41 are set, else codeBitmapGeneric. interpreter.go lines 92-146 define frameSlots, a two-entry per-frame SLOAD cache keyed by the stack word and valid while IntraBlockState().ReadStamp() equals the stamp taken at fill; putCallContext clears the entries when a context is pooled (lines 215-221), and opSload in instructions.go returns slots.val on a hit without calling GetState. Nethermind 2.2.2 JumpDestinationAnalyzer.cs lines 156-159 pick the Vector512 (Avx512Vbmi), Vector256 (Avx2), Ssse3 or AdvSimd kernel at run time. I rebuilt the jdtest harness from the work directory in my own scratch directory with go1.24.7 on an SSSE3 and SSE4.1 host; its analysis_amd64.s is byte-identical to the fetched v3.8.1 file and the .go files differ only in the package name and the forced hasSSE4 flag. It printed 689,896 cases and 0 mismatches against an independent scalar rule that I read in main.go. eth_getCode on https://ethereum-rpc.publicnode.com (reth/v2.11.0-b9abbcc) for 0x000000000004444c5dc75cB358380D2e3dE08A90 returned 24,009 bytes equal to pm_mainnet.hex. I could not find where IntraBlockState.ReadStamp is defined: it is absent from execution/state/intra_block_state.go, journal.go, state_object.go, versionmap.go, versionedio.go, access_list.go, transient_storage.go and cached_reader.go at v3.8.1, and about 40 other guessed file names returned 404. The finding states this gap itself.",
+    "codeCheck": "PoolManager.swap reads pool state at src/PoolManager.sol:196 (checkPoolInitialized), calls beforeSwap at :202 through Hooks.callHook (src/libraries/Hooks.sol:131-134, a CALL that a hook may use to reenter), then reads slot0 again in _swap. modifyLiquidity has the same order at src/PoolManager.sol:152-157. A stale cached slot0 or liquidity after a reentrant write would make the outer frame swap or mint from an old price. The settlement state (sync, unlock flag, delta count) is transient (src/libraries/CurrencyReserves.sol:23-30) and erigon's cache covers only SLOAD, so settlement is outside it. The reentrancy needs a hook in the pool, so an unprivileged attacker could only reach it in a pool with its own hook; for pools without attacker hooks a stale read would need some other path. The finding reports no fault, and I found none in the code I could read.",
+    "corrections": "clientdiversity.org shows two execution-client datasets. One gives Nethermind 43, Geth 43, Besu 8, Reth 3 and Erigon 3 percent. The other gives Geth 50.13, Nethermind 25.46, Besu 9.45, Reth 7.67 and Erigon 6.53 percent. Under the second, Nethermind is below one third, and a Nethermind-only fault would knock its nodes off the chain without stalling finality. The conclusion that no single minority client can change canonical pool state holds under both. The ReadStamp invalidation rule is still unread, and the NEON and Nethermind kernels were not run, so those parts of 'none found' rest on reading the code and on the probe.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/analysis_amd64.go",
+      "supports": "CPU-selected codeBitmapSSE4 or codeBitmapGeneric"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/analysis_amd64.s",
+      "supports": "SSSE3 and SSE4.1 kernel, byte-identical to the harness copy"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/interpreter.go",
+      "supports": "frameSlots two-entry SLOAD cache keyed by stack word and ReadStamp, lines 92-146 and 205-232"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/instructions.go",
+      "supports": "opSload returns the cached value on a hit"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/state/intra_block_state.go",
+      "supports": "fetched; contains no ReadStamp definition"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/NethermindEth/nethermind/2.2.2/src/Nethermind/Nethermind.Evm/CodeAnalysis/JumpDestinationAnalyzer.cs",
+      "supports": "run-time choice of four SIMD kernels, lines 156-159"
+     },
+     {
+      "url": "https://clientdiversity.org/",
+      "supports": "two execution-client datasets: Nethermind 43 or 25.46 percent, Erigon 3 or 6.53 percent"
+     },
+     {
+      "url": "https://ethereum-rpc.publicnode.com",
+      "supports": "eth_getCode of the PoolManager equals pm_mainnet.hex, 24,009 bytes; web3_clientVersion reth/v2.11.0-b9abbcc"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 24,
+   "id": "F-147",
+   "firstCycle": 24,
+   "history": [
+    {
+     "cycle": 24,
+     "unit": "ethereum-reference",
      "status": "confirmed",
      "severity": "info"
     }

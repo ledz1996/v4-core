@@ -1,0 +1,87 @@
+# Postmortem:  June 25th Block Production Outage
+
+> Base is committed to building in the open, which includes sharing detailed public postmortems when issues arise.
+
+- Date: 2026-06-27
+- Author: Base Engineering Team
+- URL: https://www.base.org/blog/postmortem-june-25th-block-production-outage
+
+Base is committed to building in the open, which includes sharing detailed public postmortems when issues arise.
+
+## Overview
+
+On June 25th and 26th 2026, Base mainnet experienced two block production outages. The first incident began at 11:47am EDT on the 25th, and lasted 116 minutes. The second started at 11:28am EDT on the 26th and lasted 20 minutes. The root cause was the same and they will be discussed together throughout this postmortem.
+
+The integrity of the chain was not compromised and all funds on Base were safe. Block production resumed safely after we mitigated the incident. This postmortem dives into the root cause, the impact, how we mitigated, and what we plan to improve moving forward.
+
+## Root Cause
+
+We identified a bug in sequencer block-building logic that allowed stale journal state to persist after a transaction validation failure. An invalid transaction was received by the block builder and failed during execution, as expected, but erroneously did not clear the journal state that contained the accounts and storage slots that had been accessed.
+
+After that failed transaction, a valid transaction was received and executed before the journal was properly cleared. As a result of the inaccurate journal state, the valid transaction had a mismatch in the amount of gas charged. This caused a sequenced block that contained an invalid state transition, leading to a block that could not be accepted by any other nodes. The chain fully halted at this point.
+
+## Impact
+
+During the 116 and 20 minute outages, Base experienced the following issues.
+
+### Block Production
+
+Complete halt of new L2 blocks produced. The sequencer and validator nodes could not progress past the invalid block until sequencing was restored.
+
+### Transaction Processing
+
+During the outage, new transactions that queued in the mempool were not included onchain. This caused the txpool to grow larger than what it could store, and reject newly submitted transactions. Requests submitting `eth_sendRawTransaction` transactions to Base were receiving errors throughout this time.
+
+## Mitigation
+
+The outage was fixed by applying a patch to the sequencers to ensure the journal state was properly updated during execution.
+
+The fix can be seen in this PR: [https://github.com/base/base/pull/3806](https://github.com/base/base/pull/3806)
+
+Mitigation took longer than expected due to infrastructure conditions unrelated to the original bug. The sequencers in the active/passive cluster do consensus-layer sync rather than execution sync like validator nodes. A race condition in the engine reset feature prevented the sequencers from catching up to tip after being restarted. This affected only the sequencers, but was a separate bug we had to fix during mitigation.
+
+It is because of this second issue that the incident occurred again the following day. The issue can be seen here: [https://github.com/base/base/pull/3805/changes](https://github.com/base/base/pull/3805/changes)
+
+## Going forward
+
+Base is committed to building a platform for global finance, and will continue investing in the reliability and performance of the chain to live up to that mission. We recognize this incident caused disruption for users, builders, and node operators.
+
+We are using this incident to harden protocol fuzz testing practices and load testing harnesses to be able to more easily identify adversarial transaction patterns that could expose bugs like the one we saw here. In addition to operational and monitoring improvements, we expect these changes to improve resilience and will continue validating them in production and through testing.
+
+Additionally, this case required validator nodes to be restarted in order to continue syncing. We intend to implement graceful recovery into base-consensus for faster and easier ecosystem recovery in these situations.
+
+Please subscribe to notifications on [https://status.base.org](https://status.base.org) to stay informed going forward.
+
+---
+
+## Incident Timeline
+
+### Phase 1: The Chain Halt
+
+| **Time**                          | **Event**                            | **What Happened**                                                                                                                                                                                                                                                     |
+| --------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **11:47:13 AM ET** (15:47:13 UTC) | **Sequencer State Contamination**    | An invalid transaction fails during the building of block 47806543. However, error handling fails to clear the memory state journal, leaving it "dirty".                                                                                                              |
+| **11:47:13 AM ET** (15:47:13 UTC) | **Corrupted State Execution**        | Within the same 2-second window, a subsequent valid transaction runs against the dirty journal state. This produces an incorrect receipts root. The sequencer seals and distributes the bad block.                                                                    |
+| **11:47:13 AM ET** (15:47:13 UTC) | **Validator Rejection & Chain Halt** | Validators receive the block and re-execute it. Because they do not run the excluded invalid transaction, they use a clean state journal and compute a different receipts root. Due to this mismatch, they reject the block, **halting the chain at block 47806542**. |
+
+### **Phase 2: Rapid Response & Triage Benchmarks**
+
+| **Time**                          | **Metric / Milestone** | **Response Action**                                                                                                                            |
+| --------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **11:49:00 AM ET** (15:49:00 UTC) | **T + 2 minutes**      | **Automated Alerting:** Monitors detect the block production stall and fire an alert.                                                          |
+| **11:52:00 PM ET** (15:52:00 UTC) | **T + 5 minutes**      | **War Room & Identification:** Live engineering war room is established. Within 3 minutes of the alert, engineers pinpoint the bad block hash. |
+| **11:53:00 PM ET** (15:53:00 UTC) | **T + 6 minutes**      | **Public Notification:** Public status page is updated.                                                                                        |
+
+### Phase 3: Mitigation & Network Recovery
+
+| **Time**                    | **Status**                   | **Resolution Steps**                                                                                                                                 |
+| --------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **12:24 PM ET** (16:24 UTC) | **Investigating**            | Technical teams coordinate across multiple workstreams to isolate the root cause.                                                                    |
+| **12:55 PM ET** (16:55 UTC) | **Core Issue Isolated**      | Root cause is determined and the invalid block interfering with subsequent block building is isolated. Implementation and testing of the fix begins. |
+| **1:20 PM ET** (17:20 UTC)  | **Internal Node Recovery**   | Internal sequencers and core nodes achieve preliminary recovery. The EVM state journal patch is deployed to internal nodes.                          |
+| **1:51 PM ET** (17:51 UTC)  | **Block Production Resumed** | New blocks resume sequencing. Downstream ecosystem node operators are instructed to restart stuck nodes. **Total Outage Duration: ~116 minutes**.    |
+| **1:58 PM ET** (17:58 UTC)  | **Stability Confirmed**      | Widespread syncing across the ecosystem is verified. Systems are fully stable under active monitoring.                                               |
+
+\
+
+The second chain halt on June 26th was similar in root cause as the first. It started at 11:28am EDT and lasted 20 minutes.

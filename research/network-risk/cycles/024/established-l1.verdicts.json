@@ -1,0 +1,37 @@
+{
+  "unit": "established-l1",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "Six web3_clientVersion calls to https://polygon-bor-rpc.publicnode.com at about 11:56 UTC on 2026-11-26 answered bor/ebcfea01452d, bor/a863b8e5cce1, bor/cb3d19c5f690 three times and bor/280514fa9fb7, each v2.11.1-private/linux-amd64/go1.26.10. raw.githubusercontent.com/0xPolygon/bor/<ref>/params/version.go returned 404 for cb3d19c5f690 and 280514fa9fb7 and 200 for v2.11.1 and develop, so the commits are not in the public repository. rpc-mainnet.matic.quiknode.pro answered bor/qn-lsn-fra-12486/v2.11.1/linux-amd64/go1.26.11, a named release build. The work files show the battery and targeted set matched on the endpoint, and the BSC pinned runs in the same directory show 0 mismatches for both builds there.",
+      "codeCheck": "FullMath.mulDiv calls mulmod(a, b, not(0)) at src/libraries/FullMath.sol:24 and mulmod(a, b, denominator) at src/libraries/FullMath.sol:48, so a wrong MULMOD in an unreadable build would move prod1 and the remainder. The finding claims no such fault and only notes that results cannot be tied to a build. That holds. No code path is changed by which build answers when both compute as specified.",
+      "corrections": "The endpoint rotates among at least four private builds, not two: in this check ebcfea01452d and a863b8e5cce1 answered within the same few seconds as cb3d19c5f690 and 280514fa9fb7. The mitigation of bracketing batches with web3_clientVersion therefore needs to handle four or more tags.",
+      "sources": [
+        {"url": "https://polygon-bor-rpc.publicnode.com", "supports": "web3_clientVersion answered four distinct private bor commits in six consecutive calls on 2026-11-26"},
+        {"url": "https://raw.githubusercontent.com/0xPolygon/bor/cb3d19c5f690/params/version.go", "supports": "HTTP 404, commit not public"},
+        {"url": "https://raw.githubusercontent.com/0xPolygon/bor/280514fa9fb7/params/version.go", "supports": "HTTP 404, commit not public"},
+        {"url": "https://rpc-mainnet.matic.quiknode.pro", "supports": "answers a tagged v2.11.1 QuikNode build"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "bor's MULMOD memo (v2.12.0-beta and develop, core/vm/mulmod_memo.go) read against holiman/uint256 v1.3.2, for the two moduli FullMath.mulDiv uses on one call.",
+      "agrees": true,
+      "note": "Read develop mulmod_memo.go and opMulmod in develop instructions.go (lines 200-205). The memo takes the memo path only when z[3] != 0, compares the whole uint256.Int modulus, copies it into mm.mod and recomputes Reciprocal on a miss before z is written. bor develop go.mod line 59 pins holiman/uint256 v1.3.2, whose MulModWithReciprocal and MulMod (uint256.go 684-748) are the same code except that MulMod computes mu itself. Zero operands clear z before mu is used. The output is a function of (x, y, m) only, so alternating 2^256-1 (FullMath.sol:24) and the denominator (FullMath.sol:48), or reuse of the EVM across transactions, cannot change a result."
+    },
+    {
+      "check": "Battery and targeted set on bsc-dataseed1 pinned to each of its two builds.",
+      "agrees": true,
+      "note": "tagspin.log shows each run kept only answers tagged with the wanted build (167 battery and 143 targeted batches each) and discarded 82 to 200 batches from the other build. battery-dataseed-4e1c8247.json and targeted-dataseed-nocommit.json record ran equal to vectors (99,985 and 85,544) with mismatchCount 0 and no errors."
+    },
+    {
+      "check": "The SAE executor of avalanchego 1.15.3 read for transaction boundaries and the EVM it runs.",
+      "agrees": true,
+      "note": "In vms/saevm/saexec/execution.go at v1.15.3 the loop over txs calls stateDB.SetTxContext then core.ApplyTransaction once per transaction with vm.Config{}, and the source comment says ApplyTransaction calls StateDB.Finalise. Transient storage is reset per transaction, so the lock and delta slots (src/libraries/Lock.sol, src/libraries/CurrencyReserves.sol) do not leak between transactions. The bor shared keccak cache seen next to the memo (core/vm/shared_cache.go) was already cleared in state/cleared.json as keyed on the full input."
+    }
+  ],
+  "leads": []
+}

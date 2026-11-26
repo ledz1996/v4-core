@@ -1,0 +1,35 @@
+{
+  "unit": "op-stack-eth",
+  "verdicts": [
+    {"findingIndex": 0,
+     "verdict": "confirmed",
+     "severity": "low",
+     "factCheck": "The interop derivation spec says a block built with an invalid executing message is invalid, may exist only as an unsafe block, and is replaced by a deposits-only block at the same height; it also says deposits are prevented from triggering executing messages. The interop sequencer spec says the sequencer may include an executing message with any level of confirmation safety, at higher risk of an invalid block. The Upgrade 22 notice says Lagoon turns on interop between OP Mainnet and Unichain, lists mainnet Lagoon activation on Monday, January 11, 2027, 16:00:01 UTC (1799683201), and says mainnet dates depend on Optimism Governance approval. All three pages were fetched in this session and match the finding.",
+     "codeCheck": "src/PoolManager.sol:103-113 sets the transient lock, calls unlockCallback on msg.sender, reverts with CurrencyNotSettled unless NonzeroDeltaCount is zero, and relocks. Each unlock is atomic inside one transaction, so dropping a whole block removes complete unlocks and leaves balances and deltas consistent. No PoolManager state of a replaced block survives. The finding correctly reports no fund movement.",
+     "corrections": "",
+     "sources": [
+      {"url": "https://specs.optimism.io/interop/derivation.html", "supports": "invalid executing messages invalidate a block, which is replaced by a deposits-only block; deposits cannot trigger executing messages"},
+      {"url": "https://specs.optimism.io/interop/sequencer.html", "supports": "the sequencer may include executing messages at any confirmation safety level, at higher risk of an invalid block"},
+      {"url": "https://docs.optimism.io/notices/upgrade-22.md", "supports": "Lagoon activates interop between OP Mainnet and Unichain on 11 January 2027 at 16:00:01 UTC, subject to governance"}
+     ]},
+    {"findingIndex": 1,
+     "verdict": "confirmed",
+     "severity": "info",
+     "factCheck": "The Base postmortem (fetched) says block building kept stale journal state after a transaction validation failure, the next valid transaction was charged different gas, validators rejected block 47806543, the chain halted at 47806542, and the outages lasted 116 and 20 minutes. PR 3806's diff (fetched) adds evm.ctx().journal_mut().discard_tx() in the non-deposit branch of catch_error and adds tests with a caller that has code and with nonce failures. base v1.5.6 handler.rs has discard_tx at lines 385-387, and web3_clientVersion recorded in the work directory shows mainnet.base.org on base/v1.5.6. op-revm at op-reth/v2.10.0-rc.4 (Unichain's build) routes Legacy, 2930, 1559, 7702 and PostExec transaction errors to discard_and_surface_error, which calls discard_tx (handler.rs:480-503), and the revision 85f7c13d routes non-transaction errors to the same function (handler.rs:396-407). The postmortem itself says the invalid transaction failed during execution; the claim that it failed before any frame ran rests on the PR's tests, which use pre-execution validation failures.",
+     "codeCheck": "src/libraries/Lock.sol:10-27 keeps the unlock flag only in transient storage, and src/PoolManager.sol:103-113 requires the flag to be cleared and the delta count to be zero at the end of each unlock. A validation failure runs no frame, so no TSTORE of the failed transaction existed to leak. A leaked warm set changes gas only, and validators would reject any block whose state differed, as they did. The halt froze exits on Base for its duration and moved no funds.",
+     "corrections": "The postmortem describes the bad transaction as failing during execution; that no frame ran is inferred from PR 3806's tests, not stated by Base. The actor is right for the historical event: a stale nonce transaction is something any account can send.",
+     "sources": [
+      {"url": "https://www.base.org/blog/postmortem-june-25th-block-production-outage.md", "supports": "stale journal after a transaction validation failure; block 47806543 rejected; 116 and 20 minute halts"},
+      {"url": "https://patch-diff.githubusercontent.com/raw/base/base/pull/3806.diff", "supports": "fix adds discard_tx in the non-deposit branch of catch_error"},
+      {"url": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/handler.rs", "supports": "the running Base build has discard_tx at lines 385-387"},
+      {"url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.10.0-rc.4/rust/op-revm/src/handler.rs", "supports": "every non-deposit transaction error calls discard_and_surface_error, which discards the journal"},
+      {"url": "https://raw.githubusercontent.com/ethereum-optimism/optimism/85f7c13d7470a66254081f0177fc297201c07459/rust/op-revm/src/handler.rs", "supports": "non-transaction errors also discard the journal"}
+     ]}
+  ],
+  "clearedSpotChecks": [
+    {"check": "Battery (99,985 vectors) and targeted set (85,544 vectors) at the builds answering on 2026-11-26 on all seven chains.", "agrees": true, "note": "battery.log and targeted.log report 0 mismatches and 0 errors on all seven chains. I ran my own eth_call with a code override on OP Mainnet, Base and Unichain: MULMOD(2^256-1, 2^256-1, 2^256-2), SDIV(-2^255, -1) and SAR(255, -2^255). All three endpoints returned 1, -2^255 and -1, which are the specified results."},
+    {"check": "Lagoon interop: can a relayed message make the PoolManager act for someone else.", "agrees": true, "note": "L2ToL2CrossDomainMessenger.relayMessage at op-contracts/v10.0.0 validates the identifier through CrossL2Inbox, rejects unsafe targets, and calls target.call{value: msg.value}(message), so the PoolManager sees the messenger as msg.sender. unlock (src/PoolManager.sol:103-113) calls back the messenger, and the messenger source has no unlockCallback or fallback, so it reverts. Every function that moves funds needs onlyWhenUnlocked (src/PoolManager.sol:145-332). The functions that need no lock (sync, initialize, updateDynamicLPFee, ERC6909 transfer, approve and setOperator in src/ERC6909.sol:25-58) act only on the messenger's own claims or on state the caller already controls. One line: ERC-6909 claims sent by mistake to the messenger address could be moved by anyone who relays a message, a user-error hazard outside scope."},
+    {"check": "Does any handler or builder on these chains keep the journal of a failed transaction (Base June 2026 fault class).", "agrees": true, "note": "I read base v1.5.6 handler.rs:375-395, op-revm at op-reth/v2.10.0-rc.4 handler.rs:470-503 and op-revm at 85f7c13d handler.rs:396-407. Each discards the journal on every non-deposit error. Only deposits commit after an error, and they do so on purpose to persist the mint and nonce."}
+  ],
+  "leads": []
+}

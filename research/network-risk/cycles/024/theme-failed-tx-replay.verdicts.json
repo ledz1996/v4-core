@@ -1,0 +1,22 @@
+{
+  "unit": "theme-failed-tx-replay",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 2 (L-1035): whether a mega-evm v1.7.4 resource limit can stop a frame after take has paid out and before settle while the outer transaction succeeds on MegaETH (4326).",
+      "agrees": true,
+      "note": "Fetched https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/limit/limit.rs (HTTP 200, 1308 lines). Lines 31-53 say a TX-level exceed is OutOfGas (halt) and a Rex4+ per-frame exceed reverts that frame. Lines 152-161 return Revert for a frame-local exceed. Lines 827-837 state the one hazard: the result is rewritten to Revert after revm already committed a frame that exited successfully, so the parent sees a failure for work that stays done. I traced where that can meet the PoolManager. When the rewritten frame is a child of the PoolManager (token transfer, native send, hook call, balanceOf), every such call site reverts the PoolManager frame on failure: src/types/Currency.sol:51-53 and 82-86, src/libraries/Hooks.sol:137, and balanceOfSelf at src/types/Currency.sol:90-96 is a checked high-level call. A grep of src/ for call( and staticcall finds only these three low-level calls, and src/ProtocolFees.sol has no try or failure-tolerant call to the fee controller, so no PoolManager path continues after a child failure. The PoolManager frame's revert then rolls back the committed child with it. When the rewritten frame is a PoolManager entry point such as take, its debit was recorded before the transfer (src/PoolManager.sol:291-297) and committed together with it, and unlock still requires NonzeroDeltaCount to be 0 (src/PoolManager.sol:112), so the caller must still pay. A committed settle reported as Revert leaves a credit the caller can use or lose; a retry without sync is treated as native and credits only msg.value. The loss, if any, falls on the caller's own contract, not on other users. The clearing holds."
+    },
+    {
+      "check": "Task 1 (L-1036): failed mined transactions that entered the PoolManager on ten networks, replayed and classified as source revert, out of gas, or unexplained.",
+      "agrees": true,
+      "note": "failed-summary.json matches the counts in the cleared text for all ten networks; most source class frames are bubbled callback or child failures, not reverts raised by PoolManager code. I checked two Ethereum transactions on chain. eth_getTransactionReceipt on https://ethereum-rpc.publicnode.com gives status 0x0 for 0x01f0716a...9917228 (block 26495947, to 0x66a9893c..., 0 logs) and for 0x47314149...6bdc32 (block 26496571, to 0x00000f91..., 0 logs). debug_traceTransaction callTracer on https://eth.api.pocket.network for 0x47314149...6bdc32 shows the PoolManager unlock (0x48c89491) reverting with empty output after the callback 0x91dd7346 returned success with empty output. That is what src/PoolManager.sol:110 does: the high-level call returning bytes needs at least one ABI word, so zero bytes revert during decoding, before the delta check at line 112. The outer contract caught the unlock failure. This matches the stated classification. The classification of bubbled failures rests on the model's word-by-word match of the successful PoolManager frames inside those transactions, which I did not rerun. Four networks have only one trace endpoint each (see the unit's own low lead)."
+    },
+    {
+      "check": "Task 4a: the cycle 23 replay set rerun with failed frames rolled back, checking whether the model predicts a revert for any PoolManager frame that succeeded on chain.",
+      "agrees": true,
+      "note": "replay-1-c23.json, replay-4326-c23.json and replay-143-c23.json each report 20000 successful transactions with all 20000 checked for native balance and 452411, 324364 and 500829 words compared. A grep for model-revert in the matching records files returns 0 on all three. The 18 Ethereum SafeCastOverflow take frames are what src/PoolManager.sol:294 does with amount.toInt128() on an amount above type(int128).max (src/libraries/SafeCast.sol:56-58). The MegaETH class list shows 2997 and 86 caught unlock frames from the two searcher contracts named in Task 2, which agrees with that item. The bubbled classes rely on the replay model. I did not rerun it."
+    }
+  ],
+  "leads": []
+}

@@ -1,0 +1,43 @@
+{
+  "unit": "ethereum-reference",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "Fetched erigon v3.8.1 execution/vm/analysis_amd64.go, analysis_amd64.s, analysis.go, interpreter.go and instructions.go from raw.githubusercontent.com. analysis_amd64.go selects codeBitmapSSE4 at start when cpu.X86.HasSSSE3 and HasSSE41 are set, else codeBitmapGeneric. interpreter.go lines 92-146 define frameSlots, a two-entry per-frame SLOAD cache keyed by the stack word and valid while IntraBlockState().ReadStamp() equals the stamp taken at fill; putCallContext clears the entries when a context is pooled (lines 215-221), and opSload in instructions.go returns slots.val on a hit without calling GetState. Nethermind 2.2.2 JumpDestinationAnalyzer.cs lines 156-159 pick the Vector512 (Avx512Vbmi), Vector256 (Avx2), Ssse3 or AdvSimd kernel at run time. I rebuilt the jdtest harness from the work directory in my own scratch directory with go1.24.7 on an SSSE3 and SSE4.1 host; its analysis_amd64.s is byte-identical to the fetched v3.8.1 file and the .go files differ only in the package name and the forced hasSSE4 flag. It printed 689,896 cases and 0 mismatches against an independent scalar rule that I read in main.go. eth_getCode on https://ethereum-rpc.publicnode.com (reth/v2.11.0-b9abbcc) for 0x000000000004444c5dc75cB358380D2e3dE08A90 returned 24,009 bytes equal to pm_mainnet.hex. I could not find where IntraBlockState.ReadStamp is defined: it is absent from execution/state/intra_block_state.go, journal.go, state_object.go, versionmap.go, versionedio.go, access_list.go, transient_storage.go and cached_reader.go at v3.8.1, and about 40 other guessed file names returned 404. The finding states this gap itself.",
+      "codeCheck": "PoolManager.swap reads pool state at src/PoolManager.sol:196 (checkPoolInitialized), calls beforeSwap at :202 through Hooks.callHook (src/libraries/Hooks.sol:131-134, a CALL that a hook may use to reenter), then reads slot0 again in _swap. modifyLiquidity has the same order at src/PoolManager.sol:152-157. A stale cached slot0 or liquidity after a reentrant write would make the outer frame swap or mint from an old price. The settlement state (sync, unlock flag, delta count) is transient (src/libraries/CurrencyReserves.sol:23-30) and erigon's cache covers only SLOAD, so settlement is outside it. The reentrancy needs a hook in the pool, so an unprivileged attacker could only reach it in a pool with its own hook; for pools without attacker hooks a stale read would need some other path. The finding reports no fault, and I found none in the code I could read.",
+      "corrections": "clientdiversity.org shows two execution-client datasets. One gives Nethermind 43, Geth 43, Besu 8, Reth 3 and Erigon 3 percent. The other gives Geth 50.13, Nethermind 25.46, Besu 9.45, Reth 7.67 and Erigon 6.53 percent. Under the second, Nethermind is below one third, and a Nethermind-only fault would knock its nodes off the chain without stalling finality. The conclusion that no single minority client can change canonical pool state holds under both. The ReadStamp invalidation rule is still unread, and the NEON and Nethermind kernels were not run, so those parts of 'none found' rest on reading the code and on the probe.",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/analysis_amd64.go", "supports": "CPU-selected codeBitmapSSE4 or codeBitmapGeneric"},
+        {"url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/analysis_amd64.s", "supports": "SSSE3 and SSE4.1 kernel, byte-identical to the harness copy"},
+        {"url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/interpreter.go", "supports": "frameSlots two-entry SLOAD cache keyed by stack word and ReadStamp, lines 92-146 and 205-232"},
+        {"url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/instructions.go", "supports": "opSload returns the cached value on a hit"},
+        {"url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/state/intra_block_state.go", "supports": "fetched; contains no ReadStamp definition"},
+        {"url": "https://raw.githubusercontent.com/NethermindEth/nethermind/2.2.2/src/Nethermind/Nethermind.Evm/CodeAnalysis/JumpDestinationAnalyzer.cs", "supports": "run-time choice of four SIMD kernels, lines 156-159"},
+        {"url": "https://clientdiversity.org/", "supports": "two execution-client datasets: Nethermind 43 or 25.46 percent, Erigon 3 or 6.53 percent"},
+        {"url": "https://ethereum-rpc.publicnode.com", "supports": "eth_getCode of the PoolManager equals pm_mainnet.hex, 24,009 bytes; web3_clientVersion reth/v2.11.0-b9abbcc"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "erigon v3.8.1 jump destination analysis: the SSE4 kernel and the generic chunked scan against an independent scalar rule.",
+      "agrees": true,
+      "note": "I rebuilt and reran the harness. The assembly is byte-identical to the fetched v3.8.1 file and the mainnet bytecode matches eth_getCode. The result was 689,896 cases with 0 mismatches. The reference rule in main.go skips op-0x5f bytes for 0x60 to 0x7f and marks 0x5b otherwise, which is the specified rule. It also checks that bits past the code length stay clear."
+    },
+    {
+      "check": "Lead L-1047: what an ordinary account can undo or reorder around another account's PoolManager transaction.",
+      "agrees": true,
+      "note": "sync (src/PoolManager.sol:279-288) has no unlock guard, but it writes only TSTORE slots (src/libraries/CurrencyReserves.sol:23-30), which EIP-1153 clears at the end of each transaction. An inserted transaction therefore leaves nothing in the victim's transaction. _settle (src/PoolManager.sol:349-364) credits only balance minus the reserves the victim synced in its own transaction, or msg.value for native currency. Tokens donated in advance go into the snapshot and are credited to no one."
+    },
+    {
+      "check": "Hegota candidates that change control flow or opcode bytes (EIP-7979, EIP-8163, EIP-5920) and EIP-8141 transient storage between frames.",
+      "agrees": true,
+      "note": "EIP-7979 makes CALLDEST 0xBB a valid JUMP destination. I scanned the 24,009-byte mainnet runtime at instruction boundaries and found none of 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xAE, 0xFC, 0xA7 or 0xF6, so no new destination or meaning appears. EIP-8141 (master) line 481 says 'Discard the TSTORE and TLOAD transient storage between frames', so a sync or unlock state set in one frame cannot reach a settle in another frame."
+    }
+  ],
+  "leads": [
+    {"chainIds": [1], "lens": "L2", "question": "Find the definition of IntraBlockState.ReadStamp in erigon v3.8.1 (it is not in execution/state/intra_block_state.go, journal.go, state_object.go, versionmap.go, versionedio.go or cached_reader.go). Does the stamp change on every journalled SetState in any frame and on every RevertToSnapshot? Does it return ok=false under parallel execution with a versionMap?", "why": "If the stamp is the journal length, it still separates states while the reading frame is live, because reverts during that time never cut below its own entries. Any SetState path that skips the journal would leave the PoolManager's second slot0 read (src/PoolManager.sol:196-206) stale after a hook reentered.", "priority": "medium"}
+  ]
+}

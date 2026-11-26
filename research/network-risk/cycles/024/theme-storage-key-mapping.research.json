@@ -1,0 +1,220 @@
+{
+  "unit": "theme-storage-key-mapping",
+  "profiles": [],
+  "findings": [],
+  "cleared": [
+    {
+      "chainIds": [
+        1,
+        10,
+        8453,
+        130,
+        7777777,
+        480,
+        57073,
+        1868,
+        42220,
+        196,
+        42161,
+        4663,
+        99901,
+        137,
+        56,
+        43114,
+        143,
+        4326,
+        4217,
+        5042,
+        999
+      ],
+      "lens": "L1",
+      "check": "Task 4: at the real PoolManager address of each network, one eth_call (no transaction) runs a probe through unlock. Inside the callback the probe calls mint(Q, 0x1234, 5), sync on a stub token that reports a balance of 0x77, then exttload and extsload of the same 20 indexes, then burn(Q, 0x1234, 5), so the unlock settles. A stateDiff override first writes a distinct marker into the persistent slot of every index except the ERC-6909 balance of Q and slots 0 and 6. The indexes are the five transient slots the PoolManager writes (IS_UNLOCKED_SLOT, NONZERO_DELTA_COUNT_SLOT, CURRENCY_SLOT, RESERVES_OF_SLOT, the delta slot keccak(Q, 0x1234)), the balance slot balanceOf[Q][0x1234], a pool state slot keccak(id, 6) and its +6 word, slots 0 and 6, and each of these with bit 248 flipped. Can a persistent and a transient slot with one index share an entry, and does any network fold a pair of these real PoolManager keys?",
+      "result": "No transient fold and no persistent fold outside Avalanche. On 20 networks every read equals the Ethereum answer: exttload returns 1, 1, the stub token, 0x77 and -5 for the five transient slots and zero for their bit 248 partners, while extsload of the same indexes returns the persistent markers, and extsload of the balance slot returns 5 from the mint inside the same call. So a TSTORE at an index leaves the persistent slot of that index untouched and the reverse, on every network, including during an unlock. On Avalanche the transient reads are also exact, and every persistent pair reads one shared value, which is the F-040 rule acting on real PoolManager keys: the two overrides of a pair land on one entry, the override of slot 0 with bit 248 set replaced the owner word, and the mint of 5 to balanceOf[Q][0x1234] (whose index has bit 248 set) was added to the marker written for the partner index with bit 248 clear. The persistent and transient key spaces stay separate there too. The client version was read before and after each call; the build strings are in the output file. The source lines this rests on are src/libraries/Lock.sol:8-26, src/libraries/NonzeroDeltaCount.sol:8-32, src/libraries/CurrencyReserves.sol:13-36, src/libraries/CurrencyDelta.sol:11-39, src/Extsload.sol:10-15 and src/Exttload.sol:10-15.",
+      "source": "research/network-risk/cycles/024/theme-storage-key-mapping.work/out/pmkeys.json (script scripts/pmkeys.py, run 2026-11-26 against the rpc field of every entry of state/networks.json; blocks 26,498,816 on Ethereum to 527,702,829 on Arbitrum One)"
+    },
+    {
+      "chainIds": [
+        1
+      ],
+      "lens": "L1",
+      "check": "Task 1 for reth v2.11.0, the build the Ethereum endpoint reports (reth/v2.11.0-b9abbcc), which runs on evm2 at rev 66687c18. How is (address, slot) keyed in the EVM state, the transient map, the execution cache, the txpool prewarm snapshot and the reuse of speculative results?",
+      "result": "Every map is keyed by the full address and the full 256 bit slot. evm2's StorageKey is a 52 byte repr(C) struct of the address and the slot, and equality compares all 52 bytes (crates/evm2/src/storage_key.rs lines 12-56). Transient storage is a separate map of that key (crates/evm2/src/evm/state/mod.rs lines 58-59, 799-812) and persistent slots sit in per-account maps keyed by the slot word (lines 653-690). The execution cache keys storage by (Address, StorageKey) in fixed-cache 0.1.10 (cached_state.rs lines 967-968, 1063-1100); the crate's get compares the full key with key.equivalent and treats any other occupant of the bucket as a miss, and a colliding insert replaces the entry (fixed-cache lib.rs lines 316-350, 386-440; crate checksum 2fe63500 matches the lock file). The txpool snapshot looks up the full address and U256::from_be_bytes of the full slot, per parent hash (txpool.rs lines 13-38). The reuse of speculative results commits a prewarm result only when every recorded (address, slot) read still equals the current value and every account read matches, with balance differences allowed only where the transaction did not observe the balance and both balances are nonzero (reuse.rs lines 284-342, 367-401). No key is truncated, hashed down or reused across transactions.",
+      "source": "https://raw.githubusercontent.com/DaniPopes/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/evm2/src/storage_key.rs ; https://raw.githubusercontent.com/DaniPopes/evm2/66687c18b34d3bdbb899f5eb7605070615c03475/crates/evm2/src/evm/state/mod.rs ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/engine/execution-cache/src/cached_state.rs ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/engine/execution-cache/src/txpool.rs ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/engine/tree/src/tree/payload_processor/reuse.rs ; https://static.crates.io/crates/fixed-cache/fixed-cache-0.1.10.crate ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/Cargo.lock"
+    },
+    {
+      "chainIds": [
+        137
+      ],
+      "lens": "L1",
+      "check": "Task 1 for bor v2.11.1 (the endpoint reports bor/ebcfea01452d/v2.11.1-private): the BlockSTM multi-version key, the per-incarnation committed-state cache and transient storage of the V2 parallel state.",
+      "result": "The multi-version key is 54 bytes: the full 20 byte address, the full 32 byte slot, a subpath byte and a type byte that separates account, state and subpath entries (core/blockstm/mvhashmap.go lines 90-150). ParallelStateDB keeps local writes in map[common.Address]map[common.Hash]common.Hash (core/state/parallel_statedb.go line 96, SetState lines 1040-1060) and its committed-state cache in a map keyed by stateKey{addr, slot} (lines 168, 1008-1032). Transient storage is a separate map that Prepare replaces for every transaction (lines 1137-1150, 1277-1279). The keccak result caches were cleared in cycles 8, 11 and 16 as keyed by the full input. bor v2.11.1 has no MULMOD memo: opMulmod calls uint256 MulMod directly (core/vm/instructions.go lines 200-204).",
+      "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/blockstm/mvhashmap.go ; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/state/parallel_statedb.go ; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/vm/instructions.go"
+    },
+    {
+      "chainIds": [
+        56
+      ],
+      "lens": "L1",
+      "check": "Task 1 and 2 for BSC v1.8.2 (bsc-dataseed reports Geth/v1.8.2-4e1c8247, an unpublished commit; the tag was read): storage caches, the shared storage path of the Hertz fix, transient storage and KECCAK256.",
+      "result": "Storage maps are keyed by the full common.Hash slot per state object (core/state/state_object.go lines 37, 165-233). The only read path that can serve a value from another cache, needBadSharedStorage, is switched on by NeedBadSharedStorage only for BSC block 33,851,236 and two testnet blocks before Hertzfix (params/config.go lines 1148-1160, core/blockchain.go lines 2645 and 2733), far below the PoolManager's deployment. Transient storage is keyed by transientStorageKey{addr, key} (core/state/transient_storage.go lines 27-35). opKeccak256 hashes the memory range directly with no cache (core/vm/instructions.go lines 232-243). reth-bsc was not read.",
+      "source": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/state/state_object.go ; https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/params/config.go ; https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/blockchain.go ; https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/state/transient_storage.go ; https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/instructions.go"
+    },
+    {
+      "chainIds": [
+        43114
+      ],
+      "lens": "L1",
+      "check": "Task 1 for avalanchego 1.15.3 (commit 983815fd, libevm d398bc4dbe41): is there a second key rule next to the bit 248 fold of F-040, and does any rule cross accounts or reach transient storage?",
+      "result": "There is one rule. libevm's StateDBHooks interface has a single method, TransformStateKey (core/state/statedb.libevm.go lines 41-53), applied in GetState, GetCommittedState and SetState (core/state/statedb.go lines 349, 359, 422). The C-Chain hook clears bit 0 of byte 0 and ignores the address (vms/saevm/cchain/libevm/extstate/statedb.go, partitionStateKeysHook). The only other variant is the skip option, used for asset balances and for GetCommittedState before Apricot Phase 1, which is history. The rule maps a key of an account into the same account, so a write by one contract cannot reach the PoolManager's storage. Firewood was not read; the transform sits above the state store, so a store behind it receives keys that are already folded.",
+      "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/983815fd993acf846a27749b598f0fea4d876a75/vms/saevm/cchain/libevm/extstate/statedb.go ; https://raw.githubusercontent.com/ava-labs/libevm/d398bc4dbe41/core/state/statedb.libevm.go ; https://raw.githubusercontent.com/ava-labs/libevm/d398bc4dbe41/core/state/statedb.go"
+    },
+    {
+      "chainIds": [
+        43114
+      ],
+      "lens": "L1",
+      "check": "Task 3 for the Avalanche fold: can an ordinary account make a PoolManager write land on, or a PoolManager read return, another user's entry?",
+      "result": "No. The PoolManager writes only fixed slots 0 to 6 (src/libraries/StateLibrary.sol:11 and the declarations in src/ProtocolFees.sol, src/ERC6909.sol, src/PoolManager.sol), keccak256 outputs of mapping keys (src/libraries/Pool.sol:83-91, src/libraries/TickBitmap.sol:66-73, src/ERC6909.sol balance and allowance mappings, src/libraries/Position.sol:34-62) and such outputs plus an offset of at most 6 (src/libraries/StateLibrary.sol:324-347). Under the fold two of these collide only if they agree in 255 bits. An account that picks pool ids, owners, ticks and salts to aim one of its own slots at one fixed victim slot needs about 2^255 tries; two slots it controls both are useless to it. A fixed slot S with bit 248 set is 2^248 + S, and a keccak output equal to it is a preimage search of the same size. Adding an offset of at most 6 changes bit 248 only if the lower 248 bits of the hash are within 6 of 2^248, which has probability about 2^-245. No PoolManager function writes a caller-chosen index; extsload and exttload only read (src/Extsload.sol:10-15, src/Exttload.sol:10-15). The live test shows half of the keccak slots used (the balance slot 0x8f57 for instance) already live at their folded index on chain, which is harmless because every access to them goes through the same rule.",
+      "source": "research/network-risk/cycles/024/theme-storage-key-mapping.work/out/pmkeys.json ; src/libraries/StateLibrary.sol:324-347 ; src/libraries/Pool.sol:83-91"
+    },
+    {
+      "chainIds": [
+        143
+      ],
+      "lens": "L1",
+      "check": "Task 1 for Monad v0.16.5 and v0.16.7 (the endpoint reports Monad/0.16.7): TrieDb key encoding, the page encoding of storage, the account and storage cache, and the per-transaction state of parallel execution.",
+      "result": "No two (address, slot) pairs share an entry. With the monad state machine the TrieDb is page encoded: the trie path is keccak(address) then keccak(page key), the page key is the slot shifted right by 7 and the offset in the page is the low 7 bits (category/execution/monad/db/storage_page.hpp lines 41-44, 173-191; trie_db.cpp lines 87, 134-194; db.hpp lines 84-87). Page key and offset together give back the whole slot (compute_slot_key), so the split is one to one. The storage cache key is the 20 byte address, the incarnation and the 32 byte page key, compared with memcmp over all bytes (storage_key.hpp; bytes_hash_compare.hpp lines 31-44; db_cache.hpp lines 50-64, 102-160). In execution, persistent and transient storage are two separate immer maps keyed by the full bytes32 slot of one account state (account_state.hpp lines 52-70, 126-153), and the native runtime passes the full 32 byte key and the recipient address to the host (category/vm/runtime/storage.cpp lines 37-110). trie_db.cpp differs between v0.16.5 and v0.16.7 only in include comments, and state.cpp and block_state.cpp are identical. The runtime's sha3 hashes the memory range directly with no cache (category/vm/runtime/keccak.hpp).",
+      "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/monad/db/storage_page.hpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/ethereum/db/trie_db.cpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/execution/ethereum/db/trie_db.cpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/ethereum/db/db.hpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/ethereum/db/db_cache.hpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/ethereum/db/storage_key.hpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/core/bytes_hash_compare.hpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/ethereum/state3/account_state.hpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/runtime/storage.cpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/runtime/keccak.hpp"
+    },
+    {
+      "chainIds": [
+        4326
+      ],
+      "lens": "L1",
+      "check": "Task 1 for MegaETH (the endpoint reports mega-reth/v2.3.1-4499c42): the SALT bucket mapping and the plain key format.",
+      "result": "A storage entry's plain key is the 20 byte address followed by the 32 byte slot, 52 bytes (salt/src/types.rs line 295). The bucket is a 64 bit hash of the plain key modulo the bucket count (salt/src/state/hasher.rs lines 40-43), so many keys share a bucket, but every lookup compares the stored plain key with the whole requested key (salt/src/state/state.rs lines 833-840 and 993-1000). A shared bucket changes storage gas (F-042, F-062 and the portal finding) and not which value is read. Cycle 9 cleared the same rule with probes; the run above adds the PoolManager's real keys.",
+      "source": "https://raw.githubusercontent.com/megaeth-labs/salt/main/salt/src/types.rs ; https://raw.githubusercontent.com/megaeth-labs/salt/main/salt/src/state/hasher.rs ; https://raw.githubusercontent.com/megaeth-labs/salt/main/salt/src/state/state.rs"
+    },
+    {
+      "chainIds": [
+        42161,
+        4663,
+        99901
+      ],
+      "lens": "L1",
+      "check": "Task 1 and 2 for Nitro (Arbitrum One and Robinhood Chain report v3.13.0-rc.9+b72783f, Elysium a local build): ArbOS storage under its own account, its keccak cache, and KECCAK256 in the go-ethereum fork.",
+      "result": "ArbOS maps its own keys by keccak(storageKey, key[:31])[:31] followed by key[31] (arbos/storage/storage.go lines 119-126), through an LRU of 1,024 hashes keyed by the full input string (lines 58-79), and writes them only under the account it was built for: ArbosStateAddress or FilteredTransactionsStateAddress (lines 72-91, 183-195). It never rewrites a key of a user contract. opKeccak256 in OffchainLabs/go-ethereum hashes the memory range with no cache (core/vm/instructions.go lines 236-249). Both files were read on master and v3.12.0 because raw.githubusercontent.com serves no v3.13.0 tag and the fork commit inside b72783f is private (cycle 23); storage.go is byte identical on the two revisions.",
+      "source": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/arbos/storage/storage.go ; https://raw.githubusercontent.com/OffchainLabs/nitro/v3.12.0/arbos/storage/storage.go ; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/vm/instructions.go"
+    },
+    {
+      "chainIds": [
+        4217
+      ],
+      "lens": "L1",
+      "check": "Task 1 for Tempo a9d6748 (the endpoint reports tempo/v1.19.1-a9d6748): precompile storage under fixed addresses.",
+      "result": "Precompile SLOAD, SSTORE, TLOAD and TSTORE go through the same EVM journal as contract code, keyed by the address passed and the full U256 slot (crates/precompiles/src/storage/evm.rs lines 164-211 and 394-403). The address is the precompile's own, so this storage cannot be the PoolManager's. Tempo's keccak cache was cleared in cycle 16.",
+      "source": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/storage/evm.rs"
+    },
+    {
+      "chainIds": [
+        999
+      ],
+      "lens": "L1",
+      "check": "Task 1 for nanoreth nb-20261125-2: state patches and precompile handling.",
+      "result": "The only state patches remove the whole change set of 20 named addresses after given transactions in blocks 1,467,569 to 1,531,366 (src/node/evm/patch.rs lines 7-51), long before the PoolManager existed; none names it. Read precompile results are replayed from the block body by input (src/node/evm/executor.rs lines 101-125) and touch no storage key. The official endpoint is closed; the run above read the real PoolManager keys there with the expected answers, and cycle 17 found no fold.",
+      "source": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/evm/patch.rs ; https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/evm/executor.rs"
+    },
+    {
+      "chainIds": [
+        1,
+        10,
+        8453,
+        130,
+        7777777,
+        480,
+        57073,
+        1868,
+        42220,
+        196,
+        42161,
+        4663,
+        99901,
+        137,
+        56,
+        43114,
+        143,
+        4326,
+        4217,
+        5042,
+        999
+      ],
+      "lens": "L1",
+      "check": "Task 2 summary: caches in front of KECCAK256 on the clients behind the 21 endpoints.",
+      "result": "No cache keyed by a pointer, a length or a fingerprint was found. Read this cycle: BSC v1.8.2, libevm d398bc4dbe41, OffchainLabs/go-ethereum master and Monad v0.16.7 hash the memory range on every call with no cache. Cleared earlier and not repeated: bor's 64 byte and widened caches (full input), the cache of reth v2.11.0, op-reth, Base and X Layer (full key under a lock), Tempo's process-wide cache. MegaETH's closed node and Zora's build remain unread, and the 108,177 hash bucket test of the earlier cycle is the evidence for them.",
+      "source": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/instructions.go ; https://raw.githubusercontent.com/ava-labs/libevm/d398bc4dbe41/core/vm/instructions.go ; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/vm/instructions.go ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/runtime/keccak.hpp ; research/network-risk/OPCODES.md (cycle 16 and 17 tables)"
+    }
+  ],
+  "leads": [
+    {
+      "chainIds": [
+        1
+      ],
+      "lens": "L2",
+      "question": "reth v2.11.0 commits a speculative prewarm result without re-running the transaction when its recorded reads still match. Does the recorded read set cover every input a PoolManager transaction depends on, for example code loaded for an account created earlier in the block, the original value used for SSTORE gas, and a native take to an account whose balance is rebased?",
+      "why": "A result reused on a stale input would write a wrong word without any fault in the key mapping. reuse.rs lines 284-401 compare storage and accounts and refuse zero balances; the unknown_code flag and the balance tracker steps were not read to the end. Only reth nodes on Ethereum run it, so a fault would split reth from other clients.",
+      "priority": "medium"
+    },
+    {
+      "chainIds": [
+        10,
+        8453,
+        130,
+        7777777,
+        480,
+        57073,
+        1868,
+        42220,
+        196,
+        5042
+      ],
+      "lens": "L1",
+      "question": "The execution cache code of the exact reth releases behind the OP Stack, Celo, X Layer and Arc endpoints (op-reth v2.8.1 and v2.10.0-rc.4, reth v2.5.2, v2.5.1, v2.3.0, v2.2.0, world-chain v2.8.2): which cache library and key does each use?",
+      "why": "Only reth v2.11.0 was read this cycle. The live test at the real PoolManager address matched on all of them, but a cache keyed by a hash alone would only show up under a collision.",
+      "priority": "low"
+    },
+    {
+      "chainIds": [
+        43114
+      ],
+      "lens": "L1",
+      "question": "Is Firewood enabled on the C-Chain at avalanchego 1.15.3, and does its key encoding add any rule below the bit 248 transform?",
+      "why": "The F-040 transform sits above the store; a second rule in the store would fold keys again.",
+      "priority": "low"
+    },
+    {
+      "chainIds": [
+        56
+      ],
+      "lens": "L1",
+      "question": "How does reth-bsc key storage and transient storage, and does it carry any equivalent of the Hertz fix shared storage path?",
+      "why": "BSC validators may run reth-bsc; only the geth fork was read.",
+      "priority": "low"
+    },
+    {
+      "chainIds": [
+        143
+      ],
+      "lens": "L1",
+      "question": "Do whole 128 slot pages of real PoolManager storage on Monad read the same through extsload(bytes32,uint256) inside the EVM and through eth_getStorageAt, for page 0 and for pages that hold pool state words?",
+      "why": "The page encoding was read as one to one in source, and the override test matched, but overrides may not pass through the page decoder. scripts/monadpage.py and monadpage0.py were written for this; rpc.monad.xyz answered HTTP 429 on 2026-11-26 after about ten calls, so no result was recorded and no other endpoint was tried.",
+      "priority": "low"
+    }
+  ],
+  "leadResults": [
+    {
+      "leadId": "L-1034",
+      "outcome": "cleared",
+      "answer": "No client behind the 21 endpoints other than Avalanche transforms, buckets into one entry, truncates or caches storage keys or KECCAK256 results in a way that lets two different (address, slot) pairs, or a persistent and a transient slot, share an entry. Read this cycle: evm2 and reth v2.11.0 (52 byte keys, fixed-cache with full key comparison, txpool snapshot and result reuse on full keys), bor v2.11.1 BlockSTM (54 byte keys, no MULMOD memo), BSC v1.8.2 (full keys; the Hertz shared path only for block 33,851,236), avalanchego 1.15.3 with libevm (one rule, F-040, same account only), Monad v0.16.5 and v0.16.7 (pages of 128 slots keyed by slot >> 7 with the low 7 bits as offset, one to one), MegaETH SALT (52 byte plain keys compared in full), Nitro (ArbOS mapping only under its own accounts), Tempo precompile storage, nanoreth patches. A live read at every real PoolManager address showed the transient and persistent spaces apart on all 21 networks and the F-040 fold on Avalanche only. Under that fold an ordinary account would need to match 255 bits of a hash to reach another user's slot."
+    }
+  ]
+}
