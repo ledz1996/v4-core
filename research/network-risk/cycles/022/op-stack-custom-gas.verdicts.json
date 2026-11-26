@@ -1,0 +1,38 @@
+{
+  "unit": "op-stack-custom-gas",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "Fetched the three cited files. In the revm fork at bd28f942, gas.rs lines 198-205 define set_final_refund as set_refunded((self.refunded() as u64).min(gas_used / max_refund_quotient) as i64), so a negative i64 counter casts to a large u64 and becomes the cap of gas_used / 5. The Cargo.lock at tag celo/reth-v1.0.10 pins revm-interpreter 35.0.1 to celo-org/revm rev bd28f9420c250df2a5c4a6d8103b51ae06b5c222 (Cargo.lock line 11387), so this is the code the release runs. At the tag, handler.rs lines 1213-1215 define refund() as a plain forward to self.op.refund with no clamp. On celo-kona main, handler.rs lines 1283-1312 add the clamp: when refunded() is below zero and KARST is enabled, set_refund(0). The comment there states that refilling a slot the debit cleared takes back an uncounted clearing refund, that set_final_refund would read the negative counter as a huge u64 and cap it to the maximum, and that blocks before Karst keep the wrapped refund. An eth_call with code 60011e on https://forno.celo.org returned 'EVM error: NotActivated' today, consistent with Osaka and therefore Karst rules not being active.",
+      "codeCheck": "The refund is computed after the frame returns, so it cannot change any value returned to code in src/. src/ contains no gasleft() branch outside src/test. The only gas() uses are forwarding calls at src/types/Currency.sol:48, src/types/Currency.sol:73 and src/libraries/Hooks.sol:134, which forward all remaining gas and do not branch on its amount. unlock at src/PoolManager.sol:104-114 still ends with the NonzeroDeltaCount check, and take at src/PoolManager.sol:291-297 debits the delta before the transfer, so a self-refill through take changes nothing the PoolManager records. No line of src/ decides differently.",
+      "corrections": "The mechanism says the CIP-64 path changes no GAS reading inside the call. That holds for the refund wrap. The celo-kona main comment at handler.rs lines 1295-1297 also says that main-call SSTOREs on slots the debit wrote stay dirty-priced, so the main call can be over- or undercharged by up to about 2,800 gas per such slot, which does shift GAS readings inside execution. src/ does not branch on remaining gas, so the conclusion stands. The actor value unprivileged is correct and severity info is correct.",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/celo-org/revm/bd28f9420c250df2a5c4a6d8103b51ae06b5c222/crates/interpreter/src/gas.rs", "supports": "set_final_refund casts refunded() to u64 and caps it at gas_used / 5 (lines 198-205)"},
+        {"url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/crates/celo-revm/src/handler.rs", "supports": "refund() forwards to the OP handler with no clamp (lines 1213-1215)"},
+        {"url": "https://raw.githubusercontent.com/celo-org/celo-kona/main/crates/celo-revm/src/handler.rs", "supports": "clamp to zero only from Karst; comment on the wrap and on dirty pricing of debit-written slots (lines 1283-1312)"},
+        {"url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/Cargo.lock", "supports": "revm-interpreter pinned to celo-org/revm rev bd28f942 (line 11387)"},
+        {"url": "https://forno.celo.org", "supports": "eth_call with code 60011e returns EVM error: NotActivated on 2026-11-26"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Whether the CIP-64 debit can leave transient storage or a self-destruct record that the main call then reads, for example a PoolManager lock or delta slot.",
+      "agrees": true,
+      "note": "At tag celo/reth-v1.0.10, handler.rs cip64_rollbackable_debit_and_deduct_caller (lines 616-690) opens a journal checkpoint at line 635, commits it on success at line 643, then clears transient_storage at line 668 and truncates selfdestructed_addresses to the checkpoint index at line 675; on rejection it calls checkpoint_revert at line 678. The PoolManager lock (src/libraries/Lock.sol) and delta slots therefore start empty in the main call."
+    },
+    {
+      "check": "The two implementations of the Celo transfer precompile at tag celo/reth-v1.0.10 make the same checks and the same transfer.",
+      "agrees": true,
+      "note": "alloy-celo-evm lib.rs lines 135-198 and celo-revm precompiles/transfer.rs lines 80-140 check, in the same order, static context, gas of at least TRANSFER_GAS_COST 9,000, caller equal to the chain's celo_token, and input length 96; both decode from, to and value from the same offsets, apply the pre-Jovian cold restore, and halt on a transfer or database error. make_transfer_precompile marks the DynPrecompile stateful at lib.rs line 125."
+    },
+    {
+      "check": "The X Layer gasless allowance check, a system call before each zero-priced transaction, for any state it leaves behind.",
+      "agrees": true,
+      "note": "xlayer_gasless_contract.rs at xlayer/v0.1.7 calls evm.transact_system_call(SYSTEM_ADDRESS, contract, calldata) at line 173 and returns only result.result; the state field is dropped and never committed. decode_allowance (lines 155-165) maps any non-success or short output to (false, 0), and is_gasless requires tx.gas_limit <= the allowance (line 130). Nothing it runs can move a PoolManager balance. CLZ also answered NotActivated on https://rpc.xlayer.tech today."
+    }
+  ],
+  "leads": []
+}

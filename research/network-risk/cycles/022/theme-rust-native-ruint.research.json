@@ -1,0 +1,141 @@
+{
+ "unit": "theme-rust-native-ruint",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    8453,
+    4326,
+    196,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Method and build identity for L-967 and L-968. The module trees of base/base v1.5.6 (crates/common/precompiles and crates/common/precompile-storage), mega-evm v1.7.4 (crates/mega-evm), xlayer-reth v0.0.7 (builder, chainspec, flashblocks, intercept, rpc, monitor, bin/node), tempo a9d6748 (crates/precompiles and crates/contracts), arc-node v0.8.6 (crates/precompiles, crates/evm, crates/execution-config) and nanoreth nb-20261125-2 (src) were fetched from raw.githubusercontent.com by following every mod declaration (scripts/crawl.py, 558 requests in dl/fetchlog.txt, no module left unresolved). scripts/scan.py listed every shift operator, every shift method (checked_shl, overflowing_shl, wrapping_shl and the rest), and every wrapping_from, saturating_from, try_from, try_into, I256 and Signed use in non-test code (scan-*.json). web3_clientVersion at the start and end of the session returned base/v1.5.6, xlayer/v0.0.7, tempo/v1.19.1-a9d6748, mega-reth/v2.3.1, arc/v1 and hyperliquid evm Mainnet (rpc/clientversion-start.txt and rpc/clientversion-end.txt).",
+   "result": "The lockfiles read in cycle 21 pin ruint 1.19.0 for Base v1.5.6 and mega-evm v1.7.4, 1.18.0 for xlayer v0.0.7, 1.20.0 for arc-node v0.8.6 and 1.20.1 for nanoreth. Tempo a9d6748 pins ruint 1.21.1 and alloy-primitives 1.7.3 (Cargo.lock fetched this session). Across all six trees the whole non-test search returns one shift method call (Base pausable_feature.rs:31), no call of wrapping_from or saturating_from on a Uint, no I256 or Signed integer arithmetic, and Uint shifts only in the storage packing helpers, Base string length decoding and the Tempo order book bitmap. Every other shift is on a primitive u8, u64, u128 or i16 and does not go through ruint. A reading of ruint 1.21.1 src/from.rs:160-225 and 494-512 narrows the conversion fault: TryFrom of a negative primitive returns an error and saturating_from returns zero, which are correct. Only wrapping_from returns the zero-extended payload of the ValueNegative error.",
+   "source": "research/network-risk/cycles/022/theme-rust-native-ruint.work/scan-base_base@v1.5.6.json; research/network-risk/cycles/022/theme-rust-native-ruint.work/scan-tempoxyz_tempo@a9d6748.json; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/Cargo.lock; https://static.crates.io/crates/ruint/ruint-1.21.1.crate (src/from.rs:188-225, 494-512)"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L1",
+   "check": "L-967, Base v1.5.6 B20 precompiles, factory, policy registry and precompile storage under ruint 1.19.0. The sites are packing.rs:87, 114, 142, 144 and 161 (U256 shifted by usize offset*8 or byte_count*8), types/vec.rs:316 (byte_offset*8), types/bytes_like.rs:305 (shift by the constant 1), policy logic v1/v2/v3 (u64 shifts by the constant POLICY_ID_TYPE_SHIFT) and pausable_feature.rs:31 (U256::ONE.checked_shl(feature as u8)).",
+   "result": "No faulty input is reachable. Every packing shift is reached only after the check offset + bytes > 32 returns an error (packing.rs:102, 129 and 152), so offset*8 is at most 248, and create_element_mask shifts only when byte_count < 32 (at most 248). vec.rs:316 uses (index % elems_per_slot) * T::BYTES, which is below 32. The 1.19.0 truncation needs an amount of 2^32 or more. checked_shl uses the overflowing_shl flag, which in 1.19.0 (src/bits.rs:394-409) inspects only the carry out of the last limb it moves and ignores limbs dropped whole. U256::ONE has no bits in dropped limbs, and the amount is a u8 enum value, so the flag is correct for every reachable input. B20 balances, supply and allowances use checked_add and checked_sub on U256 (b20_stablecoin/logic/v3.rs:111-115, 138, 322, 332), which the 1.19.0 faults do not touch. balanceOf returns the stored balance without the UI multiplier (b20_asset/logic/v3.rs:940-980, multiplier capped at type(uint128).max). The PoolManager reads these values through balanceOfSelf (src/types/Currency.sol:90) in sync and _settle (src/PoolManager.sol:279-289, 349-364), and no value it reads passes through a faulty ruint path.",
+   "source": "https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompile-storage/src/packing.rs; https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompile-storage/src/types/vec.rs; https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/common/pausable_feature.rs; https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompiles/src/b20_stablecoin/logic/v3.rs; https://static.crates.io/crates/ruint/ruint-1.19.0.crate (src/bits.rs:343-348, 394-409)"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "L-967, mega-evm v1.7.4 system contracts (control, deploy, intercept, keyless_deploy, limit_control, oracle, sequencer_registry, tx) and limit accounting (compute_gas, data_size, frame_limit, kv_update, state_growth, storage_call_stipend) under ruint 1.19.0.",
+   "result": "No call site exists. The only shifts are bitflag constants and 1 << (ty as u8) on a primitive bitflags type (access/volatile.rs:19-43, 102), u128 and u64 shifts in the SALT hasher (external/hasher/fallback.rs:30-125) and usize constants. Limit accounting is in u64. Uint conversions are unsigned: to::<u64>, saturating_to and usize::try_from of a low limb after the high limbs are checked to be zero (evm/instructions.rs:1567-1573, evm/precompiles.rs:132-136). The system contracts are Solidity bytecode that the interpreter runs, so their arithmetic is covered by the opcode work in OPCODES.md.",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/access/volatile.rs; https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/evm/instructions.rs; https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/external/hasher/fallback.rs; research/network-risk/cycles/022/theme-rust-native-ruint.work/scan-megaeth-labs_mega-evm@v1.7.4.json"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L1",
+   "check": "L-967, xlayer-reth v0.0.7 under ruint 1.18.0: Rust-native precompiles and system contracts.",
+   "result": "xlayer-reth v0.0.7 defines no precompile and no system contract. Its workspace members are builder, chainspec, flashblocks, intercept, rcs-filter, legacy-rpc, monitor, rpc, tests, version and two binaries (Cargo.toml). The crawled trees mention precompiles only as the stock PrecompilesMap type of op-revm (crates/builder/src/flashblocks/context.rs:28, builder_tx.rs:25). No Uint shift, no overflowing_shl and no signed conversion appears in non-test code. The 1.18.0 overflow flag fault therefore has no Rust-native caller on X Layer.",
+   "source": "https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7/Cargo.toml; https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7/crates/builder/src/flashblocks/context.rs; research/network-risk/cycles/022/theme-rust-native-ruint.work/scan-okx_xlayer-reth@v0.0.7.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "L-968, Tempo a9d6748 tip20/mod.rs, tip20/rewards.rs, stablecoin_dex/mod.rs and orderbook.rs, tip_fee_manager/amm.rs and tip20_channel_reserve/mod.rs under ruint 1.21.1: Uint shifts and signed to Uint conversions.",
+   "result": "ruint 1.21.1 has neither shift fault, so only wrapping_from matters, and no file calls it. tip20, rewards, amm and the channel reserve use only checked U256 arithmetic and unsigned conversions (U256::from of u128 or u64 and try_into to u128, for example rewards.rs:164-171 and 362-373). The order book shifts U256::ONE and U256::MAX by (tick & 0xFF) as usize, which is 0 to 255, or by 255 - bit_index with bit_index below 255 (orderbook.rs:508-509, 588-596, 638-646). Word indices are i16 values shifted as i16 and never reach ruint. The signed tick arithmetic is tick_to_price(tick) = (PRICE_SCALE as i32 + i32::from(tick)) as u32 (orderbook.rs:693-695). Its least value over all of i16 is 100000 - 32768 = 67232, so it is never negative, and base_to_quote and quote_to_base turn it into U256 with U256::from of a u32 (orderbook.rs:119-160). stablecoin_dex/mod.rs:2059 is inside the test module that starts at line 1863 and repeats the same formula. The signed credit deltas at stablecoin_dex/mod.rs:196 and tip20_channel_reserve/mod.rs:825 are i128 differences of u64 counters (storage_credits/mod.rs:228-245) cast to u64, without ruint. An eth_call of tickToPrice and priceToTick on the DEX precompile at block 0x307b756 (50,837,334) gave 100000 + tick for all 13 aligned ticks from -32760 to 32760, InvalidTick for unaligned ticks and TickOutOfBounds outside 98000 to 102000 (rpc/tempo-ticktoprice.json).",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/stablecoin_dex/orderbook.rs; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/stablecoin_dex/mod.rs; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/tip20/rewards.rs; research/network-risk/cycles/022/theme-rust-native-ruint.work/rpc/tempo-ticktoprice.json"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L1",
+   "check": "L-968, Arc arc-node v0.8.6 native coin precompiles (native_coin_authority, native_coin_control, system_accounting, call_from, helpers) under ruint 1.20.0.",
+   "result": "No call site exists. native_coin_authority uses checked_add for supply on mint and saturating_sub for supply on burn (native_coin_authority.rs:163, 263). system_accounting packs u64 values by byte slices (system_accounting.rs:225-250). The only shifts are on primitive integers in hardfork bit sets (execution-config/src/hardforks.rs:184-187). No Uint shift and no signed conversion appear. Mint and burn are issuer actions, already covered by earlier findings on Arc.",
+   "source": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/precompiles/src/native_coin_authority.rs; https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/precompiles/src/system_accounting.rs; research/network-risk/cycles/022/theme-rust-native-ruint.work/scan-circlefin_arc-node@v0.8.6.json"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "check": "L-968, HyperEVM read precompiles in nanoreth nb-20261125-2 under ruint 1.20.1.",
+   "result": "The read precompiles 0x800 to 0x80D, or up to highest_precompile_address, return outputs recorded from HyperCore, or forward the call when none is recorded (src/node/evm/executor.rs:396-458). They compute nothing with ruint. The only Uint conversions are saturating_to of block numbers and timestamps and address.into_u256().try_into() to u64. No Uint shift and no signed conversion appear in non-test code.",
+   "source": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/evm/executor.rs; research/network-risk/cycles/022/theme-rust-native-ruint.work/scan-hl-archive-node_nanoreth@nb-20261125-2.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "L-969, every caller of TIP20Token::system_transfer_from and channel_reserve_transfer at a9d6748. The tag tempo/v1.19.1 holds byte-identical copies of tip20/mod.rs, tip20_channel_reserve/mod.rs, stablecoin_dex/mod.rs and tip_fee_manager/amm.rs. It schedules T14 for mainnet at 1,796,742,000 and leaves T15 unscheduled for mainnet (crates/hardfork/src/constants.rs:254, hardfork lib.rs:438-440). Probes for later tags (tempo/v1.19.2, v1.20.0, v1.20.1, v1.21.0, v2.0.0) returned 404. The latest block read was 50,837,521 at timestamp 1,795,657,040, so T14 is not active yet.",
+   "result": "No caller lets an ordinary account move the PoolManager's TIP-20 balance. The StablecoinDEX pulls from sender in decrement_balance_or_transfer_from (stablecoin_dex/mod.rs:299-305, 325-351), and every caller passes the dispatcher's msg_sender (swap_exact_amount_in:428, swap_exact_amount_out:494, place:697, place_flip:869; dispatch.rs:25-66). TipFeeAMM rebalance_swap and mint pull from msg_sender (amm.rs:239, 360; dispatch.rs:56-68). The fee path uses transfer_fee_pre_tx from the transaction's fee payer (tip_fee_manager/mod.rs:158-177), which must sign. In the channel reserve the payer is always msg_sender at open (mod.rs:168-247), and top_up, request_close and withdraw require msg_sender == descriptor.payer (mod.rs:380, 481, 623). Pulls come only from msg_sender, at mod.rs:232-243 and 422-438. settle and close move only reserve custody. They require the payee or operator (mod.rs:854-864), and they need a voucher from the payer or the authorized signer for any amount above what is already settled. The PoolManager can be a payer only by calling the reserve itself. Its code calls only currency contracts and hooks (src/types/Currency.sol:40-90, src/libraries/Hooks.sol). eth_call from the PoolManager address to the reserve 0x4D50500000000000000000000000000000000000 with the transfer, balanceOf and withdraw(uint256) selectors reverted with the unknown selector error 0xaa4bc69a (rpc/tempo-reserve-selectors.txt), so a pool that uses the reserve address as a currency cannot make the PoolManager open, fund or capture a channel. receive_policy_sender differs from the account whose balance moves only when the reserve pays out. For a payee it is the descriptor payer when the channel was opened at T12 or later, and the reserve itself otherwise. For a refund it is the reserve (mod.rs:94-100, 324-329, 553-565, 642-647). In both cases only reserve custody that the payer deposited moves. A channel whose payee is the PoolManager only donates the payer's own tokens to it.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/tip20/mod.rs (lines 945-1027); https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/tip20_channel_reserve/mod.rs; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/stablecoin_dex/mod.rs; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/tip_fee_manager/amm.rs; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/address_registry/mod.rs (lines 27-45); https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/hardfork/src/constants.rs; research/network-risk/cycles/022/theme-rust-native-ruint.work/rpc/tempo-reserve-selectors.txt"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "What the PoolManager source would compute differently if a Rust-native token balance were wrong.",
+   "result": "The PoolManager learns a precompile token balance only through balanceOfSelf in sync and _settle (src/PoolManager.sol:279-289, 349-364; src/types/Currency.sol:90) and moves it only through transfer (src/types/Currency.sol:40). A wrong native balance would change paid in _settle with all opcodes correct. On the six networks with Rust-native token code, no ruint fault from cycle 21 is reachable from that code, so no such balance can be computed wrongly by this route.",
+   "source": "src/PoolManager.sol:349"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "question": "Once a Tempo release with T15 scheduled for mainnet is tagged, recheck the channel reserve open path. From T15, salt must equal the signer's configuration commitment (tip20_channel_reserve/mod.rs:215-226). Check whether a commitment set by a third party can block or redirect a payee payout to the PoolManager.",
+   "why": "In a9d6748 the T15 rules exist in code but are not scheduled for mainnet, and they change who controls vouchers for new channels.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-967",
+   "outcome": "cleared",
+   "answer": "Base v1.5.6 has six ruint shift sites, all with amounts of at most 248. Its one checked_shl shifts U256::ONE by a u8, so the 1.19.0 truncation and the 1.18.0 and 1.19.0 overflow flag faults cannot be reached. mega-evm v1.7.4 and xlayer v0.0.7 have no Rust-native call site; xlayer defines no precompile. No site calls wrapping_from or saturating_from or converts a signed value."
+  },
+  {
+   "leadId": "L-968",
+   "outcome": "cleared",
+   "answer": "Tempo, Arc and nanoreth precompiles call no wrapping_from, saturating_from or signed TryFrom on a Uint. The Tempo order book shifts by 0 to 255. tick_to_price is at least 67232 for every i16, and it reaches U256 only through U256::from(u32). An eth_call of tickToPrice and priceToTick on Tempo matched 100000 + tick. stablecoin_dex/mod.rs:2059 is test code."
+  },
+  {
+   "leadId": "L-969",
+   "outcome": "cleared",
+   "answer": "Every system_transfer_from caller pulls from msg_sender, or from the signing fee payer through the separate fee path. The channel reserve sets the payer to msg_sender at open and requires the payer for top_up, request_close and withdraw. Settle and close move only reserve custody, against a voucher from the payer. The PoolManager never calls the reserve, and the reserve rejects ERC-20 selectors. Tag v1.19.1 schedules T14 at 1,796,742,000 with identical files. No later tag exists."
+  }
+ ]
+}

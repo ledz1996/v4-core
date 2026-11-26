@@ -1,0 +1,136 @@
+"""Builds theme-deposit-transient.research.json from the readings and the scan outputs."""
+import json, glob, os
+W = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(os.path.dirname(W), 'theme-deposit-transient.research.json')
+R = 'https://raw.githubusercontent.com/'
+CR = 'https://static.crates.io/crates/'
+ALL = [1, 10, 8453, 130, 7777777, 480, 57073, 1868, 42220, 196, 42161, 4663, 99901, 137, 56, 43114, 143, 4326, 4217, 5042, 999]
+
+scans = {}
+for f in glob.glob(os.path.join(W, 'out', 'scan-*.json')):
+    if f.endswith('-a.json'):
+        continue
+    d = json.load(open(f))
+    scans[d['chainId']] = d
+
+
+def scantxt(c):
+    d = scans.get(c)
+    if not d:
+        return 'no scan output'
+    nf = len(d['failedDeposits'])
+    return ('window %d-%d (%s at start, %s at end): %d blocks with PoolManager logs, %d PoolManager transactions, '
+            '%d user deposits in those blocks, %d with status 0, %d pairs with a later PoolManager transaction in the same block'
+            % (d['window'][0], d['window'][1], d['clientVersionStart'], d['clientVersionEnd'], d['candidateBlocks'],
+               d['poolManagerTxs'], d['userDepositsInCandidateBlocks'], nf, d['pairs']))
+
+
+def pairtxt(c):
+    d = scans.get(c)
+    if not d or not d['pairs']:
+        return ''
+    out = []
+    for f in d['failedDeposits']:
+        if not f['laterPoolManagerTxs']:
+            continue
+        ok = [t for t in f['laterPoolManagerTxs'] if t['status'] == '0x1']
+        out.append('block %d deposit %s (index %d, gasUsed %s) followed by %d PoolManager transactions, %d of them status 1 with PoolManager logs'
+                   % (f['block'], f['depositHash'], f['depositIndex'], f['gasUsed'], len(f['laterPoolManagerTxs']), len(ok)))
+    return ' Pairs: ' + '; '.join(out[:6]) + ('; and %d more' % (len(out) - 6) if len(out) > 6 else '') + '.'
+
+
+cleared = []
+leadResults = []
+findings = []
+leads = []
+
+
+def C(ch, check, result, source, lens='L2'):
+    cleared.append({'chainIds': ch, 'lens': lens, 'check': check, 'result': result, 'source': source})
+
+
+# ---------- Task 1: failed and halted deposits, per build ----------
+C([8453], 'Base reth/v2.5.2-9e380dd base/v1.5.6: what a failed or halted deposit does to the journal and to transient storage.',
+  'The handler is BaseHandler in base-common-evm, its own copy of the OP handler. execution_result turns a halted deposit into the error HaltedDepositPostRegolith before any commit (crates/common/evm/src/handler.rs lines 334-336); run sends every error to catch_error (revm-handler 42.0.1 src/handler.rs lines 100-108). catch_error, for a transaction error of a deposit, calls checkpoint_revert(JournalCheckpoint::default()) (line 368), bumps the nonce and adds the mint, then commit_tx (line 377); any other error goes to discard_tx (line 386). The Cargo.lock at tag v1.5.6 pins revm 42.0.1 and revm-context 42.0.0 from crates.io and reth from base/reth tag base-v2.5.2.11 commit 9e380dd, the commit the endpoint names. In revm-context 42.0.0 checkpoint_revert replays the journal with the transient map (src/journal/inner.rs lines 622-640, and revm-context-interface 42.0.0 entry.rs lines 432-440 put back or remove each TSTORE), commit_tx clears transient_storage (inner.rs lines 141-158), and so do discard_tx (174-192) and finalize (207-250). Every block transaction runs through ExecuteEvm::transact (executor/block_executor.rs line 255, evm.rs line 450), which calls finalize after transact_one even on error. So a failed or halted deposit leaves no transient value, first because its own TSTOREs are replayed away, then because the commit and the finalize clear the map.',
+  R + 'base/base/v1.5.6/crates/common/evm/src/handler.rs')
+C([7777777], 'Zora conduit-op-reth/v2.5.1-8f0ccac: the deposit handler and the transient clear.',
+  'conduit-op-reth has no handler of its own. Its crates are chainspec, node and rpc-api, and crates/node/src/evm.rs wraps OpBlockExecutor and OpEvmFactory from op-reth/v2.8.0 and adds only state overrides written to the database at activation blocks and EVM limit settings (evm.rs lines 44-115, 214-235). The Cargo.lock at tag v2.5.1 pins op-revm and alloy-op-evm from ethereum-optimism/optimism tag op-reth/v2.8.0 (commit d6620202) and revm 43.0.3 with revm-context 43.0.3. In that op-revm, execution_result returns HaltedDepositPostRegolith for a halted deposit before commit_tx (rust/op-revm/src/handler.rs lines 419-428), catch_error sends a transaction error of a deposit to catch_error_failed_deposit (lines 469-482), which calls checkpoint_revert to the default checkpoint (line 524) and then commit_tx (line 535); a non-deposit failure calls discard_tx (line 501). revm-context 43.0.3 clears transient_storage in commit_tx, discard_tx and finalize (src/journal/inner.rs lines 141-158, 174-192, 207-250). The commit 8f0ccac in the version string could not be matched to the tag because the GitHub API is not available.',
+  R + 'ethereum-optimism/optimism/op-reth/v2.8.0/rust/op-revm/src/handler.rs')
+C([480, 10], 'World Chain world-chain/v2.8.2-9596311 and the OP Mainnet build op-reth/v2.8.1-72207294: the deposit handler and the transient clear.',
+  'World Chain has no handler of its own: world-chain-evm builds OpEvmConfig with OpEvmFactory (crates/evm/src/lib.rs line 91) and its block executor delegates to the inner OP executor (crates/evm/src/execution/executor.rs lines 15-57). The Cargo.lock at v2.8.2 has two op-revm revisions; the node crates (world-chain-evm, -builder, -validator, -rpc, reth-optimism-evm, reth-optimism-node) all take op-revm at ethereum-optimism/optimism 722072949ce5 with revm 43.0.3, and only world-chain-proof-kona-client takes da6d3252 with revm 42.0.1. Commit 72207294 is also what OP Mainnet reports as op-reth v2.8.1. Its op-revm handler.rs is byte identical (md5 prefix 5dc44a82) to the op-reth/v2.8.0 file read for Zora, with the same checkpoint_revert at line 524 and commit_tx at line 535. revm-context 43.0.3 clears transient storage in all three teardown paths. OP Mainnet also answered once as op-reth v0.0.0-dev-unknown, a build that names no commit.',
+  R + 'ethereum-optimism/optimism/722072949ce583f361424a160082186ee14cac71/rust/op-revm/src/handler.rs')
+C([42220], 'Celo reth/v2.2.0-74cc8bb (celo-reth): the deposit handler and the transient clear.',
+  'celo-kona tags celo/reth-v1.0.10 and celo/reth-v1.0.9 both pin celo-org/reth 74cc8bbce763, the commit the endpoint names; v1.0.10 takes revm-context 16.0.1 from celo-org/revm bd28f942 and v1.0.9 from crates.io, and the two journal files are identical in lines 130-250. CeloHandler::execution_result builds the result in build_execution_result, which returns HaltedDepositPostRegolith for a halted deposit (crates/celo-revm/src/handler.rs lines 889-897) before the commit_tx at line 1298. CeloHandler::catch_error delegates to OpHandler (line 1312), and op-revm at celo-org/optimism b08a8d0 handles a transaction error of a deposit by checkpoint_revert to the default checkpoint (rust/op-revm/src/handler.rs line 397) and commit_tx (line 415). revm-context 16.0.1 clears transient_storage in commit_tx (inner.rs line 154), discard_tx (188) and finalize (246). The block path calls transact, which finalizes (alloy-celo-evm lib.rs line 406; revm-handler api.rs lines 68-77 at celo-org/revm bd28f942). Which of the two tags the Celo binary was built from is not shown by the endpoint; the reading holds for both.',
+  R + 'celo-org/celo-kona/celo/reth-v1.0.10/crates/celo-revm/src/handler.rs')
+C([196], 'X Layer reth/v2.3.0-f60420a xlayer/v0.0.7: the deposit handler, the blacklist interception of deposits, and the transient clear.',
+  'Tag v0.0.7.3-rc.1 of okx/xlayer-reth is the one whose Cargo.toml takes every reth crate from okx/reth f60420aa (54 lines), the commit the endpoint names; tags v0.0.7 and v0.0.7.3 pin 81573d2c. All three locks pin revm 40.0.3 and revm-context 18.0.3, and take op-revm and alloy-op-evm from the submodule deps/optimism (okx/optimism). The submodule commit cannot be read without the GitHub API; the newest xlayer-dep tag, a492b62b, was read. Its op-revm returns HaltedDepositPostRegolith for a halted deposit before commit_tx (rust/op-revm/src/handler.rs lines 395-415), and catch_error reverts to the default checkpoint (line 445) and commits (line 463). The X Layer addition intercept_blacklisted_deposit runs the TxBlacklist query, restores the deposit, and for a blacklisted deposit calls the same OpHandler::catch_error and then finalize (rust/alloy-op-evm/src/lib.rs lines 289-316). revm-context 18.0.3 clears transient_storage in commit_tx (inner.rs line 154), discard_tx (188) and finalize (246).',
+  R + 'okx/optimism/a492b62bbecbdcf3be90719e042c9abca47c8cc6/rust/alloy-op-evm/src/lib.rs')
+C([4326], 'MegaETH mega-evm v1.7.4 (endpoint mega-reth/v2.3.1-4499c42): the deposit handler and the transient clear.',
+  'MegaHandler::execution_result passes ordinary deposits to the op-revm handler (crates/mega-evm/src/evm/execution.rs line 1130); only deposit-style sandbox transactions take the branch at lines 1115-1128, which commits with commit_tx. MegaHandler::catch_error calls op-revm catch_error and, when that returns an error, discard_tx (lines 1163-1194). op-revm at ethereum-optimism/optimism f67d87cd returns HaltedDepositPostRegolith for a halted deposit (rust/op-revm/src/handler.rs lines 380-385) and for a failed deposit reverts to the default checkpoint (line 417) and calls commit_tx (line 435). The v1.7.4 Cargo.lock pins revm 40.0.3 and revm-context 18.0.3, which clear transient storage in commit_tx, discard_tx and finalize. MegaEvm::discard_tx, the panic recovery path, calls finalize (evm/mod.rs lines 420-436). The block producer is closed, and which mega-evm revision mega-reth v2.3.1 links was not read.',
+  R + 'megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/evm/execution.rs')
+C([196, 42220, 4326], 'Older op-revm catch_error leaves the journal in place for errors other than a failed deposit (Celo b08a8d0, X Layer a492b62, MegaETH f67d87cd). Does that let transient storage of a failed transaction reach the next one?',
+  'No. In these revisions catch_error has no discard_tx branch (for example okx/optimism a492b62 rust/op-revm/src/handler.rs lines 423-484), unlike op-reth v2.8.0, which added discard_and_surface_error for this reason (lines 489-502). Every block path calls ExecuteEvm::transact, which runs finalize after transact_one whether or not it failed (revm-handler 20.0.3 src/api.rs lines 68-77), and finalize clears transient_storage (revm-context 18.0.3 inner.rs line 246). MegaETH adds discard_tx after any failing catch_error (execution.rs lines 1176-1186), and X Layer discards after a failing system call (alloy-op-evm lib.rs lines 416-426). The errors in question also stop the transaction or the block, so no PoolManager code of that transaction completes.',
+  R + 'okx/optimism/a492b62bbecbdcf3be90719e042c9abca47c8cc6/rust/op-revm/src/handler.rs')
+
+# ---------- Task 2: executions outside a user transaction's frame ----------
+C([8453], 'Base v1.5.6: EVM executions outside a user transaction frame (EIP-2935 and EIP-4788 system calls, the L1 attributes deposit, irregular state changes, EIP-8130 phases).',
+  'apply_pre_execution_changes runs the EIP-2935 and EIP-4788 system calls (executor/block_executor.rs lines 171-173) through transact_system_call, which is SystemCallEvm::system_call_with_caller (evm.rs lines 452-459): run_system_call ends in BaseHandler::execution_result with commit_tx (handler.rs line 340), and system_call_with_caller then finalizes (revm-handler 42.0.1 src/system_call.rs line 135). The create2 deployer, BaseTime and EIP-8130 account steps write to the database without running code (block_executor.rs lines 179-204). The L1 attributes deposit is an ordinary deposit transaction to the L1Block predeploy, and every Base block read in the scan window also carries a second system deposit at index 1 from 0xdeaddeaddeaddeaddeaddeaddeaddeaddead0001 to the BaseTime predeploy 0x4200000000000000000000000000000000000030 (eth_getTransactionByBlockNumberAndIndex on the last block of the window); both run through the same deposit handler as any deposit. The targets are fixed and the caller chooses none of their code. EIP-8130 phased transactions are in the source but inactive on mainnet: everest_timestamp is None in the mainnet config (crates/common/chains/src/config.rs line 479). If activated, the phases of one transaction share its journal, a reverting phase is undone by checkpoint_revert, transient writes included (eip8130.rs lines 1260-1346), and the transaction ends with commit_tx or discard_tx (lines 369 and 1632). base-common-evm2 is not linked into the base binary (no crate of the v1.5.6 lock depends on it).',
+  R + 'base/base/v1.5.6/crates/common/evm/src/executor/block_executor.rs')
+C([7777777, 480], 'Zora and World Chain: executions outside a user transaction frame.',
+  'Both use OpBlockExecutor from op-reth v2.8.x: apply_pre_execution_changes runs the EIP-2935 and EIP-4788 system calls and the canyon create2 deployer step (rust/alloy-op-evm/src/block/mod.rs lines 997-1022), and transact_system_call goes through system_call_with_caller, which commits and finalizes (alloy-op-evm lib.rs lines 426-432; revm-handler 43.0.3 src/handler.rs lines 126-150 and 646-660, src/system_call.rs line 139). Post-exec (SDM) transactions never run in the EVM (alloy-op-evm src/post_exec/mod.rs lines 37-50, lib.rs lines 394-399). Zora adds state overrides written to the database without code (conduit crates/node/src/evm.rs lines 77-96). World Chain adds the builder transaction spendNullifierHashes (crates/builder/src/execution_context.rs line 48), a signed ordinary transaction that runs through the normal handler. None of these runs code an ordinary account chose.',
+  R + 'ethereum-optimism/optimism/op-reth/v2.8.0/rust/alloy-op-evm/src/block/mod.rs')
+C([42220], 'Celo: CIP-64 fee currency debit and credit calls, the core contract reads, and the system calls. Is transient storage cleared between them and the user transaction, and does the user choose their code?',
+  'The debit runs before the user frames, through the non-committing system call inside a checkpoint. On success the checkpoint is committed and the debit\'s transient storage is cleared before the user transaction runs (crates/celo-revm/src/handler.rs lines 635-676, clear at line 668); on rejection checkpoint_revert undoes it (line 678). The credit runs after the user frames, inside build_execution_result (line 876), through core_contracts::call, which runs a committing system call and then clears transient_storage itself (contracts/core_contracts.rs lines 211-248, clear at line 243). Inside that call execution_result calls commit_tx (handler.rs line 1298), which clears the user transaction\'s transient map too, after the user\'s last frame has returned. The fee currency\'s code therefore runs once with the user transaction\'s transient values present, but transient storage is keyed by address, the PoolManager\'s lock is already false after a completed unlock (src/PoolManager.sol:113), and the fee currency must be on the governance-held FeeCurrencyDirectory list, so the user picks among listed currencies and chooses none of their code. Core contract reads use call_read_only inside a checkpoint that is reverted (core_contracts.rs lines 142-173). EIP-2935 and EIP-4788 run through OpBlockExecutor as on the other OP chains (alloy-celo-evm block/executor_factory.rs line 114).',
+  R + 'celo-org/celo-kona/celo/reth-v1.0.10/crates/celo-revm/src/contracts/core_contracts.rs', lens='L2')
+C([196], 'X Layer: the blacklist query before user deposits, the gasless allowance query before user transactions, and the system calls.',
+  'Both queries are system calls from SYSTEM_ADDRESS to fixed addresses (TxBlacklist proxy and GaslessWhitelist proxy 0x19787404b0c70021b4752028f7e3a92313885B27, rust/alloy-op-evm/src/block/xlayer_gasless_contract.rs lines 40-41) through transact_system_call, which commits and finalizes on success and calls discard_tx on error (alloy-op-evm lib.rs lines 410-428). The user supplies arguments (the deposit source hash, or the target and a calldata prefix) and no code. The query runs before the user transaction and its journal is finalized first, so no transient value crosses in either direction. EIP-2935 and EIP-4788 run in apply_pre_execution_changes (block/mod.rs lines 843-845).',
+  R + 'okx/optimism/a492b62bbecbdcf3be90719e042c9abca47c8cc6/rust/alloy-op-evm/src/block/xlayer_gasless_contract.rs')
+C([4326], 'MegaETH mega-evm v1.7.4: pre-block system calls, Oracle system transactions, the sequencer registry update, and the KeylessDeploy sandbox.',
+  'Pre-block calls (EIP-2935, EIP-4788, the sequencer registry pending changes) use transact_system_call_with_gas_limit, which runs run_system_call and then finalize on success and on error (src/evm/interfaces.rs lines 299-318; block/eips.rs lines 67-80 and 142-155; system/sequencer_registry.rs line 381), and system_call_with_caller also finalizes on both paths (interfaces.rs lines 273-284). Their targets are fixed system contracts. Oracle system transactions come from a fixed signer (cleared in cycle 20). The KeylessDeploy sandbox runs caller-chosen init code in a second EVM with its own journal, so it starts with an empty transient map and its transient values are dropped. It is intercepted only at depth 0 and outside a sandbox (system/intercept.rs line 301 at v1.7.4, unchanged from v1.7.3), so the outer transaction has no PoolManager frame before or after it. This repeats the cycle 4 and 5 clearances at the v1.7.4 tag.',
+  R + 'megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/system/intercept.rs')
+C([10, 130, 57073, 1868], 'OP Mainnet, Unichain, Ink and Soneium (op-reth v2.10.0-rc.4 and v2.8.1): failed deposits and the transient clear.',
+  'op-reth v2.10.0-rc.4 op-revm handler.rs has the same structure as v2.8.0: HaltedDepositPostRegolith at line 425, catch_error_failed_deposit at lines 509-535 with checkpoint_revert at line 524 and commit_tx at line 535, discard_tx for other failures at line 501 (read again in this cycle at the tag). It pins revm-context 43.0.3, which clears transient storage in commit_tx (critic reading of cycle 21, confirmed here from the crate). OP Mainnet v2.8.1 (commit 72207294) has the byte identical v2.8.0 handler (see the World Chain entry).',
+  R + 'ethereum-optimism/optimism/op-reth/v2.10.0-rc.4/rust/op-revm/src/handler.rs')
+C([1, 42161, 4663, 99901, 137, 56, 43114, 143, 4217, 5042, 999], 'Networks without OP Stack deposits: is there a deposit-like transaction that commits after a failure without clearing transient storage?',
+  'These networks have no type 0x7e transaction. Their system and bridge-delivered transactions were read in earlier cycles: Arbitrum retryables and HyperEVM system transactions give no opening for bracketed payments (OPCODES.md line 324), bor resets transient storage per transaction and per re-execution (line 238), Tempo has no caller that starts a transaction while another runs (line 385), and senders set without a signature were listed for Ethereum, Polygon, BNB Chain, Avalanche, Monad, MegaETH, Tempo, Arc and HyperEVM (line 407). The read-only probe at the real PoolManager address found transient slots empty in the next transaction on 16 networks with eth_simulateV1 (line 430). This unit adds no new reading for them.',
+  'research/network-risk/OPCODES.md:430')
+
+# ---------- code side ----------
+C(ALL, 'What a carried transient slot would do to src/, and whether a failed deposit could leave one.',
+  'A failed deposit cannot leave a PoolManager transient value even on a client that skipped the clear at commit: any TSTORE the deposit made is a journal entry, and the revert to the first checkpoint puts the previous value back or removes the key (revm-context-interface 43.0.2 src/journaled_state/entry.rs lines 455-470). The only values that can outlive a successful transaction on a faulty client are the synced currency and reserves, because unlock writes the lock false (src/PoolManager.sol:113) and reverts unless the delta count is 0 (line 112). A carried synced currency would be read by the next transaction\'s settle as paid = balanceOf - reservesBefore (src/PoolManager.sol:349-361) and could credit one account with another\'s transfer. All builds read here clear the map at the end of every transaction, so that case does not arise.',
+  'src/PoolManager.sol:349', lens='L1')
+
+# ---------- Task 3: mined blocks ----------
+names = {8453: 'Base', 7777777: 'Zora', 480: 'World Chain', 42220: 'Celo', 196: 'X Layer', 4326: 'MegaETH'}
+for c in [8453, 7777777, 480, 42220, 196, 4326]:
+    d = scans.get(c)
+    if not d:
+        continue
+    res = scantxt(c) + '.' + pairtxt(c)
+    res += {8453: ' On Base almost every one of the deposits counted is the per-block BaseTime system deposit at index 1; all had status 1. The official endpoint mainnet.base.org answered HTTP 429 during the first attempt and base-rpc.publicnode.com answered a challenge page, so the scan used base-mainnet.public.blastapi.io, which reports the same build and limits eth_getLogs to 10 blocks; some batches met HTTP 429 and were retried until answered.',
+            480: ' The Alchemy public endpoint limits eth_getLogs to 100 blocks, so the window is 100,000 blocks.',
+            196: ' rpc.xlayer.tech limits eth_getLogs to 100 blocks, and PoolManager activity is dense (28,726 blocks with PoolManager logs in 100,000 blocks), and the endpoint refuses JSON-RPC batches of 25 with one error object, so the scan uses batches of 10 over a 30,000 block window; earlier attempts were stopped before the deposit step finished (logs kept in out/).',
+            4326:' The endpoint refuses eth_getTransactionByBlockNumberAndIndex, so whole blocks were read with eth_getBlockByNumber.'}.get(c, '')
+    if d['pairs']:
+        res += (' A later PoolManager transaction with status 1 and PoolManager logs has passed the AlreadyUnlocked test of unlock (src/PoolManager.sol:105) and the delta count test (line 112), so the lock flag was false and the count was 0 when it started. Receipts do not show the synced currency slot; traces were not requested.')
+    else:
+        res += ' No mined pair exists in this window, so the reading rests on the source for this chain.'
+    C([c], '%s: mined deposits with status 0 followed in the same block by a PoolManager transaction (scan by eth_getLogs for the PoolManager, then the transactions at index 1 and up of each such block, then receipts).' % names[c],
+      res, d['rpc'] + ' (eth_getLogs, eth_getTransactionByBlockNumberAndIndex, eth_getTransactionReceipt; script theme-deposit-transient.work/scripts/depscan.py, output out/scan-%d.json)' % c)
+
+tot_pairs = sum(scans[c]['pairs'] for c in scans)
+leadResults.append({'leadId': 'L-970', 'outcome': 'cleared',
+    'answer': 'Yes on all six builds. Base v1.5.6 (own BaseHandler, revm-context 42.0.0), conduit-op-reth v2.5.1 (op-revm op-reth/v2.8.0, revm-context 43.0.3), world-chain v2.8.2 (op-revm 72207294, revm-context 43.0.3), celo-reth at reth 74cc8bb (CeloHandler delegating to op-revm b08a8d0, revm-context 16.0.1), X Layer at reth f60420a (op-revm of okx/optimism a492b62, revm-context 18.0.3, plus the blacklist interception that reuses catch_error and finalizes) and mega-evm v1.7.4 (op-revm f67d87cd, revm-context 18.0.3) all redirect a halted deposit to catch_error, revert to the default checkpoint, which replays transient writes away, and then call commit_tx, which clears the transient map; every block path also calls finalize. Mined check: %d pairs of a failed deposit and a later PoolManager transaction in the windows read (see cleared entries).' % tot_pairs})
+leadResults.append({'leadId': 'L-101', 'outcome': 'cleared',
+    'answer': 'Closed through L-970: op-reth v2.10.0-rc.4 and v2.8.x and every build with its own handler code clear transient storage at commit, discard and finalize, and a failed deposit reverts its own transient writes before the commit.'})
+
+if not any(scans[c]['pairs'] for c in scans):
+    pass
+leads.append({'chainIds': [196], 'lens': 'L2', 'question': 'Which okx/optimism commit is the deps/optimism submodule of the X Layer build f60420a, and is its op-revm handler.rs and alloy-op-evm lib.rs the same as at xlayer-dep tag a492b62b?',
+              'why': 'The deposit and blacklist reading for X Layer rests on the newest xlayer-dep tag; the submodule pointer could not be read without the GitHub API.', 'priority': 'low'})
+
+leads.append({'chainIds': [8453, 7777777, 480, 42220, 196, 4326], 'lens': 'L2', 'question': 'Over a longer history (for example from PoolManager deployment to head, through an archive endpoint without the 10 and 100 block log limits), is there any mined deposit with status 0 followed in its block by a PoolManager transaction, and does a trace of that transaction show the lock, delta count and synced currency slots empty at its start?',
+              'why': 'The windows read in cycle 22 held no failed deposit in a block with PoolManager activity on any of the six chains, so the source reading has no mined confirmation yet.', 'priority': 'low'})
+doc = {'unit': 'theme-deposit-transient', 'profiles': [], 'findings': findings, 'cleared': cleared, 'leads': leads, 'leadResults': leadResults}
+json.dump(doc, open(OUT, 'w'), indent=1)
+print('wrote', OUT, len(cleared), 'cleared', tot_pairs, 'pairs')

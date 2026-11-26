@@ -1,0 +1,22 @@
+{
+  "unit": "op-stack-eth",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Base v1.6.0-rc.1 links the evm2 interpreter (alloy-rs/evm2 rev 9b037449) while keeping ruint 1.19.0; evm2 does not execute on Base at this release and SHL, SHR and SAR still clamp the shift amount before calling ruint.",
+      "agrees": true,
+      "note": "I fetched the base-common-evm2 README at tag v1.6.0-rc.1. It says the crate is intentionally not wired into the node. In the v1.6.0-rc.1 Cargo.lock I fetched, the string base-common-evm2 occurs once, as its own package name, so no crate depends on it. evm2 is listed only as a dependency of base-common-evm2. The lockfile pins ruint 1.19.0 and revm-interpreter 43.0.2. The build Base serves today is v1.5.6 (clientver.txt; my eth_call answered on mainnet.base.org). Its lockfile pins revm-interpreter 42.0.0 and ruint 1.19.0. I read bitwise.rs in the revm-interpreter 42.0.0 crate. shl, shr and sar convert the amount with as_usize_saturated and branch on shift < 256 before calling ruint (lines 120-158), and byte does the same with o1 < 32 (lines 107-117). The ruint fast path for amounts of 2^32 and above is therefore never reached. I ran an eth_call with a code override on Base, OP Mainnet and World Chain. SHL(2^32+1, 1) returned 0, SAR(2^40, -1) returned 2^256-1, and MULMOD(M, M-2, M-1) with M = 2^256-1 returned 0xff..fd, all as specified. I did not read the 43.0.2 handlers; the battery covers them through the op-reth chains."
+    },
+    {
+      "check": "On Base v1.5.6 and World Chain, a failed or halted deposit, or any transaction, does not leave transient storage behind for the next transaction.",
+      "agrees": true,
+      "note": "In the Base v1.5.6 handler.rs I fetched, a successful execution calls journal.commit_tx at line 340. A halted deposit returns an error just before that point and goes to catch_error. There a failed deposit is reverted with checkpoint_revert(JournalCheckpoint::default()), its nonce and mint are applied, and journal.commit_tx is called. Every other error calls discard_tx (lines 349-386). I read src/journal/inner.rs in the revm-context 42.0.0 crate, which v1.5.6 pins: commit_tx (lines 141-167) and discard_tx (lines 170-195) both call transient_storage.clear(). The PoolManager's transient state therefore cannot outlive a transaction. That state is the unlock flag (src/libraries/Lock.sol:13,19,25), the synced currency and reserves (src/libraries/CurrencyReserves.sol:17-36), the delta count (src/libraries/NonzeroDeltaCount.sol:14-32) and the deltas (src/libraries/CurrencyDelta.sol:21-39). I did not re-read World Chain's factory. Its claim to use op-revm's stock handler rests on the research file, and the battery already covered World Chain."
+    },
+    {
+      "check": "Battery (99,985 vectors) and targeted set (85,544 vectors) at today's builds return the specified word on all seven chains, so FullMath, SqrtPriceMath, TickMath, TickBitmap and BitMath compute as on Ethereum.",
+      "agrees": true,
+      "note": "battery.log and targeted.log in the work directory show 99985/99985 and 85544/85544 vectors run with 0 mismatches and 0 errors on chain ids 10, 8453, 130, 7777777, 480, 57073 and 1868. The vector counts per opcode cover MULMOD, ADDMOD, the 512 bit product, the shifts, BYTE, SIGNEXTEND, JUMPI, KECCAK256, MCOPY and CALLDATALOAD. My own three-vector eth_call on chains 8453, 10 and 480 at the same endpoints agreed. A limit remains: OP Mainnet and Ink rpc-qnd serve a build that reports itself as v0.0.0-dev-unknown. Its source cannot be tied to a tag, so for that build the clearance rests on behaviour alone. The sequencer's own build is not observable through these endpoints."
+    }
+  ],
+  "leads": []
+}

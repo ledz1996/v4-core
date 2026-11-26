@@ -1,0 +1,22 @@
+{
+  "unit": "theme-deposit-transient",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Base reth/v2.5.2-9e380dd base/v1.5.6: what a failed or halted deposit does to the journal and to transient storage.",
+      "agrees": true,
+      "note": "web3_clientVersion on https://mainnet.base.org/ returned reth/v2.5.2-9e380dd/x86_64-unknown-linux-gnu/base/v1.5.6. In https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/handler.rs, execution_result returns HaltedDepositPostRegolith for a halted deposit before commit_tx (lines 335-337), and catch_error for a deposit transaction error calls checkpoint_revert(JournalCheckpoint::default()), bumps the nonce, adds the mint and calls commit_tx; other errors call discard_tx. The v1.5.6 Cargo.lock pins revm 42.0.1, revm-context 42.0.0 and revm-handler 42.0.1 from crates.io. In the revm-context 42.0.0 crate from static.crates.io, src/journal/inner.rs clears transient_storage in commit_tx (line 158), discard_tx (line 192) and finalize (line 250), and checkpoint_revert passes the transient map to each entry revert (lines 625-638). The line numbers in the cleared item are off by one in places and the substance holds."
+    },
+    {
+      "check": "Celo: CIP-64 fee currency debit and credit calls, the core contract reads, and the system calls. Is transient storage cleared between them and the user transaction, and does the user choose their code?",
+      "agrees": true,
+      "note": "web3_clientVersion on https://forno.celo.org returned reth/v2.2.0-74cc8bb/x86_64-unknown-linux-gnu. In celo-kona celo/reth-v1.0.10 crates/celo-revm/src/handler.rs the debit runs inside a checkpoint, and on success checkpoint_commit is followed by transient_storage.clear() at line 668 before any user frame; on error checkpoint_revert. The credit runs from build_execution_result at line 876, after the user frames, and core_contracts.rs call_inner clears transient_storage at line 243 on the committing path. The fee currency code therefore sees the user transaction's transient map only after the last user frame returned. At that point the PoolManager lock is false and the delta count is zero (src/PoolManager.sol:112-113), and the fee currency is a governance listed contract the attacker cannot write. The only PoolManager transient values left are the synced currency and reserves, and the credit call does not call the PoolManager. No unprivileged path follows."
+    },
+    {
+      "check": "OP Mainnet, Unichain, Ink and Soneium (op-reth v2.10.0-rc.4 and v2.8.1): failed deposits and the transient clear.",
+      "agrees": true,
+      "note": "https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.10.0-rc.4/rust/op-revm/src/handler.rs returns HaltedDepositPostRegolith for a halted deposit after Regolith before commit_tx (lines 423-428), calls discard_tx through discard_and_surface_error for other failures (line 501), and in catch_error_failed_deposit calls checkpoint_revert(JournalCheckpoint::default()) (line 524) then commit_tx (line 535). The revm-context-interface 43.0.2 crate, src/journaled_state/entry.rs lines 455-470, removes or restores each TransientStorageChange on revert. A failed deposit leaves no PoolManager transient value. The code consequence in src/ holds: only the synced currency and reserves can outlive a completed unlock (src/PoolManager.sol:112-113), and _settle would read them as paid = balanceOf - reservesBefore (src/PoolManager.sol:349-361), but every build read clears the map at commit."
+    }
+  ],
+  "leads": []
+}

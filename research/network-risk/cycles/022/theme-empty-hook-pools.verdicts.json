@@ -1,0 +1,75 @@
+{
+ "unit": "theme-empty-hook-pools",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "Queried myself. eth_getCode of 0xf8c3f4243c4d8c02831a718a7978fd869f094300 returns runtime code on Ethereum (https://ethereum-rpc.publicnode.com, nonce 0x1) and 0x with nonce 0x0 on Polygon (https://polygon-bor-rpc.publicnode.com), BNB Smart Chain (https://bsc-dataseed1.bnbchain.org) and Avalanche (https://api.avax.network/ext/bc/C/rpc). eth_call from the Polygon PoolManager 0x67366782805870060151383f4bbff9dab53e5cd6 and from the Avalanche PoolManager 0x06380c0e0912312b5150364b9dc4542ba0dbbc85 to that address with selector 0x21d0ee70 returned success and 0x. Pool liquidity read with eth_getStorageAt at keccak256(id . 6) + 3 on the Polygon PoolManager: pool 0x4accc6ab... holds 0xc860876bb = 53,788,309,179 and pool 0xc5a3738f... holds 0x438cef18 = 1,133,309,720, both equal to the values in the finding. The unit's sim_137.json records the as-is removal reverting with 0x1e048e1d and the selector stub run succeeding; I read the file and did not rerun the simulation.",
+   "codeCheck": "Storage slot 6 for _pools follows from the layout owner (lib/solmate/src/auth/Owned.sol:17), protocolFeesAccrued and protocolFeeController (src/ProtocolFees.sol:21,24), isOperator, balanceOf and allowance (src/ERC6909.sol:15,17,19) and _pools (src/PoolManager.sol:93), with liquidity the fourth field (src/libraries/Pool.sol:83-87). initialize checks only the flag bits (src/PoolManager.sol:126, src/libraries/Hooks.sol:109-127) and never reads code. modifyLiquidity calls beforeModifyLiquidity (src/PoolManager.sol:156) and afterModifyLiquidity (src/PoolManager.sol:178). For liquidityDelta <= 0, which includes a fee collection with delta 0, bit 9 calls beforeRemoveLiquidity (src/libraries/Hooks.sol:203-204) and bit 8 calls afterRemoveLiquidity (src/libraries/Hooks.sol:233-241). callHook uses call with value 0 (src/libraries/Hooks.sol:134); empty return data fails result.length < 32 and reverts with InvalidHookResponse (src/libraries/Hooks.sol:152-154). The only skip is msg.sender == hook (src/libraries/Hooks.sol:171-175, 217). No other exit for principal or fees exists in modifyLiquidity. The path holds as written.",
+   "corrections": "The donate flags (bits 5 and 4) gate only donate (src/libraries/Hooks.sol:317-335) and freeze no position, so the two Robinhood Chain pools on 0x...dead0030 counted under 'bit 9, 8, 5 or 4' hold no frozen principal, as the unit's own cleared entry says; only the Polygon and Avalanche pools on 0xf8c3f424...4300 have frozen third-party positions. The Ethereum pool 0x992c0ab6 listed in step 6 is on a delegated hook with code, so it belongs to F-013, not to this empty-hook finding. The chainIds list all 21 networks while the measured third-party freeze exists on 137 and 43114 only. The 'difference' is a difference in deployed state, not in network semantics. The actor pool-creator is right: the pool creator named the empty address and the victims chose to add liquidity to that pool.",
+   "sources": [
+    {
+     "url": "rpc: eth_getCode 0xf8c3f4243c4d8c02831a718a7978fd869f094300 on https://ethereum-rpc.publicnode.com, https://polygon-bor-rpc.publicnode.com, https://bsc-dataseed1.bnbchain.org, https://api.avax.network/ext/bc/C/rpc",
+     "supports": "code on Ethereum, 0x and nonce 0 on Polygon, BNB Smart Chain and Avalanche"
+    },
+    {
+     "url": "rpc: eth_call from 0x67366782805870060151383f4bbff9dab53e5cd6 (Polygon) and 0x06380c0e0912312b5150364b9dc4542ba0dbbc85 (Avalanche) to 0xf8c3f424...4300 data 0x21d0ee70",
+     "supports": "success with empty return data"
+    },
+    {
+     "url": "rpc: eth_getStorageAt Polygon PoolManager at keccak256(poolId . 6)+3 for pools 0x4accc6ab... and 0xc5a3738f...",
+     "supports": "liquidity 53,788,309,179 and 1,133,309,720"
+    },
+    {
+     "url": "src/libraries/Hooks.sol:152-154",
+     "supports": "empty return data reverts with InvalidHookResponse"
+    }
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "confirmed",
+   "severity": "medium",
+   "factCheck": "Queried myself on https://ethereum-rpc.publicnode.com: eth_getCode of 0x52bf1a8075581c2e40854d3ece7181e1fb41258b is 0xef01001154ae56ac04306e34b01c27fbd2d84b7145658b and its nonce is 0xb (11), both as stated. Liquidity of pool 0x992c0ab607f40131... at keccak256(id . 6)+3 on the PoolManager 0x000000000004444c5dc75cB358380D2e3dE08A90 is 0xcbd7c5de052c0 = 3,586,041,569,104,576, as stated. PositionManager 0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e ownerOf(517545) returns 0x3d4e4f78de9daddddf0b91851f3b78fab7c57bb0, and getPoolAndPositionInfo(517545) returns a key with currency1 USDC 0xa0b86991..., hook 0x52bf1a80...58b and the pool id prefix 0x992c0ab607f401315eab1f5fca82b4. The EIP-7702 text fetched from https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md sets the code to 0xef0100 || address (line 118) and lets a later authorization to the zero address clear it (line 121), so the holder can repoint or clear the delegation.",
+   "codeCheck": "Bits 0x258b are 13, 10, 8, 7, 3, 1 and 0 (src/libraries/Hooks.sol:29-47). For a removal with bit 8 and bit 0 set, afterModifyLiquidity parses a 64 byte return as the hook delta (src/libraries/Hooks.sol:159-167, 233-242), subtracts it from the caller delta (src/libraries/Hooks.sol:242) and credits it to the hook (src/PoolManager.sol:180-182). With the delegation cleared, the call returns empty data and reverts (src/libraries/Hooks.sol:152-154). beforeSwapReturnsDelta with bit 7 moves swap amounts to the hook (src/libraries/Hooks.sol:266-279, 305-313). The path holds as written.",
+   "corrections": "The hook delta is not taken 'without bound': the subtraction is checked and a hook delta beyond the removal proceeds leaves the remover owing, so the unlock fails unless the remover pays, and a router with a minimum output reverts first. The take is bounded by what the remover's transaction accepts. Pools on hooks with bits 0x2488 (0xa8531805) set no remove flag, so their third-party position (token 514342) is exposed only through add and swap callbacks, not on removal. The actor pool-creator is right: only the holder of the hook account can act, and the victims chose that hook.",
+   "sources": [
+    {
+     "url": "rpc: eth_getCode and eth_getTransactionCount of 0x52bf1a8075581c2e40854d3ece7181e1fb41258b on https://ethereum-rpc.publicnode.com",
+     "supports": "delegation indicator to 0x1154ae56..., nonce 11"
+    },
+    {
+     "url": "rpc: eth_call PositionManager 0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e ownerOf(517545) and getPoolAndPositionInfo(517545) on https://ethereum-rpc.publicnode.com",
+     "supports": "owner 0x3d4e4f78 in pool 0x992c0ab6 on hook 0x52bf1a80"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-7702.md",
+     "supports": "delegation indicator format and clearing (lines 118-121)"
+    },
+    {
+     "url": "src/libraries/Hooks.sol:233-242",
+     "supports": "afterRemoveLiquidity return delta subtracted from the caller"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Task 3: who can place code at 0xf8c3f4243c4d8c02831a718a7978fd869f094300 on the networks where it is empty, and does that account gain control of the removal callbacks.",
+   "agrees": true,
+   "note": "I confirmed the address is empty with nonce 0 on Polygon, BNB Smart Chain and Avalanche and has code on Ethereum. The hook sets only bits 9 and 8 and no return delta bit, so even arbitrary code at the address could only block or allow removal and could take nothing (src/libraries/Hooks.sol:203-204, 233-242 with parseReturn false at 163). A replay of the stateless runtime keeps the freeze. Nobody gains a path to funds."
+  },
+  {
+   "check": "Task 3, last part: on which of the 21 networks an address without code does not answer a call from the PoolManager with success and empty data.",
+   "agrees": true,
+   "note": "My own eth_call from the Polygon and Avalanche PoolManagers to the empty hook returned success and 0x. The hook call carries value 0 (src/libraries/Hooks.sol:134), so the Arc value-call difference does not apply. I did not rerun the other 19 networks."
+  },
+  {
+   "check": "Whether the permissionless deterministic factories that a hook deployed on one network could be replayed through exist on all 21 networks.",
+   "agrees": true,
+   "note": "CreateX 0xba5ed099...a5ed has code on OP Mainnet and Base, and 0x4cd3be8768aea2a0297c22c17a7a3cae65adc0cc is empty on OP Mainnet and has code on Base, as stated. Its flag bits 0x00cc are swap callbacks and swap return deltas only, so someone who fills it could tax swappers up to their slippage limit but cannot touch LP removal (no bit 9 or 8). The clearance of LP principal holds; the open lead on CREATE3 salts remains low priority."
+  }
+ ],
+ "leads": []
+}

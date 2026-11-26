@@ -1,0 +1,22 @@
+{
+  "unit": "theme-rust-native-ruint",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "L-967, Base v1.5.6 B20 precompiles, factory, policy registry and precompile storage under ruint 1.19.0: packing.rs shifts and pausable_feature.rs:31 checked_shl.",
+      "agrees": true,
+      "note": "I fetched https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/precompile-storage/src/packing.rs and crates/common/precompiles/src/common/pausable_feature.rs. packing.rs returns an error when offset + bytes > 32 at lines 102, 130 and 151 before the shifts at 114, 142, 144 and 161, and create_element_mask at line 87 shifts only when byte_count < 32, so every shift amount is at most 248. pausable_feature.rs:31 is U256::ONE.checked_shl(usize::from(feature as u8)). I read ruint 1.19.0 src/bits.rs:343-409 in the work directory: overflowing_shl sets the flag only from the carry of the last moved limb and returns ZERO with the flag when limbs >= LIMBS. For U256::ONE and any amount below 256 the true result fits, and for 256 or more the limbs >= LIMBS branch reports overflow correctly, so the flag fault cannot change the mask. The PoolManager reads token balances only through balanceOfSelf in sync and _settle (src/PoolManager.sol:279-289 and 349-364, src/types/Currency.sol:90)."
+    },
+    {
+      "check": "L-968, Tempo a9d6748 order book shifts and tick_to_price, and the DEX pull path.",
+      "agrees": true,
+      "note": "I fetched https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/stablecoin_dex/orderbook.rs. tick_to_price is (PRICE_SCALE as i32 + i32::from(tick)) as u32 with PRICE_SCALE 100000 (orderbook.rs:19, 693-695), at least 67232 for any i16, and base_to_quote and quote_to_base convert it with U256::from (orderbook.rs:119-160). The bitmap shifts use (tick & 0xFF) as usize (orderbook.rs:508-509, 588-596). On https://rpc.mainnet.tempo.xyz, web3_clientVersion returned tempo/v1.19.1-a9d6748, and eth_call of tickToPrice(-32760) on 0xdec0000000000000000000000000000000000000 at latest (block 0x307f498) returned 0x106a8 = 67240; tickToPrice(-32768) and tickToPrice(32767) reverted with InvalidTick (0xce8ef7fc). In stablecoin_dex/mod.rs (same tag) decrement_balance_or_transfer_from pulls only from its sender argument (mod.rs:325-351, transfer_from at 299-312), the four callers pass sender (428, 494, 697, 869), and dispatch.rs:25-66 supplies msg_sender for place, placeFlip, swapExactAmountIn and swapExactAmountOut."
+    },
+    {
+      "check": "L-969, Tempo channel reserve and every caller of system_transfer_from; reserve rejects ERC-20 selectors from the PoolManager address.",
+      "agrees": true,
+      "note": "I repeated the eth_call from the PoolManager 0x33620f62c5b9b2086dd6b62f4a297a9f30347029 to 0x4D50500000000000000000000000000000000000 with balanceOf(PoolManager) on https://rpc.mainnet.tempo.xyz at latest; it reverted with 0xaa4bc69a followed by the selector 70a08231, the same unknown selector error recorded in rpc/tempo-reserve-selectors.txt. A pool using that address as a currency therefore cannot even sync, since balanceOfSelf reverts (src/types/Currency.sol:90). The DEX pull path checked above takes only from msg_sender. I did not refetch tip20_channel_reserve/mod.rs line by line; the agreement on the reserve rests on the selector query and on the PoolManager calling only currency contracts and hooks (src/types/Currency.sol:40-90)."
+    }
+  ],
+  "leads": []
+}

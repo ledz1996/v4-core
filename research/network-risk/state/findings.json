@@ -6323,6 +6323,84 @@
    ]
   },
   {
+   "title": "Celo pays the maximum gas refund to a CIP-64 transaction whose main call refills a fee-currency slot that the debit cleared",
+   "chainIds": [
+    42220
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "difference": "On Ethereum the refund counter cannot be negative when a transaction ends. On Celo, the CIP-64 debit can clear a slot before the main call runs. The main call prices its SSTOREs against values from before the debit, so refilling that slot takes back a clearing refund that was never counted. The counter ends negative. celo-reth v1.0.10 passes it unchanged to set_final_refund, which casts it to u64 and caps it at one fifth of gas used. The celo-kona main branch clamps the counter to zero only from Karst on.",
+   "mechanism": "A sender pays fees in a fee currency, and the debit takes its balance of that currency to exactly zero. The sender's main call then credits the sender's balance slot in the same currency again, for example through a transfer to itself from another holder or a take of that currency from the PoolManager. That SSTORE carries the -4,800 take-back, and the transaction ends with a negative counter. The handler's refund step on v1.0.10 does nothing to the counter (handler.rs:1213-1215 at the tag), and revm then grants a refund of gas_used / 5. The refund is applied after execution is complete. It changes no opcode result and no return data. Gas readings inside the main call do differ from Ethereum, because SSTOREs on slots the debit wrote are priced as already written (verifier's correction); the PoolManager forwards all gas and never branches on a GAS value (src/types/Currency.sol:48 and 73, src/libraries/Hooks.sol:134). So no line of src/ computes or decides anything differently, and the PoolManager's balances and deltas are the same as they would be on Ethereum.",
+   "impact": "Only the fee: the sender pays up to 20 percent less gas, and the base fee and tip recipients receive that much less. No PoolManager funds, LP positions or ERC-6909 claims are affected.",
+   "preconditions": "The sender pays in a registered fee currency, the debit empties the sender's balance slot, and the main call refills it. The fork is before Karst, which is the case on Celo today.",
+   "mitigations": "None needed for the PoolManager. Celo's clamp at Karst removes it.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114",
+    "src/PoolManager.sol:291-297"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/crates/celo-revm/src/handler.rs",
+     "supports": "v1.0.10 refund() only forwards to the OP handler, with no clamp (lines 1213-1215)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/celo-kona/main/crates/celo-revm/src/handler.rs",
+     "supports": "main clamps a negative counter to zero from Karst; its comment and tests describe the wrap to the cap before Karst"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/celo-org/revm/bd28f9420c250df2a5c4a6d8103b51ae06b5c222/crates/interpreter/src/gas.rs",
+     "supports": "set_final_refund casts refunded() to u64 and takes min with gas_used / 5 (lines 199-205)"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 22,
+    "factCheck": "Fetched the three cited files. In the revm fork at bd28f942, gas.rs lines 198-205 define set_final_refund as set_refunded((self.refunded() as u64).min(gas_used / max_refund_quotient) as i64), so a negative i64 counter casts to a large u64 and becomes the cap of gas_used / 5. The Cargo.lock at tag celo/reth-v1.0.10 pins revm-interpreter 35.0.1 to celo-org/revm rev bd28f9420c250df2a5c4a6d8103b51ae06b5c222 (Cargo.lock line 11387), so this is the code the release runs. At the tag, handler.rs lines 1213-1215 define refund() as a plain forward to self.op.refund with no clamp. On celo-kona main, handler.rs lines 1283-1312 add the clamp: when refunded() is below zero and KARST is enabled, set_refund(0). The comment there states that refilling a slot the debit cleared takes back an uncounted clearing refund, that set_final_refund would read the negative counter as a huge u64 and cap it to the maximum, and that blocks before Karst keep the wrapped refund. An eth_call with code 60011e on https://forno.celo.org returned 'EVM error: NotActivated' today, consistent with Osaka and therefore Karst rules not being active.",
+    "codeCheck": "The refund is computed after the frame returns, so it cannot change any value returned to code in src/. src/ contains no gasleft() branch outside src/test. The only gas() uses are forwarding calls at src/types/Currency.sol:48, src/types/Currency.sol:73 and src/libraries/Hooks.sol:134, which forward all remaining gas and do not branch on its amount. unlock at src/PoolManager.sol:104-114 still ends with the NonzeroDeltaCount check, and take at src/PoolManager.sol:291-297 debits the delta before the transfer, so a self-refill through take changes nothing the PoolManager records. No line of src/ decides differently.",
+    "corrections": "The mechanism says the CIP-64 path changes no GAS reading inside the call. That holds for the refund wrap. The celo-kona main comment at handler.rs lines 1295-1297 also says that main-call SSTOREs on slots the debit wrote stay dirty-priced, so the main call can be over- or undercharged by up to about 2,800 gas per such slot, which does shift GAS readings inside execution. src/ does not branch on remaining gas, so the conclusion stands. The actor value unprivileged is correct and severity info is correct.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/celo-org/revm/bd28f9420c250df2a5c4a6d8103b51ae06b5c222/crates/interpreter/src/gas.rs",
+      "supports": "set_final_refund casts refunded() to u64 and caps it at gas_used / 5 (lines 198-205)"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/crates/celo-revm/src/handler.rs",
+      "supports": "refund() forwards to the OP handler with no clamp (lines 1213-1215)"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/celo-org/celo-kona/main/crates/celo-revm/src/handler.rs",
+      "supports": "clamp to zero only from Karst; comment on the wrap and on dirty pricing of debit-written slots (lines 1283-1312)"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/Cargo.lock",
+      "supports": "revm-interpreter pinned to celo-org/revm rev bd28f942 (line 11387)"
+     },
+     {
+      "url": "https://forno.celo.org",
+      "supports": "eth_call with code 60011e returns EVM error: NotActivated on 2026-11-26"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 22,
+   "id": "F-144",
+   "firstCycle": 22,
+   "history": [
+    {
+     "cycle": 22,
+     "unit": "op-stack-custom-gas",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
    "title": "Operator transaction filtering on Robinhood Chain can fail any exit from the PoolManager, including force-included ones",
    "chainIds": [
     4663
@@ -6782,11 +6860,11 @@
     "A8"
    ],
    "effect": "freeze",
-   "difference": "HyperCore places unsigned system transactions at the top of HyperEVM blocks and states their sender itself. Under AQAv2 it sends token transfers in the name of the linked contract and of a treasury address. The receipts of these transactions are not covered by the header receipts root. On Ethereum a balance leaves an address only through a transaction that address signed or a call made by its own code.",
-   "mechanism": "If HyperCore recorded the PoolManager as the treasury address of an aligned quote asset, the node would send transfer calls on that token with the PoolManager as msg.sender. The token balance would fall while pool state, ERC-6909 balances and protocol fee counters keep counting it as owed, because the PoolManager reads a balance only between sync and settle inside one transaction (src/PoolManager.sol:279-288, src/PoolManager.sol:349-365). The last takes in that token would then revert inside the transfer (src/types/Currency.sol:40-88). New in this cycle: the authorizeAqav2Role action has only a token index and a role, and the documentation says the authorization transactions come from the deployers' staking accounts, so the action that binds a role names no address and the rule by which the treasury address is chosen is still unpublished. nanoreth pull request 169 states that system transaction receipts are outside the header receipts root, so before release nb-20261125-2 no public client compared them. The PoolManager nonce is still 1 on the official and archive endpoints, so no system transaction has used it as sender. An ordinary account cannot create the record: it needs two staked deployers of 500,000 HYPE each and a validator vote.",
+   "difference": "HyperCore places unsigned system transactions at the top of HyperEVM blocks and states their sender itself, encoded in the signature s value. Under AQAv2 it sends token transfers in the name of the linked contract and of a treasury address. On Ethereum a balance leaves an address only through a transaction that address signed or a call made by its own code.",
+   "mechanism": "nanoreth nb-20261125-2 takes the sender of any gas price 0 transaction from its s value with no signature check and executes it through the normal transact path. If HyperCore recorded the PoolManager as the treasury address of an aligned quote asset, such a transaction would call transfer on that token with the PoolManager as msg.sender, and the token balance would fall while pool state, ERC-6909 balances and protocol fee counters still count it as owed, because the PoolManager compares balances only between sync and settle inside one transaction. The last takes in that token would then revert inside the transfer. The aligned quote assets page is unchanged today and still gives no rule that the treasury address must sign or must be an account without code. The PoolManager nonce is still 1 on the official and archive endpoints, so no system transaction has used it as sender.",
    "impact": "All pools and ERC-6909 claims in a token for which HyperCore named the PoolManager as the rebalancing address. Nothing is exposed today.",
-   "preconditions": "The validator set, or whatever privileged record names an AQAv2 treasury, must name the PoolManager. An ordinary account cannot.",
-   "mitigations": "Watch the PoolManager nonce, which rises with any system transaction sent in its name, and run nanoreth nb-20261125-2 or later, which checks system transaction receipts against the block source. Ask the Hyperliquid team whether the node refuses an address with code as AQAv2 treasury.",
+   "preconditions": "Two staked deployers of 500,000 HYPE each and a validator vote must name the PoolManager as treasury address. An ordinary account cannot.",
+   "mitigations": "Watch the PoolManager nonce, which rises with any system transaction sent in its name. Ask the Hyperliquid team whether the node refuses an address with code as AQAv2 treasury.",
    "coreRefs": [
     "src/PoolManager.sol:279-288",
     "src/PoolManager.sol:349-365",
@@ -6794,60 +6872,52 @@
    ],
    "sources": [
     {
-     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md",
-     "supports": "authorizeAqav2Role carries token and role only"
-    },
-    {
      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md",
-     "supports": "Treasury deployer designates the treasury address; activation by validator vote after authorization transactions from the staking accounts; 9:1 rebalance between treasury and linked contract"
+     "supports": "Treasury deployer designates the treasury address; activation by validator vote; 9:1 rebalance. Fetched 2026-11-25, byte equal to the cycle 20 copy."
     },
     {
-     "url": "https://github.com/hl-archive-node/nanoreth/pull/169",
-     "supports": "System transaction receipts are not covered by the header receipts root"
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/primitives/transaction.rs",
+     "supports": "System transaction sender decoded from s without signature (lines 38-95)."
     },
     {
      "url": "https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest = 0x1, 2026-11-25",
-     "supports": "No system transaction has been sent in the PoolManager name"
+     "supports": "No system transaction has been sent in the PoolManager name (same on rpc.purroofgroup.com)."
     }
    ],
    "evidence": "inferred",
    "actor": "operator",
    "severity": "high",
-   "proposedSeverity": "medium",
+   "proposedSeverity": "high",
    "status": "plausible",
    "verification": {
-    "cycle": 20,
-    "factCheck": "The cited sources say what the finding says. The aligned quote assets page (fetched 2026-11-25) states that the treasury deployer designates a treasury address, that activation is by validator vote after both deployers have staked and sent the authorization transactions from the staking accounts, and that the linked HyperEVM contract rebalances with the treasury address at 9:1. The exchange endpoint page (fetched with curl) shows authorizeAqav2Role with only token and role fields, so no published action names the treasury address or proves control of it. nanoreth pull request 169 (fetched, merged 2026-11-25T02:59:23Z) states that system transaction receipts are not covered by the header receipts root and that blocks without a commitment run unchecked. My own queries on 2026-11-25: eth_getTransactionCount of the PoolManager is 0x1 on rpc.hyperliquid.xyz/evm and on rpc.purroofgroup.com (reth/v0.1.0-f0cad31) at block about 52,236,610. A scan of 300 recent blocks on the archive client found unsigned system transactions (gas price 0) from 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24, which has 2,175 bytes of code and is the evmContract of USDC (token 0) in HyperCore spotMeta, and from the treasury address 0xc20699185c15D0a2fD65779BB5d69f5b0B113c00, both calling the USDC token 0xb88339cb7199b77e23db6e890353e22632ba630f. Their tx nonces are sequential and the senders' account nonces rise with them (0x6b9e...: tx nonce 2,392,497, account nonce 2,392,500), so the nonce watch in the mitigations works. spotMeta lists 521 tokens and none names the PoolManager. The unconfirmed link is the premise of the finding: no source says whether HyperCore accepts a treasury address that the treasury deployer does not control, or one with code. The official node hides system transactions, so the scan used the archive client only.",
-    "codeCheck": "sync reads balanceOf only when called and stores it in transient storage (src/PoolManager.sol:279-288). _settle credits the rise since that sync within the same transaction and checks msg.value (src/PoolManager.sol:349-365). Nothing in src/ reconciles pool state, ERC-6909 balances or protocol fee counters against the token balance across transactions, so a balance removed by an outside transfer from the PoolManager is not noticed. take debits the caller and calls currency.transfer (src/PoolManager.sol:290-297), and Currency.transfer reverts with ERC20TransferFailed when the token call fails (src/types/Currency.sol:40-88), so the last takers in that token would be unable to withdraw. unlock still requires a zero delta count (src/PoolManager.sol:104-114), which does not help here because the shortfall is in the token balance, not in deltas. The code path holds as described.",
-    "corrections": "severity: high. SCHEMA.md rates a loss or freeze that needs a privileged chain-level actor (validator set) as high; the effect here is a freeze or loss of all pools and claims in the named token, so medium understates it by the scale, although nothing is exposed today. actor: operator is correct, since activation needs a validator vote in addition to a staked treasury deployer. The Telegram announcement of the 200,000 gas cap (t.me/hyperliquid_api/401) returned only the channel header when fetched, so its text was not confirmed here; it is not needed for this finding.",
+    "cycle": 22,
+    "factCheck": "nanoreth nb-20261125-2 transaction.rs fetched today: is_system_transaction is gas price equal to 0 (line 182-184), and recover_signer, recover_signer_unchecked and recover_unchecked_with_buf return s_to_address(s) for such a transaction with no signature check (lines 77-97); s = 1 maps to 0x2222...2222 and any other s to its low 20 bytes (lines 52-60). executor.rs lines 241-320 run it through self.evm.transact and commit it alone, and leave its gas out of block gas. The aligned quote assets page fetched today has sha256 9fd997fe...f708, equal to the cycle 20 and cycle 22 copies. It says the treasury deployer designates the treasury address, that AQAv2 activates by validator vote after both deployers stake 500k HYPE, and that the linked HyperEVM contract rebalances with the treasury address at 9:1. It does not say by what transaction the rebalance moves tokens, nor that HyperCore sends a transfer with the treasury address as msg.sender, nor whether an address with code may be named. eth_getTransactionCount for the PoolManager returns 0x1 on rpc.hyperliquid.xyz/evm (hyperliquid evm Mainnet) and on rpc.purroofgroup.com (reth/v0.1.0-f0cad31) at block 0x31d8069, while 0x2222...2222 returns 0x10a363, so no system transaction has used the PoolManager as sender. The latest block has base fee 100,000,000 wei and every listed user transaction carries a nonzero gas price, so the public path cannot produce a gas price 0 transaction; the block producer is the closed hl-node, which this check could not read.",
+    "codeCheck": "sync reads balanceOfSelf and settle subtracts it from the synced reserves inside one transaction (src/PoolManager.sol:279-288, src/PoolManager.sol:349-365), so an external debit between transactions is not seen by any accounting. take calls currency.transfer (src/PoolManager.sol:291-297), which reverts with ERC20TransferFailed when the token refuses for lack of balance (src/types/Currency.sol:51-88). The last holders of claims or positions in that token would be unable to withdraw. An external credit to the PoolManager would instead be collectable through sync and settle by any caller, which is a donation and costs users nothing. No guard in src/ prevents the debit, since the PoolManager does not participate in it.",
+    "corrections": "The difference field states that HyperCore sends token transfers in the name of the treasury address under AQAv2. The fetched page says only that the linked contract rebalances with the treasury address; the transaction form and sender of that rebalance are not published, so this link is unconfirmed and is the reason for plausible rather than confirmed. The actor value operator is right: the record needs a staked treasury deployer and a validator vote.",
     "sources": [
      {
+      "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/primitives/transaction.rs",
+      "supports": "Gas price 0 marks a system transaction and its sender is decoded from s without a signature check (lines 52-97, 182-184)."
+     },
+     {
+      "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/evm/executor.rs",
+      "supports": "System transactions run through evm.transact and are committed one by one (lines 241-320)."
+     },
+     {
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md",
-      "supports": "Treasury deployer designates the treasury address; activation by validator vote; linked contract rebalances with the treasury address at 9:1"
+      "supports": "Treasury address designated by the treasury deployer, activation by validator vote, 9:1 rebalance with the linked contract; no rule on the treasury address and no sender stated for the rebalance."
      },
      {
-      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md",
-      "supports": "authorizeAqav2Role carries token and role only"
+      "url": "https://rpc.hyperliquid.xyz/evm",
+      "supports": "eth_getTransactionCount PoolManager latest = 0x1, 0x2222...2222 = 0x10a363, block 0x31d8069, base fee 100000000, queried 2026-11-26."
      },
      {
-      "url": "https://github.com/hl-archive-node/nanoreth/pull/169",
-      "supports": "System transaction receipts are not covered by the header receipts root; blocks without a commitment run unchecked"
-     },
-     {
-      "url": "https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest = 0x1, 2026-11-25",
-      "supports": "No system transaction has used the PoolManager as sender"
-     },
-     {
-      "url": "https://rpc.purroofgroup.com eth_getBlockByNumber over 300 blocks before about 52,236,684 and eth_getTransactionCount/eth_getCode of the senders, 2026-11-25",
-      "supports": "System transactions are sent in the name of a contract (USDC linked contract 0x6b9e...0a24) and of the treasury address 0xc206...3c00, and raise the sender's account nonce"
-     },
-     {
-      "url": "https://api.hyperliquid.xyz/info spotMeta, 2026-11-25",
-      "supports": "USDC evmContract is 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24; no token names the PoolManager"
+      "url": "https://rpc.purroofgroup.com",
+      "supports": "eth_getTransactionCount PoolManager latest = 0x1 on reth/v0.1.0-f0cad31, queried 2026-11-26."
      }
     ]
    },
-   "lastVerifiedCycle": 20,
+   "lastVerifiedCycle": 22,
    "id": "F-020",
    "firstCycle": 1,
    "history": [
@@ -6883,6 +6953,12 @@
     },
     {
      "cycle": 20,
+     "unit": "hyperevm",
+     "status": "plausible",
+     "severity": "high"
+    },
+    {
+     "cycle": 22,
      "unit": "hyperevm",
      "status": "plausible",
      "severity": "high"
@@ -8827,7 +8903,7 @@
    ],
    "effect": "both",
    "difference": "None. The code path is the same on every network. Networks where the code behind an address can change after pool creation (A7) add ways for a hook that was harmless at creation to start doing this.",
-   "mechanism": "modifyLiquidity calls the hook library's beforeModifyLiquidity before it touches the pool (src/PoolManager.sol:156). For liquidityDelta <= 0 the library calls beforeRemoveLiquidity when address bit 9 is set (src/libraries/Hooks.sol:203-204). callHook reverts the whole call when the hook reverts (Hooks.sol:134-137) and when the return data is shorter than 32 bytes or carries the wrong selector (Hooks.sol:152-154). A hook address with no code returns empty data, so it also reverts. After the pool update, afterModifyLiquidity calls afterRemoveLiquidity when bit 8 is set, and when bit 0 is also set it reads a BalanceDelta from the return data, subtracts it from the caller's delta without any bound and credits it to the hook (Hooks.sol:232-243, src/PoolManager.sol:177-183). The hook call is skipped only when msg.sender is the hook itself (Hooks.sol:171-175, 217). No other function removes liquidity. The swap path has the same shape: beforeSwap and afterSwap deltas move value between swapper and hook (Hooks.sol:248-315), and the hook of a dynamic fee pool can set the LP fee to 100 percent (src/PoolManager.sol:339-346, src/libraries/LPFeeLibrary.sol:25, 37-45). Cycle 21 addition: Ethereum has a live case. Pool 0x462175dbedc82a59909309d8d93c8ff5283fc3ce41e9dcbea28aea89709ab870 (ETH and tCURV 0x0b5702a3000a3ae3e80c3dfd6be547c4325f7eb9, fee 100, tick spacing 1) names the hook 0xe16af6e33266e572bbcadb288bf3893942cd8220, which has no code, nonce 0 and balance 0 at block 26,495,270 and sets bits 9 (before remove liquidity) and 5 (before donate). The pool was initialized at block 25,072,940 in the transaction that also minted PositionManager token 265,123 over the full range with liquidity 150,557,992,383,766,460,021. A read-only eth_call of modifyLiquidities with a full decrease from the token owner reverts with 0x1e048e1d (InvalidHookResponse) on two endpoints, because the call to the empty address returns no data and Hooks.sol:153 needs 32 bytes. The test at Hooks.sol:202 is liquidityDelta <= 0, so the owner cannot collect fees through a zero change either, and donate to this pool reverts the same way. A control position (token 292,697) in a pool whose empty hook sets only the after swap flag passes the decrease. The position holds about 0.0054 ETH and 4,199,619 tCURV. Its owner created the pool and chose the hook, so no other account is affected today. The case was missed before because the cycle 17 hook census read transaction hashes as pool ids. This behaves the same on every network where an empty address answers a call with success.",
+   "mechanism": "modifyLiquidity calls the hook library's beforeModifyLiquidity before it touches the pool (src/PoolManager.sol:156). For liquidityDelta <= 0 the library calls beforeRemoveLiquidity when address bit 9 is set (src/libraries/Hooks.sol:203-204). callHook reverts the whole call when the hook reverts (Hooks.sol:134-137) and when the return data is shorter than 32 bytes or carries the wrong selector (Hooks.sol:152-154). A hook address with no code returns empty data, so it also reverts. After the pool update, afterModifyLiquidity calls afterRemoveLiquidity when bit 8 is set, and when bit 0 is also set it reads a BalanceDelta from the return data, subtracts it from the caller's delta without any bound and credits it to the hook (Hooks.sol:232-243, src/PoolManager.sol:177-183). The hook call is skipped only when msg.sender is the hook itself (Hooks.sol:171-175, 217). No other function removes liquidity. The swap path has the same shape: beforeSwap and afterSwap deltas move value between swapper and hook (Hooks.sol:248-315), and the hook of a dynamic fee pool can set the LP fee to 100 percent (src/PoolManager.sol:339-346, src/libraries/LPFeeLibrary.sol:25, 37-45). Cycle 21 addition: Ethereum has a live case. Pool 0x462175dbedc82a59909309d8d93c8ff5283fc3ce41e9dcbea28aea89709ab870 (ETH and tCURV 0x0b5702a3000a3ae3e80c3dfd6be547c4325f7eb9, fee 100, tick spacing 1) names the hook 0xe16af6e33266e572bbcadb288bf3893942cd8220, which has no code, nonce 0 and balance 0 at block 26,495,270 and sets bits 9 (before remove liquidity) and 5 (before donate). The pool was initialized at block 25,072,940 in the transaction that also minted PositionManager token 265,123 over the full range with liquidity 150,557,992,383,766,460,021. A read-only eth_call of modifyLiquidities with a full decrease from the token owner reverts with 0x1e048e1d (InvalidHookResponse) on two endpoints, because the call to the empty address returns no data and Hooks.sol:153 needs 32 bytes. The test at Hooks.sol:202 is liquidityDelta <= 0, so the owner cannot collect fees through a zero change either, and donate to this pool reverts the same way. A control position (token 292,697) in a pool whose empty hook sets only the after swap flag passes the decrease. The position holds about 0.0054 ETH and 4,199,619 tCURV. Its owner created the pool and chose the hook, so no other account is affected today. The case was missed before because the cycle 17 hook census read transaction hashes as pool ids. This behaves the same on every network where an empty address answers a call with success. Cycle 22 addition: a census of every Initialize row on all 21 networks, with pool ids recomputed from the pool keys, found hook addresses without code on 12 networks. The call to an address without code returned success with no data in all 199 test calls on the 21 networks, so the freeze has the same shape everywhere. One address stands out. 0xf8c3f4243c4d8c02831a718a7978fd869f094300 (bits 9 and 8) was deployed through the CREATE2 deployer 0x4e59b44847b379578588920ca78fbf26c0b4956c and has 2,488 bytes of code on Ethereum, OP Mainnet, Base, Unichain and Arbitrum One. It has no code on Polygon, BNB Smart Chain, World Chain and Avalanche, where pool creators named it anyway. On Polygon, pools 0x4accc6ab…4116 and 0xc5a3738f…a184 hold positions of accounts other than the creator (PositionManager tokens 58461 and 69169, about 0.019 POL and 0.0015 USDC together). On Avalanche, pools 0x07ec041c…4f30 and 0x3752b3c6…4d8f hold six such positions (about 0.045 AVAX and 0.32 USDt together). A full removal through the PositionManager reverts with 0x1e048e1d (InvalidHookResponse) for each of them. The same call passes when a stub that returns its selector is placed at the hook address by state override, so the missing code is the only obstacle. The verifier repeated the code, storage and call readings and confirmed them. It corrected three points. The donate flags (bits 5 and 4) freeze no position, so the two Robinhood Chain pools on 0x…dead0030 hold no frozen principal. The Ethereum pool 0x992c0ab6 is on a delegated hook that has code and belongs to F-013. The difference between networks is one of deployed state, with no difference in how a call to an empty address behaves. The owners in the Polygon and Avalanche pools also create pools on the same hook, so they may be one operator; that link was not established.",
    "impact": "Principal and uncollected fees of every position in the affected pool. A reverting hook freezes them. A hook with the return delta bit can take part or all of what a removal would pay out, up to what the LP's router accepts. Funds in other pools are not reachable this way, because the caller delta plus the hook delta always equals the pool delta (Hooks.sol:230, 242, 312) and each party must net to zero before unlock returns (src/PoolManager.sol:112).",
    "preconditions": "The pool's hook address has bit 9 (0x200) or bit 8 (0x100) set, and for taking funds also bit 0. The hook code reverts, returns a bad selector, returns a hostile delta, or is replaced or removed after LPs deposit. LPs must have chosen that pool. This is how the hook design works; I list it because it is a path to a freeze or loss that the text of core does not limit.",
    "mitigations": "LPs and position managers can read the low 14 bits of the hook address before depositing and treat bits 9, 8 and 0 as custody risk unless the hook code is immutable and reviewed. Routers should enforce minimum amounts on removal so a hostile return delta reverts. The deployer cannot change this without adding a removal path that skips hooks.",
@@ -8863,6 +8939,18 @@
     {
      "url": "research/network-risk/cycles/021/ethereum-reference.research.json",
      "supports": "cycle 21 report and verdict for the live mainnet case"
+    },
+    {
+     "url": "rpc: census per network, files research/network-risk/cycles/022/theme-empty-hook-pools.work/raw/census_<chainId>.json and research/network-risk/cycles/022/theme-empty-hook-pools.work/raw/detail_<chainId>.json",
+     "supports": "empty and delegated hooks, pools on them, live positions, owners and creators on all 21 networks (cycle 22)"
+    },
+    {
+     "url": "rpc: eth_call PositionManager.modifyLiquidities on https://polygon.gateway.tenderly.co and https://avalanche.gateway.tenderly.co, files research/network-risk/cycles/022/theme-empty-hook-pools.work/raw/sim_137.json and research/network-risk/cycles/022/theme-empty-hook-pools.work/raw/sim_43114.json",
+     "supports": "removal reverts with 0x1e048e1d as is and passes with a selector stub at the hook address (cycle 22)"
+    },
+    {
+     "url": "rpc: eth_getCode of 0xf8c3f4243c4d8c02831a718a7978fd869f094300 on all 21 networks, file research/network-risk/cycles/022/theme-empty-hook-pools.work/raw/xchain.json",
+     "supports": "code on 1, 10, 8453, 130, 42161 and none on 137, 56, 480, 43114 (cycle 22)"
     }
    ],
    "evidence": "primary",
@@ -8906,7 +8994,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 21,
+   "lastVerifiedCycle": 22,
    "id": "F-004",
    "firstCycle": 1,
    "history": [
@@ -8922,6 +9010,13 @@
      "status": "confirmed",
      "severity": "medium",
      "note": "Live mainnet example added: a pool whose hook address has no code and sets the before remove liquidity flag."
+    },
+    {
+     "cycle": 22,
+     "unit": "theme-empty-hook-pools",
+     "status": "confirmed",
+     "severity": "medium",
+     "note": "Census on all 21 networks; live third-party positions frozen behind an empty hook on Polygon and Avalanche (dust amounts). Folded in by hand."
     }
    ]
   },
@@ -9149,7 +9244,11 @@
   {
    "title": "EIP-7702 lets the code behind a hook address be replaced or removed after a pool is created",
    "chainIds": [
-    1
+    1,
+    8453,
+    42161,
+    4663,
+    56
    ],
    "lens": "L1",
    "assumptions": [
@@ -9157,9 +9256,9 @@
    ],
    "effect": "both",
    "difference": "Since Pectra (EIP-7702) an EOA can point its code at any contract through a delegation indicator, repoint it in a later transaction, or clear it. Since Dencun (EIP-6780) an ordinary contract cannot delete its code after the creation transaction. On mainnet today a delegated EOA is therefore the one kind of account whose code can change or vanish at a fixed address without a proxy pattern in its bytecode.",
-   "mechanism": "initialize accepts a hook address on its low 14 bits alone and never looks at code (src/PoolManager.sol:126, src/libraries/Hooks.sol:109-127). An EOA whose address ends in chosen flag bits is cheap to find because only 14 bits must match. While the EOA delegates to honest hook code the pool behaves normally. If the account holder clears the delegation, a call to the hook succeeds with empty return data, and callHook reverts with InvalidHookResponse because the result is shorter than 32 bytes (src/libraries/Hooks.sol:131-155). With the before or after remove liquidity flag set, every liquidity removal by anyone other than the hook address then reverts (src/PoolManager.sol:156, 178; src/libraries/Hooks.sol:195-206, 232-243), so LPs cannot withdraw until the holder delegates again. If the holder repoints the delegation to hostile code and the address carries a returns-delta flag, the new code can assign itself part of each withdrawal or swap, because the hook delta is credited to the hook and subtracted from the caller (src/libraries/Hooks.sol:233-243, 298-313; src/PoolManager.sol:181-183, 224-226). The hook address is skipped when it is itself the caller (src/libraries/Hooks.sol:171-175, 217, 253, 293), and a delegated EOA can originate transactions. The holder can therefore delegate to code that answers the unlock callback for its own calls and returns invalid data to hook calls made for everyone else.",
+   "mechanism": "initialize accepts a hook address on its low 14 bits alone and never looks at code (src/PoolManager.sol:126, src/libraries/Hooks.sol:109-127). An EOA whose address ends in chosen flag bits is cheap to find because only 14 bits must match. While the EOA delegates to honest hook code the pool behaves normally. If the account holder clears the delegation, a call to the hook succeeds with empty return data, and callHook reverts with InvalidHookResponse because the result is shorter than 32 bytes (src/libraries/Hooks.sol:131-155). With the before or after remove liquidity flag set, every liquidity removal by anyone other than the hook address then reverts (src/PoolManager.sol:156, 178; src/libraries/Hooks.sol:195-206, 232-243), so LPs cannot withdraw until the holder delegates again. If the holder repoints the delegation to hostile code and the address carries a returns-delta flag, the new code can assign itself part of each withdrawal or swap, because the hook delta is credited to the hook and subtracted from the caller (src/libraries/Hooks.sol:233-243, 298-313; src/PoolManager.sol:181-183, 224-226). The hook address is skipped when it is itself the caller (src/libraries/Hooks.sol:171-175, 217, 253, 293), and a delegated EOA can originate transactions. The holder can therefore delegate to code that answers the unlock callback for its own calls and returns invalid data to hook calls made for everyone else. Cycle 22 addition: the census found seven hook addresses that are delegated accounts, live on Ethereum, Base, Arbitrum One, Robinhood Chain and BNB Smart Chain. The same hook address points at different targets on different networks and the accounts have nonces up to 11, so their holders have set and changed the delegation per network. Fifteen pools with liquidity sit on these hooks, all created by one account (0xec08eff7). Two of them, both on Ethereum, hold a position of another account. Pool 0x992c0ab6…cf9c (hook 0x52bf1a80…258b, bits 0x258b, which include after remove liquidity and its return delta) holds PositionManager token 517545 of 0x3d4e4f78 with about 0.0035 ETH. Pool 0x08834f72 (hook 0xa8531805, bits 0x2488) holds token 514342 of the same account with about 0.0055 ETH and 0.038 USDC; its hook sets no removal flag, so that position is exposed only through the add and swap callbacks. The verifier confirmed the code, nonce, liquidity and owner readings and corrected one statement: the hook's share of a removal is bounded by what the remover's own transaction accepts, because the subtraction is checked and a router with a minimum output reverts first.",
    "impact": "Funds of LPs and swappers in pools that use such a hook. Other pools are not affected because pool math never reads another pool's state. The same outcome is already possible with an upgradeable proxy hook; the change is that inspecting the code at the hook address at one point in time no longer shows it.",
-   "preconditions": "The attacker creates the pool with a delegated EOA as hook and LPs deposit into it. I did not scan mainnet for existing pools whose hook is a delegated account.",
+   "preconditions": "The attacker creates the pool with a delegated EOA as hook and LPs deposit into it. Cycle 22 scanned all 21 networks for such pools; the result is in the mechanism.",
    "mitigations": "Interfaces, routers and LPs can read the code at the hook address and reject hooks whose code is the 23 byte delegation indicator starting with 0xef0100, or that have no code. The deployer could add a code check in initialize, but the same account could delegate afterwards, so the check belongs in periphery and off-chain listing.",
    "coreRefs": [
     "src/PoolManager.sol:126",
@@ -9185,6 +9284,14 @@
     {
      "url": "https://ethereum-rpc.publicnode.com",
      "supports": "eth_config at block 26470380 reports fork id 0x07c9462e with activation time 1767747671, which EIP-7607 lists as BPO2, a fork later than Pectra"
+    },
+    {
+     "url": "rpc: eth_getCode and eth_getTransactionCount of every empty or delegated hook on all 21 networks, file research/network-risk/cycles/022/theme-empty-hook-pools.work/raw/xchain.json",
+     "supports": "delegation indicators, targets and nonces per network (cycle 22)"
+    },
+    {
+     "url": "rpc: ModifyLiquidity logs and PositionManager ownerOf, files research/network-risk/cycles/022/theme-empty-hook-pools.work/raw/detail_<chainId>.json",
+     "supports": "live positions and their owners in pools on delegated hooks (cycle 22)"
     }
    ],
    "evidence": "primary",
@@ -9216,7 +9323,7 @@
      }
     ]
    },
-   "lastVerifiedCycle": 1,
+   "lastVerifiedCycle": 22,
    "id": "F-013",
    "firstCycle": 1,
    "history": [
@@ -9225,6 +9332,13 @@
      "unit": "ethereum-reference",
      "status": "confirmed",
      "severity": "medium"
+    },
+    {
+     "cycle": 22,
+     "unit": "theme-empty-hook-pools",
+     "status": "confirmed",
+     "severity": "medium",
+     "note": "Delegated hooks found live on five networks; one Ethereum pool with a removal flag holds a third-party position (about 0.0035 ETH). Folded in by hand."
     }
    ]
   },
