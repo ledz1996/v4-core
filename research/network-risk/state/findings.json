@@ -6492,6 +6492,84 @@
    ]
   },
   {
+   "title": "X Layer runs PoolManager swaps and liquidity changes at zero gas price through two whitelisted shared carriers",
+   "chainIds": [
+    196
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A9"
+   ],
+   "effect": "degrade",
+   "difference": "X Layer waives the fee of a zero-priced transaction when its gasless whitelist allows the transaction's target and calldata prefix and the gas limit is within the allowance. The whitelist allows EntryPoint v0.7 for any non-empty calldata up to 30,000,000 gas and the contract at 0x7c5bee2a for any non-empty calldata up to 50,000,000 gas. Ethereum has no such rule.",
+   "mechanism": "The executor queries getGaslessAllowance(to, input) before each transaction whose max fee per gas is zero and marks it gasless when the answer is true and the gas limit fits; it then executes the transaction normally with only the base fee check relaxed. An ordinary account can submit handleOps to EntryPoint v0.7 carrying its own user operation with zero fees, or a call to 0x7c5bee2a, and so reach the PoolManager without paying gas. In three thousand recent blocks 101 zero-priced transactions from more than 80 senders emitted PoolManager logs. The PoolManager reads neither GASPRICE nor BASEFEE (no use in src/), so every amount it computes and every settlement check in unlock (src/PoolManager.sol:104-114) is the same as in a paid transaction. The effect is cost only: dust tick filling of F-038 and other spam against pools no longer costs gas.",
+   "impact": "No funds move and nobody is left unable to withdraw. Griefing that F-038 records loses its gas cost on X Layer; the dust payment it needs still applies.",
+   "preconditions": "Whitelist entries as read on 2026-11-26 and a sequencer that admits zero-priced transactions from any sender. The per block gasless budget and any per sender limit of the sequencer were not read, and no transaction was sent to test admission.",
+   "mitigations": "None needed for funds. Pool creators who rely on gas cost as a deterrent against tick filling should not do so on X Layer.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114",
+    "src/libraries/Pool.sol:166-171"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/block/xlayer_gasless_contract.rs",
+     "supports": "is_gasless requires allowed == true and tx.gas_limit <= returned gasLimit; mainnet whitelist at 0x19787404b0c70021b4752028f7e3a92313885B27"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/lib.rs",
+     "supports": "a gasless transaction only sets disable_base_fee for its own execution"
+    },
+    {
+     "url": "https://rpc.xlayer.tech (eth_call getGaslessAllowance, out/gasless.json)",
+     "supports": "EntryPoint v0.7 allowed with 30,000,000 gas and 0x7c5bee2a with 50,000,000 gas for any non-empty prefix; PoolManager and periphery not allowed"
+    },
+    {
+     "url": "https://rpc.xlayer.tech (receipts of blocks 76,927,161-76,930,160, out/gasless_scan.json)",
+     "supports": "101 mined zero-priced transactions emitted PoolManager logs, for example 0x14ba5174ce2bf8b682ac926064813eee4a9087bb449346b1500f91659056339d and 0xda396c963d30a6f9774ed5dad69e64ff0b5204432331d4accc2ed88462b42ad8"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 25,
+    "factCheck": "xlayer_gasless_contract.rs at tag xlayer/v0.1.7 (lines 45-48, 116, 124-130) queries getGaslessAllowance(to, input) on 0x19787404b0c70021b4752028f7e3a92313885B27 and treats the transaction as gasless only when allowed is true and tx.gas_limit is at most the returned limit. lib.rs transact_raw (lines 346-405) sets only cfg.disable_base_fee for that one execution and restores the previous value on every result path. I ran eth_call on rpc.xlayer.tech at block 0x495f5b3 (selector 0xbad12ebe, from 0x...dEaD): EntryPoint v0.7 0x0000000071727De22E5E9d8BAf0edAc6f37da032 returned (true, 0x1c9c380 = 30,000,000) for 0x765e827f and for an arbitrary 0x12345678, and (false, 0) for empty calldata. 0x7c5bee2a returned (true, 0x2faf080 = 50,000,000) for 0x0c307f76 and for 0xdeadbeef. The PoolManager with 0x48c89491 returned (false, 0). Both cited transactions are mined with gasPrice 0, maxFeePerGas 0, effectiveGasPrice 0 and status 1, and both receipts carry logs from the PoolManager 0x360e68fa. Transaction 0xda396c96 came from 0x4549fbf0, an account with no code, through EntryPoint handleOps, so an ordinary externally owned account has reached the PoolManager at zero price through the open handleOps entry point.",
+    "codeCheck": "No file in src/ outside src/test reads GASPRICE or BASEFEE (grep for gasprice, basefee and gasleft finds only test helpers). unlock (src/PoolManager.sol:104-114) still requires NonzeroDeltaCount to be zero before it relocks, and the per tick cap at src/libraries/Pool.sol:166-171 applies unchanged, so every amount and every settlement decision is the same as in a priced transaction. The rule changes only what the sender pays.",
+    "corrections": "The client passes the full transaction input to getGaslessAllowance (encode_get_gasless_allowance copies all of tx.input), so \"prefix\" means the whole calldata. \"Any non-empty calldata\" is shown only for the prefixes tested. Whether 0x7c5bee2a (13,322 bytes, has an owner function; one sender is an EIP-7702 account delegated to 0xe40ccb2d) accepts calls from any account was not read; the EntryPoint v0.7 route alone carries the claim. Sequencer admission policy, the per block gasless budget and per sender limits were not read, as the finding states. The finding supersedes the cycle 11 cleared item that said no gasless path reaches the PoolManager, which tested direct targets only; that item did not concern funds.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/block/xlayer_gasless_contract.rs",
+      "supports": "allowed && tx.gas_limit <= gas_limit; whitelist address; full input passed to the query"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/lib.rs",
+      "supports": "transact_raw relaxes only disable_base_fee and restores it on every path"
+     },
+     {
+      "url": "https://rpc.xlayer.tech (eth_call getGaslessAllowance at block 0x495f5b3, run by the verifier)",
+      "supports": "EntryPoint v0.7 (true, 30,000,000) for any tested non-empty calldata; 0x7c5bee2a (true, 50,000,000); PoolManager false"
+     },
+     {
+      "url": "https://rpc.xlayer.tech (eth_getTransactionByHash and eth_getTransactionReceipt for 0x14ba5174... and 0xda396c96..., run by the verifier)",
+      "supports": "zero-priced mined transactions with PoolManager logs, one from an account with no code via EntryPoint v0.7"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 25,
+   "id": "F-151",
+   "firstCycle": 25,
+   "history": [
+    {
+     "cycle": 25,
+     "unit": "op-stack-custom-gas",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
    "title": "Operator transaction filtering on Robinhood Chain can fail any exit from the PoolManager, including force-included ones",
    "chainIds": [
     4663
@@ -15582,6 +15660,192 @@
     {
      "cycle": 24,
      "unit": "ethereum-reference",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
+   "title": "Monad's main branch rewrites the integer library and the x86 emitter in ways that would reach compiled PoolManager blocks before any eth_call can see them",
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "difference": "Monad validators run native code that the x86 emitter produces for frequently used contracts, while every public endpoint answers eth_call and serves traces through the interpreter. The main branch, which no tag carries, changes that emitter and the 256 bit library in four places: a Barrett reduction for division, ADDMOD and MULMOD in uint256.hpp, elision of the memory bound check for literal offsets already touched in the block, direct calls to runtime routines by immediate address, and a migration to the asmjit 2 API.",
+   "mechanism": "The PoolManager's pool math runs MULMOD with the literal modulus 2^256-1 on every mulDiv (src/libraries/FullMath.sol:24) and with a variable modulus for the low remainder (src/libraries/FullMath.sol:48, :112, src/libraries/SqrtPriceMath.sol:252). A Barrett path for a constant modulus, if a later release wired it into the MULMOD handler, would sit under all of these. Today no VM file on main calls it, and math.hpp still calls the division-based mulmod. The literal-offset memory elision on main applies to the revert encoders and the free memory pointer (src/libraries/CustomRevert.sol:16-43, src/libraries/Hooks.sol:144, src/types/Currency.sol:57), which write at offsets 0x00, 0x04 and 0x40. The emitter resets the tracked end at every block that is a jump destination, and memory never shrinks within a frame, so on reading the elision gives the same result. A wrong elision would read or write memory past the frame's allocation. The interpreter would not show it, because eth_call never runs native code (rpc/monad_executor.cpp lines 1306-1309 at v0.16.7), and tracing nodes run the interpreter for blocks too (cmd/monad/main.cpp line 488). A fault would show only as the tracing RPC nodes falling out of consensus at the delayed merkle root, three blocks later. By then the validators' result is canonical.",
+   "impact": "None today. No release contains these changes and no revision after MONAD_TEN is scheduled. If a release carried a fault in one of these paths and two thirds of validators ran it, every pool's swap and liquidity amounts would follow the faulty native result.",
+   "preconditions": "Monad must tag and roll out a release built from main, and a fault must exist on a path the PoolManager reaches. An ordinary swap would then trigger it. No ordinary account can make validators run a given release.",
+   "mitigations": "When a tag after v0.16.7 appears, rebuild the cycle 23 harness (cycles/023/theme-monad-compiled-coverage.work/tools/build.sh) at that tag. Run the six script sets and the mined transactions natively, and run a direct test of uint256.hpp's mulmod, addmod and udivrem, with the Barrett variants, against Python integers. Do this before validators adopt the tag.",
+   "coreRefs": [
+    "src/libraries/FullMath.sol:24",
+    "src/libraries/FullMath.sol:48",
+    "src/libraries/SqrtPriceMath.sol:252",
+    "src/libraries/CustomRevert.sol:16-43",
+    "src/libraries/Hooks.sol:144"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/category-labs/monad/main/category/core/runtime/uint256.hpp",
+     "supports": "Barrett reciprocal types and barrett::mulmod, addmod, mulmod_const and udivrem overloads on main; division-based mulmod unchanged at lines 955-962"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/x86/emitter.cpp",
+     "supports": "touched_memory_end_ elision at lines 6340-6356 and reset at lines 1030-1045; call asmjit::imm(runtime_fun_)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/cmd/monad/main.cpp",
+     "supports": "--trace_calls selects VM::InterpreterOnly, otherwise VM::Dual (line 488)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/rpc/monad_executor.cpp",
+     "supports": "eth_call always uses the interpreter (lines 1306-1309)"
+    },
+    {
+     "url": "https://docs.monad.xyz/monad-arch/consensus/asynchronous-execution",
+     "supports": "delayed merkle root D = 3; a node with an execution error falls out of consensus"
+    },
+    {
+     "url": "https://docs.monad.xyz/developer-essentials/changelog/releases",
+     "supports": "v0.16.7 is testnet only; v0.16.5 is the last mainnet release"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 25,
+    "factCheck": "I fetched uint256.hpp from main and from v0.16.7 on raw.githubusercontent.com. Main is 75,879 bytes and contains the word barrett 21 times. v0.16.7 is 37,912 bytes and does not contain it. The Barrett code sits in namespace barrett (line 1383 on main). The division-based mulmod is at lines 955-962 and calls udivrem on wide_mul. runtime/math.hpp on main calls the unqualified mulmod and addmod on uint256_t (lines 74-96) and has no using-declaration for barrett, so the handler resolves to the division-based function. emitter.cpp on main has no use of barrett, reciprocal or mulmod_const. touched_memory_end_ is reset in begin_new_block (line 1042) whenever the block does not continue the previous stack, and is read and set at lines 6348 and 6355. Memory::offset_bits is 28 (runtime/types.hpp line 126 on main), so static_cast<int32_t>(lit) + read_size cannot overflow to a negative end that would wrongly pass the comparison. The emitter on main calls asmjit::imm(runtime_fun_) at line 525. At v0.16.7, cmd/monad/main.cpp line 488 picks InterpreterOnly when trace_calls is set, and rpc/monad_executor.cpp line 1309 fixes eth_call to InterpreterOnly. The releases page lists v0.16.7 with mainnet N/A and testnet 2026-11-19, and v0.16.5 with mainnet 2026-10-22. The asynchronous execution page says the delayed merkle root is 3 and that a block with a wrong delayed merkle root is rejected. web3_clientVersion on rpc.monad.xyz returned Monad/0.16.7. debug_traceTransaction with callTracer on that endpoint returned a stored frame for a transaction in finalized block 125,607,628, whose timestamp equalled the local clock.",
+    "codeCheck": "src/libraries/FullMath.sol:24 runs mulmod(a, b, not(0)) on every mulDiv. src/libraries/FullMath.sol:48 and :112 and src/libraries/SqrtPriceMath.sol:252 run mulmod with a variable denominator. src/libraries/CustomRevert.sol:16-43 writes at fixed offsets 0x00 and 0x04. src/libraries/Hooks.sol:144 reads the free memory pointer at 0x40, and src/types/Currency.sol:57 does the same. An ordinary account can reach all of these with an ordinary swap, but the swap only reaches a fault if validators run a faulty release. On the code as tagged no such fault is shown, and the main-branch paths I read give the same results as the tagged code.",
+    "corrections": "",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/category-labs/monad/main/category/core/runtime/uint256.hpp",
+      "supports": "Barrett code in namespace barrett at line 1383; division-based mulmod at lines 955-962"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/runtime/math.hpp",
+      "supports": "addmod and mulmod handlers call the unqualified division-based functions (lines 74-96)"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/x86/emitter.cpp",
+      "supports": "touched_memory_end_ reset at line 1042 and used at lines 6348-6355; call asmjit::imm(runtime_fun_) at line 525"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/category-labs/monad/main/category/vm/runtime/types.hpp",
+      "supports": "Memory::offset_bits = 28 at line 126"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/cmd/monad/main.cpp",
+      "supports": "line 488 selects InterpreterOnly under trace_calls"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/rpc/monad_executor.cpp",
+      "supports": "line 1309 fixes eth_call to InterpreterOnly"
+     },
+     {
+      "url": "https://docs.monad.xyz/developer-essentials/changelog/releases",
+      "supports": "v0.16.7 mainnet N/A, testnet 2026-11-19; v0.16.5 mainnet 2026-10-22"
+     },
+     {
+      "url": "https://docs.monad.xyz/monad-arch/consensus/asynchronous-execution",
+      "supports": "delayed merkle root of 3; a block with a wrong delayed merkle root is rejected"
+     },
+     {
+      "url": "https://rpc.monad.xyz",
+      "supports": "web3_clientVersion Monad/0.16.7; debug_traceTransaction callTracer answered for a transaction in finalized block 125,607,628"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 25,
+   "id": "F-150",
+   "firstCycle": 25,
+   "history": [
+    {
+     "cycle": 25,
+     "unit": "high-throughput",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
+  },
+  {
+   "title": "Avalanche serves receipts, logs and state at latest from the answering node own execution, which consensus confirms only at settlement",
+   "chainIds": [
+    43114
+   ],
+   "lens": "L6",
+   "assumptions": [
+    "A14"
+   ],
+   "effect": "degrade",
+   "difference": "Under SAE a block is final at acceptance, but its execution results are agreed by consensus only when a later block settles it, about five seconds after execution. latest is the last block the answering node executed; safe and finalized are the last settled block.",
+   "mechanism": "A wallet, bridge or indexer that reads a PoolManager take, a Transfer log or a balance at latest reads the result of that node execution (sae/rpc/receipts.go:28-41, saexec/receipts.go:48-73). An honest node computes the same result as every other, because the order is fixed at acceptance and execution is deterministic. A node with a local fault (disk corruption, as the source names, or a miscompiled build) can serve a receipt or a balance that settlement later contradicts, and nothing in the RPC response marks the result as unsettled. The PoolManager itself is not affected: it settles inside one transaction (src/PoolManager.sol:104-114).",
+   "impact": "No loss of pool funds. An integration that releases value on a latest receipt from a faulty node could act on a result that never settles. Ordinary users of pools are not exposed.",
+   "preconditions": "A faulty or dishonest RPC node, and an integration that acts on latest instead of safe or finalized.",
+   "mitigations": "Bridges and off-chain settlement on Avalanche should read safe or finalized, which the SAE backend maps to the last settled block, or check the result on a second endpoint.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/blocks/access.go",
+     "supports": "latest is the last executed block and safe and finalized are the last settled block (lines 124-147); the comment at 110-123 says settlement demonstrates consensus of execution results"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/avalanche-foundation/ACPs/main/ACPs/194-continuous-execution/README.md",
+     "supports": "blocks are accepted, then executed, then settled by a later block that carries the state root and receipts root"
+    },
+    {
+     "url": "raw/probe_tags.json (eth_getBlockByNumber on https://api.avax.network/ext/bc/C/rpc)",
+     "supports": "safe and finalized lag latest by 6 to 7 blocks on the live node"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 25,
+    "factCheck": "Fetched blocks/access.go of avalanchego v1.15.3 saevm. ResolveRPCNumber maps latest to LastExecuted().Height() and safe and finalized to LastSettled().Height() (lines 124-147), and the comment at 109-123 says finality comes at acceptance, settlement demonstrates consensus of execution results, and the only non-determinism is very rare disk corruption. sae/rpc/receipts.go:28-41 returns receipts only through restoreExecutedBlock, and saexec/receipts.go:48-73 says RecentReceipt blocks until the transaction has executed. ACP-194 README (fetched) says a block is accepted, then executed, then settled by a later block that carries the state root of the settled block and the receipts root of all receipts since the last settlement (lines 52, 108-110, 223-235), with tau of 5 seconds (line 260). On chain, eth_getBlockByNumber on https://api.avax.network/ext/bc/C/rpc (avalanchego/1.15.3 commit 983815fd) gave latest 101461089, safe 101461081, finalized 101461081; a batched call of latest and pending gave equal numbers in six rounds (101461100). The lag of safe behind latest is 8 blocks in my sample, close to the 6 to 7 stated.",
+    "codeCheck": "src/PoolManager.sol:104-114: unlock calls the callback and checks NonzeroDeltaCount before relocking, all inside one transaction, so the PoolManager never acts on an RPC result and the difference between latest and safe cannot change what it computes or who it pays. The hazard is confined to off-chain readers.",
+    "corrections": "The source names only disk corruption as the cause of a divergent execution result; a miscompiled build is the finding's own addition, reasonable but not in the cited comment. actor: operator is acceptable as the closest value for a faulty or dishonest RPC node; no ordinary account can cause it.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/blocks/access.go",
+      "supports": "latest is last executed, safe and finalized are last settled; settlement demonstrates consensus of execution results (lines 109-147)"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/sae/rpc/receipts.go",
+      "supports": "receipts are served only for executed blocks (lines 28-41)"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/saexec/receipts.go",
+      "supports": "RecentReceipt waits for execution (lines 48-73)"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/avalanche-foundation/ACPs/main/ACPs/194-continuous-execution/README.md",
+      "supports": "accept, execute, settle order and tau of 5 seconds"
+     },
+     {
+      "url": "https://api.avax.network/ext/bc/C/rpc",
+      "supports": "eth_getBlockByNumber latest 101461089, safe and finalized 101461081; batched latest and pending equal at 101461100"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 25,
+   "id": "F-152",
+   "firstCycle": 25,
+   "history": [
+    {
+     "cycle": 25,
+     "unit": "theme-avalanche-sae",
      "status": "confirmed",
      "severity": "info"
     }

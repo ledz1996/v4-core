@@ -1,0 +1,158 @@
+{
+ "unit": "theme-avalanche-sae",
+ "profiles": [],
+ "findings": [
+  {
+   "ref": "new",
+   "title": "Avalanche serves receipts, logs and state at latest from the answering node own execution, which consensus confirms only at settlement",
+   "chainIds": [
+    43114
+   ],
+   "lens": "L6",
+   "assumptions": [
+    "A14"
+   ],
+   "effect": "degrade",
+   "actor": "operator",
+   "severity": "info",
+   "difference": "Under SAE a block is final at acceptance, but its execution results are agreed by consensus only when a later block settles it, about five seconds after execution. latest is the last block the answering node executed; safe and finalized are the last settled block.",
+   "mechanism": "A wallet, bridge or indexer that reads a PoolManager take, a Transfer log or a balance at latest reads the result of that node execution (sae/rpc/receipts.go:28-41, saexec/receipts.go:48-73). An honest node computes the same result as every other, because the order is fixed at acceptance and execution is deterministic. A node with a local fault (disk corruption, as the source names, or a miscompiled build) can serve a receipt or a balance that settlement later contradicts, and nothing in the RPC response marks the result as unsettled. The PoolManager itself is not affected: it settles inside one transaction (src/PoolManager.sol:104-114).",
+   "impact": "No loss of pool funds. An integration that releases value on a latest receipt from a faulty node could act on a result that never settles. Ordinary users of pools are not exposed.",
+   "preconditions": "A faulty or dishonest RPC node, and an integration that acts on latest instead of safe or finalized.",
+   "mitigations": "Bridges and off-chain settlement on Avalanche should read safe or finalized, which the SAE backend maps to the last settled block, or check the result on a second endpoint.",
+   "coreRefs": [
+    "src/PoolManager.sol:104-114"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/blocks/access.go",
+     "supports": "latest is the last executed block and safe and finalized are the last settled block (lines 124-147); the comment at 110-123 says settlement demonstrates consensus of execution results"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/avalanche-foundation/ACPs/main/ACPs/194-continuous-execution/README.md",
+     "supports": "blocks are accepted, then executed, then settled by a later block that carries the state root and receipts root"
+    },
+    {
+     "url": "raw/probe_tags.json (eth_getBlockByNumber on https://api.avax.network/ext/bc/C/rpc)",
+     "supports": "safe and finalized lag latest by 6 to 7 blocks on the live node"
+    }
+   ],
+   "evidence": "primary"
+  }
+ ],
+ "cleared": [
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Task 1: which state eth_call, eth_getStorageAt, eth_getBalance and debug_traceCall run against for each block tag under the SAE backend of avalanchego 1.15.3 (commit 983815fd, libevm d398bc4dbe41).",
+   "result": "latest resolves to the last executed block, not the last accepted one (blocks/access.go:133-134). safe and finalized resolve to the last settled block (blocks/access.go:135-136). pending resolves to the last accepted block only when api-resolve-pending-to-last-executed is false; the C-Chain default is true (cchain/config.go:138, blocks/access.go:125-127), and a node with it false refuses state for pending (sae/rpc/stateful.go:79-83). An explicit number is accepted up to the last accepted block and refused above it (blocks/access.go:139-146). Every state method then opens the post-execution root of the resolved block through restoreExecutedBlock, which waits for execution of an accepted block (sae/rpc/blocks.go:59-86, WaitUntilExecuted at line 82), and the header handed to the EVM is rewritten to carry that post-execution root and the executed base fee (sae/rpc/stateful.go:537-542). debug_traceCall uses the same post-execution state (traceCallBackend, sae/rpc/stateful.go:578-580). So no tag names a block whose state does not exist: latest is executed by construction, and a number between latest and the accepted tip blocks until it is executed. The cycle 24 statement that latest is the last accepted block is corrected by this reading; the eth_call results of earlier cycles at latest ran on executed post-state with the same interpreter configuration (vm.Config{}) as block execution (saexec/execution.go:360).",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/blocks/access.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/sae/rpc/stateful.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/sae/rpc/blocks.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/config.go"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Task 1 on chain: tags and explicit numbers on api.avax.network (avalanchego/1.15.3 commit 983815fd before and after every batch) and avax.api.pocket.network (rotates 1.15.1, 1.15.2 and 1.15.3 backends), scripts/probe_tags.py and probe_gap.py, outputs raw/probe_tags.json and raw/probe_gap-api.json, blocks 101,453,690 to 101,454,200.",
+   "result": "On api.avax.network pending equals latest in every round (default resolution to last executed), safe equals finalized and lags latest by 6 to 7 blocks, and a number 50 blocks above the tip answers \"block not found: not accepted yet\". In 26 of 120 samples the header of latest+1 was already served while latest had not moved (a block accepted before it was executed); at most 1 block was ahead, and a state read at that number answered within 0.34 s, either with the executed state or, once, with \"not accepted yet\" from another backend behind the load balancer. eth_getBalance, eth_getStorageAt and extsload of the PoolManager agree at latest, pending, safe and finalized in every round. The accepted-but-unexecuted window is one block and well under a second at present.",
+   "source": "raw/probe_tags.json, raw/probe_gap-api.json (eth_getBlockByNumber, eth_getBalance, eth_getStorageAt, eth_call on https://api.avax.network/ext/bc/C/rpc and https://avax.api.pocket.network)"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Task 2: which checks a transaction passes at acceptance and which run only at execution, and every way a transaction of an accepted block can end differently from what the builder assumed.",
+   "result": "At building and at verification (VerifyBlock rebuilds the block and compares hashes, sae/blocks.go:59-98) worstcase.ApplyTx runs txpool.ValidateTransaction against the worst-case header (legacy, 2930 and 1559 types only, so no EIP-7702 delegation can appear, worstcase/state.go:181-195), refuses senders with code (lines 207-209), checks exact nonce, fee cap against the worst-case base fee, block gas left, and balance for gasLimit times the worst-case price plus value, on the settled state minus every earlier debit of the unsettled blocks (lines 239-322, sae/block_builder.go:181-235). At execution saexec.Execute applies every transaction of the block in order with core.ApplyTransaction on the state left by the previous one (saexec/execution.go:346-364). An error that is not a revert is fatal and stops the node (lines 362-364, 97-103); nothing is skipped and nothing is reordered. The libevm checks that run only at execution are CanExecuteTransaction, which returns nil on the C-Chain (cchain/hooks.go:245-247), and InvalidateExecution, which no code in avalanchego 1.15.3 calls (search of the whole tree). The only values that differ from the header are BASEFEE and the effective GASPRICE: the header carries the worst-case base fee (ACP-194 baseFeePerGas rule) and execution uses the gas clock base fee, which is at most that (saexec/execution.go:325-332). Gas charged is max(gasUsed, ceil(gasLimit/2)) after execution (hook/hook.go:218-221); this does not change the GAS opcode or what any call returns. A transaction that reverts rolls back all of its PoolManager writes as on Ethereum, and transient storage is replaced per transaction by StateDB.Prepare (libevm core/state_transition.go:436, core/state/statedb.go:1335). So the PoolManager cannot be left with an unlock half applied (src/PoolManager.sol:104-114, src/libraries/Lock.sol:13-25), with transient storage from an earlier transaction, or with a native payout made and the rest of the transaction dropped (src/types/Currency.sol:48).",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/worstcase/state.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/saexec/execution.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/sae/blocks.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/hooks.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/hook/hook.go; https://proxy.golang.org/github.com/ava-labs/libevm/@v/v1.13.15-0.20261028200218-d398bc4dbe41.zip (core/state_transition.go, core/state/statedb.go, core/state_transition.libevm.go); https://raw.githubusercontent.com/avalanche-foundation/ACPs/main/ACPs/194-continuous-execution/README.md"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L2",
+   "check": "Task 2 on chain: what BLOCKHASH, NUMBER, TIMESTAMP, BASEFEE, GASPRICE, COINBASE, PREVRANDAO and BLOBBASEFEE return in the post-execution context, read with an eth_call of a creation payload that only returns those words, at 8 blocks on two endpoints (scripts/probe_ctx.py, raw/probe_ctx.json).",
+   "result": "NUMBER and TIMESTAMP equal the header; BLOCKHASH(NUMBER-1) equals the header parentHash in all 8 blocks; COINBASE is 0x0100000000000000000000000000000000000000; PREVRANDAO and BLOBBASEFEE are 1; BASEFEE is 0x1bf08eb00 (7.5 gwei) when a gas price is given and 0 without one, as in go-ethereum. Receipt effectiveGasPrice equals 7.5 gwei plus the tip in every sampled transaction, so the executed base fee equals the header base fee at present. The executor sets the block context from the same header (saexec/execution.go:332-341) and BLOCKHASH from recent consensus headers (saexec/context.go:26-40). The PoolManager reads none of these (ASSUMPTIONS A10); it reads SELFBALANCE and GAS (src/types/Currency.sol:48, 73, 92; src/libraries/Hooks.sol:134), whose semantics the SAE path does not change.",
+   "source": "raw/probe_ctx.json (eth_call, eth_getBlockByNumber, eth_getTransactionReceipt on https://api.avax.network/ext/bc/C/rpc and https://avax.api.pocket.network); https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/saexec/context.go"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L6",
+   "check": "Task 3: can an ordinary account use the gap between acceptance and execution against another user, and how receipts and logs are served for accepted blocks not yet executed.",
+   "result": "Receipts exist only after execution: RecentReceipt blocks until the transaction has executed (saexec/receipts.go:48-73), getReceipts goes through restoreExecutedBlock and returns nothing for an unexecuted block (sae/rpc/receipts.go:28-41), logs are read from the database written at MarkExecuted (sae/rpc/receipts.go:77-79, blocks/execution.go:142), and the log filter backend treats any header above the last executed block as absent and resolves latest through the same rule (sae/rpc/filters.go:34-35, 121-127). Execution is deterministic and the order is fixed at acceptance, so a receipt served at latest is what every honest node computes; settlement (safe) about five seconds later records the agreed state root (ACP-194, blocks/access.go:110-123). An attacker cannot place a transaction ahead of one already accepted, and a victim transaction priced against latest executes on latest plus at most the accepted blocks ahead of it, which is the same exposure as pending transactions on Ethereum and is bounded by the victim router slippage limit. No path lets an ordinary account take or freeze another user funds through the gap.",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/saexec/receipts.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/sae/rpc/receipts.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/sae/rpc/filters.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/blocks/execution.go; https://raw.githubusercontent.com/avalanche-foundation/ACPs/main/ACPs/194-continuous-execution/README.md"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "check": "Task 4: replay of the newest 20,000 PoolManager transactions with the cycle 23 scripts (scripts/collect.py, run.py, model.py, copied; only the log endpoint changed because publicnode answered with a challenge page and api.avax.network caps eth_getLogs at 100 blocks). Code at 0x06380c0e0912312b5150364b9dc4542ba0dbbc85 equals the build runtime of 24,009 bytes outside the immutable ranges (eth_getCode on avax.api.pocket.network).",
+   "result": "Window: 20000 transactions with a PoolManager log in blocks 100882354 to 101453582 (head 101453656 at 2026-11-26T14:46:26Z, 27142 logs read). 14741 of them were traced; the rest were refused by pocket backends that do not serve debug_traceTransaction (\"method does not exist\" or \"Method not supported\", raw/43114/errors.jsonl), after two passes. All 14741 replayed transactions are after the first SAE block 95,921,105 (2026-09-22 15:00:00 UTC), so the split is 0 before and 14741 after activation. 296689 words compared (37750 storage words changed), 16147 swaps (1803 of more than one step), native balance matches in all 14741, and the only mismatch is one ERC-20 flow pair of token 0x47afa96c in transaction 0x52f6f0e3, the interest-bearing token whose balance rose one unit more than its Transfer, already explained in cycle 23. 780 of the window transactions were not in the cycle 23 window and 720 of those were traced. Trace endpoint builds seen in the brackets: avalanchego/1.15.1, avalanchego/1.15.2, avalanchego/1.15.3.",
+   "source": "raw/43114/window.json, raw/43114/result.json, raw/43114/mismatches.jsonl, raw/43114/brackets.jsonl (debug_traceTransaction on https://avax.api.pocket.network); first SAE block from eth_getBlockByNumber 95,921,104 and 95,921,105 on https://api.avax.network/ext/bc/C/rpc (settledHeight fields appear at 95,921,105) and upgrade/upgrade.go:41 of https://proxy.golang.org/github.com/ava-labs/avalanchego/@v/v1.15.3.zip"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "check": "Task 4: committed state against the replay (cycle 23 committed.py) on the newest blocks of the window, eth_getStorageAt and eth_getBalance at each block on api.avax.network, which serves archive state on the SAE backend.",
+   "result": "The newest 1000 fully traced blocks that change PoolManager state (about blocks 101,397,700 to 101,453,582, all after SAE activation; limited to 1,000 because one block takes about 1.5 s on the public endpoint), 2880 words and 255 balances compared, 0 differ. 105 blocks were skipped because one of their window transactions was not traced. Clients before and after: avalanchego/1.15.3 [database=v1.4.5, rpcchainvm=47, commit=983815fd993acf846a27749b598f0fea4d876a75, go=1.26.10] / avalanchego/1.15.3 [database=v1.4.5, rpcchainvm=47, commit=983815fd993acf846a27749b598f0fea4d876a75, go=1.26.10].",
+   "source": "raw/43114/committed-api.avax.network.json (eth_getStorageAt, eth_getBalance on https://api.avax.network/ext/bc/C/rpc)"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "check": "Task 4: failed and log-free transactions with the cycle 24 scripts (fx/scripts/find.py scan, trace.py, analyze.py, copied with paths changed). 400 blocks drawn with random.Random(25) from the blocks of the window, eth_getBlockReceipts on avax.api.pocket.network, entry set of cycle 24 (60 router and bot addresses).",
+   "result": "2166 receipts to entry contracts, 738 failed. Sample with seed 25: 150 of 738 failed and 150 of 981 log-free successful. 284 of the 300 never enter the PoolManager, 15 do and 1 could not be traced. Of 12 failed transactions replayed, every PoolManager frame that failed is classified as a source revert (PriceLimitAlreadyExceeded, or a bubbled failed child at src/PoolManager.sol:110) or no PoolManager frame failed; 148 words compared. The 3 log-free ones (sync, settle, take, unlock) match word by word and in native balance. One failed transaction, 0x52cea783, has no prestate because every backend that answered refused prestateTracer, so its 8 mismatches come from a model that started from empty storage (PoolNotInitialized); it is left inconclusive.",
+   "source": "fx/results/replay-43114.json, fx/results/replay-43114-records.jsonl, fx/raw/43114/trace-sample-25.json (eth_getBlockReceipts and debug_traceTransaction on https://avax.api.pocket.network)"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "check": "Task 5 and lead L-1072: is Firewood the C-Chain database at 1.15.3, and does its key encoding add a rule below the bit 248 transform.",
+   "result": "Firewood is opt-in. The state scheme defaults to the empty string (cchain/config.go:85, not set in defaultConfig at 127-139), and the empty scheme selects HashDB (saedb/tracker.go:121-126). When Firewood is chosen, its storage key is keccak256(address) followed by keccak256 of the full 32-byte slot as handed down by the StateDB (firewood/base_trie.go:18-33), the same path an MPT uses; the slot it receives is already the output of the bit 248 transform (cchain/libevm/extstate/statedb.go:47-56). Firewood therefore adds no fold of its own. Validators must agree on the settled state root in every header (ACP-194 block settlement), so a store that keyed differently would fork the node away. No public endpoint states which scheme it runs.",
+   "source": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/saedb/tracker.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/firewood/base_trie.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/config.go; https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/libevm/extstate/statedb.go"
+  },
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "check": "Task 5: the cycle 24 transient and persistent fold probe (scripts/pmkeys.py, copied, tag from PMKEYS_TAG) at the real PoolManager on api.avax.network at latest (block 101,453,960), safe (101,453,955) and finalized (101,453,956), compared with the cycle 24 run at 101,436,825.",
+   "result": "The four runs agree on every structural fact: the 10 transient reads equal the expected values exactly (no transient fold), and in each of the 10 persistent pairs S and S with bit 248 flipped read the same word. The only difference between runs is which of the two override markers a pair returns. That is an artefact of the probe: both slots of a pair are written by one stateDiff override, which libevm applies by iterating a Go map (internal/ethapi/api.go:994-997), so the last write of the folded entry is random. latest, safe and finalized give the same answer.",
+   "source": "raw/pmkeys-latest.json, raw/pmkeys-safe.json, raw/pmkeys-finalized.json (eth_call with state overrides on https://api.avax.network/ext/bc/C/rpc); https://proxy.golang.org/github.com/ava-labs/libevm/@v/v1.13.15-0.20261028200218-d398bc4dbe41.zip (internal/ethapi/api.go)"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    43114
+   ],
+   "lens": "L1",
+   "question": "Replay the one failed transaction 0x52cea78377670094eee219302bc3efea1c985877387a2bae9ebeb0628295c269 (block 101,395,505) once a backend serves prestateTracer for it, and trace the 5,259 window transactions the pocket backends refused in this cycle.",
+   "why": "They are the only part of the newest 20,000 PoolManager transactions on Avalanche that no replay has covered; every other one matches the source model.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1081",
+   "outcome": "cleared",
+   "answer": "eth_call, eth_getStorageAt, eth_getBalance and debug_traceCall run against the post-execution state of the resolved block: latest is the last executed block, safe and finalized the last settled, pending the last executed under the C-Chain default, and an explicit number up to the accepted tip waits for execution. A transaction of an accepted block always runs, in block order, on the state left by the one before; the worst-case check guarantees only that it can pay, and any non-revert error halts the node instead of skipping it. Transient storage is replaced per transaction. Only BASEFEE and the effective gas price can be lower than the header says. No path leaves an unlock half applied. Mined replay of 14741 of the newest 20,000 PoolManager transactions, all after SAE activation, matches the source model except one explained token rounding pair."
+  },
+  {
+   "leadId": "L-1072",
+   "outcome": "cleared",
+   "answer": "Firewood is opt-in at 1.15.3 (default scheme HashDB) and keys storage by keccak256(address) and keccak256 of the full transformed slot, so it adds no rule below the bit 248 transform. The fold probe gives the same answer at latest, safe and finalized."
+  }
+ ]
+}

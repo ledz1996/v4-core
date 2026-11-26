@@ -1,0 +1,37 @@
+{
+ "unit": "op-stack-custom-gas",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "xlayer_gasless_contract.rs at tag xlayer/v0.1.7 (lines 45-48, 116, 124-130) queries getGaslessAllowance(to, input) on 0x19787404b0c70021b4752028f7e3a92313885B27 and treats the transaction as gasless only when allowed is true and tx.gas_limit is at most the returned limit. lib.rs transact_raw (lines 346-405) sets only cfg.disable_base_fee for that one execution and restores the previous value on every result path. I ran eth_call on rpc.xlayer.tech at block 0x495f5b3 (selector 0xbad12ebe, from 0x...dEaD): EntryPoint v0.7 0x0000000071727De22E5E9d8BAf0edAc6f37da032 returned (true, 0x1c9c380 = 30,000,000) for 0x765e827f and for an arbitrary 0x12345678, and (false, 0) for empty calldata. 0x7c5bee2a returned (true, 0x2faf080 = 50,000,000) for 0x0c307f76 and for 0xdeadbeef. The PoolManager with 0x48c89491 returned (false, 0). Both cited transactions are mined with gasPrice 0, maxFeePerGas 0, effectiveGasPrice 0 and status 1, and both receipts carry logs from the PoolManager 0x360e68fa. Transaction 0xda396c96 came from 0x4549fbf0, an account with no code, through EntryPoint handleOps, so an ordinary externally owned account has reached the PoolManager at zero price through the open handleOps entry point.",
+   "codeCheck": "No file in src/ outside src/test reads GASPRICE or BASEFEE (grep for gasprice, basefee and gasleft finds only test helpers). unlock (src/PoolManager.sol:104-114) still requires NonzeroDeltaCount to be zero before it relocks, and the per tick cap at src/libraries/Pool.sol:166-171 applies unchanged, so every amount and every settlement decision is the same as in a priced transaction. The rule changes only what the sender pays.",
+   "corrections": "The client passes the full transaction input to getGaslessAllowance (encode_get_gasless_allowance copies all of tx.input), so \"prefix\" means the whole calldata. \"Any non-empty calldata\" is shown only for the prefixes tested. Whether 0x7c5bee2a (13,322 bytes, has an owner function; one sender is an EIP-7702 account delegated to 0xe40ccb2d) accepts calls from any account was not read; the EntryPoint v0.7 route alone carries the claim. Sequencer admission policy, the per block gasless budget and per sender limits were not read, as the finding states. The finding supersedes the cycle 11 cleared item that said no gasless path reaches the PoolManager, which tested direct targets only; that item did not concern funds.",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/block/xlayer_gasless_contract.rs", "supports": "allowed && tx.gas_limit <= gas_limit; whitelist address; full input passed to the query"},
+    {"url": "https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/lib.rs", "supports": "transact_raw relaxes only disable_base_fee and restores it on every path"},
+    {"url": "https://rpc.xlayer.tech (eth_call getGaslessAllowance at block 0x495f5b3, run by the verifier)", "supports": "EntryPoint v0.7 (true, 30,000,000) for any tested non-empty calldata; 0x7c5bee2a (true, 50,000,000); PoolManager false"},
+    {"url": "https://rpc.xlayer.tech (eth_getTransactionByHash and eth_getTransactionReceipt for 0x14ba5174... and 0xda396c96..., run by the verifier)", "supports": "zero-priced mined transactions with PoolManager logs, one from an account with no code via EntryPoint v0.7"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Whether the Celo revm fork at bd28f942 changes any instruction, the jump destination analysis, memory expansion, gas, the journal or the handler, which would change results of FullMath, TickMath, BitMath, SqrtPriceMath or the settlement code.",
+   "agrees": true,
+   "note": "I fetched eight files from celo-org/revm bd28f942 and bluealloy/revm v107 (arithmetic.rs, bitwise.rs, i256.rs, control.rs, system.rs, host.rs, bytecode legacy/analysis.rs, context journal/inner.rs); all eight have equal sha256. The celo/reth-v1.0.10 Cargo.lock pins revm-interpreter 35.0.1 and revm-bytecode 10.0.0 from that rev and ruint 1.20.0 from crates.io. Two links are not proven by this check: that forno's reth/v2.2.0-74cc8bb is built from celo/reth-v1.0.10, and that the Celo specific handler and precompiles in celo-kona's celo-revm crate add nothing to the instruction table. Earlier cycles read the latter, and the pinned battery covers the running node."
+  },
+  {
+   "check": "Whether a gasless transaction runs with any validation relaxed other than the base fee, in particular the balance check that the optional_balance_check feature makes available.",
+   "agrees": true,
+   "note": "lib.rs at xlayer/v0.1.7 lines 363-390 sets cfg.disable_base_fee only when op_tx.is_gasless and restores the saved value after the match on every result; no disable_balance_check assignment appears in the file. The test at lines 807-827 checks that a gasless transaction with insufficient balance still fails."
+  },
+  {
+   "check": "Opcode battery (99,985 vectors) and targeted set (85,544 vectors) rerun on 2026-11-26, with the battery also pinned to each forno backend through pin.py.",
+   "agrees": true,
+   "note": "The logs in op-stack-custom-gas.work/out show 99,985 of 99,985 and 85,544 of 85,544 run with 0 mismatches and 0 errors on both chains, 167 batches kept on each pinned Celo backend, pmdiff 250 of 250 and pmdiff2 300 of 300 identical, and 89 and 278 mined swaps matched exactly. These runs test the public RPC node, not the sequencer's own build; on X Layer the sequencer binary cannot be read from chain."
+  }
+ ],
+ "leads": []
+}

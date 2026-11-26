@@ -1,0 +1,38 @@
+{
+  "unit": "theme-avalanche-sae",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "Fetched blocks/access.go of avalanchego v1.15.3 saevm. ResolveRPCNumber maps latest to LastExecuted().Height() and safe and finalized to LastSettled().Height() (lines 124-147), and the comment at 109-123 says finality comes at acceptance, settlement demonstrates consensus of execution results, and the only non-determinism is very rare disk corruption. sae/rpc/receipts.go:28-41 returns receipts only through restoreExecutedBlock, and saexec/receipts.go:48-73 says RecentReceipt blocks until the transaction has executed. ACP-194 README (fetched) says a block is accepted, then executed, then settled by a later block that carries the state root of the settled block and the receipts root of all receipts since the last settlement (lines 52, 108-110, 223-235), with tau of 5 seconds (line 260). On chain, eth_getBlockByNumber on https://api.avax.network/ext/bc/C/rpc (avalanchego/1.15.3 commit 983815fd) gave latest 101461089, safe 101461081, finalized 101461081; a batched call of latest and pending gave equal numbers in six rounds (101461100). The lag of safe behind latest is 8 blocks in my sample, close to the 6 to 7 stated.",
+      "codeCheck": "src/PoolManager.sol:104-114: unlock calls the callback and checks NonzeroDeltaCount before relocking, all inside one transaction, so the PoolManager never acts on an RPC result and the difference between latest and safe cannot change what it computes or who it pays. The hazard is confined to off-chain readers.",
+      "corrections": "The source names only disk corruption as the cause of a divergent execution result; a miscompiled build is the finding's own addition, reasonable but not in the cited comment. actor: operator is acceptable as the closest value for a faulty or dishonest RPC node; no ordinary account can cause it.",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/blocks/access.go", "supports": "latest is last executed, safe and finalized are last settled; settlement demonstrates consensus of execution results (lines 109-147)"},
+        {"url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/sae/rpc/receipts.go", "supports": "receipts are served only for executed blocks (lines 28-41)"},
+        {"url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/saexec/receipts.go", "supports": "RecentReceipt waits for execution (lines 48-73)"},
+        {"url": "https://raw.githubusercontent.com/avalanche-foundation/ACPs/main/ACPs/194-continuous-execution/README.md", "supports": "accept, execute, settle order and tau of 5 seconds"},
+        {"url": "https://api.avax.network/ext/bc/C/rpc", "supports": "eth_getBlockByNumber latest 101461089, safe and finalized 101461081; batched latest and pending equal at 101461100"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 2: which checks a transaction passes at acceptance and which run only at execution, and every way a transaction of an accepted block can end differently from what the builder assumed.",
+      "agrees": true,
+      "note": "Read saexec/execution.go of v1.15.3. Every transaction is applied in order with core.ApplyTransaction and vm.Config{} (lines 346-360), and a non-revert error returns errFatal (lines 362-364), which the executor logs with log.Fatal (lines 97-103). The txs[:config.maxNumTxs] truncation at line 337 is an option for inspection only: Execute sets maxNumTxs to len(txs) by default (line 304) and verify refuses a partial run unless end-of-block operations are skipped (lines 245-249). cchain/hooks.go:245-247 CanExecuteTransaction returns nil. No transaction is skipped, so no unlock is half applied."
+    },
+    {
+      "check": "Task 5 and lead L-1072: is Firewood the C-Chain database at 1.15.3, and does its key encoding add a rule below the bit 248 transform.",
+      "agrees": true,
+      "note": "cchain/config.go:85 declares StateScheme with no default in defaultConfig (lines 127-139), saedb/tracker.go:121-126 maps the empty scheme to HashDB, and firewood/base_trie.go:18-33 keys storage by keccak256(address) and keccak256 of the full key it receives. No extra fold is introduced."
+    },
+    {
+      "check": "Task 3: can an ordinary account use the gap between acceptance and execution against another user, and how receipts and logs are served for accepted blocks not yet executed.",
+      "agrees": true,
+      "note": "sae/rpc/receipts.go:28-41 and 62-79 return receipts and logs only for executed blocks, and ResolveRPCNumber (blocks/access.go:124-147) never names unexecuted state for latest. Order is fixed at acceptance and execution is a single ordered loop (saexec/execution.go:346-364), so an ordinary account cannot insert itself ahead of an accepted transaction. The exposure equals mempool exposure on Ethereum."
+    }
+  ],
+  "leads": []
+}

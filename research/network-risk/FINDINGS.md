@@ -1,6 +1,6 @@
 # All findings
 
-149 findings on record after cycle 24, in-scope ones first.
+152 findings on record after cycle 25, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -1767,6 +1767,31 @@ Sources:
 - https://patch-diff.githubusercontent.com/raw/base/base/pull/3806.diff (the fix adds discard_tx in catch_error and tests EIP-3607 and nonce failures)
 - https://raw.githubusercontent.com/base/base/v1.5.6/crates/common/evm/src/handler.rs (the running build carries the fix at lines 385-387)
 - https://raw.githubusercontent.com/ethereum-optimism/optimism/85f7c13d7470a66254081f0177fc297201c07459/rust/op-revm/src/handler.rs (the op-revm revision op-rbuilder pins discards the journal on every non-deposit error)
+
+## F-151. X Layer runs PoolManager swaps and liquidity changes at zero gas price through two whitelisted shared carriers
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: X Layer.
+
+What differs on the network: X Layer waives the fee of a zero-priced transaction when its gasless whitelist allows the transaction's target and calldata prefix and the gas limit is within the allowance. The whitelist allows EntryPoint v0.7 for any non-empty calldata up to 30,000,000 gas and the contract at 0x7c5bee2a for any non-empty calldata up to 50,000,000 gas. Ethereum has no such rule.
+
+How it meets the code: The executor queries getGaslessAllowance(to, input) before each transaction whose max fee per gas is zero and marks it gasless when the answer is true and the gas limit fits; it then executes the transaction normally with only the base fee check relaxed. An ordinary account can submit handleOps to EntryPoint v0.7 carrying its own user operation with zero fees, or a call to 0x7c5bee2a, and so reach the PoolManager without paying gas. In three thousand recent blocks 101 zero-priced transactions from more than 80 senders emitted PoolManager logs. The PoolManager reads neither GASPRICE nor BASEFEE (no use in src/), so every amount it computes and every settlement check in unlock (src/PoolManager.sol:104-114) is the same as in a paid transaction. The effect is cost only: dust tick filling of F-038 and other spam against pools no longer costs gas.
+
+What is at risk: No funds move and nobody is left unable to withdraw. Griefing that F-038 records loses its gas cost on X Layer; the dust payment it needs still applies.
+
+What it takes: Whitelist entries as read on 2026-11-26 and a sequencer that admits zero-priced transactions from any sender. The per block gasless budget and any per sender limit of the sequencer were not read, and no transaction was sent to test admission.
+
+What can be done: None needed for funds. Pool creators who rely on gas cost as a deterrent against tick filling should not do so on X Layer.
+
+Second reviewer's corrections: The client passes the full transaction input to getGaslessAllowance (encode_get_gasless_allowance copies all of tx.input), so "prefix" means the whole calldata. "Any non-empty calldata" is shown only for the prefixes tested. Whether 0x7c5bee2a (13,322 bytes, has an owner function; one sender is an EIP-7702 account delegated to 0xe40ccb2d) accepts calls from any account was not read; the EntryPoint v0.7 route alone carries the claim. Sequencer admission policy, the per block gasless budget and per sender limits were not read, as the finding states. The finding supersedes the cycle 11 cleared item that said no gasless path reaches the PoolManager, which tested direct targets only; that item did not concern funds.
+
+Code: `src/PoolManager.sol:104-114`, `src/libraries/Pool.sol:166-171`.
+
+Sources:
+
+- https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/block/xlayer_gasless_contract.rs (is_gasless requires allowed == true and tx.gas_limit <= returned gasLimit; mainnet whitelist at 0x19787404b0c70021b4752028f7e3a92313885B27)
+- https://raw.githubusercontent.com/okx/optimism/refs/tags/xlayer/v0.1.7/rust/alloy-op-evm/src/lib.rs (a gasless transaction only sets disable_base_fee for its own execution)
+- https://rpc.xlayer.tech (eth_call getGaslessAllowance, out/gasless.json) (EntryPoint v0.7 allowed with 30,000,000 gas and 0x7c5bee2a with 50,000,000 gas for any non-empty prefix; PoolManager and periphery not allowed)
+- https://rpc.xlayer.tech (receipts of blocks 76,927,161-76,930,160, out/gasless_scan.json) (101 mined zero-priced transactions emitted PoolManager logs, for example 0x14ba5174ce2bf8b682ac926064813eee4a9087bb449346b1500f91659056339d and 0xda396c963d30a6f9774ed5dad69e64ff0b5204432331d4accc2ed88462b42ad8)
 
 ## F-003. A Stylus program used as a hook or token stops answering calls on expiry or a Stylus version change, and activation is blocked
 
@@ -3783,6 +3808,55 @@ Sources:
 - https://raw.githubusercontent.com/NethermindEth/nethermind/2.2.2/src/Nethermind/Nethermind.Evm/CodeAnalysis/JumpDestinationAnalyzer.cs (Nethermind selects AVX-512 VBMI, AVX2, SSSE3 or AdvSimd kernels at run time)
 - https://clientdiversity.org/ (execution client shares of reporting validators: Nethermind about 43 percent, geth 43, Besu 8, reth 3, erigon 3)
 - file:research/network-risk/cycles/024/ethereum-reference.work/jdtest/jdtest.out (harness result: 689,896 cases, 0 mismatches)
+
+## F-150. Monad's main branch rewrites the integer library and the x86 emitter in ways that would reach compiled PoolManager blocks before any eth_call can see them
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Monad.
+
+What differs on the network: Monad validators run native code that the x86 emitter produces for frequently used contracts, while every public endpoint answers eth_call and serves traces through the interpreter. The main branch, which no tag carries, changes that emitter and the 256 bit library in four places: a Barrett reduction for division, ADDMOD and MULMOD in uint256.hpp, elision of the memory bound check for literal offsets already touched in the block, direct calls to runtime routines by immediate address, and a migration to the asmjit 2 API.
+
+How it meets the code: The PoolManager's pool math runs MULMOD with the literal modulus 2^256-1 on every mulDiv (src/libraries/FullMath.sol:24) and with a variable modulus for the low remainder (src/libraries/FullMath.sol:48, :112, src/libraries/SqrtPriceMath.sol:252). A Barrett path for a constant modulus, if a later release wired it into the MULMOD handler, would sit under all of these. Today no VM file on main calls it, and math.hpp still calls the division-based mulmod. The literal-offset memory elision on main applies to the revert encoders and the free memory pointer (src/libraries/CustomRevert.sol:16-43, src/libraries/Hooks.sol:144, src/types/Currency.sol:57), which write at offsets 0x00, 0x04 and 0x40. The emitter resets the tracked end at every block that is a jump destination, and memory never shrinks within a frame, so on reading the elision gives the same result. A wrong elision would read or write memory past the frame's allocation. The interpreter would not show it, because eth_call never runs native code (rpc/monad_executor.cpp lines 1306-1309 at v0.16.7), and tracing nodes run the interpreter for blocks too (cmd/monad/main.cpp line 488). A fault would show only as the tracing RPC nodes falling out of consensus at the delayed merkle root, three blocks later. By then the validators' result is canonical.
+
+What is at risk: None today. No release contains these changes and no revision after MONAD_TEN is scheduled. If a release carried a fault in one of these paths and two thirds of validators ran it, every pool's swap and liquidity amounts would follow the faulty native result.
+
+What it takes: Monad must tag and roll out a release built from main, and a fault must exist on a path the PoolManager reaches. An ordinary swap would then trigger it. No ordinary account can make validators run a given release.
+
+What can be done: When a tag after v0.16.7 appears, rebuild the cycle 23 harness (cycles/023/theme-monad-compiled-coverage.work/tools/build.sh) at that tag. Run the six script sets and the mined transactions natively, and run a direct test of uint256.hpp's mulmod, addmod and udivrem, with the Barrett variants, against Python integers. Do this before validators adopt the tag.
+
+Code: `src/libraries/FullMath.sol:24`, `src/libraries/FullMath.sol:48`, `src/libraries/SqrtPriceMath.sol:252`, `src/libraries/CustomRevert.sol:16-43`, `src/libraries/Hooks.sol:144`.
+
+Sources:
+
+- https://raw.githubusercontent.com/category-labs/monad/main/category/core/runtime/uint256.hpp (Barrett reciprocal types and barrett::mulmod, addmod, mulmod_const and udivrem overloads on main; division-based mulmod unchanged at lines 955-962)
+- https://raw.githubusercontent.com/category-labs/monad/main/category/vm/compiler/ir/x86/emitter.cpp (touched_memory_end_ elision at lines 6340-6356 and reset at lines 1030-1045; call asmjit::imm(runtime_fun_))
+- https://raw.githubusercontent.com/category-labs/monad/v0.16.7/cmd/monad/main.cpp (--trace_calls selects VM::InterpreterOnly, otherwise VM::Dual (line 488))
+- https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/rpc/monad_executor.cpp (eth_call always uses the interpreter (lines 1306-1309))
+- https://docs.monad.xyz/monad-arch/consensus/asynchronous-execution (delayed merkle root D = 3; a node with an execution error falls out of consensus)
+- https://docs.monad.xyz/developer-essentials/changelog/releases (v0.16.7 is testnet only; v0.16.5 is the last mainnet release)
+
+## F-152. Avalanche serves receipts, logs and state at latest from the answering node own execution, which consensus confirms only at settlement
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Avalanche.
+
+What differs on the network: Under SAE a block is final at acceptance, but its execution results are agreed by consensus only when a later block settles it, about five seconds after execution. latest is the last block the answering node executed; safe and finalized are the last settled block.
+
+How it meets the code: A wallet, bridge or indexer that reads a PoolManager take, a Transfer log or a balance at latest reads the result of that node execution (sae/rpc/receipts.go:28-41, saexec/receipts.go:48-73). An honest node computes the same result as every other, because the order is fixed at acceptance and execution is deterministic. A node with a local fault (disk corruption, as the source names, or a miscompiled build) can serve a receipt or a balance that settlement later contradicts, and nothing in the RPC response marks the result as unsettled. The PoolManager itself is not affected: it settles inside one transaction (src/PoolManager.sol:104-114).
+
+What is at risk: No loss of pool funds. An integration that releases value on a latest receipt from a faulty node could act on a result that never settles. Ordinary users of pools are not exposed.
+
+What it takes: A faulty or dishonest RPC node, and an integration that acts on latest instead of safe or finalized.
+
+What can be done: Bridges and off-chain settlement on Avalanche should read safe or finalized, which the SAE backend maps to the last settled block, or check the result on a second endpoint.
+
+Second reviewer's corrections: The source names only disk corruption as the cause of a divergent execution result; a miscompiled build is the finding's own addition, reasonable but not in the cited comment. actor: operator is acceptable as the closest value for a faulty or dishonest RPC node; no ordinary account can cause it.
+
+Code: `src/PoolManager.sol:104-114`.
+
+Sources:
+
+- https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/blocks/access.go (latest is the last executed block and safe and finalized are the last settled block (lines 124-147); the comment at 110-123 says settlement demonstrates consensus of execution results)
+- https://raw.githubusercontent.com/avalanche-foundation/ACPs/main/ACPs/194-continuous-execution/README.md (blocks are accepted, then executed, then settled by a later block that carries the state root and receipts root)
+- raw/probe_tags.json (eth_getBlockByNumber on https://api.avax.network/ext/bc/C/rpc) (safe and finalized lag latest by 6 to 7 blocks on the live node)
 
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 

@@ -1,0 +1,162 @@
+{
+ "unit": "theme-speculative-commit",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L2",
+   "check": "Task 1 for reth v2.11.0 (Ethereum endpoint as recorded in cycle 24) and Tempo's pinned reth rev 167933d (reth-engine-tree 2.11.0 in Tempo's Cargo.lock). Where the commit-without-rerun path is, what it records, how it validates, and whether producers use it.",
+   "result": "The path is PrewarmResults::take_valid in payload_processor/reuse.rs. The Tempo rev differs from the v2.11.0 tag only in test attributes. The read set holds every storage word loaded from the database with its value (RecordingDb::get_storage, lines 917-937), every account loaded with nonce, balance and code hash but not the code bytes (get_account, lines 882-900; without_code, 945-949), a flag that rejects the result when code was loaded by a hash the database does not know (902-915, 460), and the block environment fields COINBASE, TIMESTAMP, PREVRANDAO and GASLIMIT (1027-1049). Block hashes and transient storage are not recorded: block hashes are fixed by the parent, and transient storage is not a database input. Before commit, every storage read must equal the current value (validate, 285-290) and every account must be identical, except that a balance may differ when the transaction did not observe it, both balances are nonzero and below 2^128, and the account was not created, destroyed or wiped (compare, 375-402; 305-307). BALANCE, SELFBALANCE, SELFDESTRUCT and an out-of-funds call make a balance exact (61-71, 1027-1055, 1070-1078). A value send records the smallest balance left, which becomes an AtLeast bound (1001-1019, 484-496). The path runs only in engine validation of received blocks (ConfigureEvm::reuses_prewarm_results doc, reth crates/evm/evm/src/lib.rs lines 669-686). It needs the flag --engine.prewarm-reuse, which defaults to false (crates/node/core/src/args/engine.rs lines 570-577; TreeConfig default prewarm_reuse false, crates/engine/primitives/src/config.rs lines 286, 376). Ethereum's EthEvmConfig opts in (crates/ethereum/evm/src/lib.rs lines 489-493). TempoEvmConfig's ConfigureEvm impl (tempo crates/evm/src/lib.rs line 224) does not override the default of false, so a Tempo node never reuses through this path, whatever the flag says. A wrong reuse during validation could only make a node reject a correct block, because the header's state root is checked. It cannot make a wrong state canonical.",
+   "source": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/engine/tree/src/tree/payload_processor/reuse.rs ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/evm/evm/src/lib.rs ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/node/core/src/args/engine.rs ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/engine/primitives/src/config.rs ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/ethereum/evm/src/lib.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/Cargo.lock ; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/evm/src/lib.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Tempo v1.19.1 block producer (payload builder): does it commit a speculative result without running the transaction again?",
+   "result": "It can, under narrow conditions. With prewarming on (the default) and the hidden flag --builder.parallel (default false; the node warns that it 'is still in development and should not be used', crates/node/src/node.rs lines 131-133, 172, 194-201, 1054-1072), the builder commits a recorded replay through execute_transaction_with_actions (crates/payload/builder/src/lib.rs lines 653-668). Replays are made only for transactions that is_parallel_candidate accepts: TIP-1045 payment-lane transactions with a nonzero nonce key (crates/payload/builder/src/prewarming.rs lines 177-178, 497-508). A payment-lane transaction must call a TIP-20 token or the TIP-20 channel reserve with payment calldata (crates/primitives/src/transaction/envelope.rs lines 299-312, 622-637). No call to the PoolManager can qualify. Replay checks every recorded account (lines 96-111 of crates/evm/src/action_replay.rs), rechecks exact SLOADs, and applies balance changes as Sinc and Sdec deltas on the current value with overflow and underflow checks (lines 123-170). A reverted transaction is not replayed (lines 45-48). So a TIP-20 transfer to the PoolManager committed by replay in transaction A credits the exact delta. Transaction B's sync and settle (src/PoolManager.sol:279-288, 349-364) then run normally on the committed state. With the default flags every pool transaction runs normally (lines 474-489, 93, 113-120 of prewarming.rs return without_replay when not parallel). Tempo validators have no reuse path (previous item).",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/payload/builder/src/lib.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/payload/builder/src/prewarming.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/evm/src/action_replay.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/node/src/node.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/primitives/src/transaction/envelope.rs"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    57073,
+    1868,
+    7777777,
+    480,
+    42220,
+    196,
+    5042,
+    4326
+   ],
+   "lens": "L2",
+   "check": "Do the reth-derived nodes behind the OP Stack, Celo, X Layer, Arc and MegaETH endpoints contain a commit-without-rerun path? Client builds were read with web3_clientVersion this session (work/clientversions.json).",
+   "result": "reuse.rs first exists at reth tag v2.8.0. Fetches of the file return 404 at v2.2.0, v2.5.2, v2.6.0 and v2.7.0, and 200 at v2.8.0, v2.8.1, v2.9.0, v2.10.0 and v2.11.0. Releases without the file: base v1.5.6, the Base endpoint (reth-engine-tree 2.5.2); conduit-op-reth v2.5.1 and v2.5.2 and world-chain v2.8.2 (ethereum-optimism/reth op-v2.6.0-2, commit 3c5f2f1, reuse.rs 404); Celo (celo-org/reth 74cc8bb, 404); Arc v0.8.6 (circlefin/arc-reth v2.2.0-arc.2, 404); X Layer (reth v2.3.0); MegaETH (mega-reth v2.3.1). The prewarm task of those forks only sends proof targets from speculative runs. It saves to the cache the state of the real execution (arc-reth prewarm.rs lines 229-253, 297), so it is cache warming only. Cycle 24 read that cache. Releases with the file are op-reth v2.8.1 (OP Mainnet), op-reth v2.10.0-rc.4 (Unichain, Ink, Soneium) and base v1.6.0-rc.3 (reth-engine-tree 2.8.1). The v2.8.1 logic matches v2.11.0 in revm form: exact storage, an unknown-code reject, BALANCE, SELFBALANCE, SELFDESTRUCT and OutOfFunds observation, and the same balance rules (reth v2.8.1 reuse.rs lines 276, 369-390, 427, 454, 907-917, 1016-1075). The path needs the engine flag (default false, v2.8.1 engine.rs lines 603-606) and an EvmConfig that opts in. The trait default is false (v2.8.1 crates/evm/evm/src/lib.rs lines 528-530). OpEvmConfig at op-reth/v2.8.1 and v2.10.0-rc.4 (rust/op-reth/crates/evm/src/lib.rs) and BaseEvmConfig at base v1.6.0-rc.3 (crates/execution/evm/src/config.rs line 141) do not override it. Whatever the flag, none of these nodes reuses a speculative result. MegaETH's sequencer is closed source and its replicas apply its results without running them (F-118, operator). That is a separate path, and it is checked by mined evidence below.",
+   "source": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.8.1/crates/engine/tree/src/tree/payload_processor/reuse.rs ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.8.1/crates/evm/evm/src/lib.rs ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.8.1/crates/node/core/src/args/engine.rs ; https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.8.1/rust/op-reth/crates/evm/src/lib.rs ; https://raw.githubusercontent.com/ethereum-optimism/optimism/op-reth/v2.10.0-rc.4/rust/op-reth/crates/evm/src/lib.rs ; https://raw.githubusercontent.com/base/base/v1.6.0-rc.3/crates/execution/evm/src/config.rs ; https://raw.githubusercontent.com/base/base/v1.5.6/Cargo.lock ; https://raw.githubusercontent.com/worldcoin/world-chain/v2.8.2/Cargo.lock ; https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/Cargo.lock ; https://raw.githubusercontent.com/circlefin/arc-reth/v2.2.0-arc.2/crates/engine/tree/src/tree/payload_processor/prewarm.rs ; https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/Cargo.lock ; research/network-risk/cycles/025/theme-speculative-commit.work/clientversions.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L2",
+   "check": "Monad v0.16.7 optimistic execution and merge: read set, validation before merge, and whether producer and validator share it.",
+   "result": "Every transaction runs against the block state up to that point. After the previous transaction is done, it is merged only if BlockState::can_merge accepts its originals; otherwise it runs again and must merge (execute_transaction.cpp lines 456-497). Validators run the same code, so this one path decides the canonical state. can_merge compares every original storage word with the block's current word, and a word the block state has not seen must be zero (block_state.cpp lines 156-192). An account that differs passes only through try_fix_account_mismatch (state.cpp lines 650-710). That function refuses when either side is dead, or the code hash, incarnation or nonce differ, or relaxed validation is off, or the balance was read exactly, or the new balance is below the recorded minimum. Otherwise it shifts the current balance by the difference. Every balance read through the host sets validate_exact_balance (evmc_host.cpp line 87 calls State::get_balance, state.cpp lines 233-241). A debit records a minimum or exact balance (state.cpp line 712 onward). Original values for SSTORE gas are the recorded originals. Transient storage belongs to the per-transaction State object. Code is keyed by the code hash that is compared. Every PoolManager input listed in the task is in this read set.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/ethereum/execute_transaction.cpp ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/ethereum/evmc_host.cpp ; research/network-risk/cycles/024/theme-storage-key-mapping.work/dl/monad-v0.16.7-block_state.cpp:156-192 ; research/network-risk/cycles/024/theme-storage-key-mapping.work/dl/monad-v0.16.7-state.cpp:233-241,650-740"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "check": "bor v2.11.1 BlockSTM: does a speculative result become canonical without a serial check?",
+   "result": "No. On import, ProcessBlock races the V2 parallel processor against the serial processor. The parallel result is checked against the header by validateStateForPipeline before it is used. On error the node falls back to the serial result (core/blockchain.go lines 1308-1420). The block producer (miner/worker.go) has no parallel or BlockSTM path, so Polygon blocks are produced serially. A wrong speculative read set could only make an importer fall back or reject a block. The V1 StateDB records balance, nonce, code, self-destruct and storage reads in MVHashMap (core/state/statedb.go lines 1053-1201) and has no relaxed balance rule.",
+   "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/core/blockchain.go ; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/miner/worker.go ; research/network-risk/cycles/024/theme-storage-key-mapping.work/dl/bor-statedb.go:1053-1201"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L2",
+   "check": "BNB Smart Chain v1.8.2 and reth-bsc: speculative paths.",
+   "result": "geth-bsc v1.8.2 runs its block prefetcher on a throwaway StateDB and discards it (core/blockchain.go lines 2646-2690, read in cycle 24). No parallel commit path is in state_processor.go. reth-bsc pins bnb-chain/reth v0.1.4, which has no payload_processor/reuse.rs (404).",
+   "source": "research/network-risk/cycles/024/theme-storage-key-mapping.work/dl/bsc-blockchain.go:2646-2690 ; https://raw.githubusercontent.com/bnb-chain/reth-bsc/main/Cargo.toml ; https://raw.githubusercontent.com/bnb-chain/reth/v0.1.4/crates/engine/tree/src/tree/payload_processor/reuse.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Task 2: the PoolManager inputs that a speculative result could get wrong. These are its own native balance, a token balance changed earlier in the block, transient storage, hook code created earlier in the block, and original slot values for SSTORE gas.",
+   "result": "The PoolManager never reads its own native balance. Currency.balanceOfSelf with address zero (src/types/Currency.sol:90-92) is reachable only from sync and settle, and both take the native branch first: sync resets the currency (src/PoolManager.sol:281-283) and settle uses msg.value (src/PoolManager.sol:353-354). Native take sends value with CALL (src/types/Currency.sol:45-49). A send with too little balance fails, and both reth and Monad record such a send as a minimum or exact balance. Case by case for reth v2.11.0. (a) Native transfer in A, then native settle or take in B: the balance is unobserved and B's changes are applied as a delta on the current balance (reuse.rs lines 296-321), and a take is bounded by AtLeast. (b) Token transfer in A, then sync and settle in B: balanceOf reads token storage, which is compared exactly (285-290). (c) Initialize in A, then swap in B: slot0 and the pool words are storage, compared exactly. (d) Hook deployed in A and called in B: B's account read of the hook changes from None to Some and gives Differs (376-379), or the code hash comes from A's published prediction and is compared. Unknown code is rejected (902-915). (e) ERC-6909 mint in A, then burn in B: storage. (f) A reverts after a successful speculative run: B is validated against the state that block execution actually committed (take_valid reads the executor's database, 223-247), and a replaced prediction is retracted (179-187). (g) SSTORE gas and refunds: the first SSTORE of a word loads it through get_storage, so the original value is a recorded read. Transient storage (src/libraries/Lock.sol, NonzeroDeltaCount.sol, CurrencyReserves.sol) is per transaction in evm2 (cycle 24, evm2 state/mod.rs lines 799-812) and is not an input across transactions. Monad answers each case the same way through can_merge, with exact storage and code hash and an exact observed balance. No input of a PoolManager transaction falls outside these read sets.",
+   "source": "src/types/Currency.sol:90-92 ; src/PoolManager.sol:279-288 ; src/PoolManager.sol:349-364 ; src/types/Currency.sol:45-52 ; https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/engine/tree/src/tree/payload_processor/reuse.rs"
+  },
+  {
+   "chainIds": [
+    4217,
+    8453,
+    130,
+    137,
+    143,
+    4326
+   ],
+   "lens": "L2",
+   "check": "Task 3, mined evidence. Blocks with two or more PoolManager transactions (from eth_getLogs) were found newest first. Each transaction was traced in block order with prestateTracer diffMode. The last traced post value of every PoolManager word, and the PoolManager's native balance, were compared with eth_getStorageAt and eth_getBalance at that block. Script work/scripts/sameblock.py, deterministic with no sampling seed, outputs in work/out/. web3_clientVersion is recorded before and after each run.",
+   "result": "No mismatch. Tempo (tempo/v1.19.1-a9d6748, 3,000,000 blocks): 4,430 blocks with PoolManager logs, 114 with two or more transactions (101 sharing a pool id and 101 sharing a word), all 114 checked, 779 words. Base (base.api.pocket.network, reth/v2.5.2 base/v1.5.6, then v1.5.3; mainnet.base.org answered 429): 24 blocks, 190 words, 11 balances. Unichain (unichain.api.pocket.network, op-reth v2.9.0 and v2.4.2 behind a balancer; mainnet.unichain.org answered 403 to debug calls): 30 blocks, 305 words, 23 balances. Polygon (poly.api.pocket.network, bor v2.11.0-private and v2.11.2; polygon-bor-rpc.publicnode.com returned a Cloudflare challenge): 12 blocks, 109 words, 3 balances, 22 blocks skipped for missing debug or historical state. Monad (Monad/0.16.7): 40 blocks, 235 words, 14 balances. MegaETH (mega-reth/v2.3.1 replica): 40 blocks, 148 words, 36 balances. Tempo is new: cycle 23 did not cover it, and its blocks here are mostly two transactions on one pool. On Tempo, Base, Unichain and Polygon the producer runs PoolManager transactions serially, as read above, so the test is a consistency check. On Monad it tests the merge path, and on MegaETH the sequencer's closed executor against the replica's trace. This compares traced post state with committed state. It is not a model replay. Cycle 23's per-transaction model replay stands for the arithmetic.",
+   "source": "research/network-risk/cycles/025/theme-speculative-commit.work/out/sameblock-4217-all.json ; research/network-risk/cycles/025/theme-speculative-commit.work/out/sameblock-8453-pocket.json ; research/network-risk/cycles/025/theme-speculative-commit.work/out/sameblock-130-pocket.json ; research/network-risk/cycles/025/theme-speculative-commit.work/out/sameblock-137.json ; research/network-risk/cycles/025/theme-speculative-commit.work/out/sameblock-143.json ; research/network-risk/cycles/025/theme-speculative-commit.work/out/sameblock-4326.json"
+  },
+  {
+   "chainIds": [
+    4217,
+    8453,
+    130,
+    137,
+    10,
+    57073,
+    1868
+   ],
+   "lens": "L2",
+   "check": "Task 4: does debug_traceTransaction replay serially?",
+   "result": "reth (Tempo, Base, OP Stack) traces from the parent block's state and replays the block's earlier transactions in order before the traced one (reth v2.11.0 crates/rpc/rpc/src/debug.rs lines 337-370, spawn_with_state_at_block on parent_hash and inspect_transaction_in_block). bor does the same with ApplyMessage and Finalise per earlier transaction (eth/state_accessor.go lines 270-296). On these networks a trace speaks for the serial result, and eth_getStorageAt speaks for the committed one. These differ only where a node reused a speculative result, which none does for PoolManager transactions. Monad and MegaETH were not read this cycle. Cycle 23 and F-118 record that MegaETH's public endpoint serves the sequencer's state while its trace comes from a replica interpreter.",
+   "source": "https://raw.githubusercontent.com/paradigmxyz/reth/v2.11.0/crates/rpc/rpc/src/debug.rs ; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.1/eth/state_accessor.go"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "question": "If Tempo turns on --builder.parallel, or T15 switches the candidate test to is_payment_v3 (prewarming.rs line 500 TODO), does any replayable action reach a contract other than a TIP-20 token, the channel reserve, the fee manager or the nonce precompile? Could a replayed Sinc credit to the PoolManager's TIP-20 balance differ from a serial run?",
+   "why": "Replay is the only producer-side path on the 21 networks that commits a result without running it again. Today it cannot touch a PoolManager call, and it is off by default.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "question": "In bor's V1 StateDB, GetStateAndCommittedState (statedb.go line 1162) does not go through MVRead, so the SSTORE gas inputs of a parallel worker may come from the parent block. Is V1 still reachable on mainnet, or only V2 (NewV2StateProcessor, blockchain.go line 975)?",
+   "why": "Gas taken from stale values would only make the importer fall back to serial, because the result is checked against the header. It is recorded to close the read set question.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1078",
+   "outcome": "cleared",
+   "answer": "tempo v1.19.1 pins reth rev 167933d (reth-engine-tree 2.11.0), whose reuse path is used only in engine validation, needs a default-off flag, and needs the EvmConfig to opt in. TempoEvmConfig does not opt in. Tempo's own payload builder commits recorded replays only with the hidden, default-off --builder.parallel flag, and only for TIP-20 payment-lane transactions, so never for a PoolManager call. base v1.5.6 (reth 2.5.2) has no reuse code. op-reth v2.10.0-rc.4 and base v1.6.0-rc.3 carry it, but their EvmConfigs do not opt in. Where the code exists, its read set covers storage words exactly, account nonce, code hash and existence, unknown code, observed balances (BALANCE, SELFBALANCE, SELFDESTRUCT, out of funds) and the first loaded value of every slot, which is the SSTORE original. The PoolManager never reads its own native balance (src/PoolManager.sol:281-283, 353-354). A token balance changed by an earlier transaction is a storage read. Mined evidence on Tempo, Base, Unichain, Polygon, Monad and MegaETH: 260 blocks with two or more PoolManager transactions and 1,766 words, with no mismatch."
+  },
+  {
+   "leadId": "L-1071",
+   "outcome": "inconclusive",
+   "answer": "Not reached for the cache key question. This cycle established which of those releases carry a speculative commit path: none of op-reth v2.8.1, v2.10.0-rc.4, reth 2.5.x, 2.3.0, 2.2.0 or world-chain v2.8.2 (op-v2.6.0-2) reuses results. The cache library and key of each release were not read."
+  }
+ ]
+}
