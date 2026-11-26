@@ -1,0 +1,22 @@
+{
+  "unit": "theme-hook-and-native-sides",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 2: native value. settle with value in a native pool, settle and settleFor with value while an ERC-20 is synced, a take above the PoolManager's balance and at 2^127, native takes to 62 recipients including the PoolManager itself, on every network.",
+      "agrees": true,
+      "note": "The code holds under my reading. _settle reverts with NonzeroNativeValue when a currency other than address(0) is synced and msg.value is nonzero (src/PoolManager.sol:353-356), so a value payment cannot be counted under a synced face. take debits the caller through amount.toInt128() before the payout (src/PoolManager.sol:294-295), so an amount of 2^127 or more reverts in SafeCast and a payout above the balance fails the CALL at src/types/Currency.sol:44 and reverts through bubbleUpAndRevertWith at Currency.sol:47-49, which undoes the debit. No receive or fallback function exists in src/PoolManager.sol or its parents (grep over src/*.sol finds none), so a native take to the PoolManager itself reverts. The recipient is chosen by the caller, so a recipient that has code on one network and not another changes only the caller's own payout. Any net imbalance left open ends at the count check at src/PoolManager.sol:112. I did not rerun the 62 recipient eth_calls."
+    },
+    {
+      "check": "Tempo native value cases: without an override, SELFBALANCE, BALANCE and a value CALL give 0 while eth_getBalance answers 0x9612084f...c9b2, so settle credits msg.value 0 and every native take of a nonzero amount fails.",
+      "agrees": true,
+      "note": "I reran it at block 0x3097dda against https://rpc.mainnet.tempo.xyz (web3_clientVersion tempo/v1.19.1-a9d6748/x86_64-unknown-linux-gnu). eth_getBalance of the PoolManager 0x33620f62c5b9b2086dd6b62f4a297a9f30347029 returned 0x9612084f0316e0ebd5182f398e5195a51b5ca47667d4c9b26c9b26c9b26c9b2. An eth_call with only a code override at the PoolManager address (SELFBALANCE, MSTORE, RETURN) returned 0, and BALANCE(PoolManager) read from another address returned 0. The EVM therefore sees no native value, so balanceOfSelf for address(0) (src/types/Currency.sol:91-93) reads 0 and the native branch of _settle credits only msg.value (src/PoolManager.sol:353-354). The large eth_getBalance figure is an RPC-side value and the PoolManager never reads it. I did not test a transaction that carries value on Tempo."
+    },
+    {
+      "check": "ParseBytes.parseSelector and parseFee load a full word without masking. Dirty bytes after the selector, a caller with nonzero upper bytes, or fee bits above 24 do not change the outcome.",
+      "agrees": true,
+      "note": "The conclusion holds, with one citation error. parseSelector and parseFee are plain mloads (src/libraries/ParseBytes.sol:9-21). The selector comparison is at src/libraries/Hooks.sol:152, and the reference results in out/dirtysel.json (four cases: low and high driver address, zero and 0xff padding) show it accepts padded selectors, so the compiled code cleans both bytes4 operands. A failed comparison would only revert the hook's own pool. The fee word is used only when the pool fee is the dynamic flag (Hooks.sol:263) and then through isOverride, which tests self & 0x400000, and removeOverrideFlag, which returns self & 0xBFFFFF and so drops every bit above 24, followed by validate against 1,000,000 (src/libraries/LPFeeLibrary.sol:61-78, used at src/libraries/Pool.sol:303-304). Correction: the cleared item cites src/libraries/LPFeeLibrary.sol:128-145, but the file has 79 lines and the masks are at lines 61-70. Only the pool's own hook chooses these words, so any effect is pool-creator scope."
+    }
+  ],
+  "leads": []
+}

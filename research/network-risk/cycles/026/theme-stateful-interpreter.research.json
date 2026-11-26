@@ -1,0 +1,210 @@
+{
+ "unit": "theme-stateful-interpreter",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L1",
+   "check": "Task 4: bor's MULMOD memo at the newest tag that has it (v2.12.0-beta) and on develop, which is the only ref that carries Salvador (SalvadorBlock 98688600 at params/config.go:478 on develop; v2.12.0-beta has no Salvador entry; tags v2.12.0, v2.12.0-beta2, v2.12.0-beta3, v2.12.0-rc1, v2.12.1 and v2.11.3 return 404). Exact reuse condition and proof that a reused reciprocal belongs to the same full 256 bit modulus.",
+   "result": "core/vm/mulmod_memo.go is byte identical on v2.12.0-beta and develop, and so are core/vm/evm.go, instructions.go and interpreter.go. opMulmod pops x and y by value and passes z = the stack top (instructions.go:200-205). An entry is reused only when z[3] != 0 and mm.ok and mm.mod == *z (mulmod_memo.go:56-57), where mm.mod is a uint256.Int, an array of four uint64, so the comparison is on all 256 bits. On a miss the code stores a value copy of *z in mm.mod and mm.mu = uint256.Reciprocal(z) before z is written (lines 58-60). The reciprocal in mm.mu is therefore always the reciprocal of exactly the value in mm.mod, and a hit requires mm.mod to equal the new modulus in every limb, so a reused reciprocal belongs to the same full modulus. MulModWithReciprocal (holiman/uint256 v1.3.2 uint256.go:688-715) then runs the same umul and reduce4(&p, m, mu) as MulMod (uint256.go:720-735) with mu equal to Reciprocal(m), with z aliasing m in both, so the word is the stock word. Narrow moduli (z[3] == 0) and m == 0 bypass the memo. The memo is a field of the EVM (evm.go:217-219) and is never cleared; it outlives frames, reverts and transactions of one EVM, which is harmless because its value is a function of its key. Direct test: memo.go copied verbatim from v2.12.0-beta, compiled with go1.24.7 against uint256 v1.3.2 source, one memo instance for the whole run, consecutive moduli sharing the top limb, the bottom limb, three limbs, the top or bottom 192 bits, differing by one in the top limb, or repeating, each pair also run as FullMath does with 2^256-1 between: seed 2026112626, 1,000,000 pairs, 5,000,000 MULMODs, 1,271,986 memo hits, 0 mismatches against math/big; seed 2026112627, 250,000 pairs, 0 mismatches. A planted fault keying the memo on limb 3 only does not finish 10 pairs in 20 seconds (reduce4's final subtraction loop at mod.go:450-461 runs with the reciprocal of another modulus), so a stale entry cannot pass unseen.",
+   "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.12.0-beta/core/vm/mulmod_memo.go; https://raw.githubusercontent.com/0xPolygon/bor/develop/core/vm/mulmod_memo.go; https://raw.githubusercontent.com/0xPolygon/bor/develop/params/config.go; https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go; https://raw.githubusercontent.com/holiman/uint256/v1.3.2/mod.go; research/network-risk/cycles/026/theme-stateful-interpreter.work/build/memotest/main.go"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L1",
+   "check": "How often the PoolManager itself can meet the memo with a repeated or a near-equal modulus. Every MULMOD the PoolManager frames execute in sequences a64, a512 and b was traced in the reference interpreter.",
+   "result": "a512: 5288 MULMODs, 3328 with a full-width modulus, 257 distinct full-width moduli, 2816 of them 2^256-1, 512 changes of modulus, none to a modulus that shares limb 3 or limb 0 with the one before. Every full-width denominator is preceded by mulmod(a, b, not(0)) (src/libraries/FullMath.sol:24), so a one-entry memo holds 2^256-1 whenever a new denominator arrives; the only hits on a denominator are FullMath.sol:48 followed by :112 for the same denominator in mulDivRoundingUp. A memo that keyed on one limb would therefore be exposed by PoolManager swaps only for a denominator whose keyed limb is all ones, and the a512 sequence exposes it 0 times. The memo check rests on the raw sequences of established-l1 (20,000 records on every Polygon endpoint) and on the direct test above; the PoolManager sequences check that the whole path returns the same words.",
+   "source": "research/network-risk/cycles/026/theme-stateful-interpreter.work/out/moduli.json; src/libraries/FullMath.sol:24; src/libraries/FullMath.sol:48; src/libraries/FullMath.sol:112"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Task 2: long sequences inside one eth_call per sequence with state overrides at each network's real PoolManager address and the build of this checkout (research/network-risk/build/PoolManager.json), driven by src/Seq.sol of the work directory. (a) a64 and a512: 16 pools on one pair with liquidity 2^100+i*2^20, 2^100+k*2^96 (denominators that differ only in limb 3), 2^101-1-i and four random values in [2^96, 2^105) (seed 2026112661), 4 and 32 rounds of 16 swaps, directions alternating per round and per pool, exact input and exact output, so FullMath.mulDiv and mulDivRoundingUp (src/libraries/FullMath.sol:14-116) see distinct, repeated and alternating full-width denominators at src/libraries/SqrtPriceMath.sol:47 and :71. (b) the same swap on two identical pools before and after an unlock that swapped 16 other denominators and reverted, and before and after an inner call that swapped another pool and reverted (A2 must equal A1). (c) extsload of a pool's four words before a swap, after it, after an inner swap that reverted, and around a pool whose afterSwap hook swaps the same pool back. (c2) a pool whose beforeSwap hook swaps the same pool after the PoolManager frame has read slot0 at checkPoolInitialized and before Pool.swap reads it again (the F-147 shape). (d) 300 currencies in one unlock: mint of ERC-6909 claims (a transient delta write), exttload, an inner frame that mints more, reads and reverts, exttload again, NonzeroDeltaCount after each, and burn of all 300. (e) a hook deployed by CREATE2 with constant init code that fetches its runtime from the factory, a swap through it, SELFDESTRUCT, a second CREATE2 at the same address with other runtime, and a second swap.",
+   "result": "199 eth_calls returned the reference interpreter's words exactly (33827 words), each bracketed by web3_clientVersion and pinned to a block. Per network: Ethereum (1) 39 of 39 calls; Optimism (10) 7 of 7 calls; Base (8453) 7 of 7 calls; Unichain (130) 7 of 7 calls; Zora (7777777) 7 of 7 calls; Worldchain (480) 7 of 7 calls; Ink (57073) 7 of 7 calls; Soneium (1868) 7 of 7 calls; Celo (42220) 7 of 7 calls; X Layer (196) 7 of 7 calls; Arbitrum One (42161) 7 of 7 calls; Robinhood Chain (4663) 7 of 7 calls; Elysium (99901) 7 of 7 calls; Polygon (137) 25 of 27 calls; BNB Smart Chain (56) 7 of 7 calls; Avalanche (43114) 7 of 7 calls; Monad (143) 7 of 7 calls; MegaETH (4326) 8 of 8 calls; Tempo (4217) 6 of 10 calls; Arc (5042) 8 of 8 calls; HyperEVM (999) 8 of 8 calls. Every network also matches Ethereum. Sequence b's A2 equals A1 on every network, the reverted pool's words read back unchanged, c's words after the reverted inner swap equal the words before it, and d returns 0 bad checks and a NonzeroDeltaCount of 0. In e every network except Tempo returns the same ten words as Ethereum (on Tempo the call reverted with WrappedError from afterSwap after running out of the 25,000,000 gas the endpoint grants, so e is unobserved there, and a64 steps 4 to 5 and d300 also reverted for gas; Tempo has no word-level comparison for those sequences): the second CREATE2 returns address 0, the code hash is unchanged and the second swap runs the first runtime (mark 0xA), as EIP-6780 requires for an account created and destroyed in one transaction. MegaETH, Arc and HyperEVM ran a512 as two eth_calls because a single one exceeded the gas the endpoint grants; the halves were compared with their own reference runs. Tempo's endpoint grants 25,000,000 gas and charges more for new storage, so a64 (second half), d300 and b ran out of gas inside the unlock (empty revert data); the smaller variants a64t (4 pools, 16 rounds, 64 swaps), bt and d40 match the reference on Tempo, and a debug_traceCall of e on Tempo shows the second CREATE2 failing with 'contract address collision'. Polygon answered from bor builds cb3d19c5f690, ebcfea01452d, a863b8e5cce1 and 280514fa9fb7 (publicnode, v2.11.1-private), from QuikNode v2.11.1 backends, from Pocket's v2.11.2 and v2.11.0-private backends and from drpc; drpc refused two calls with HTTP 429, which are recorded. No public Polygon endpoint reports v2.12.0-beta or develop, so the memo code itself was not reached on chain.",
+   "source": "research/network-risk/cycles/026/theme-stateful-interpreter.work/out/compare.json; research/network-risk/cycles/026/theme-stateful-interpreter.work/scripts/seqlib.py; research/network-risk/cycles/026/theme-stateful-interpreter.work/src/Seq.sol; research/network-risk/cycles/026/theme-stateful-interpreter.work/out/trace-4217-e.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Whether the sequences can see a stale interpreter cache. The reference interpreter was run with a planted per-frame SLOAD cache in the PoolManager's frames that is not invalidated by writes in nested frames or by reverts (the stale-entry shape of erigon's frameSlots).",
+   "result": "Sequence c2 returns 3 different words under the planted cache, because Pool.swap then starts from the price read before the hook moved it (src/PoolManager.sol:196 reads slot0 through checkPoolInitialized, the beforeSwap hook writes it, and Pool.swap reads it again). Sequences b, c and d300 do not change under the plant, because the PoolManager reads no pool word after an afterSwap hook returns and reverted frames are separate frames. The c2 words match the unplanted reference on all 21 networks, so no endpoint has this stale-read shape.",
+   "source": "research/network-risk/cycles/026/theme-stateful-interpreter.work/out/plantcheck-sload.json; research/network-risk/cycles/026/theme-stateful-interpreter.work/scripts/pyevm_plant.py; src/PoolManager.sol:196"
+  },
+  {
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "check": "Task 1, erigon v3.8.1 (Ethereum minority client, reached through the Pocket gateway): state that outlives one instruction.",
+   "result": "(1) frameSlots, a per-frame cache of the last two SLOAD results keyed by the stack word, valid only while IntraBlockState.ReadStamp() equals the stamp stored at fill time (execution/vm/interpreter.go:93-145, opSload at instructions.go:766-786); it is reset for every frame (interpreter.go:515-516) and turns itself off after 8 fills without a hit. The comment at interpreter.go:96-97 says warming is journalled and changes the stamp, which means the stamp follows the journal. The definition of ReadStamp was not found: it is not in execution/state/intra_block_state.go, journal.go, versionedio.go, versionmap.go, access_list.go, transient_storage.go or state_object.go at v3.8.1, and no other file name could be guessed, so how a nested write or a revert changes the stamp is not confirmed from source. (2) cacheGen, an intern cache of one storage key and one address valid for one opcode dispatch (interpreter.go:70-81, 148-181). (3) jumpDestCache, a process-wide 64 MB LRU of JUMPDEST bitmaps keyed by the full code hash and never unwound (contract.go:66-70, 101-121); content addressed, so it cannot go stale. Through the gateway 39 calls of c2, c, b, a64, d300 and a512 matched; 15 of them had erigon 3.3.9, 3.8.1 or 3.8.2 on one side of the bracket and none had erigon on both sides, so the gateway does not let a call be pinned to erigon.",
+   "source": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/interpreter.go; https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/instructions.go; https://raw.githubusercontent.com/erigontech/erigon/v3.8.1/execution/vm/contract.go; research/network-risk/cycles/026/theme-stateful-interpreter.work/out/compare.json"
+  },
+  {
+   "chainIds": [
+    137,
+    56,
+    43114,
+    42161,
+    4663,
+    99901,
+    42220
+   ],
+   "lens": "L1",
+   "check": "Task 1, go-ethereum and its forks (bor on Polygon, BNB Chain's geth, avalanchego's libevm, Nitro's fork for Arbitrum One, Robinhood Chain and Elysium, Celo's op-geth backend): state that outlives one instruction.",
+   "result": "geth v1.17.4 keeps JUMPDEST bitmaps per EVM in a map keyed by code hash (core/vm/evm.go:127-147, SetJumpDestCache at 212-213), a per-transaction journal that undoes transient storage writes on revert (core/state/journal.go:337-341 and 588-590) and clears transient storage between transactions, and per-transaction access lists and refund counters, which change only gas. bor v2.12.0-beta adds a per-block SharedResultCaches set with a synchronised jump destination map keyed by code hash, a keccak cache keyed by a full copy of the input and an ecrecover cache (core/vm/jumpdests.go:26-76, shared_cache.go:268-299 on develop, evm.go:238-249), and the MULMOD memo read above. Every key is the full input or the full keccak of the code, and JUMPDEST analysis of legacy code does not depend on the fork, so no key is narrower than its input. Code at an address cannot change inside a transaction on any of the 21 networks (sequence e), and new code has a new hash, so no entry can be stale after SELFDESTRUCT or CREATE2. Sequences b and d (reverted inner frames, 300 transient deltas) match on all of these networks.",
+   "source": "https://raw.githubusercontent.com/ethereum/go-ethereum/v1.17.4/core/vm/evm.go; https://raw.githubusercontent.com/ethereum/go-ethereum/v1.17.4/core/state/journal.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.12.0-beta/core/vm/jumpdests.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.12.0-beta/core/vm/evm.go; research/network-risk/cycles/026/established-l1.work/dl/bor/develop-shared_cache.go"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    4326,
+    999,
+    5042,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 1, reth and revm based clients and evm2 (Ethereum's reth nodes, the OP Stack networks, Base, World Chain, X Layer, Celo's reth backend, MegaETH, HyperEVM, Arc, Tempo): analysed code caches, and revm's new SIMD jump destination analysis.",
+   "result": "revm stores the jump table inside the analysed bytecode (crates/bytecode/src/legacy/jump_map.rs) and caches bytecode by code hash, which is the full keccak of the code; the analysis has no fork input for legacy code. revm's main branch replaces the scalar scan with SSE4.1, AVX2, AVX-512 VBMI and NEON kernels (crates/bytecode/src/legacy/analysis.rs and analysis/x86.rs); no published revm-bytecode release carries them (41.0.0, 42.0.0, 43.0.0 and 11.0.1 from crates.io contain only the scalar scan). The x86 kernels from main were compiled here and each was run with the scalar tail as analyze_legacy does: 0 mismatches against the specification rule on 806 cuts of the PoolManager build and the driver and on 400,000 random strings of up to 600 bytes (seed 2026112662, 133,440,681 bytes). Changing the kernel's BIAS constant by one gives 16,118, 15,933 and 8,547 mismatches, so the harness sees a fault. The NEON kernel was not run. evm2's kernels were tested in an earlier cycle (OPCODES.md, evm2 row).",
+   "source": "https://raw.githubusercontent.com/bluealloy/revm/main/crates/bytecode/src/legacy/analysis.rs; https://raw.githubusercontent.com/bluealloy/revm/main/crates/bytecode/src/legacy/analysis/x86.rs; https://static.crates.io/crates/revm-bytecode/revm-bytecode-43.0.0.crate; research/network-risk/cycles/026/theme-stateful-interpreter.work/build/jdsimd/src/main.rs"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Monad: the PoolManager frames of every sequence through the cycle 23 harness, interpreter and native x86 code, built from v0.16.5 and v0.16.7.",
+   "result": "a64, a512, b, c and c2 give identical results in both engines on both releases, and both equal the reference interpreter word for word. d300 does the same in a world that uses the forwarding token doubles. Sequence e cannot run there: the harness has no CREATE and its selfdestruct returns false. Reading the harness explains part of the two cycle 25 harness effects: exec_code runs w.code[m.recipient] (harness.cpp:234-236), so a DELEGATECALL runs the caller's own code instead of the code address, and native and intercode objects are cached by recipient address (harness.cpp:247). A world with forwarders therefore cannot run token calls, and a world with the token code at every currency makes the interpreter side of d40 and d300 fail early while native code succeeds; this depends only on the harness world, is deterministic over three runs, and does not appear on rpc.monad.xyz, whose Monad/0.16.7 answers match the reference on every sequence. The remaining harness effect is listed as a lead.",
+   "source": "research/network-risk/cycles/023/theme-monad-compiled-coverage.work/src/harness.cpp:176; research/network-risk/cycles/023/theme-monad-compiled-coverage.work/src/harness.cpp:234-247; research/network-risk/cycles/026/theme-stateful-interpreter.work/out/hx-results.json; research/network-risk/cycles/026/theme-stateful-interpreter.work/out/hx-d300-fwd.json"
+  },
+  {
+   "chainIds": [
+    1,
+    137,
+    143,
+    4217,
+    8453
+   ],
+   "lens": "L1",
+   "check": "Task 3: caches that outlive a transaction (analysed code, compiled code, bor's per-block caches, erigon's code cache) cannot be reached by eth_call, so mined blocks with several PoolManager transactions were traced in block order and the folded post state compared with committed storage (cycle 25 sameblock.py, run again on newer blocks).",
+   "result": "chain 1: 12 blocks with two or more PoolManager transactions traced, 468 words and 10 balances, 0 mismatches, 0 trace errors, https://eth.api.pocket.network (reth/v2.10.1-58ebce1/x86_64-unknown-linux-gnu to reth/v2.11.0-b9abbcc/x86_64-unknown-linux-gnu), head 26501320, window 40 blocks; chain 137: 4 blocks with two or more PoolManager transactions traced, 38 words and 0 balances, 0 mismatches, 16 trace errors, https://poly.api.pocket.network (bor/ec9ea5f13f70/v2.11.2/linux-amd64/go1.26.11 to bor/ec9ea5f13f70/v2.11.2/linux-amd64/go1.26.11), head 98009234, window 400 blocks; chain 143: 48 blocks with two or more PoolManager transactions traced, 290 words and 25 balances, 0 mismatches, 0 trace errors, https://rpc.monad.xyz (Monad/0.16.7 to Monad/0.16.7), head 125647800, window 1500 blocks; chain 4217: 2 blocks with two or more PoolManager transactions traced, 10 words and 0 balances, 0 mismatches, 0 trace errors, https://rpc.mainnet.tempo.xyz (tempo/v1.19.1-a9d6748/x86_64-unknown-linux-gnu to tempo/v1.19.1-a9d6748/x86_64-unknown-linux-gnu), head 50951728, window 2000000 blocks; chain 8453: 40 blocks with two or more PoolManager transactions traced, 248 words and 25 balances, 0 mismatches, 0 trace errors, https://base.api.pocket.network (reth/v2.5.2-9e380dd/x86_64-unknown-linux-gnu/base/v1.5.3 to reth/v2.5.2-9e380dd/x86_64-unknown-linux-gnu/base/v1.5.6), head 62638435, window 300 blocks. Polygon's publicnode endpoint refused all six traces of its window; Pocket served 4 of 20. No word differs from committed state.",
+   "source": "research/network-risk/cycles/026/theme-stateful-interpreter.work/out/sameblock-1.json; research/network-risk/cycles/026/theme-stateful-interpreter.work/out/sameblock-137.json; research/network-risk/cycles/026/theme-stateful-interpreter.work/out/sameblock-143.json; research/network-risk/cycles/026/theme-stateful-interpreter.work/out/sameblock-4217.json; research/network-risk/cycles/026/theme-stateful-interpreter.work/out/sameblock-8453.json; research/network-risk/cycles/025/theme-speculative-commit.work/scripts/sameblock.py"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Code replacement at a hook address within one transaction, which would let any code or analysis cache keyed by address serve old code (Task 2e).",
+   "result": "EIP-6780 keeps the code of an account destroyed in its creation transaction until the transaction ends, so a CREATE2 to the same address in the same transaction collides. Sequence e gives this on 20 networks, and on Tempo the trace of the reverted call (out/trace-4217-e.json) shows the same contract address collision: second CREATE2 returns 0 and the hook keeps its first runtime. Between transactions a redeployed hook has a new code hash. A hook author who replaces hook code between transactions is the pool-creator case and is outside this unit (one line: hooks that are EIP-7702 delegated accounts or metamorphic factories can change behaviour between transactions; pool creator level).",
+   "source": "https://raw.githubusercontent.com/ethereum/EIPs/master/EIPS/eip-6780.md; research/network-risk/cycles/026/theme-stateful-interpreter.work/out/compare.json"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    4326,
+    999,
+    5042
+   ],
+   "lens": "L1",
+   "question": "When a revm-bytecode release carries the SIMD jump destination kernels now on revm main (crates/bytecode/src/legacy/analysis.rs, analysis/x86.rs, analysis/aarch64.rs), do the released kernels equal the ones tested here, and does the NEON kernel match the scalar rule on the PoolManager build and random strings on aarch64 hardware?",
+   "why": "A kernel that dropped one of the PoolManager's 610 JUMPDESTs would make that branch fail on every reth based node of that release; the x86 kernels of main match today, and NEON was not run.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1115",
+   "outcome": "cleared",
+   "answer": "Built on all 21 networks, not only Polygon: 64 and 512 consecutive swaps over 16 pools with distinct, repeated and alternating full-width denominators (including denominators that differ only in limb 3 or only below it) in one eth_call each, plus the reverted-frame, extsload, nested-hook, 300-currency transient and CREATE2 redeploy sequences. 199 calls and 33827 words equal the reference interpreter and Ethereum; Tempo's three gas-limited calls ran as smaller variants that match. On Polygon the sequences ran on the five private publicnode builds, QuikNode v2.11.1, Pocket v2.11.2 and drpc; none runs the memo. The memo itself was read at v2.12.0-beta and develop (identical) and tested directly from source on 1,250,000 pairs of moduli sharing top or bottom limbs with 0 mismatches."
+  }
+ ]
+}

@@ -1,0 +1,74 @@
+{
+ "unit": "theme-monad-shipped-binary",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 1, distribution of the Monad mainnet validator binary. Monad's node operator documentation installs the apt package monad from https://pkg.category.xyz/ (suite noble), version 0.16.5 for mainnet and 0.16.7 for testnet. The repository index (InRelease dated 18 Nov 2026, Packages.gz sha256 7ad122d7...19357) lists monad 0.16.5 as pool/main/monad_0.16.5_amd64.deb, size 739,508,498, sha256 0b27486fc85fefedfdb44637e1ee52a1f59e0287594562f5260fa86abf62acc8, description 'Monad BFT stack (with debug symbols)'. The file was downloaded without credentials into research/network-risk/cycles/026/theme-monad-shipped-binary.work/dl and its sha256 equals the index value.",
+   "result": "The package can be fetched, so the shipped binary is open to inspection. Its data.tar and control.tar are zstd compressed, no zstd tool or Python module is installed, and building zstd from its release source inside the work directory was refused by this session's permission system, so no file of the package was unpacked and no ELF reading was done. The build recipe of the tagged source was read instead: monad-bft v0.16.5 docker/devnet/Dockerfile builds with gcc-15 and g++-15 and ASMFLAGS, CFLAGS and CXXFLAGS of -march=haswell (C and C++ also -fno-omit-frame-pointer), Rust with target-cpu=haswell, through cargo build --release, and links the execution library from the monad-execution submodule; the execution toolchain gcc-avx2.cmake sets -march=haswell for ASM, C and C++; asmjit is built from third_party/asmjit as a static library (CMakeLists.txt:69-71). The cycle 23 harness used clang++ -O2 -march=haswell with asmjit e8c8e2e4. The emitter passes the runtime's CPU features to asmjit only to initialise the code holder (emitter.cpp:734) and validates instructions only in testing builds (emitter.cpp:614-616), so the emitted bytes do not depend on the validator's CPU. Whether the 0.16.5 package was built by this Dockerfile or by another pipeline, and which asmjit commit it carries, stays unconfirmed. Correction by the verifier: the operator page fetched on 2026-11-26 names monad 0.16.7 for mainnet and testnet, and rpc.monad.xyz answers Monad/0.16.7, so the package to read first is monad_0.16.7_amd64.deb (sha256 3cb9dba5501b61ea3487bd042e2b8d12f871cff0e2e15409210e2cef0f8e81fb).",
+   "source": "https://docs.monad.xyz/node-ops/full-node-installation ; https://pkg.category.xyz/dists/noble/InRelease ; https://pkg.category.xyz/dists/noble/main/binary-amd64/Packages.gz ; https://raw.githubusercontent.com/category-labs/monad-bft/v0.16.5/docker/devnet/Dockerfile ; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/category/core/toolchains/gcc-avx2.cmake ; https://raw.githubusercontent.com/category-labs/monad/v0.16.5/CMakeLists.txt"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 3, effect 1: the interpreter side of the cycle 25 harness gave different results for one scenario when the world held 3,066 token accounts (rep1369.txt). Rerun here: the scenario five times in one process with the large world gives five different top level gasleft values on each engine (for example 149823397 interpreted and 149808185 native on the first repetition), the same sequence in two processes, while the small world gives 149618850 on both engines in every repetition. Only the driver's top level gas differs; every step line, storage word, balance and log is the same.",
+   "result": "The cause is the harness host. Host::call copies the whole World before each call and assigns the copy back when the call fails (research/network-risk/cycles/023/theme-monad-compiled-coverage.work/src/harness.cpp:413, 424). libstdc++ map assignment destroys and rebuilds each node, so the code vector of every contract is freed and allocated again. The calling frame still runs with runtime::Context::env.code pointing at the old code buffer (research/network-risk/cycles/023/theme-monad-compiled-coverage.work/src/harness.cpp:236, 244). Valgrind reports 50 contexts of invalid reads in copy_impl called from CODECOPY, all inside the freed 9,537 byte block that holds the driver contract, from the interpreter and from native code. What CODECOPY reads then depends on how the allocator reused the freed block, which the 3,066 token entries copied on every call change. Controls: under valgrind, which never reuses a freed block at once, the large world gives 149618850 on both engines in all five repetitions (SAME); with MALLOC_PERTURB_=165 or 90 the small world varies too. The PoolManager runtime has no CODECOPY (scan of build/PoolManager.json), so no PoolManager code was read from freed memory. In the node, Context::from takes the code span from the Intercode, which a shared pointer keeps alive for the whole call (vm.cpp:83-84, code.hpp:36-62), and a revert does not free it. This is not Monad code and a validator cannot hit it.",
+   "source": "research/network-risk/cycles/023/theme-monad-compiled-coverage.work/src/harness.cpp:236-244, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/src/harness.cpp:411-426, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/dl/monad-0.16.5/category/vm/vm.cpp:83-84, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/dl/monad-0.16.5/category/vm/code.hpp:36-62, research/network-risk/cycles/026/theme-monad-shipped-binary.work/out/vg-big.err, research/network-risk/cycles/026/theme-monad-shipped-binary.work/out/vg-big-5rep.txt, research/network-risk/cycles/026/theme-monad-shipped-binary.work/out/perturb-small.txt"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 3, effect 2: case 1528 gives a different native result only on the first scenario of a process. Rerun with the six scenario file of cycle 25 on all four cycle 23 builds: DIFF on the first scenario for 0.16.5-plain, 0.16.7-plain and 0.16.5-cov, SAME on all for 0.16.7-cov, and SAME on all eighteen when the same file is repeated three times in one input.",
+   "result": "The cause is the same harness fault. Valgrind finds 86 contexts of invalid reads by CODECOPY inside the freed 9,537 byte driver block, most of them from JIT frames, and gives SAME on all six scenarios. MALLOC_PERTURB_=165 makes the second scenario differ as well. Which scenario is hit depends on heap layout, which the scenario file size and the build change. The separate cycle 25 explanation of the difference from the reference (balanceOf on an address without code is answered by the harness router at harness.cpp:421-423) concerns the harness as well. No Monad VM cache keyed on process history, uninitialised memory or compiler thread race was found behind either effect: the harness runs the compiler synchronously (harness.cpp:247-250) and the faulty reads are all in the host's code buffer.",
+   "source": "research/network-risk/cycles/023/theme-monad-compiled-coverage.work/src/harness.cpp:247-250, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/src/harness.cpp:411-426, research/network-risk/cycles/026/theme-monad-shipped-binary.work/out/vg-1528.err, research/network-risk/cycles/026/theme-monad-shipped-binary.work/out/perturb-1528.txt"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 3, which earlier harness runs are exposed. The fault needs a failed nested call followed by CODECOPY in a frame above it. The replay tool rp keeps code in a global outside the snapshot (replay.cpp:138, 215), so cycle 23 mined replays are not exposed. The cycle 23 scenario runs with hx used src/world.txt, which holds the PoolManager as the only code account, and the PoolManager has no CODECOPY. Only the cycle 25 runs with the 9,537 byte driver are exposed.",
+   "result": "The cycle 25 runs used a per case world after the first attempt, and their results were compared with reference words, not only between engines: a corrupted driver run would show as a mismatch, and the only mismatches were 1369 and 1528 of the first attempt and 1372 and 1528 of the final run. 1369 and 1528 are now rerun with the fault controlled and give SAME, with 1369 at the small world gas value. Runs that were SAME and equal to the reference need no rerun, because both engines then received the same PoolManager calls and returned the same words.",
+   "source": "research/network-risk/cycles/023/theme-monad-compiled-coverage.work/src/replay.cpp:138, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/src/replay.cpp:215, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/src/world.txt, research/network-risk/cycles/026/theme-monad-shipped-binary.work/out/r1369-big-1.txt"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 4, places where the interpreter and native code of v0.16.5 could differ by design. Native code subtracts a block's whole static gas on entry (x86.cpp:443-448) and tests the sign only at JUMPDEST blocks or after 1,000 gas of unchecked static work (emitter.cpp:1030-1046, 1284-1298, emitter.hpp:51). Stack bounds are tested once per block in block_prologue (emitter.cpp:1301-1333). Runtime routines add the remaining block base gas back before the CALL 63/64 rule and the SSTORE sentry (call.cpp:136-147, storage.cpp:70-73), and the depth limit and memory expansion are runtime code shared by both engines (call.cpp:152-154, types.hpp:330-341). copy_result_data turns a negative gas_remaining at STOP, RETURN or REVERT into out of gas (context.cpp:174-176).",
+   "result": "When a frame cannot pay a block, both engines fail the frame with all gas consumed; native code may fail earlier inside the block, or at the next check up to 1,000 gas later, and reports Error where the interpreter reports out of gas, which a caller sees only as failure. The static cost of a block is paid by the interpreter before it leaves the block, and dynamic costs are computed by the same runtime, so a block that fails on one engine fails on the other. In the PoolManager build there are 917 blocks by Monad's splitting rule (cycle 23 counted 913 entered or reachable); 49 of them hold 64 instructions with an effect outside the frame (39 SSTORE, 8 TSTORE, 12 LOG, 4 CALL, 1 STATICCALL) followed by more instructions of the same block. Every block with static gas has its out of gas test moved to its start. In those 49 blocks, an out of gas run lists an outgoing call or a write on the interpreter side that native code never makes. The failing frame is reverted on both sides, so no PoolManager storage word, transient word, balance, log or outgoing call that persists can differ, which matches the 20 cycle 23 runs whose frame lists differed with equal state. These files were read at v0.16.5; mainnet runs 0.16.7, and the reread at that tag is an open lead.",
+   "source": "research/network-risk/cycles/023/theme-monad-compiled-coverage.work/dl/monad-0.16.5/category/vm/compiler/ir/x86.cpp:382-391, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/dl/monad-0.16.5/category/vm/compiler/ir/x86.cpp:443-448, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/dl/monad-0.16.5/category/vm/compiler/ir/x86/emitter.cpp:1030-1046, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/dl/monad-0.16.5/category/vm/compiler/ir/x86/emitter.cpp:1301-1333, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/dl/monad-0.16.5/category/vm/runtime/call.cpp:136-154, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/dl/monad-0.16.5/category/vm/runtime/storage.cpp:70-73, research/network-risk/cycles/023/theme-monad-compiled-coverage.work/dl/monad-0.16.5/category/vm/runtime/context.cpp:174-176, research/network-risk/cycles/026/theme-monad-shipped-binary.work/out/pm-blocks.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Endpoint bracket for this unit: rpc.monad.xyz answered web3_clientVersion with Monad/0.16.7 (a first attempt returned 'Rate limit exceeded') and eth_getCode of 0x188d586d...9ea8e returned 24,009 bytes.",
+   "result": "The endpoint build is the one cycle 25 tested. No other call was made.",
+   "source": "research/network-risk/cycles/026/theme-monad-shipped-binary.work/rpc/clientversion2.txt"
+  }
+ ],
+ "leads": [],
+ "leadResults": [
+  {
+   "leadId": "L-1104",
+   "outcome": "inconclusive",
+   "answer": "The mainnet package monad 0.16.5 was found in the apt repository the documentation names and downloaded without credentials (sha256 matches the index), but it is zstd compressed and no decoder could be used in this session, so the binary was not read. From the tagged source, the build uses gcc-15 with -march=haswell and a static asmjit from the submodule; the harness used clang -O2 -march=haswell. The emitted instruction bytes depend on the emitter and asmjit source, not on the CPU the validator runs on. A follow-up lead names the steps."
+  },
+  {
+   "leadId": "L-1108",
+   "outcome": "cleared",
+   "answer": "Both effects come from the harness host. A failed nested call makes Host::call restore its World copy, which frees and rebuilds each code vector while the calling frame still points at the old buffer; CODECOPY in the 9,537 byte driver then reads freed memory whose content depends on allocator history. Valgrind shows the reads and removes both effects; poisoning freed memory makes the small world vary too. The PoolManager has no CODECOPY, the node keeps code alive through a shared Intercode, and no Monad VM state was involved."
+  }
+ ]
+}

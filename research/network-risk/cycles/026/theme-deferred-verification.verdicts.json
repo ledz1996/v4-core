@@ -1,0 +1,54 @@
+{
+  "unit": "theme-deferred-verification",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "low",
+      "factCheck": "monad-rpc v0.16.7 data/mod.rs line 92 returns get_latest_proposed_block_key for get_latest_block_key, line 105 maps BlockTags::Latest to it and line 106 maps Safe to the latest voted key; get_transaction_receipt (lines 196-225) reads the buffer first and then looks up the transaction location against the latest proposed key. types/eth_json.rs line 328 comments Latest as proposed and line 376 parses pending to Latest. docs.monad.xyz/reference/json-rpc/overview states latest is Proposed with no consensus vote, safe is Voted, finalized is Finalized, and that eth_getTransactionReceipt can match a transaction in a non-finalized block. A batched JSON-RPC request to https://rpc.monad.xyz (web3_clientVersion Monad/0.16.7) on 2026-11-26 returned eth_blockNumber 125653492, safe 125653491, finalized 125653490 and in a second batch finalized 125653491, so latest runs one to two blocks ahead of finalized. No primary source contradicts the claim. The replacement of a Proposed block needs a missed QC or an equivocating leader, so only operators act.",
+      "codeCheck": "src/PoolManager.sol:103-114 unlock checks NonzeroDeltaCount at the end of the same call, so every PoolManager effect settles inside one transaction; take at src/PoolManager.sol:291-297 debits the delta and transfers in that transaction. A search of src/ for block.number, block.timestamp, blockhash, tx.origin, prevrandao and blobhash matches only src/test/NoDelegateCallTest.sol. A dropped block removes all of its PoolManager effects together, so core state is never half applied. The hazard is confined to off-chain integrations that act on latest.",
+      "corrections": "",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/category-labs/monad-bft/v0.16.7/monad-rpc/src/data/mod.rs", "supports": "Latest resolves to the latest proposed block key (lines 91-93, 105); receipts looked up against it (196-225)"},
+        {"url": "https://raw.githubusercontent.com/category-labs/monad-bft/v0.16.7/monad-rpc/src/types/eth_json.rs", "supports": "Latest is proposed, Safe voted, pending parses to Latest (lines 328-330, 376)"},
+        {"url": "https://docs.monad.xyz/reference/json-rpc/overview", "supports": "latest is Proposed with no vote; transaction-hash lookups can match non-finalized blocks"},
+        {"url": "https://rpc.monad.xyz", "supports": "batched eth_blockNumber and eth_getBlockByNumber safe and finalized on 2026-11-26: 125653492 / 125653491 / 125653490, client Monad/0.16.7"}
+      ]
+    },
+    {
+      "findingIndex": 1,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "Tempo a9d6748 crates/consensus/src/args.rs lines 35-56 define VerificationMode with Hardfork as default, resolving to deferred when T14 is active at the previous epoch boundary timestamp, and lines 153-165 define the hidden --consensus.verification-mode flag with that default. consensus/application/mod.rs lines 120-143 hand out Application::Deferred or Application::Immediate by that test. The chainspec tests (crates/chainspec/src/spec.rs line 952-958) give mainnet T14 at 1796742000, and the tempo.com changelog for v1.19.0 lists mainnet activation on 8 December 2026 15:00 UTC (1796742000) and the hardfork default. The commonware-consensus 2026.11.0 crate, marshal/standard/deferred.rs lines 15-37, says Deferred votes to notarize after only the availability, context and parent checks and waits on the application result in certify before the finalize vote; simplex/mod.rs lines 106-111 say a false certify leads to nullify and refusal to build on the block, and a payload finalizes only if a quorum certifies it. executor/actor.rs lines 12-25 say HEAD becomes a notarized convergence target only after the node's own newPayload returned VALID, and lines 2884-2889 set safe and finalized to the finalized hash. On 2026-11-26 rpc.mainnet.tempo.xyz (tempo/v1.19.1-a9d6748) served latest 50953853 and finalized 50953854 in sequential reads, so latest did not run ahead of finalized before T14. Only validators can produce a notarized and then nullified view.",
+      "codeCheck": "src/PoolManager.sol:103-114 settles every action inside one transaction and src/ reads no block field outside src/test, so a nullified notarized block takes all of its PoolManager effects with it. Nothing in src/ depends on whether a validator verified execution before or after its notarize vote.",
+      "corrections": "Deferred verification is not the only way a block served at latest on Tempo can be replaced after T14. A notarized block can be followed by a nullification in simplex under either mode, so the integration hazard comes from the executor's HEAD policy. Deferred mode itself cannot put an invalid block at latest on an RPC node, because that node checks VALID first. That supports severity info.",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/consensus/src/args.rs", "supports": "VerificationMode definitions and hardfork default (lines 35-56, 153-165)"},
+        {"url": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/consensus/src/consensus/application/mod.rs", "supports": "Deferred or Inline wrapper chosen by timestamp (lines 120-143)"},
+        {"url": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/consensus/src/executor/actor.rs", "supports": "HEAD moves to notarized target only after own VALID; safe and finalized are the finalized block (lines 12-25, 2884-2889)"},
+        {"url": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/chainspec/src/spec.rs", "supports": "mainnet T14 at 1796742000 (test lines 952-958)"},
+        {"url": "https://static.crates.io/crates/commonware-consensus/commonware-consensus-2026.11.0.crate", "supports": "deferred.rs lines 15-37 and simplex/mod.rs lines 106-111: notarize before verification, certify gates finalize, false certify leads to nullify"},
+        {"url": "https://tempo.com/developers/docs/changelog", "supports": "v1.19.0 verification mode defaults to hardfork; mainnet T14 on 8 December 2026 15:00 UTC, 1796742000"},
+        {"url": "https://rpc.mainnet.tempo.xyz", "supports": "2026-11-26: latest 50953853, safe and finalized 50953854, client tempo/v1.19.1-a9d6748"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 5: does anything in src/ depend on finality, including ERC-6909 claims and protocol fee accrual.",
+      "agrees": true,
+      "note": "A search of src/ for block.number, block.timestamp, blockhash, tx.origin, prevrandao, chainid and blobhash matches only src/test/NoDelegateCallTest.sol. _updateProtocolFees at src/ProtocolFees.sol:66-70 accrues in the swap transaction, and collectProtocolFees at src/ProtocolFees.sol:44-57 checks the controller and the synced currency. unlock at src/PoolManager.sol:103-114 enforces a zero delta count in the same call. A replaced block removes every effect of its transactions together."
+    },
+    {
+      "check": "L-1100: with --builder.parallel or the T15 test is_payment_v3, can a replayed action reach a contract other than a TIP-20 token or the channel reserve, for example a TIP-20 transfer to the PoolManager followed by settle.",
+      "agrees": true,
+      "note": "prewarming.rs lines 497-506 (a9d6748) make a transaction a candidate only if is_payment_v2 and a nonzero nonce key hold. envelope.rs lines 282-330 and 622-637 require every call to target a 0x20c0 TIP-20 address with payment calldata or the channel reserve, with empty access and authorization lists. payload builder lib.rs lines 653-668 run a transaction without a replay through the serial path, and enable_parallel is an operator option (lines 150-155). One detail in the cleared text is too broad: a TIP-20 transfer to a zone deposit address calls the ZonePortal at to.target (precompiles/src/tip20/mod.rs lines 1090-1114), so a TIP-20 transfer can run recipient code. That path reaches a ZonePortal, not the PoolManager, and validators still re-execute the block through newPayload, so the conclusion stands."
+    },
+    {
+      "check": "Task 4: what latest, safe and finalized resolve to on the public endpoint of each network, and who can replace a block served at latest.",
+      "agrees": true,
+      "note": "Rechecked on Monad and Tempo only. On rpc.monad.xyz latest ran 1 to 2 blocks ahead of finalized. On rpc.mainnet.tempo.xyz latest did not run ahead of finalized. Both match the cleared text. Every replacement path listed needs a sequencer, leader, validator set or a parent chain reorganisation. Because core has no state that depends on finality (spot check above), a wrong entry here would not open an unprivileged path to pool funds."
+    }
+  ],
+  "leads": []
+}

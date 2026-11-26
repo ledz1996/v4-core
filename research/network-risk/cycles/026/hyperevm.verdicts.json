@@ -1,0 +1,53 @@
+{
+ "unit": "hyperevm",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "plausible",
+   "severity": "high",
+   "factCheck": "Fetched on 2026-11-26. The aligned quote assets page (sha256 9fd997fe977532e3...) says the treasury deployer designates a treasury address, that activation of AQAv2 is by validator vote after both deployers stake 500k HYPE and send authorization transactions, and that the linked HyperEVM contract will rebalance with the treasury address at a 9:1 ratio. It does not say how the rebalance is executed: it names no system transaction with the treasury address as sender and no call to transfer. The exchange endpoint page (sha256 812ecf7e87ec0470...) lines 1370-1384 show authorizeAqav2Role with only token and role, so the treasury address is set by some action the docs do not show. The transfers page (sha256 0af24917...) says HyperCore credits a token by a system transaction that calls transfer on the linked contract as the token's system address, and its caveats say there are no checks on the system address supply or on the linked contract. nanoreth nb-20261125-2 src/node/primitives/transaction.rs: is_system_transaction is gas_price == Some(0) and recover_signer returns s_to_address(s) for such a transaction with no signature check, as the finding says. On https://rpc.hyperliquid.xyz/evm at head 0x31e564c eth_getTransactionCount of the PoolManager is 0x1 (the EIP-161 creation nonce) and eth_getBalance is 0x9d908ef23bc0864f, both as the finding states. Base fee at block 0x31e568c is 0x5f5e100 (0.1 gwei), so a public legacy transaction with gas price 0 fails the standard base fee rule; the sender spoofing path stays with HyperCore.",
+   "codeCheck": "sync reads balanceOfSelf and stores currency and reserves in transient storage (src/PoolManager.sol:279-288). _settle credits paid = reservesNow - reservesBefore only between a sync and a settle in the same transaction (src/PoolManager.sol:349-365). No code compares the PoolManager's token balance with the sum of pool reserves, ERC-6909 balances and protocol fees, so a balance drop made outside an unlock is not noticed until a take or a burn pays out; Currency.transfer then reverts with ERC20TransferFailed when the token refuses (src/types/Currency.sol:55-86), which leaves the last claimants unable to withdraw. take is gated by onlyWhenUnlocked and the delta count check in unlock (src/PoolManager.sol:103-113, 291-297), which does not help here because the outflow happens in another transaction made by HyperCore. The path in src is as described.",
+   "corrections": "actor: operator stands, because the published text puts AQAv2 activation behind a validator vote; if the treasury address can be changed after activation without a vote, the least privileged party would be the treasury deployer, which is issuer. The finding's statement that the rebalance is a system transaction sent from the treasury address that calls transfer is inferred: no fetched page says it, so the mechanism is unconfirmed at that link. The cited file out/sync-precompiles-official.txt begins with a web3_clientVersion of reth/v0.1.0-b92ad36, which is the hyperlend replica and not the official endpoint; this does not affect this finding.",
+   "sources": [
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md",
+     "supports": "Treasury deployer designates the treasury address; AQAv2 activation by validator vote; linked contract rebalances with the treasury address 9:1. Fetched 2026-11-26, sha256 9fd997fe977532e3..."
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md",
+     "supports": "authorizeAqav2Role takes token and role only (lines 1370-1384). Fetched 2026-11-26, sha256 812ecf7e87ec0470..."
+    },
+    {
+     "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers.md",
+     "supports": "Credits are system transactions calling transfer on the linked contract as the system address; no checks on system address supply or contract validity."
+    },
+    {
+     "url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/primitives/transaction.rs",
+     "supports": "System transaction means gas price 0; sender is decoded from s with no signature check."
+    },
+    {
+     "url": "https://rpc.hyperliquid.xyz/evm eth_getTransactionCount and eth_getBalance 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest, 2026-11-26",
+     "supports": "Nonce 0x1 and balance 0x9d908ef23bc0864f at head 0x31e564c."
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Lead L-1107: does any opcode result of the PoolManager change after the MRB fork? Script set 6 at the real PoolManager address on the official endpoint and on the nanoreth b92ad36 replica.",
+   "agrees": true,
+   "note": "spec.rs at nb-20261125-2 (fetched 2026-11-26) maps both HlSpecId V1 and V2 to SpecId::CANCUN, so the replay client uses one instruction table across the fork. pmdiff6-official.json lists 701 identical and different [275, 276, 277, 279], which are the initialisations at the price limits (names 'init price 4295128739', '4295128740', '1461446703485210103287273052203988822378723970341', '...342'); 279's node record is empty and the others end in a truncated record, consistent with the 30 million eth_call cap, and the replica with a larger cap gives 705 of 705. The official endpoint and the replica are not the closed producer, so this measures the RPC path only, as earlier cycles noted."
+  },
+  {
+   "check": "Can the Osaka MODEXP at 0x05, or a precompile wrapped by the MRB repricing, act for the PoolManager as currency, recipient or token in a way that books value? Sweep of 0x01 to 0x13 and 0x100 with the P1, P2 and P3 call shapes from the PoolManager address, and PoolManager.sync on five of them.",
+   "agrees": true,
+   "note": "My own eth_call sweep from the PoolManager on https://rpc.hyperliquid.xyz/evm (2026-11-26, 30,000,000 gas) matches: 0x01 empty, 0x02 SHA-256 word, 0x03 RIPEMD word, 0x04 echo starting a9059cbb, 0x05 to 0x0a PrecompileError on both the transfer and balanceOf shapes, 0x0b, 0x11, 0x13 and 0x100 empty success. No answer is the word 1, so Currency.transfer rejects them except the codeless empty case (src/types/Currency.sol:64-74). I extended the sweep to 0x0800-0x0813: all fail with PrecompileError except 0x0809, which returns the L1 block number (0x49a886ea, then 0x49a886ed in a later call); that case is already cleared, since the value is fixed within one execution and sync and settle share one transaction (src/PoolManager.sol:279-288, 349-365)."
+  },
+  {
+   "check": "Did the producer write anything to the PoolManager after the cycle 23 replay window, or move its native balance?",
+   "agrees": true,
+   "note": "eth_getBalance of the PoolManager on the official endpoint at head 0x31e564c is 0x9d908ef23bc0864f and the nonce is 0x1, equal to the figures in the cleared item. I did not rerun the log census over 52,266,493 to head."
+  }
+ ],
+ "leads": []
+}

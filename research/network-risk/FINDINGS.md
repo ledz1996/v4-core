@@ -1,6 +1,6 @@
 # All findings
 
-152 findings on record after cycle 25, in-scope ones first.
+154 findings on record after cycle 26, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -2939,27 +2939,27 @@ Sources:
 
 High severity, plausible. Effect: freeze. Who can trigger it: sequencer, validator or bridge committee. Networks: HyperEVM.
 
-What differs on the network: HyperCore places unsigned system transactions at the top of HyperEVM blocks and states their sender itself, encoded in the signature s value. Under AQAv2 it sends token transfers in the name of the linked contract and of a treasury address. On Ethereum a balance leaves an address only through a transaction that address signed or a call made by its own code.
+What differs on the network: HyperCore places system transactions in HyperEVM blocks without a signature and states their sender itself. The public replay client takes that sender from the s value of the transaction with no check. Under AQAv2 a token's linked contract and a treasury address designated by a staked deployer rebalance supply between them. On Ethereum a balance leaves an address only through a transaction that address signed or a call made by its own code.
 
-How it meets the code: nanoreth nb-20261125-2 takes the sender of any gas price 0 transaction from its s value with no signature check and executes it through the normal transact path. If HyperCore recorded the PoolManager as the treasury address of an aligned quote asset, such a transaction would call transfer on that token with the PoolManager as msg.sender, and the token balance would fall while pool state, ERC-6909 balances and protocol fee counters still count it as owed, because the PoolManager compares balances only between sync and settle inside one transaction. The last takes in that token would then revert inside the transfer. The aligned quote assets page is unchanged today and still gives no rule that the treasury address must sign or must be an account without code. The PoolManager nonce is still 1 on the official and archive endpoints, so no system transaction has used it as sender. Cycle 23 addition: a census of 5,405 HyperEVM blocks holds 1,579 transactions with gas price 0, and every one is a system transaction that the validator lists. 191 come from 0xc20699185c15d0a2fd65779bb5d69f5b0b113c00, an address without code that the ledger already identifies as Coinbase's AQAv2 USDC treasury (L-748), and 488 come from the USDC linked contract 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24. Each calls USDC transfer to the other, which is the documented rebalance. None targets the PoolManager and none moves a token out of it. The base fee is at least 100,000,000 wei in every block after genesis, so an ordinary account cannot send a gas price 0 transaction. The official endpoint and two nanoreth replicas return the same word for all 8,464 PoolManager slots ever written, and the PoolManager nonce is 1 on all three. The verifier adds that the linked contract route (finalizeEvmContract) needs the PoolManager's deployer or owner, so it does not lower the actor. No source says whether HyperCore refuses an address with code as treasury, and the finding stays plausible for that reason.
+How it meets the code: If HyperCore recorded the PoolManager as the treasury address of an aligned quote asset, a system transaction with the PoolManager as sender could call transfer on that token and lower the PoolManager's balance outside any unlock. sync and settle compare balances only inside one transaction (src/PoolManager.sol:279-288 and 349-365), so pool state, ERC-6909 balances and protocol fee counters would still count the moved tokens as owed, and the last takes in that token would revert in Currency.transfer (src/types/Currency.sol:55-86). This cycle found nothing that closes or opens the path. The aligned quote assets page (sha256 9fd997fe...) and the exchange endpoint page (sha256 812ecf7e...) fetched today are byte identical to the cycle 22 and 24 copies: authorizeAqav2Role takes only token and role, and no page says whether an address with code may be named. The transfers page states that a HyperCore to HyperEVM credit is a system transaction that calls transfer on the linked contract as the token's system address (0x20 followed by the token index, or 0x2222...2222), which is a fixed address and not one a deployer names. The PoolManager nonce is 1 on the official endpoint, on rpc.hypurrscan.io and on both nanoreth replicas at block 52,312,226, so no system transaction has used it as sender, and its native balance equals the cycle 23 value to the wei.
 
 What is at risk: All pools and ERC-6909 claims in a token for which HyperCore named the PoolManager as the rebalancing address. Nothing is exposed today.
 
-What it takes: Two staked deployers of 500,000 HYPE each and a validator vote must name the PoolManager as treasury address. An ordinary account cannot.
+What it takes: Two staked deployers of 500,000 HYPE each and a validator vote must name the PoolManager as treasury address. An ordinary account cannot do either.
 
 What can be done: Watch the PoolManager nonce, which rises with any system transaction sent in its name. Ask the Hyperliquid team whether the node refuses an address with code as AQAv2 treasury.
 
-Second reviewer's corrections: The difference field states that HyperCore sends token transfers in the name of the treasury address under AQAv2. The fetched page says only that the linked contract rebalances with the treasury address; the transaction form and sender of that rebalance are not published, so this link is unconfirmed and is the reason for plausible rather than confirmed. The actor value operator is right: the record needs a staked treasury deployer and a validator vote.
+Second reviewer's corrections: actor: operator stands, because the published text puts AQAv2 activation behind a validator vote; if the treasury address can be changed after activation without a vote, the least privileged party would be the treasury deployer, which is issuer. The finding's statement that the rebalance is a system transaction sent from the treasury address that calls transfer is inferred: no fetched page says it, so the mechanism is unconfirmed at that link. The cited file out/sync-precompiles-official.txt begins with a web3_clientVersion of reth/v0.1.0-b92ad36, which is the hyperlend replica and not the official endpoint; this does not affect this finding.
 
-Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-365`, `src/types/Currency.sol:40-88`.
+Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-365`, `src/types/Currency.sol:55-86`.
 
 Sources:
 
-- https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md (Treasury deployer designates the treasury address; activation by validator vote; 9:1 rebalance. Fetched 2026-11-25, byte equal to the cycle 20 copy.)
-- https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/primitives/transaction.rs (System transaction sender decoded from s without signature (lines 38-95).)
-- https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest = 0x1, 2026-11-25 (No system transaction has been sent in the PoolManager name (same on rpc.purroofgroup.com).)
-- https://rpc.purroofgroup.com eth_getBlockByNumber over 5,405 census blocks and https://rpc.hyperliquid.xyz/evm eth_getSystemTxsByBlockNumber over 150 of them, 2026-11-26 (1,579 gas price 0 transactions, all system transactions; 191 from 0xc20699... and 488 from 0x6b9e77..., each calling USDC transfer to the other (cycles/023/theme-hyperevm-twin-state.work/raw/syscount.json).)
-- https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md (fetched 2026-11-26: authorizeAqav2Role takes token and role only; no documented action sets the treasury address.)
+- https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md (Fetched 2026-11-26, sha256 9fd997fe977532e3..., identical to the cycle 22 copy: treasury deployer designates the treasury address; activation by validator vote.)
+- https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md (Fetched 2026-11-26, sha256 812ecf7e87ec0470...: authorizeAqav2Role takes token and role only (lines 1370-1384).)
+- https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers.md (Credits are system transactions that call transfer on the linked contract as the token's system address (lines 11-25); no checks on system address supply (line 77).)
+- https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest = 0x1 at head 0x31e38a2, 2026-11-26 (No system transaction has been sent in the PoolManager's name; the same 0x1 on rpc.purroofgroup.com, rpc.hyperlend.finance and rpc.hypurrscan.io (out/clientversions-start.txt).)
+- https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/primitives/transaction.rs (System transaction sender decoded from s without a signature check (read in cycle 22, lines 52-97 and 182-184).)
 
 ## F-046. X Layer voids blacklisted L1 deposits at the execution layer, so forced inclusion is no guaranteed exit from the PoolManager
 
@@ -3313,6 +3313,32 @@ Sources:
 - https://specs.optimism.io/interop/derivation.html (invalid executing messages invalidate a block, which is replaced by a deposits-only block; deposits are prevented from executing messages)
 - https://specs.optimism.io/interop/sequencer.html (the sequencer may include executing messages with any level of confirmation safety, at higher risk of an invalid block)
 - https://docs.optimism.io/notices/upgrade-22.md (interop between OP Mainnet and Unichain activates with Lagoon on 11 January 2027, subject to governance)
+
+## F-153. Monad serves balances, call results and PoolManager receipts at latest from a proposed block that has no vote yet
+
+Low severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Monad.
+
+What differs on the network: Since v0.13.0 the Monad RPC maps latest to the Proposed state, a block the leader has sent and the node has executed speculatively before any quorum certificate exists. Ethereum's latest is a block that already carries proposer weight in the fork choice; Monad's latest has none. safe is Voted and finalized is Finalized.
+
+How it meets the code: monad-rpc v0.16.7 resolves BlockTags::Latest (and pending) to get_latest_proposed_block_key (monad-rpc/src/data/mod.rs:91-93 and 102-106, monad-rpc/src/types/eth_json.rs:328-330 and 373-376). eth_getTransactionReceipt first reads the in-memory buffer and then looks up the transaction location against the latest proposed block key (monad-rpc/src/data/mod.rs:196-225), so a receipt is served as soon as the proposed block is executed. A wallet, router or bridge that releases value on such a receipt, a Transfer log or a balance read at latest acts on a block that consensus can still abandon: a proposal that fails to collect a QC, or one of two blocks an equivocating leader sent, is dropped implicitly when another block finalizes at that height (docs.monad.xyz block states). The PoolManager itself is not affected: every action settles inside one transaction (src/PoolManager.sol:104-114) and core reads no block field, so a dropped block takes its whole PoolManager effect with it.
+
+What is at risk: No loss of pool funds and no locked funds. An off-chain integration that credits a user on a latest receipt of a PoolManager take could pay out for a swap that never finalizes. On the sample taken no block served at latest was replaced.
+
+What it takes: A Monad leader that equivocates or a proposal that misses its vote, and an integration that acts on latest. An ordinary account cannot make a proposal miss its vote with a transaction.
+
+What can be done: Integrations and bridges on Monad should settle on finalized, which lags latest by one to two blocks (about 0.4 to 0.8 s), or compare the receipt block number with the finalized height as the Monad documentation advises.
+
+Code: `src/PoolManager.sol:104-114`, `src/PoolManager.sol:291-297`.
+
+Sources:
+
+- https://docs.monad.xyz/reference/json-rpc/overview (latest maps to Proposed with no consensus vote, safe to Voted, finalized to Finalized; transaction-hash lookups can match a transaction in a non-finalized block)
+- https://docs.monad.xyz/monad-arch/consensus/block-states (a Proposed block may never be Voted; finalizing a number implicitly abandons other proposals at that number)
+- https://docs.monad.xyz/developer-essentials/changelog/releases (v0.13.0 moved latest from Finalized to Proposed (monad-bft PR 2675))
+- https://raw.githubusercontent.com/category-labs/monad-bft/v0.16.7/monad-rpc/src/data/mod.rs (get_latest_block_key returns the latest proposed block key (lines 91-93); Latest and Safe tags resolve to proposed and voted keys (102-106); receipts are looked up against the latest proposed key (196-225))
+- https://raw.githubusercontent.com/category-labs/monad-bft/v0.16.7/monad-rpc/src/types/eth_json.rs (Latest is commented proposed, Safe voted, pending parses to Latest (lines 328-330, 373-376))
+- theme-deferred-verification.work/raw/monad_heads.json and monad_heads_recheck.json (eth_getBlockByNumber on https://rpc.monad.xyz, Monad/0.16.7 at start, middle and end) (2,000 distinct blocks 125,644,933 to 125,648,318 recorded at latest all have the same hash after finality; latest minus finalized was 1 or 2 blocks in 41 of 43 snapshots; 245 requests were refused with HTTP 429 and retried later)
+- theme-deferred-verification.work/raw/monad_pm_receipts.json (eth_getLogs and eth_getTransactionReceipt on https://rpc.monad.xyz, Monad/0.16.7) (70 PoolManager transactions were read at latest, 69 of them before their block was finalized; none of the 70 receipts changed block hash, status or log count after finality)
 
 ## F-117. Six go-ethereum family nodes run a Go toolchain with a published silent dead store miscompile, and no function on the opcode or state path has the triggering shape
 
@@ -3857,6 +3883,34 @@ Sources:
 - https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/blocks/access.go (latest is the last executed block and safe and finalized are the last settled block (lines 124-147); the comment at 110-123 says settlement demonstrates consensus of execution results)
 - https://raw.githubusercontent.com/avalanche-foundation/ACPs/main/ACPs/194-continuous-execution/README.md (blocks are accepted, then executed, then settled by a later block that carries the state root and receipts root)
 - raw/probe_tags.json (eth_getBlockByNumber on https://api.avax.network/ext/bc/C/rpc) (safe and finalized lag latest by 6 to 7 blocks on the live node)
+
+## F-154. From T14 Tempo validators vote to notarize a block before its execution is verified and withhold only the finalize vote
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Tempo.
+
+What differs on the network: Tempo v1.19.0 and v1.19.1 default --consensus.verification-mode to hardfork, which switches to deferred verification at the first epoch boundary at or after T14 (8 December 2026 15:00 UTC, timestamp 1796742000). Under deferred verification a validator checks only that the block is available, that its embedded consensus context matches and that it names the expected parent before it votes to notarize. The execution check (newPayload VALID) runs while the vote collects and gates the finalize vote.
+
+How it meets the code: crates/consensus/src/args.rs:35-56 and 153-165 define the modes; crates/consensus/src/consensus/application/mod.rs:120-143 selects the Deferred wrapper of commonware-consensus 2026.11.0, whose module documentation (marshal/standard/deferred.rs:15-37) says the notarize vote is cast without waiting for the application to verify the block contents, and certify waits for that result before a finalize vote. If certify returns false the validator broadcasts nullify for the view and refuses to build on the block (simplex/mod.rs:106-111, 138-140), so a block whose execution is wrong cannot gather a finalization from an honest quorum and is never finalized. Nothing in the source read slashes the proposer. The executor of an RPC node moves HEAD to a notarized convergence target only after its own newPayload returned VALID and its ancestry reaches the network finalized tip; otherwise HEAD is the finalized block, and safe and finalized are always the finalized block (crates/consensus/src/executor/actor.rs:12-25 and 2884-2889). A wallet reading latest on such a node therefore reads a block the node itself executed correctly, which a nullified view can still replace. The PoolManager settles inside one transaction (src/PoolManager.sol:104-114), so no PoolManager state outlives the replaced block.
+
+What is at risk: No loss of pool funds. After T14 an integration acting on latest can, in a view that is notarized and then nullified, see a PoolManager take that does not reach the final chain. A wrong arithmetic result in one validator's build cannot be finalized unless a quorum shares it, as before T14.
+
+What it takes: Tempo T14 active, a validator set that notarizes and then nullifies a view, and an integration that acts on latest. Only validators act.
+
+What can be done: Integrations on Tempo should read finalized (equal to safe) after T14. A day-one sample of latest against finalized should confirm whether the public endpoint moves HEAD past finalized.
+
+Second reviewer's corrections: Deferred verification is not the only way a block served at latest on Tempo can be replaced after T14. A notarized block can be followed by a nullification in simplex under either mode, so the integration hazard comes from the executor's HEAD policy. Deferred mode itself cannot put an invalid block at latest on an RPC node, because that node checks VALID first. That supports severity info.
+
+Code: `src/PoolManager.sol:104-114`.
+
+Sources:
+
+- https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/consensus/src/args.rs (VerificationMode Immediate completes application verification before voting to notarize, Deferred defers it until voting to finalize, Hardfork follows T14 (lines 35-56, 153-165))
+- https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/consensus/src/consensus/application/mod.rs (the factory hands each epoch the Deferred or Inline marshal wrapper by the previous epoch boundary timestamp (lines 1-12, 120-143))
+- https://static.crates.io/crates/commonware-consensus/commonware-consensus-2026.11.0.crate (src/marshal/standard/deferred.rs, src/simplex/mod.rs) (notarize vote without waiting for application verification; certify gates the finalize vote; certify false leads to nullify and no child built on the block)
+- https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/consensus/src/executor/actor.rs (HEAD becomes a notarized convergence target only after the node's own newPayload VALID; safe and finalized hashes are the finalized block (lines 12-25, 2884-2889))
+- https://tempo.com/developers/docs/changelog (v1.19.0 is required for T14 at 1796742000 and the verification mode defaults to hardfork)
+- https://tempo.com/developers/docs/protocol/tips/tip-1031 (the consensus context in the header exists for deferred verification, and a validator may keep synchronous verification)
+- theme-deferred-verification.work/raw/tempo_heads.json (eth_getBlockByNumber on https://rpc.mainnet.tempo.xyz, tempo/v1.19.1-a9d6748 before and after) (400 blocks 50,949,238 to 50,949,638 read at latest kept their hash; latest never ran ahead of finalized by more than the time between two queries)
 
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 
