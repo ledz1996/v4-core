@@ -1,0 +1,40 @@
+{
+ "unit": "arbitrum-family",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "Queried this session. arb1.arbitrum.io/rpc answers web3_clientVersion nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3 and rpc.mainnet.chain.robinhood.com answers the same build on linux-amd64. arbOSVersion() (selector 0x051038f2, computed with a local keccak) on 0x64 returns 0x74 on both. getScheduledUpgrade() (selector 0x81ef944c) on 0x6b returns 64 zero bytes on Arbitrum One, Robinhood Chain and Elysium. The Docker Hub tag list shows v3.13.0-b72783f-stripped and its amd64 and arm64 tags published on 2026-11-25. go-ethereum v1.17.7 core/vm/instructions.go:756 builds the child budget as NewGasBudget(gas, scope.Contract.Gas.StateGas), so the whole state reservoir goes to the callee, and opGas (instructions.go:548-551) pushes only Contract.Gas.ExecutionGas. analysis_legacy.go:79-82 treats only PUSH1 to PUSH32 as carrying immediates. The Arbitrum forum post says the Glamsterdam L1 pricing change needs no ArbOS or Nitro upgrade. The function table in the work directory (raw/amd64-corevm-funcs.txt) lists opDupN, opSwapN, opExchange, opSlotNum, newAmsterdamInstructionSet, newArbitrumAmsterdamInstructionSet, Contract.forwardGas and Contract.refundState; I read that extracted table and did not re-parse the binary myself. My own linear walk of the 24,009 byte PoolManager code from eth_getCode on Arbitrum One found no byte 0x1e, 0x4b, 0xe6, 0xe7 or 0xe8 at an instruction position and no opcode undefined under Osaka; the 0xfe at offset 23,996 is followed by the 13 byte CBOR metadata. The coinalerts.org page was not fetched.",
+   "codeCheck": "src/types/Currency.sol:48 (native payout) and :73 (token transfer) call with gas(); success is decided at :51 and :65-74 by the call result and the return data check. src/libraries/Hooks.sol:134 calls the hook with gas(), reverts on failure at :137 and checks length and selector at :152-154. take (src/PoolManager.sol:291-297) debits the caller's delta before transfer. A callee that spends the forwarded state reservoir can only make the PoolManager's later state-creating writes run out of gas, which reverts the whole transaction; no successful path computes a different amount or debits a different account. With no attacker-made hook or token in the path, the callee is the recipient's address or a token the pool already holds, so the change is a gas pricing shift of the A9 kind.",
+   "corrections": "The Go build info in the work directory records the go-ethereum module as v1.16.2 replaced by ./go-ethereum, and the function table paths read go-ethereum@v1.16.2; the v1.17.x identification rests on the functions present and their line offsets, not on a version string. The finding states this indirectly; it should say so plainly.",
+   "sources": [
+    {"url": "https://arb1.arbitrum.io/rpc", "supports": "eth_call 0x6b 0x81ef944c returns zeros; 0x64 0x051038f2 returns 0x74; web3_clientVersion nitro/v3.13.0-rc.9+b72783f arm64 go1.27.3; eth_getCode of 0x360e68faccca8ca495c1b759fd9eee466db9fb32 is 24,009 bytes with no Amsterdam opcode at an instruction position"},
+    {"url": "https://rpc.mainnet.chain.robinhood.com", "supports": "eth_call 0x6b 0x81ef944c returns zeros; 0x64 returns 0x74; same rc.9 build on amd64"},
+    {"url": "https://rpc.elysium.kinetiq.xyz", "supports": "eth_call 0x6b 0x81ef944c returns zeros"},
+    {"url": "https://hub.docker.com/v2/repositories/offchainlabs/nitro-node/tags?page_size=30&ordering=last_updated", "supports": "v3.13.0-b72783f-stripped published 2026-11-25 for amd64 and arm64"},
+    {"url": "https://raw.githubusercontent.com/ethereum/go-ethereum/v1.17.7/core/vm/instructions.go", "supports": "opCall line 756 hands the whole state reservoir to the child; opGas returns ExecutionGas only"},
+    {"url": "https://raw.githubusercontent.com/ethereum/go-ethereum/v1.17.7/core/vm/analysis_legacy.go", "supports": "jump destination analysis skips immediates of PUSH1 to PUSH32 only"},
+    {"url": "https://forum.arbitrum.foundation/t/constitutional-aip-update-arbitrum-one-and-nova-l1-pricing-parameters-for-ethereum-glamsterdam/31555", "supports": "The Glamsterdam L1 pricing change needs no ArbOS or Nitro upgrade"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Whether future instruction sets in the running node (EIP-8024 DUPN, SWAPN, EXCHANGE at 0xe6 to 0xe8, EIP-7843 SLOTNUM at 0x4b, CLZ at 0x1e) could change how the deployed PoolManager decodes.",
+   "agrees": true,
+   "note": "I walked the eth_getCode result of the Arbitrum One PoolManager myself with my own decoder: no 0x1e, 0x4b, 0xe6, 0xe7 or 0xe8 at an instruction position and no opcode undefined under Osaka. go-ethereum v1.17.7 analysis_legacy.go:79-82 gives immediates only to PUSH1 to PUSH32, so the new opcodes cannot shift jump destination analysis for this code. The Robinhood and Elysium PoolManagers were not walked by me; the earlier cycles show the same bytecode on every network."
+  },
+  {
+   "check": "Whether the precompile result cache added with the v1.17.x merge can replay an answer of a stateful ArbOS precompile to a PoolManager take, sync or hook call.",
+   "agrees": true,
+   "note": "go-ethereum v1.17.7 contracts.go:289-299 consults the cache only when precompileCacheKey accepts the contract, and precompile_cache.go:223-225 rejects any contract without a Cacheable method returning true. The extracted function table lists exactly 20 Cacheable methods, all stock pure precompiles, none of the ArbOS ones. The PoolManager calls no precompile itself. I did not re-extract the table from the binary."
+  },
+  {
+   "check": "Cycle 23 reruns of battery.py, targeted.py, pmdiff.py, pmdiff2.py, swaps.py, replay.py and callsem.py on 42161, 4663 and 99901.",
+   "agrees": true,
+   "note": "battery.log ends with 99985/99985 and 0 mismatches on all three chains, and pmdiff.log with 250/250 identical on all three. I read the logs and did not rerun the scripts. The uint256 v1.3.2 pin item also agrees with the build info file in the work directory, which records holiman/uint256 v1.3.2 with h1:a9EgMPSC1AAaj1SZL5zIQD3WbwTuHrMGOerLjGmM/TA=; I did not parse the binary myself."
+  }
+ ],
+ "leads": []
+}

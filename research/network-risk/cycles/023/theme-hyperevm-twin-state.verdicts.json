@@ -1,0 +1,39 @@
+{
+ "unit": "theme-hyperevm-twin-state",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "plausible",
+   "severity": "high",
+   "factCheck": "On 2026-11-26 eth_getSystemTxsByBlockNumber 0x2cdbbf4 (block 47,037,428) on https://rpc.hyperliquid.xyz/evm returned two type 0 transactions with gasPrice 0, r=0 and s=0: index 0 from 0xc20699185c15d0a2fd65779bb5d69f5b0b113c00 calling USDC 0xb88339cb7199b77e23db6e890353e22632ba630f transfer(0x6b9e7731..., 10,000,000), and index 1 from 0x2000...0000 calling 0x6b9e7731... transfer. eth_getCode of 0xc20699... is 0x, its nonce is 0x10553d, eth_getCode of 0x6b9e7731... is a proxy, and eth_getTransactionCount of the PoolManager is 0x1 at block about 0x31dc796. The aligned quote assets page says the treasury deployer designates a treasury address, the linked HyperEVM contract rebalances with it at 9:1, the treasury deployer stakes 500k HYPE, and AQAv2 is activated by validator vote. The exchange endpoint page lists authorizeAqav2Role with fields token and role only. nanoreth transaction.rs (nb-20261125-2) takes the sender of a gas price 0 transaction from s without a signature check (s_to_address and recover_signer, lines 50-97; is_system_transaction, lines 182-184). No source states whether HyperCore refuses an address with code as treasury address, so that link stays unconfirmed.",
+   "codeCheck": "sync stores balanceOfSelf as reserves (src/PoolManager.sol:279-288) and _settle credits only reservesNow minus reservesBefore inside one unlock (src/PoolManager.sol:349-365); no code path compares the PoolManager token balance with what pools, ERC-6909 balances (src/ERC6909.sol:17) and protocolFeesAccrued (src/ProtocolFees.sol:21) owe. A balance removed by a system transaction outside the PoolManager's code is therefore not detected, and later take calls run Currency.transfer (src/types/Currency.sol:40-88), which reverts with ERC20TransferFailed once the token transfer fails for lack of balance. The loss falls on whoever withdraws last. The PoolManager itself has no transfer(address,uint256) entry point, so the token-level system call never runs its code.",
+   "corrections": "The leads entry asking whether 0xc20699... is the USDC AQAv2 treasury is already answered in the ledger (L-748, cycle 15: Coinbase's AQAv2 USDC treasury, first system transfer in block 37,597,803). The census nonce of 0xc20699... (1,069,810) has since grown to 1,070,397 (0x10553d). The linked-contract route (finalizeEvmContract with the create nonce or with firstStorageSlot, which for the PoolManager reads slot 0, the owner) needs the PoolManager deployer or owner and is covered by L-073; it does not lower the actor below operator for the treasury route.",
+   "sources": [
+    {"url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md", "supports": "Treasury deployer designates the treasury address, stakes 500k HYPE; linked contract rebalances with it at 9:1; activation by validator vote."},
+    {"url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md", "supports": "authorizeAqav2Role has fields token and role ('technical' or 'treasury') only."},
+    {"url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers.md", "supports": "Linking needs the EVM contract deployer's nonce or a finalizer named in storage slot 0 or a custom slot; system address transfers call transfer on the linked contract."},
+    {"url": "https://rpc.hyperliquid.xyz/evm eth_getSystemTxsByBlockNumber 0x2cdbbf4, 2026-11-26", "supports": "Unsigned system transaction from 0xc20699... (r=0, s=0, gasPrice 0) calling USDC transfer to 0x6b9e7731..."},
+    {"url": "https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest = 0x1, 2026-11-26", "supports": "No system transaction has used the PoolManager as sender."},
+    {"url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/primitives/transaction.rs", "supports": "System transaction sender decoded from s with no signature check."}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "L-995 base fee: whether any HyperEVM block after genesis had a base fee below the 100,000,000 wei level, which would let a legacy transaction with gas price 0 pass the standard EIP-1559 check.",
+   "agrees": true,
+   "note": "eth_getBlockByNumber on rpc.purroofgroup.com gives baseFeePerGas 100,000,000 for blocks 1, 2, 16 and 1,048,576 and 144,435,925 for block 46,000,094; eth_gasPrice on the official endpoint is 0x5f5e100. eth_feeHistory on both endpoints returns a last entry below the floor (0x594a590 = 93,627,792 and 89,257,934), but that entry is the projected next block, not a mined header; the recorded per-chunk counts (covered equals block count) show the item excluded it. The base fee floor shows only what the standard rule would reject; the closed validator's admission rule for a public gas price 0 transaction is still unread, which the item states."
+  },
+  {
+   "check": "Whether the nanoreth rule that gas price 0 means system transaction can classify an EIP-1559, EIP-7702 or EIP-4844 transaction as a system transaction.",
+   "agrees": true,
+   "note": "nanoreth src/node/evm/executor.rs (nb-20261125-2) returns false when gas_price() is None and true only for 0; Cargo.lock pins alloy-consensus 2.5.0, whose transaction/eip1559.rs:174-176 returns None. The rule lives in the replica only; the validator decides what is mined, so a misclassification would change replica output and not PoolManager state on the official chain."
+  },
+  {
+   "check": "L-994 twin state: every PoolManager storage slot that the logs show was ever written, the native balance and balanceOf(PoolManager) of all 316 pooled ERC-20 currencies, read on the official endpoint and on two nanoreth replicas at the same block.",
+   "agrees": true,
+   "note": "The slot bases match the source layout: owner slot 0 (lib/solmate/src/auth/Owned.sol:17), protocolFeesAccrued 1 and protocolFeeController 2 (src/ProtocolFees.sol:21-24), isOperator 3, balanceOf 4, allowance 5 (src/ERC6909.sol:15-19), _pools 6 (src/PoolManager.sol:93). I re-read 8 slots (owner, protocolFeeController, six pool slot0 or liquidity words) on the official endpoint bracketed by eth_blockNumber 0x31dc8a3 to 0x31dc8a5 and on rpc.purroofgroup.com at 0x31dc8a3: 8 of 8 equal. rpc.hyperlend.finance refused with HTTP 429, so that replica was not re-checked."
+  }
+ ],
+ "leads": []
+}

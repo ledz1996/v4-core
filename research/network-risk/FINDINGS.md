@@ -1,6 +1,6 @@
 # All findings
 
-144 findings on record after cycle 22, in-scope ones first.
+145 findings on record after cycle 23, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -824,33 +824,32 @@ Sources:
 - https://raw.githubusercontent.com/Benqi-fi/BENQI-Smart-Contracts/master/lending/Comptroller.sol (transferAllowed distributes supplier rewards for src and dst; claimReward(uint8,address payable) is public; grantRewardInternal pays QI only when the amount does not exceed the Comptroller balance)
 - https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api?module=account&action=addresstokenbalance&address=0x06380c0e0912312b5150364b9dc4542ba0dbbc85&page=1&offset=100 (token balances of the Avalanche PoolManager, including 2,305.61 qiAVAX, 131.06 sAVAX and 10,974 QI)
 
-## F-062. MegaETH orders transactions by time in 10 millisecond mini-blocks and skips every candidate once a block has 1,000 new state entries, so a queue of filling transactions delays later ones by its length if skipped transactions keep their place
+## F-062. MegaETH skips every later candidate of a block once one transaction fills the block budget for new state, and the specification leaves the order of reconsideration to the sequencer
 
-Low severity, plausible. Effect: degrade. Who can trigger it: any account. Networks: MegaETH.
+Low severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: MegaETH.
 
-What differs on the network: MegaETH skips every remaining candidate of a block once the block holds 1,000 new state entries. One transaction may itself create 1,000. Ethereum has no per-block cap on new state.
+What differs on the network: MegaETH caps new state at 1,000 entries per block and per transaction. Once a block reaches a block-level runtime limit, every later candidate is skipped for that block. Ethereum has no per-block cap on new state.
 
-How it meets the code: Unchanged at the newest code. One transaction that writes 1,000 fresh storage slots in minimum-size buckets costs about 22.6 million gas, about 0.0000226 ETH at the 1,000,000 wei base fee read on 2026-11-25. After it, BlockLimiter::pre_execution_check returns an error for every later candidate of that block, and that includes a modifyLiquidity, take or burn sent to the PoolManager. The executor leaves its state untouched for a rejected candidate, and the caller decides what happens next, typically putting it back in the pool. limit.rs and executor.rs on mega-evm main are byte identical to v1.7.4, and the mainnet schedule ends at Rex6, so nothing scheduled changes this. The PoolManager takes no part: a delayed call later runs with the same checks and amounts. If the closed sequencer keeps skipped transactions ahead of later arrivals, N filling transactions from several accounts close N one-second blocks to everything that arrived after them. If not, each filler delays only the candidates behind it in its own block. Cycle 21 addition: the MegaEVM resource limit specification (https://docs.megaeth.com/spec/megaevm/resource-limits) now states the rule in normative form. The first transaction that brings a block to a limit is still included, later candidates must be skipped before execution, a skipped transaction gets no receipt and may be reconsidered in a later block. Both state growth limits are still 1,000, and limit.rs and constants.rs have equal hashes on mega-evm main and v1.7.4. The endpoint answered mega-reth/v2.3.1-4499c42 at block 32,849,640. A delayed swap or liquidity change runs under the same checks, at whatever pool price the later block has and within the caller's own limits.
+How it meets the code: Unchanged on 2026-11-26. One transaction that creates 1,000 new storage slots brings the block to BLOCK_STATE_GROWTH_LIMIT. BlockLimiter::pre_execution_check (limit.rs line 765 on mega-evm main) then skips every later candidate of that block before execution, a modifyLiquidity, take or burn sent to the PoolManager among them. A skipped transaction gets no receipt and, in the words of the specification, may be reconsidered in a later block. When it runs later it meets the same checks in the PoolManager: unlock, the onlyWhenUnlocked gate and the delta count at the end of unlock (src/PoolManager.sol:104-114), and it pays or receives what the pool state of that later block gives, within the caller's own limits. The PoolManager holds no time-dependent state that a delay of one block could change. The specification gives no rule for the order of reconsideration, so whether N filling transactions close N blocks to a chosen exit or only to the candidates behind each one is the sequencer's choice, and the sequencer is a privileged party.
 
-What is at risk: No funds move. Swaps, liquidity removals and claim burns of every user are delayed. The delay lasts one block per filler, at about 1.95 ETH per day for one filler per block. A longer delay needs the unconfirmed queue rule.
+What is at risk: No funds move and no balance is lost. Swaps, liquidity removals and claim burns of other users can be delayed by about one second per filling transaction. A longer delay depends on the sequencer's unpublished queue rule.
 
-What it takes: The base fee stays near its floor. The sequencer does not filter the sender. For the amplified form, skipped transactions keep their place in the queue, which no public source states.
+What it takes: The base fee stays near its floor. The sequencer does not filter the sender. The attacker pays for 1,000 new state entries per block it fills.
 
-What can be done: Exits under load can use an L1 deposit of at most 1,000,000 gas. The operator can price state growth in minimum-size buckets, raise the block limit above the per-transaction limit, or deprioritise senders who fill the budget.
+What can be done: Exits under load can be forced through an L1 deposit. The operator can raise the block state growth limit above the per-transaction limit, price state growth more steeply, or put skipped candidates ahead of later arrivals.
 
 This entry adds to F-042.
 
-Second reviewer's corrections: The base effect (one filler closes the rest of its block to later candidates) is confirmed by source. Only the amplified form, in which N fillers close N consecutive blocks, depends on the unconfirmed queue rule of the closed sequencer, which is why the verdict is plausible. The coreRefs mark where victim calls enter and do not compute anything differently.
+Second reviewer's corrections: The skip is at limit.rs lines 881-889 inside pre_execution_check, which starts at line 765; the skip rule in the module comment is at lines 33-38. Delay of more than one block per filler for a chosen exit depends on the unpublished sequencer queue rule (operator), as the finding says. The 22,559,525 gas cost was not re-measured in this cycle.
 
-Code: `src/PoolManager.sol:145-184`, `src/PoolManager.sol:291-297`.
+Code: `src/PoolManager.sol:104-114`, `src/PoolManager.sol:145-184`, `src/PoolManager.sol:291-297`, `src/PoolManager.sol:332-336`.
 
 Sources:
 
-- https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs (byte identical to v1.7.4 (fetched and compared 2026-11-25); the skip rule recorded in cycles 4 to 13 is unchanged)
-- https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/executor.rs (byte identical to v1.7.4; a rejected candidate goes back to the caller, typically to the pool)
-- https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/chain.rs (lines 35-46: the mainnet schedule ends at Rex6 (timestamp 1787626800), so no scheduled fork changes the rule)
-- https://mainnet.megaeth.com/rpc (eth_getBlockByNumber latest on 2026-11-25: block 32,780,556 (0x1f4310c), baseFeePerGas 0xf4240, gasLimit 10,000,000,000; web3_clientVersion mega-reth/v2.2.3-72527bc@mnet-ash-rpc-2)
-- https://docs.megaeth.com/spec/megaevm/resource-limits (skip rule for later candidates, no receipt, may be reconsidered in a later block, both state growth limits 1,000)
+- https://docs.megaeth.com/spec/megaevm/resource-limits (fetched 2026-11-26: two-phase block building, skipped candidates get no receipt and may be reconsidered in a later block, no reconsideration order, per-transaction gas cap is sequencer-configured, TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT are 1,000)
+- https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/block/limit.rs (byte identical to the cycle 21 copy; pre_execution_check at line 765 and the skip rule at line 36)
+- https://raw.githubusercontent.com/megaeth-labs/mega-evm/main/crates/mega-evm/src/constants.rs (lines 206 and 211: TX_STATE_GROWTH_LIMIT and BLOCK_STATE_GROWTH_LIMIT are 1000)
+- https://docs.megaeth.com/spec/network-upgrades/overview (no upgrade after Rex6 is listed, so nothing scheduled changes the rule)
 
 ## F-063. Measured on the deployed contract, one empty bitmap word costs about 5,900 gas in the swap loop, so a small block fits about 500 words and a big block cannot hold a walk across the whole range at tick spacing 1
 
@@ -2892,7 +2891,7 @@ High severity, plausible. Effect: freeze. Who can trigger it: sequencer, validat
 
 What differs on the network: HyperCore places unsigned system transactions at the top of HyperEVM blocks and states their sender itself, encoded in the signature s value. Under AQAv2 it sends token transfers in the name of the linked contract and of a treasury address. On Ethereum a balance leaves an address only through a transaction that address signed or a call made by its own code.
 
-How it meets the code: nanoreth nb-20261125-2 takes the sender of any gas price 0 transaction from its s value with no signature check and executes it through the normal transact path. If HyperCore recorded the PoolManager as the treasury address of an aligned quote asset, such a transaction would call transfer on that token with the PoolManager as msg.sender, and the token balance would fall while pool state, ERC-6909 balances and protocol fee counters still count it as owed, because the PoolManager compares balances only between sync and settle inside one transaction. The last takes in that token would then revert inside the transfer. The aligned quote assets page is unchanged today and still gives no rule that the treasury address must sign or must be an account without code. The PoolManager nonce is still 1 on the official and archive endpoints, so no system transaction has used it as sender.
+How it meets the code: nanoreth nb-20261125-2 takes the sender of any gas price 0 transaction from its s value with no signature check and executes it through the normal transact path. If HyperCore recorded the PoolManager as the treasury address of an aligned quote asset, such a transaction would call transfer on that token with the PoolManager as msg.sender, and the token balance would fall while pool state, ERC-6909 balances and protocol fee counters still count it as owed, because the PoolManager compares balances only between sync and settle inside one transaction. The last takes in that token would then revert inside the transfer. The aligned quote assets page is unchanged today and still gives no rule that the treasury address must sign or must be an account without code. The PoolManager nonce is still 1 on the official and archive endpoints, so no system transaction has used it as sender. Cycle 23 addition: a census of 5,405 HyperEVM blocks holds 1,579 transactions with gas price 0, and every one is a system transaction that the validator lists. 191 come from 0xc20699185c15d0a2fd65779bb5d69f5b0b113c00, an address without code that the ledger already identifies as Coinbase's AQAv2 USDC treasury (L-748), and 488 come from the USDC linked contract 0x6b9e773128f453f5c2c60935ee2de2cbc5390a24. Each calls USDC transfer to the other, which is the documented rebalance. None targets the PoolManager and none moves a token out of it. The base fee is at least 100,000,000 wei in every block after genesis, so an ordinary account cannot send a gas price 0 transaction. The official endpoint and two nanoreth replicas return the same word for all 8,464 PoolManager slots ever written, and the PoolManager nonce is 1 on all three. The verifier adds that the linked contract route (finalizeEvmContract) needs the PoolManager's deployer or owner, so it does not lower the actor. No source says whether HyperCore refuses an address with code as treasury, and the finding stays plausible for that reason.
 
 What is at risk: All pools and ERC-6909 claims in a token for which HyperCore named the PoolManager as the rebalancing address. Nothing is exposed today.
 
@@ -2909,6 +2908,8 @@ Sources:
 - https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md (Treasury deployer designates the treasury address; activation by validator vote; 9:1 rebalance. Fetched 2026-11-25, byte equal to the cycle 20 copy.)
 - https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/primitives/transaction.rs (System transaction sender decoded from s without signature (lines 38-95).)
 - https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest = 0x1, 2026-11-25 (No system transaction has been sent in the PoolManager name (same on rpc.purroofgroup.com).)
+- https://rpc.purroofgroup.com eth_getBlockByNumber over 5,405 census blocks and https://rpc.hyperliquid.xyz/evm eth_getSystemTxsByBlockNumber over 150 of them, 2026-11-26 (1,579 gas price 0 transactions, all system transactions; 191 from 0xc20699... and 488 from 0x6b9e77..., each calling USDC transfer to the other (cycles/023/theme-hyperevm-twin-state.work/raw/syscount.json).)
+- https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md (fetched 2026-11-26: authorizeAqav2Role takes token and role only; no documented action sets the treasury address.)
 
 ## F-046. X Layer voids blacklisted L1 deposits at the execution layer, so forced inclusion is no guaranteed exit from the PoolManager
 
@@ -4060,3 +4061,32 @@ Sources:
 - file:research/network-risk/cycles/014/theme-proof-images.work/kona/real_shift.json (Prestate SHL, SHR and SAR handlers match on 92,871 vectors; real_shift_movn_bit0.json and real_shift_dsllv5.json show planted faults are detected.)
 - https://github.com/llvm/llvm-project/issues/235261 (The MIPS shift-parts miscompile (recorded in cycle 13, F-126).)
 - src/libraries/BitMath.sol:16-22 (Shifts by running amounts that reach 64 to 127.)
+
+## F-145. Nitro v3.13.0 carries dormant Amsterdam execution rules that a future ArbOS version would switch on, and the PoolManager bytecode has no instruction they reinterpret
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: owner, fee controller or chain governance. Networks: Arbitrum One, Robinhood Chain.
+
+What differs on the network: Ethereum has not scheduled Glamsterdam. The Nitro build that the Arbitrum One and Robinhood Chain endpoints run (commit b72783f, published as the v3.13.0 binary-only image on 25 November 2026) already contains a go-ethereum v1.17.x based interpreter with an Amsterdam instruction set (newAmsterdamInstructionSet and newArbitrumAmsterdamInstructionSet in its function table), the EIP-8037 two-part gas budget (GasBudget with ChargeState, ChargeExecution and Forward; Contract.forwardGas and refundState), handlers for the EIP-8024 opcodes (opDupN, opSwapN, opExchange) and EIP-7843 (opSlotNum). These rules switch on only with an ArbOS version that the chain owner schedules; at ArbOS 61 the endpoints run the Osaka set and no upgrade is scheduled on either chain.
+
+How it meets the code: Two parts of the PoolManager meet these rules. First, the bytecode: walked instruction by instruction, the 24,009 byte PoolManager on Arbitrum One has no byte 0x1e, 0x4b, 0xe6, 0xe7 or 0xe8 at an instruction position and no other opcode that is undefined today; the only 0xfe is the trailing invalid at offset 23,996. So no branch of the PoolManager would decode differently when DUPN, SWAPN, EXCHANGE or SLOTNUM become valid, and the compiled jump destination analysis of the binary treats only PUSH1 to PUSH32 as carrying immediates, as in go-ethereum v1.17.7 analysis_legacy.go. Second, gas: under EIP-8037 the GAS opcode returns only the execution part of the budget, and state creation is paid from a separate reservoir. The PoolManager forwards gas() on three calls: the native payout (src/types/Currency.sol:48), the token transfer (src/types/Currency.sol:73) and the hook call (src/libraries/Hooks.sol:134). In go-ethereum v1.17.7 opCall hands the callee its execution gas plus the caller's whole state reservoir (NewGasBudget(gas, scope.Contract.Gas.StateGas)), so a callee that creates state may draw on a reservoir the caller sized for itself. The outcome of a call is still decided only by success and return data (Currency.sol:48-52 and 73-79, Hooks.sol:134-160), and the PoolManager's own writes are storage updates of existing pools, positions and claims, so the rule can change which transactions run out of gas, not what a successful call computes or who is debited.
+
+What is at risk: No funds move. Once an ArbOS version enables these rules, a transaction that creates many new storage slots (first position in a pool, first ERC-6909 claim balance, first tick of a range) needs more total gas; that is a pricing change of the A9 kind, recorded for the deployment checklist.
+
+What it takes: The chain owner (ArbitrumDAO for Arbitrum One, the two chain owners for Robinhood Chain) must schedule an ArbOS version that activates the Amsterdam rules. No such version is proposed: the v3.13.0 image ships no consensus machine newer than consensus-v61, and getScheduledUpgrade() returns zeros on both chains on 26 November 2026.
+
+What can be done: Before any ArbOS upgrade that names Glamsterdam features, rerun battery.py, targeted.py, pmdiff.py and pmdiff2.py against the upgraded Sepolia or a block time override, and rerun the gas-capped scripts (pmdiff2 script 189) to see which liquidity operations change gas class.
+
+Second reviewer's corrections: The Go build info in the work directory records the go-ethereum module as v1.16.2 replaced by ./go-ethereum, and the function table paths read go-ethereum@v1.16.2; the v1.17.x identification rests on the functions present and their line offsets, not on a version string. The finding states this indirectly; it should say so plainly.
+
+Code: `src/types/Currency.sol:44-52`, `src/types/Currency.sol:60-80`, `src/libraries/Hooks.sol:131-160`, `src/PoolManager.sol:291-297`.
+
+Sources:
+
+- https://hub.docker.com/v2/repositories/offchainlabs/nitro-node/tags?page_size=30&ordering=last_updated (The v3.13.0-b72783f-stripped image was published on 2026-11-25 for amd64 and arm64, the same commit as the rc.9 build the endpoints report)
+- https://registry-1.docker.io/v2/offchainlabs/nitro-node/manifests/sha256:af5059f239fe78ee45db64f6c10211aa67cc3ff7e74e75e36deaa4231b0c4638 (Manifest of the amd64 image whose nitro binary was read (Go build info, pclntab function and file table))
+- https://raw.githubusercontent.com/ethereum/go-ethereum/v1.17.7/core/vm/instructions.go (opCall forwards execution gas plus the caller's whole state reservoir; arithmetic handlers use pop1Peek1)
+- https://raw.githubusercontent.com/ethereum/go-ethereum/v1.17.7/core/vm/contract.go (GasBudget accounting, forwardGas, refundState and the jump destination cache keyed by code hash)
+- https://coinalerts.org/news/articles/719905/ (Offchain Labs announced v3.13.0 as a binary-only release with source to follow)
+- https://forum.arbitrum.foundation/t/constitutional-aip-update-arbitrum-one-and-nova-l1-pricing-parameters-for-ethereum-glamsterdam/31555 (The Glamsterdam change for Arbitrum One is a parameter update that introduces no ArbOS upgrade)
+- https://arb1.arbitrum.io/rpc eth_call 0x6b getScheduledUpgrade() and 0x64 arbOSVersion() at block 527,629,490 (No ArbOS upgrade scheduled; ArbOS 61 (0x74 = 116))
+- https://arb1.arbitrum.io/rpc eth_getCode 0x360e68faccca8ca495c1b759fd9eee466db9fb32 (PoolManager bytecode walked for opcodes at instruction positions)

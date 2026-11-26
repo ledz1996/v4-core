@@ -1,0 +1,22 @@
+{
+ "unit": "stablecoin-l1",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "L-551 and the Tempo half of L-416: can any transaction carry sender address zero to a target of the sender's choice, through a system transaction, a type 0x76 primitive signature, a fee payer signature, a keychain signature naming user_address zero, a key authorization, or a T14 configurable account signature naming account zero?",
+   "agrees": true,
+   "note": "This is the costliest item to get wrong, because Tempo's PoolManager has protocolFeeController zero (eth_getStorageAt slot 2 on https://rpc.mainnet.tempo.xyz returns 0x0 on 2026-11-26, slot 0 is 0xcfb43dc5...811b, client tempo/v1.19.1-a9d6748) and src/ProtocolFees.sol:36 and :48 would then admit a caller recovered as address zero to collectProtocolFees. An eth_call of collectProtocolFees from 0x...01 reverts with 0x48f5c3ed (InvalidCaller), so the guard is live. I fetched tt_signature.rs, handler.rs, key_authorization.rs and configurable_account/mod.rs at a9d6748. recover_signer returns keychain user_address after checking only the inner signature (tt_signature.rs 960-976). handler.rs 670-676 requires user_address to equal aa.signer(); the existing-key path calls validate_keychain_authorization for that account (handler.rs 726-745); the same-transaction path needs the key authorization signed by the account before T6 (handler.rs 566-573) and, from T6, the authorizing account must equal the signer or be an admin key already loaded for it, and loaded_key is None on the same-transaction path, so a foreign signer is refused (handler.rs 762-790). authorizing_account for a configurable account signature returns its named account (key_authorization.rs 477-482), and validate_shape refuses a zero account (configurable_account/mod.rs 332-335), with validate_account_commitment requiring an unregistered account to equal the derived address (384-414). I reran the log scan independently with a topic filter on account zero over blocks 0 to 50,885,287 for both KeyAuthorized (0x7c46af07...) and AdminKeyAuthorized (0x493bc024...) at 0xAAAAAAAA00..00: 0 logs and 0 errors. The scan assumes the account is the first indexed topic and does not cover keys seeded at genesis without a log; I did not read the event definitions to confirm the topic order. The system transaction half rests on cycle 20's reading of block.rs, which I did not refetch."
+  },
+  {
+   "check": "Interpreter releases and fix commits since the versions OPCODES.md records: evm2 main against 35aa3280 for the instruction and jump analysis files.",
+   "agrees": true,
+   "note": "I fetched arithmetic.rs at evm2 main and at 35aa32800b147b00e616d4e1869a3835aa86701f. The only change is DIV (line 22) and MOD (line 32), from an explicit zero test with wrapping_div and wrapping_rem to checked_div and checked_rem unwrapped to the default value. Both forms return zero for a zero divisor and the wrapping quotient or remainder otherwise. The change is not in any Tempo release, so no running node computes FullMath.sol, UnsafeMath.sol, SqrtPriceMath.sol or TickMath.sol differently because of it. I did not refetch the other instruction files or the ruint source."
+  },
+  {
+   "check": "L-957: a native take to an account destroyed earlier in the same transaction, read in arc-node v0.8.6 crates/evm/src/evm.rs, and what it does to the PoolManager either way.",
+   "agrees": true,
+   "note": "arc-node v0.8.6 evm.rs (fetched) loads the target inside a checkpoint when Zero7 is active and returns a metered revert with ERR_SELFDESTRUCTED_BALANCE_INCREASED when it is self-destructed, before value moves (about lines 570-594). The failed call makes Currency.transfer revert with NativeTransferFailed (src/types/Currency.sol:45-53), undoing the debit that take recorded at src/PoolManager.sol:293. In either branch the debit falls on msg.sender of take before the transfer, so only the caller's own credit is involved and no other user's balance is reached. The running Arc builds are unpublished commits, so the reading applies to v0.8.6 source, as the cleared item says."
+  }
+ ],
+ "leads": []
+}

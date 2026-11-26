@@ -1,0 +1,162 @@
+{
+ "unit": "theme-refund-arithmetic",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Tempo v1.19.1-a9d6748 (the build rpc.mainnet.tempo.xyz reported on 2026-11-26): fee charge and refund arithmetic, integer types and casts, and whether a signed, wrapped or truncated value can reach a TIP-20 balance write.",
+   "result": "The upfront fee is calc_gas_balance_spending(gas_limit, gas_price) = U256(gas_limit u64) saturating_mul U256(gas_price u128), div_ceil 10^12 (primitives transaction/mod.rs:61-65); the gas price is converted with u128::try_from and fails the block on overflow (handler/config.rs:257-258), the base fee with u64::try_from (config.rs:319-320). settle_transaction computes actual_spending the same way from tx_gas_used and takes refund = collected.checked_sub(actual_spending), a fatal error otherwise (config.rs:269-273). The TIP-20 side uses U256 with checked decrement_balance and checked opted-in supply updates (tip20/mod.rs:1525-1552, 1558-1594), and the fee manager refunds from its own custody of that transaction's prepayment (tip_fee_manager/mod.rs:234-273). The one signed value is the i64 refund counter. Tempo maps a negative counter to i64::MAX on purpose (config.rs:260-264) and evm2's final_refund caps it at spent / MaxRefundQuotient (evm2 interpreter/host.rs:70-83). From T7 (timestamp 1,783,605,600, 9 July 2026, constants.rs:233) the quotient is 1 and SstoreClearingSlotRefund is 0 (hardfork gas_params.rs:71-73, 120-132). sstore_refund only goes negative by subtracting the clearing refund (evm2 version/gas_params.rs:344-379), which is now 0; storage-credit refunds are non-negative u64 counts times STORAGE_CREDIT_VALUE with saturating_mul (config.rs:444-487); batch refunds are summed with saturating_add (handler.rs:1306, 1357, 1371); EIP-7702 auth refunds are 0 from T1 (gas_params.rs:109-110). So the counter cannot end negative today, and if it did the result would still be a refund bounded by the payer's own prepayment. No wrapped value reaches a balance write.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/evm/src/handler/config.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Tempo: which accounts pay and receive fees and refunds, and whether an ordinary account can make the PoolManager (0x33620f62c5b9b2086dd6b62f4a297a9f30347029) the fee payer or make the fee flow touch a TIP-20 balance the PoolManager holds.",
+   "result": "collect_fee_pre_tx moves max_amount from fee_payer to TIP_FEE_MANAGER_ADDRESS (tip20/mod.rs:1548-1549, tip_fee_manager/mod.rs:158-187), and collect_fee_post_tx refunds from the fee manager to fee_payer and credits the validator ledger (tip_fee_manager/mod.rs:234-273). fee_payer comes from envelope.fee_payer(), a recovered signature (config.rs:279-281, 316-318); a self-sponsored payer signature is refused from T2 (handler.rs:1451-1457). The cycle 23 stablecoin-l1 unit showed that no envelope recovers to an address without a key, and the PoolManager has no key. Both fee moves run outside the call frames: the debit before the first call and the refund after the last (handler.rs:1581-1588 and 1717-1731), so no balanceOf(PoolManager) read between sync and settle (src/PoolManager.sol:279-288, 349-364) can see them. AA batches carry no value (handler.rs:1446-1449). The fee path never names the PoolManager as payer or recipient.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/precompiles/src/tip_fee_manager/mod.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Tempo T14 (8 December 2026, constants.rs:254): does the release that schedules it change the fee or refund arithmetic?",
+   "result": "a9d6748 already carries MAINNET_T14_TIMESTAMP. Its T14 branches in the AA handler change only the warming order and the configurable-account intrinsic gas (handler.rs:1494-1510); settle_transaction and the fee manager have no T14 branch (config.rs:251-305, tip_fee_manager/mod.rs:158-273). Nothing in the refund arithmetic changes at T14.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d6748/crates/evm/src/handler.rs"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L1",
+   "check": "Celo (forno.celo.org reports reth/v2.2.0-74cc8bb, read as celo-reth v1.0.10 in cycle 22): CIP-64 debit and credit amounts, types and casts, and whether the F-144 wrapped refund can reach a fee-currency balance write in a way that moves funds other than the sender's own prepayment.",
+   "result": "The debit is gas_limit as u128 checked_mul effective_gas_price, converted to U256 (handler.rs:543-545). The credit runs after the refund step (handler.rs:864-876; refund at 1213-1215), so refunded() is already the capped value: revm's set_final_refund returns min(refunded as u64, gas_used / 5) as i64, which is non-negative. refund_in_erc20 = price saturating_mul (remaining + refunded as u64) as u128, tip and base charge use spent_sub_refunded (handler.rs:327-343). The three parts add up to price times gas_limit, which is what the debit took, so the wrapped refund only moves value between the sender and the fee recipients. The credit pays caller, block beneficiary (or the fee handler when it is zero) and the fee handler (handler.rs:296-304, 354-364). None is the PoolManager unless the sequencer names it as beneficiary, which is an operator action, and the credit runs after execution.",
+   "source": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/crates/celo-revm/src/handler.rs"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L1",
+   "check": "Celo mined evidence for the F-144 shape: CIP-64 transactions whose main call transfers the fee token back to the sender, and whether the debit had cleared the sender's slot first.",
+   "result": "A read-only scan of the 300 blocks up to 83,781,134 (forno, reth/v2.2.0-74cc8bb at both ends) found 4,452 CIP-64 transactions; 3,197 of them receive a transfer of the debited token from a third address inside the main call. In a seeded sample of 40 (seed 23023), the sender's balance at the previous block never equalled the debit, so the debit did not clear the slot and the counter could not go negative. No mined example of the wrapped refund was found. forno refuses debug_traceTransaction ('rpc method is not whitelisted'), so the gas used before refunds, and with it the refund applied, cannot be read from that endpoint. Data: research/network-risk/cycles/023/theme-refund-arithmetic.work/raw/celo_cip64_scan.json and raw/celo_zero_debit.json.",
+   "source": "research/network-risk/cycles/023/theme-refund-arithmetic.work/raw/celo_zero_debit.json"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L1",
+   "check": "X Layer (reth/v2.3.0-f60420a xlayer/v0.0.7): post_exec_settlement_deltas and gasless transactions, amounts, types and recipients.",
+   "result": "Read at okx/optimism a492b62, the deps/optimism submodule commit used in cycle 22. The submodule pin of the running build could not be confirmed, because the GitHub API is not available. The post-exec refund is a u64 from the sequencer's payload or the producer's inspector. It is rejected when it exceeds evm_gas_used (block/mod.rs:566-599, 1003-1016). Deltas are U256 saturating_mul of the gas delta by base fee, priority price and effective price (block/mod.rs:702-752). The sender gains with saturating_add, and beneficiary, BASE_FEE_RECIPIENT and the operator vault lose with checked_sub, an underflow failing the block (block/mod.rs:645-679, 754-780). The code comment limits it to forks after Karst. Gasless status comes from a view call to the fixed contract 0x19787404b0c70021b4752028f7e3a92313885B27 returning (bool, uint64); malformed output decodes to not gasless (xlayer_gasless_contract.rs:47-48, 124-165). A gasless transaction only has its price set to zero, so no fee moves. The sender is the transaction signer, and every adjustment is applied after the transaction has run. No PoolManager balance or msg.value is involved.",
+   "source": "https://raw.githubusercontent.com/okx/optimism/a492b62bbecbdcf3be90719e042c9abca47c8cc6/rust/alloy-op-evm/src/block/mod.rs"
+  },
+  {
+   "chainIds": [
+    8453
+   ],
+   "lens": "L1",
+   "check": "Base v1.5.6 (endpoint build) and v1.6.0-rc.1: fee charge, refund and reimbursement, including the EIP-8130 phase loop and payer settlement.",
+   "result": "v1.5.6 uses revm's post_execution::refund unchanged and pays fees only to the L1, base and operator fee vaults and the beneficiary, with a U256 base fee amount from basefee as u128 saturating_mul gas used (handler.rs:242-320). No pre-execution storage write exists on Base, so the counter cannot end negative there. EIP-8130 settlement clamps a negative counter to zero before the 1/5 cap: u64::try_from(signed_refund.max(0)) (v1.5.6 eip8130.rs:1716-1718; v1.6.0-rc.1 eip8130.rs:1917-1919). The fee, base amount and priority amount use checked_mul and checked_sub, and the payer refund uses prepay.checked_sub(total_cost) and a checked balance add (v1.6.0-rc.1 eip8130.rs:1841-1909). The payer is the sender or the account a payer_auth signature recovers to (eip8130.rs:945). v1.6.0-rc.1 adds gas-limit billing, which spends all gas and sets the refund to 0 (handler.rs:265-313). EIP-8130 is gated on Everest, which has no date (OPCODES.md).",
+   "source": "https://raw.githubusercontent.com/base/base/v1.6.0-rc.1/crates/common/evm/src/eip8130.rs"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "MegaETH (mega-reth v2.3.1, mega-evm v1.7.4): storage gas and resource refunds in the fee path.",
+   "result": "mega-evm delegates reimburse_caller and refund to the op-revm handler (execution.rs:580-592). Storage gas is charged as extra regular gas (execution.rs:759-764, 848-864). The resource refunds in limit/data_size.rs, kv_update.rs and state_growth.rs lower the per-block resource counters and are never added to the gas refund counter. The only gas refund records are in precompiles.rs:322 and the EIP-7702 refund, both non-negative. Fees are native ETH and go to the beneficiary and the three vaults (execution.rs:341-358).",
+   "source": "https://raw.githubusercontent.com/megaeth-labs/mega-evm/v1.7.4/crates/mega-evm/src/evm/execution.rs"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L1",
+   "check": "Arc v0.8.6: fees in native USDC, amount computation and recipient.",
+   "result": "reward_beneficiary sends U256(effective_gas_price u128) * U256(gas_used u64), at most 192 bits, to the block beneficiary, which takes both the base fee and the tip (handler.rs:85-118). It refuses a self-destructed beneficiary from Zero8. Charging and reimbursing are revm's mainnet steps. The only per-transaction pre-execution action is a blocklist read (handler.rs:65-82), and it writes no storage. The beneficiary is chosen by the validator. Native USDC also has an ERC-20 face, but every fee move happens outside the call frames, so no PoolManager read between sync and settle sees it.",
+   "source": "https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/evm/src/handler.rs"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Monad 0.16.7: charge on gas limit, the refund counter and the reserve balance rule.",
+   "result": "execute_final asserts gas_refund >= 0 and gas_left <= gas_limit (execute_transaction.cpp:376-378). With charges_gas_limit, compute_gas_refund returns 0, so the counter is never cast or used (monad_transaction_gas.cpp:22-31) and the sender is billed gas_limit times price. The reward is a uint256 product sent to the beneficiary or the staking contract (execute_transaction.cpp:381-411). dipped_into_reserve skips every account whose code is not an EIP-7702 delegation (reserve_balance.cpp:86-96), so the PoolManager is exempt. A violation reverts the whole transaction, which is atomic for the PoolManager. The only transactions it can revert are those of the account whose own balance fell.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/execution/monad/reserve_balance.cpp"
+  },
+  {
+   "chainIds": [
+    999
+   ],
+   "lens": "L1",
+   "check": "HyperEVM (official endpoint 'hyperliquid evm Mainnet', replica nanoreth nb-20261125-2): fee and refund handler.",
+   "result": "The replica's block executor marks a transaction with gas price 0 as a system transaction and leaves its gas out of the block total (executor.rs:44-49, 261-283). It calls the stock revm transact with no fee or refund hook of its own. Without a pre-execution storage write the counter cannot end negative. The official validator is closed and was not read.",
+   "source": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/evm/executor.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Whether any of these fee paths changes a value the PoolManager reads inside a call: msg.value, a balance read between sync and settle, or gas forwarded to a hook or a token.",
+   "result": "All fee debits run before the first call frame and all refunds and credits run after the last. msg.value is the signed transaction value or a call value, and no handler read changes it. Tempo AA batches carry no value. The PoolManager reads balances only inside its own frames (src/PoolManager.sol:279-288, 349-364), so a fee move cannot fall between its sync and settle. Inside the main call, Celo and Tempo price SSTOREs on slots the debit wrote as already written, so gas readings differ from Ethereum. The PoolManager forwards all remaining gas and never branches on a gas value (src/types/Currency.sol:48 and 73, src/libraries/Hooks.sol:134, and no gasleft() outside src/test), so no line of src/ computes or decides differently.",
+   "source": "src/PoolManager.sol:349-364"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L1",
+   "question": "Which okx/optimism commit is the deps/optimism submodule of xlayer-reth v0.0.7.3-rc.1 (reth f60420a), and does its post_exec_settlement_deltas and gasless code match a492b62?",
+   "why": "The X Layer fee adjustments were read at a492b62. The running build's submodule pin could not be listed without the GitHub API.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L1",
+   "question": "On a Celo endpoint that serves debug_traceTransaction, find a mined CIP-64 transaction whose debit clears the sender's slot and whose main call refills it, and check that its receipt gasUsed equals gross gas minus gross/5.",
+   "why": "This would confirm F-144 on a mined transaction. forno refuses traces, and none of the 40 sampled transactions had a clearing debit.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1001",
+   "outcome": "cleared",
+   "answer": "The fee and refund code of Tempo, Celo, X Layer, Base (v1.5.6 and v1.6.0-rc.1), MegaETH, Arc, Monad and the HyperEVM replica was read at the builds the endpoints report. Tempo deliberately turns a negative refund counter into the largest refund, but from T7 the clearing refund is 0, so the counter cannot go negative, and the refund is checked and bounded by the payer's own prepayment. Base clamps the EIP-8130 counter to zero, Monad asserts that the counter is non-negative and then ignores it, and Celo's credit uses the already capped value. Every fee payer is a signer, every fee recipient is a vault, the beneficiary or a fee manager, and every move happens outside the call frames, so no PoolManager balance, msg.value or forwarded gas amount changes. On Celo, 4,452 CIP-64 transactions were scanned and no clearing-debit example was found in a sample of 40. No finding."
+  }
+ ]
+}
