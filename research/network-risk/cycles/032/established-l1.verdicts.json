@@ -1,0 +1,36 @@
+{
+ "unit": "established-l1",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "params/config.go on bor develop (fetched) has SalvadorBlock big.NewInt(98688600) in the mainnet BorConfig (line 478) and a BlockAlloc key \"98688600\" (lines 568-595) with five entries, balance 0x0 and a runtime that decodes to 344 bytes each, with the recovery address 0x4df68703...26eedc embedded in four and 0xd9fd3910...610b80 in the entry for 0x5227f603. consensus/bor/bor.go on develop (fetched) loops over c.config.BlockAlloc at line 1382 and calls state.SetCode at line 1391, so the code is written in block finalisation outside any transaction. I ran my own eth_call on https://polygon-bor-rpc.publicnode.com (head 0x5d81668) for each of the five addresses with the BlockAlloc code as a state override: a call from the PoolManager 0x6736...5cd6 with value 1 wei and empty calldata reverts with empty data, a call with zero value and empty calldata also reverts, and the same value call without the override succeeds with 0x. The getter 0x78ed5d81 returns 0x4df68703...26eedc for four addresses and 0xd9fd3910...610b80 for 0x5227f603. ERC-6909 balanceOf(owner, id) on the PoolManager returns 0 for all five owners in ids for native, WPOL, USDC, USDC.e, USDT and WETH at the latest block.",
+   "codeCheck": "src/PoolManager.sol:291-297 take books a negative delta for msg.sender and calls currency.transfer(to, amount). src/types/Currency.sol:44-52 sends native value with call(gas(), to, amount, 0, 0, 0, 0) and on failure reverts through CustomRevert.bubbleUpAndRevertWith with NativeTransferFailed, so the whole unlock of the taker reverts and the taker's delta stays open only inside a reverted transaction. The recipient is chosen by the caller of take, so only a caller who names one of the five accounts is affected; no other user's delta, reserve or claim changes. ERC-20 legs (Currency.sol:53-80) do not call the recipient and are unaffected. The path holds as written.",
+   "corrections": "The impact check in salvador_6909.txt covers only native and WPOL ids; my queries extend it to USDC, USDC.e, USDT and WETH, all zero. The finding is a refinement of the existing F-134 from an earlier cycle and adds no new hazard. Whether bor rejects transactions sent by these accounts once they hold code (EIP-3607) was not checked; it would matter only if they held claims or positions, which they do not in the ids queried.",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/params/config.go", "supports": "SalvadorBlock 98688600 and the five BlockAlloc entries with 344-byte Sweeper code"},
+    {"url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/consensus/bor/bor.go", "supports": "BlockAlloc applied with state.SetCode at lines 1382-1391"},
+    {"url": "https://polygon-bor-rpc.publicnode.com", "supports": "eth_call with code override: value and zero-value empty-calldata calls from the PoolManager revert; getter returns the recovery addresses; ERC-6909 balances of the five are zero in six currency ids (research/network-risk/cycles/032/established-l1.work/verify/calls.txt)"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Whether the MULMOD memo on bor develop can return another word than stock MULMOD for any operands, read against holiman/uint256 v1.3.2.",
+   "agrees": true,
+   "note": "core/vm/mulmod_memo.go on bor develop (fetched, 66 lines) takes the memo path only when z[3] != 0, compares the whole 256-bit modulus before reusing mu, and updates mod and mu together; opMulmod (instructions.go:200-205) calls it with the modulus aliased as output, exactly as stock z.MulMod(x, y, z). In uint256 v1.3.2 (fetched) MulModWithReciprocal (lines 688-718) and MulMod (720-748) are the same statements except that MulMod computes mu := Reciprocal(m) on the spot, and both clear on a zero operand before reduce4. The output is a function of (x, y, m) only, so FullMath and SqrtPriceMath get the stock word."
+  },
+  {
+   "check": "Script set 1 and 2 with the deployed PoolManager bytecode: Polygon differs on the same 19 and 20 gas-limited scripts as in cycle 30.",
+   "agrees": true,
+   "note": "The differing index list in out/pmdiff.json (9, 14, 15, 19, 29, 41, 76, 78, 79, 81, 86, 128, 144, 147, 151, 175, 177, 220, 233) equals the lists in cycles 028 and 030, and earlier cleared items record each as a full-range swap that runs out of gas because Polygon charges more gas for the same scripts. My own probe on publicnode shows eth_call passes the requested gas through (GAS at entry 0x17d2636 for a 25M call, 0x1dcd12f6 for 500M), so the gap is gas cost and not a cap. An out-of-gas swap reverts the caller's own unlock atomically and moves no other user's funds. I did not rerun pmdiff_explain.py, since it calls the Ethereum reference endpoint outside this unit's chain ids."
+  },
+  {
+   "check": "Avalanche forks in the next six months.",
+   "agrees": true,
+   "note": "upgrade/upgrade.go on avalanchego master (fetched) sets IglooTime to UnscheduledActivationTime (9999-12-01) for mainnet (line 69) and Fuji (line 94); Helicon is 2026-09-22 on mainnet (line 68). No other upgrade is listed after Igloo."
+  }
+ ],
+ "leads": []
+}

@@ -1,0 +1,22 @@
+{
+  "unit": "theme-go-binaries-storage-journal",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Transient storage path of the shipped bsc v1.8.2, bor v2.11.2 (StateDB and ParallelStateDB) and avalanchego v1.15.3 binaries: every read equals pyevm, bit-248 key keeps its own value, bsc map keyed by the 52-byte address and slot.",
+      "agrees": true,
+      "note": "raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/state/transient_storage.go defines transientStorageKey{addr common.Address; key common.Hash} as the map key (20 + 32 = 52 bytes), Set deletes on zero and stores otherwise, Get reads the full key. I ran read-only eth_call with a code override on bsc-dataseed1.bnbchain.org (Geth/v1.8.2/linux-amd64/go1.26.10), polygon-bor-rpc.publicnode.com (bor/ebcfea01452d/v2.11.1-private) and api.avax.network (avalanchego/1.15.3 commit 983815fd): TSTORE 0x2a at key 0x01<<248|5 and 0x07 at key 5, then TLOAD both, returned 0x2a and 0x07 on all three, so no high-byte truncation of transient keys. A second call stored 1 at slot 1, made a CALL to itself that stored 9 at slot 1 and reverted, then read slot 1: all three returned 1, so the inner revert restores the transient value. CurrencyDelta.sol:10-39 hashes target and currency into a 64-byte keccak slot and does tload/tstore on it; Lock.sol:13-25 uses a fixed slot. Both behave as on Ethereum on these endpoints."
+    },
+    {
+      "check": "L-1225: bor v2.11.2 64-byte keccak cache in opKeccak256 is per block, compares all 64 bytes and stores a copied array, so every result equals Keccak-256.",
+      "agrees": true,
+      "note": "raw.githubusercontent.com/0xPolygon/bor/v2.11.2/core/vm/instructions.go lines 262-285 copy the 64 bytes into a [64]byte key, Load the cache and on a hit call size.SetBytes32(h[:]); on a miss they hash into evm.hasherBuf and Store(key, evm.hasherBuf). core/vm/evm.go at the same tag declares hasherBuf as common.Hash (line 179), an array type, so Store receives a value copy and later overwrites of hasherBuf cannot change the cached entry. The key is the full 64-byte array, so no two different inputs share an entry. CurrencyDelta.sol:12-14 is the 64-byte case that goes through the cache. I did not re-run the binary models; the source and the live delta probe agree with the cleared result."
+    },
+    {
+      "check": "Task 4: call family control flow of bsc v1.8.2 EVM.Call takes Snapshot after the depth and CanTransfer checks and reverts on any error; only params.SystemAddress skips CanTransfer and Transfer.",
+      "agrees": true,
+      "note": "raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/evm.go lines 291-292 define isSystemCall(caller) as caller == params.SystemAddress; lines 311-317 skip CanTransfer only for that caller and then take the snapshot; lines 345-347 skip Transfer only for that caller; lines 370-372 call RevertToSnapshot whenever err != nil. An ordinary account cannot send a transaction from params.SystemAddress, so a public caller cannot move value without balance or keep state from a failed frame. bsc also pools Contract objects (GetContract/ReturnContract, line 358) and passes evm.jumpDests; neither writes PoolManager state between snapshot and revert, and jump destination caching is covered in OPCODES.md."
+    }
+  ],
+  "leads": []
+}

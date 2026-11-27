@@ -1,0 +1,131 @@
+{
+ "unit": "theme-go-binaries-storage-journal",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    56,
+    137,
+    43114
+   ],
+   "lens": "L2",
+   "check": "Transient storage path of the shipped bsc v1.8.2, bor v2.11.2 (StateDB and the BlockSTM V2 ParallelStateDB) and avalanchego v1.15.3 binaries, amd64 and arm64, run in the cycle 31 x86-64 and AArch64 models with the Go map calls stubbed (scripts/tsgo.py): opTstore, opTload, the vm.StateDB itab methods SetTransientState and GetTransientState of each StateDB type, (*StateDB).Snapshot and RevertToSnapshot with the snapshot id lookup, journal append and revert (ParallelStateDB: appendJournal and parallelJournalEntry.revert), transientStorage Get and Set, and the journalEntry itab methods of transientStorageChange, all read from the file. Sequences: the cycle 31 Nitro generator unchanged (seed 31_1211_01) over the PoolManager delta, count, lock and reserve slots, with nested snapshots up to depth 6, reverts at each depth, equal-value writes, writes of zero, near-collision keys one bit, one limb or one byte apart, and a key that differs only in bit 248.",
+   "result": "Every read equals tools/opdiff/pyevm.py. avax-amd64: 20008 sequences, 448356 reads, 171221 stores, 28848 reverts, 4030 equal-value writes, 0 mismatches, 0 model errors, map key sizes [20, 32]; avax-arm64: 5008 sequences, 112099 reads, 42860 stores, 7176 reverts, 1004 equal-value writes, 0 mismatches, 0 model errors, map key sizes [20, 32]; bor-amd64: 20008 sequences, 448356 reads, 171221 stores, 28848 reverts, 4030 equal-value writes, 0 mismatches, 0 model errors, map key sizes [20, 32]; bor-arm64: 5008 sequences, 112099 reads, 42860 stores, 7176 reverts, 1004 equal-value writes, 0 mismatches, 0 model errors, map key sizes [20, 32]; bor-par-amd64: 20008 sequences, 448356 reads, 171221 stores, 28848 reverts, 4030 equal-value writes, 0 mismatches, 0 model errors, map key sizes [20, 32]; bor-par-arm64: 5008 sequences, 112099 reads, 42860 stores, 7176 reverts, 1004 equal-value writes, 0 mismatches, 0 model errors, map key sizes [20, 32]; bsc-amd64: 20008 sequences, 448356 reads, 171221 stores, 28848 reverts, 4030 equal-value writes, 0 mismatches, 0 model errors, map key sizes [52]; bsc-arm64: 5008 sequences, 112099 reads, 42860 stores, 7176 reverts, 1004 equal-value writes, 0 mismatches, 0 model errors, map key sizes [52]. The bsc map is keyed by the 52-byte address and slot; bor, bor ParallelStateDB and avalanchego use a map of 20-byte addresses to maps of 32-byte slots, so the whole key reaches the runtime map calls. The bit-248 key returns its own value on Avalanche, so no bit of a transient key is cleared (avalanchego extstate.(*StateDB).SetTransientState is a tail jump to libevm (*StateDB).SetTransientState at 0x1466a20). The bsc, bor and avalanchego binaries were read as data only; the arm64 runs and the amd64 runs use the same sequences.",
+   "source": "research/network-risk/cycles/032/theme-go-binaries-storage-journal.work/out/ts/ (bsc-amd64.json, bor-amd64.json, bor-par-amd64.json, avax-amd64.json and the arm64 files); scripts/tsgo.py; src/libraries/CurrencyDelta.sol:14-39, src/libraries/NonzeroDeltaCount.sol:14-32, src/libraries/Lock.sol:13-25, src/libraries/CurrencyReserves.sol:17-36"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L2",
+   "check": "Persistent storage path of the shipped bsc v1.8.2 binaries (amd64 and arm64) in the models (scripts/stgo.py): opSload, opSstore, (*StateDB).GetCommittedState (the original value the SSTORE gas function reads), GetState, SetState, getStateObject, getOrNewStateObject, createObject, (*stateObject).GetState, getState, GetCommittedState, SetState with its inlined setState, (*journal).storageChange with its sync.Pool, append, revert, revertToSnapshot, and the *storageChange and createObjectChange journalEntry methods. The reader interface is a stub serving base state, so first reads after an inner revert go through the binary path that fills originStorage. Cases: slot written back to its original value, slot written twice in one frame, slot first read after an inner revert, account created inside a frame (reader returns no account) and then reverted. Seed 32_1226_02.",
+   "result": "No mismatch. bsc-amd64: 5005 sequences, 135693 reads, 49162 stores, 6625 reverts, 184855 original-value checks, 541946 dirty-set checks, 14800 steps on an account created in the transaction, 118341 base reads, 0 mismatches, 0 errors; bsc-arm64: 2005 sequences, 54157 reads, 19262 stores, 2647 reverts, 73419 original-value checks, 215542 dirty-set checks, 5754 steps on an account created in the transaction, 47203 base reads, 0 mismatches, 0 errors. After every step the SLOAD value equals pyevm, GetCommittedState equals the value at transaction start, the binary dirtyStorage equals the set of slots whose value differs from the original, and after every revert the journal length equals its length at the snapshot with no dirties entry left at zero.",
+   "source": "research/network-risk/cycles/032/theme-go-binaries-storage-journal.work/out/st/bsc-amd64.json, out/st/bsc-arm64.json; scripts/stgo.py"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L2",
+   "check": "BNB Chain binary-only state structures on the persistent storage path, read from the v1.8.2 source (raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/state/journal.go, state_object.go, statedb.go) and the binary: storageChangePool (sync.Pool of *storageChange), journal.storageEntries, stateReadList (BAL access list), stateReaderWithCache (the Hertz fix read cache behind needBadSharedStorage) and the trie prefetcher.",
+   "result": "A reverted write cannot reach any of them. The pool hands out a fresh entry per SetState and only takes entries back in journal.reset at the end of the transaction, when the journal entries are dropped as well; journal.copy builds its entries from the pool but keeps an empty storageEntries, so copied entries are never returned. stateReadList records keys read, not values. stateReaderWithCache and the prefetcher serve and warm committed values only; writes stay in dirtyStorage until Finalise. The binary journal.append at 0x10be9c2 compares the itab with go:itab.*storageChange and appends to journal+0x40, matching the source.",
+   "source": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/state/journal.go"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "check": "L-1225: bor v2.11.2 64-byte keccak cache in opKeccak256 (core/vm/instructions.go:265-278 at tag v2.11.2), read from the amd64 and arm64 binaries and run in the models (scripts/kk.py, seed 32_1225_01).",
+   "result": "The cache is vm.BoundedCache[[64]uint8, common.Hash], built per block by newSharedBlockCaches (core/blockchain.go:1268-1289 at v2.11.2) and shared by the prefetcher goroutine and all BlockSTM V2 workers through vm.Config; it is not process-wide. Load calls sync.(*Map).Load and Store calls internal/sync HashTrieMap.LoadOrStore after two runtime.convTnoptr calls that box copies of the 64-byte key and the 32-byte value; the count is an atomic add (lock xadd on amd64, ldaxr/stlxr or ldaddal on arm64). opKeccak256 passes the key and evm.hasherBuf by value on the stack (amd64 0xb4dc22-0xb4dc84), so the stored value is a copied array, not a slice into hasherBuf. The key type is [64]uint8 with TFlagRegularMemory and equal function memequal_varlen with size word 64, so lookup hashes and compares all 64 bytes. bor-amd64: 5000 sequences, 86963 hashes, 17028 cache hits, 52663 misses, 24613 stores, 8254 LoadOrStore that found the other worker's entry, 17272 hasherBuf overwrites, 2021 runs at a small cap, 0 mismatches, 0 errors; bor-arm64: 2000 sequences, 35096 hashes, 6836 cache hits, 21199 misses, 9918 stores, 3302 LoadOrStore that found the other worker's entry, 7061 hasherBuf overwrites, 812 runs at a small cap, 0 mismatches, 0 errors. Two workers with separate hasherBuf share one cache; inputs of other lengths overwrite a worker hasherBuf between its Store and the other worker Load; a stored entry from the other worker between Load and Store is found by LoadOrStore and not counted twice. Every result equals Keccak-256 of the input. CurrencyDelta.sol:14 hashes 64 bytes and goes through this cache; Position.sol:60 hashes 58 bytes and does not.",
+   "source": "research/network-risk/cycles/032/theme-go-binaries-storage-journal.work/out/kk/; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.2/core/vm/instructions.go; https://raw.githubusercontent.com/0xPolygon/bor/v2.11.2/core/blockchain.go"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "check": "bor v2.11.2 ParallelStateDB (BlockSTM V2 worker state) storage, transient storage and revert, read from raw.githubusercontent.com/0xPolygon/bor/v2.11.2/core/state/parallel_statedb.go, parallel_statedb_journal.go and parallel_statedb_validate.go; its transient path also ran from the binary (first entry).",
+   "result": "SetState journals the previous value with a flag for whether the slot was already in localStorage; revert puts the previous value back when it was, and deletes the local entry otherwise, so reads fall through to the MV store or base state, which hold the transaction-start value. FlushToMVStore publishes only localStorage, so a reverted write is not published; its key stays in WriteKeys, which only drives MarkEstimate and CleanupEstimate. GetCommittedState caches the first read of the MV store or base and is not touched by local writes. Transient storage is a fresh map from Prepare per transaction and is restored with transientStorage.Set. RevertToSnapshot uses the same id lookup as StateDB and truncates journal, balance ops, logs and transfers. Validation compares writer and incarnation, or the value. No step reads a reverted value.",
+   "source": "https://raw.githubusercontent.com/0xPolygon/bor/v2.11.2/core/state/parallel_statedb.go"
+  },
+  {
+   "chainIds": [
+    56,
+    137,
+    43114
+   ],
+   "lens": "L2",
+   "check": "Task 4: call family control flow of bsc v1.8.2, bor v2.11.2 and avalanchego v1.15.3 (libevm) EVM.Call, from the tagged source and the order of calls in the amd64 binaries (scripts/callflow.py, out/callflow-*.txt).",
+   "result": "All three take Snapshot after the depth and CanTransfer checks and before Exist, CreateAccount, Transfer, the precompile and Run, and call RevertToSnapshot whenever the returned error is non-nil. bsc skips CanTransfer and Transfer only when the caller is params.SystemAddress (isSystemCall, evm.go:291-293), which no transaction can be sent from; its stateful precompiles (CAS20 included) run through runPrecompile inside the same snapshot. libevm Call spends preprocessing gas before the snapshot, only for depth 0 with hooks registered. No client-only step sits between snapshot and revert that writes PoolManager state.",
+   "source": "https://raw.githubusercontent.com/bnb-chain/bsc/v1.8.2/core/vm/evm.go"
+  },
+  {
+   "chainIds": [
+    56,
+    137,
+    43114
+   ],
+   "lens": "L2",
+   "check": "Task 5: planted faults in in-memory copies of the model text (scripts/plant.py, kk.py): journal entry skipped, revert-loop exit off by one, one TLOAD/SLOAD key limb left unswapped, revert that restores zero (not on avalanchego, whose Set has no zero test), slot written back to its original value left dirty (bsc storage), keccak cache key that loses its last 8 bytes and a cached value zeroed (bor).",
+   "result": "Every planted fault was caught. bsc-amd64 skip_journal: 102 of 205 sequences flagged; bsc-amd64 key_limb: 205 of 205 sequences flagged; bsc-amd64 revert_zero: 28 of 205 sequences flagged; bsc-amd64 dirty_kept: 56 of 205 sequences flagged; bsc-arm64 skip_journal: 46 of 105 sequences flagged; bsc-arm64 key_limb: 105 of 105 sequences flagged; bsc-arm64 revert_zero: 14 of 105 sequences flagged; bsc-arm64 dirty_kept: 31 of 105 sequences flagged; avax-amd64 skip_journal: 98 of 208 sequences flagged; avax-amd64 snap_off_by_one: 82 of 208 sequences flagged; avax-amd64 key_limb: 187 of 208 sequences flagged; avax-arm64 skip_journal: 55 of 108 sequences flagged; avax-arm64 snap_off_by_one: 48 of 108 sequences flagged; avax-arm64 key_limb: 99 of 108 sequences flagged; bor-amd64 skip_journal: 98 of 208 sequences flagged; bor-amd64 snap_off_by_one: 82 of 208 sequences flagged; bor-amd64 key_limb: 187 of 208 sequences flagged; bor-amd64 revert_zero: 34 of 208 sequences flagged; bor-arm64 skip_journal: 55 of 108 sequences flagged; bor-arm64 snap_off_by_one: 48 of 108 sequences flagged; bor-arm64 key_limb: 99 of 108 sequences flagged; bor-arm64 revert_zero: 20 of 108 sequences flagged; bor-par-amd64 skip_journal: 98 of 208 sequences flagged; bor-par-amd64 snap_off_by_one: 82 of 208 sequences flagged; bor-par-amd64 key_limb: 187 of 208 sequences flagged; bor-par-amd64 revert_zero: 34 of 208 sequences flagged; bor-par-arm64 skip_journal: 55 of 108 sequences flagged; bor-par-arm64 snap_off_by_one: 48 of 108 sequences flagged; bor-par-arm64 key_limb: 99 of 108 sequences flagged; bor-par-arm64 revert_zero: 20 of 108 sequences flagged; bsc-amd64 skip_journal: 98 of 208 sequences flagged; bsc-amd64 snap_off_by_one: 82 of 208 sequences flagged; bsc-amd64 key_limb: 187 of 208 sequences flagged; bsc-amd64 revert_zero: 34 of 208 sequences flagged; bsc-arm64 skip_journal: 55 of 108 sequences flagged; bsc-arm64 snap_off_by_one: 48 of 108 sequences flagged; bsc-arm64 key_limb: 99 of 108 sequences flagged; bsc-arm64 revert_zero: 20 of 108 sequences flagged; bor kk-amd64-key_last8: 167 mismatches; bor kk-amd64-store_zero_value: 128 mismatches; bor kk-arm64-key_last8: 84 mismatches; bor kk-arm64-store_zero_value: 60 mismatches",
+   "source": "research/network-risk/cycles/032/theme-go-binaries-storage-journal.work/out/faults/"
+  },
+  {
+   "chainIds": [
+    56,
+    137,
+    43114,
+    42161,
+    4663
+   ],
+   "lens": "L2",
+   "check": "Live eth_call probe with state overrides on the deployed PoolManager (cycle 31 live_nitro.py copied unchanged as scripts/live.py): unlock, initialize a pool of two never-deployed currencies, add liquidity, swap, let a helper swap and revert (nested variant: a second helper inside), read deltas and storage back, settle with ERC-6909 claims; kept variant must revert.",
+   "result": "All variants return the reference bytes. 56: https://bsc-dataseed1.bnbchain.org block 136012602, before Geth/v1.8.2/linux-amd64/go1.26.10, after Geth/v1.8.2/linux-amd64/go1.26.10, variants settled=True,kept=True,nested=True; 137: https://polygon-bor-rpc.publicnode.com block 98043547, before bor/ebcfea01452d/v2.11.1-private/linux-amd64/go1.26.10, after bor/280514fa9fb7/v2.11.1-private/linux-amd64/go1.26.10, variants settled=True,kept=True,nested=True; 43114: https://api.avax.network/ext/bc/C/rpc block 101527321, before avalanchego/1.15.3 [database=v1.4.5, rpcchainvm=47, commit=983815fd993acf846a27749b598f0fea4d876a75, go=1.26.10], after avalanchego/1.15.3 [database=v1.4.5, rpcchainvm=47, commit=983815fd993acf846a27749b598f0fea4d876a75, go=1.26.10], variants settled=True,kept=True,nested=True; 42161: https://arb1.arbitrum.io/rpc block 527966666, before nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3, after nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3, variants settled=True,kept=True,nested=True; 4663: https://rpc.mainnet.chain.robinhood.com block 124141129, before nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-amd64/go1.27.3, after nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3, variants settled=True,kept=True,nested=True. The BNB Chain endpoint answers Geth/v1.8.2 built with go1.26.10, while the released binary read here is built with go1.25.14, so it is another build. The Polygon endpoint answers bor v2.11.1-private from two commits, not the v2.11.2 binary read. The Avalanche endpoint answers avalanchego 1.15.3 at commit 983815fd, the released build. The Nitro endpoints answer the b72783f release named in cycle 31.",
+   "source": "research/network-risk/cycles/032/theme-go-binaries-storage-journal.work/out/live-56.json, out/live-137.json, out/live-43114.json, out/live-42161.json, out/live-4663.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    99901,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "Applicability of this theme to the other 16 networks.",
+   "result": "This theme reads the shipped binaries of BNB Chain, Polygon and Avalanche and the Nitro storage revert; it does not apply to the other networks, whose clients are covered by their own units.",
+   "source": "research/network-risk/cycles/032/plan.json"
+  }
+ ],
+ "leads": [],
+ "leadResults": [
+  {
+   "leadId": "L-1225",
+   "outcome": "cleared",
+   "answer": "Per-block cache shared by the prefetcher and BlockSTM V2 workers; sync.Map plus atomic count; key and value boxed as copied arrays; full 64-byte compare. Modelled interleavings and two planted faults; no wrong hash."
+  },
+  {
+   "leadId": "L-1226",
+   "outcome": "cleared",
+   "answer": "Transient path of bsc, bor (StateDB and ParallelStateDB) and avalanchego binaries on both architectures, and the bsc persistent path, match pyevm on every read; faults caught. bor and avalanchego persistent storage were not modelled from the binary."
+  },
+  {
+   "leadId": "L-1227",
+   "outcome": "inconclusive",
+   "answer": "The Nitro persistent storage revert was not lifted this cycle; the live reverted-swap probe on Arbitrum One and Robinhood Chain again returned the reference bytes."
+  }
+ ]
+}
