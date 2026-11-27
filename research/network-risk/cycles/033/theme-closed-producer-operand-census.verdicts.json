@@ -1,0 +1,22 @@
+{
+  "unit": "theme-closed-producer-operand-census",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 5 (4326, 999): no PoolManager instruction can receive an operand class that neither closed producer has executed (SDIV -2^255 by -1, MOD by zero, SMOD by zero or negative divisor, MULMOD and ADDMOD by zero, SIGNEXTEND index >= 31, BYTE index >= 32, SAR by 256 or more).",
+      "agrees": true,
+      "note": "I re-read the cited lines. Signed divisors are only tick spacings (TickBitmap.sol:20-26, :54-64, Pool.sol:576-578), held to 1..32767 at PoolManager.sol:119-120, so neither zero, negative nor -1 with a -2^255 dividend. MOD divisors: UnsafeMath.sol:14 receives liquidity after the zero checks at SqrtPriceMath.sol:134-142 and :163-170, sqrtPriceAX96 after the zero check at SqrtPriceMath.sol:197-201, and (numerator1 / sqrtPX96) + amount at SqrtPriceMath.sol:52, which is checked addition outside unchecked with amount nonzero after :37. DIV at UnsafeMath.sol:26 runs after Pool.sol:401 and :468. FullMath.sol:30 requires denominator > prod1 before :35 and :48. SAR counts in src are the constants 8, 128 and 255 (grep over src), BYTE indices at BitMath.sol:22 and :45 are masked with 0x1f. I disassembled the PoolManager code from eth_getCode on https://mainnet.megaeth.com/rpc (0xacb7...d38e) and https://rpc.hyperliquid.xyz/evm (0x12D4...6B1F): both 24009 bytes with 13 MULMOD, 114 SIGNEXTEND, 19 SAR; the only ADDMOD, EXP and third BYTE bytes sit at pcs 24005-24008 inside the 10-byte CBOR metadata that starts at 23997, so the executable code has no ADDMOD, matching out/pm-inventory.json. Every SIGNEXTEND index is a pushed constant 1, 2 or 15 (the five non-adjacent ones take a PUSH1 0x02 a few instructions earlier through stack shuffles at pcs 14159, 14171, 14361, 14373, 19309). The two bytecodes differ at one region (hex char 27239), consistent with an immutable, not with different opcodes."
+    },
+    {
+      "check": "Task 2 (4326): wide-product MULMOD sites with no validated run at that pc (getAmount1Delta copy pcs 22585, 22639, 23094; fee and Position copies) are reachable only with liquidity times price difference of 2^256 or more, so amount1 exceeds 2^160 and currency1 must be the account's own token; SAR at pc 6059 never sees a negative feesAccrued.",
+      "agrees": true,
+      "note": "SqrtPriceMath.sol:250-252 computes mulDiv(liquidity, sqrtPrice difference, Q96); a product of 2^256 or more makes amount1 at least 2^160, which no realistic third-party token supply reaches, so a pool of ordinary tokens cannot hit the class and the error would land in the attacker's own token. feesAccrued comes from Pool.sol:192 toBalanceDelta(feesOwed0.toInt128(), feesOwed1.toInt128()) and SafeCast.sol:56-58 reverts for values of 2^127 or more, so both halves are non-negative and SAR at that site never gets a negative value. I did not re-map the pcs through the source map; the per-pc claim rests on out/pm-unexecuted-megaeth.json. The lead the unit filed for these pcs is correctly low priority."
+    },
+    {
+      "check": "Task 4 (999): HyperEVM nanoreth replicas re-execute blocks and compare gas used, receipts root, logs bloom and requests hash but no state root; headers carry a zero state root.",
+      "agrees": true,
+      "note": "Fetched https://raw.githubusercontent.com/hl-archive-node/nanoreth/b92ad36/src/node/consensus/reth_copy.rs: validate_block_post_execution checks gas used, receipts root and bloom over receipts with nonzero cumulative gas, and the requests hash, and nothing else. Fetched the pinned reth fork at c6e0a06b: payload_validator.rs:890-892 reads 'HyperEVM headers carry a zero state root ... The upstream mismatch check is removed. let _ = state_root;'. At 14509628 lines 625-627 set state_root = B256::ZERO before comparing it with the header. eth_getBlockByNumber on https://rpc.hyperliquid.xyz/evm returned stateRoot 0x00..00 for blocks 33554432 and 52386398. The conclusion that a storage-only divergence passes the replicas, and that F-120 stands, holds."
+    }
+  ],
+  "leads": []
+}

@@ -1,6 +1,6 @@
 # All findings
 
-164 findings on record after cycle 32, in-scope ones first.
+164 findings on record after cycle 33, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 

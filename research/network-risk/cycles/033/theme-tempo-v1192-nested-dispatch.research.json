@@ -1,0 +1,158 @@
+{
+ "unit": "theme-tempo-v1192-nested-dispatch",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Pins and endpoint build. web3_clientVersion on rpc.mainnet.tempo.xyz before and after every batch on 2026-11-27 between 12:29 and 12:45 UTC. Cargo.lock at a9d6748, at c0c9372 and at the tag tempo/v1.19.2 fetched from raw.githubusercontent.com.",
+   "result": "Every answer was tempo/v1.19.2-c0c9372/x86_64-unknown-linux-gnu. The c0c9372 lock pins evm2 7c9f3b6deb23005fc84596ba1b13a6492d942014 (35aa32800b147b00e616d4e1869a3835aa86701f at a9d6748) and ruint 1.21.1 at both. The Cargo.lock of the tag tempo/v1.19.2 is byte equal to the c0c9372 lock, and crates/evm/src/lib.rs, block.rs, handler/config.rs and precompiles/src/storage/evm.rs at the tag equal c0c9372. The critic's pins are confirmed.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/c0c9372/Cargo.lock"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 1, evm2 tree diff. crawl.py mirrored crates/evm2, macros, inspectors and jit at 35aa3280 (174 files) and 7c9f3b6d (175 files) into research/network-risk/cycles/033/theme-tempo-v1192-nested-dispatch.work/dl/evm2-old and dl/evm2-new and the two trees were compared file by file.",
+   "result": "30 paths differ or exist on one side only. Nothing under interpreter/ differs (arithmetic.rs, bitwise.rs, i256.rs, system.rs, host.rs, memory.rs, control.rs, mod.rs, runtime.rs and the rest), and bytecode/analysis.rs and evm/state/storage.rs are equal, so the critic's byte-equal list is confirmed and extends to every interpreter file. The changed files reachable on a PoolManager call are evm/mod.rs (nested dispatch bookkeeping, read below), evm/state/mod.rs (take_logs keeps or right-sizes its buffer and returns the same logs in the same order), evm/system.rs (the inspector is restored by a drop guard, same call), version/mod.rs (default per-frame memory limit 100 MiB, was 2^32-1) and ethereum/mod.rs (the sender code check exempts a delegation designator only when the EIP-7702 feature is on). The rest are not on the PoolManager path: bytecode/mod.rs and bal/changes.rs (block access list code hash seeding, test plus one line), ethereum/eip7702.rs (an inspector refund counter), evm/async.rs, inspector.rs and precompile.rs (box reuse and a drop guard), bn254, kzg and modexp precompiles (refactors and a zero-modulus fast path that returns the specified zero bytes), and the tracing inspectors.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/7c9f3b6deb23005fc84596ba1b13a6492d942014/crates/evm2/src/evm/mod.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 1, tempo tree diff. crawl.py mirrored 16 crates and bin/tempo at a9d6748 (374 files) and c0c9372 (381 files); nine more files outside the crawl that hold callers of transact or system_call (payload/builder prewarming.rs and lib.rs, five zones files, corpus exec/block.rs, fuzz-harness views.rs) were fetched at both revisions.",
+   "result": "32 paths differ. On the execution path only crates/evm/src/lib.rs (a downcast in tests and setup code now goes through precompiles_as directly) and crates/precompiles/src/storage/evm.rs (the T15 account skip, below) change. crates/evm/src/block.rs, handler.rs, handler/config.rs, instructions.rs and precompiles/src/tip20 are equal, as the critic found. The other changes are in consensus follow mode, snapshot download, the transaction pool (a delayed pool), the eth_simulateV1 request decoding (the permit is now taken before decoding), zone contracts, validator config v2, zone attestation and a mock signature feature for fuzzing. None of the nine extra files changed apart from fuzz-harness, which is not part of the node.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/c0c9372/crates/precompiles/src/storage/evm.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 2, the new nested dispatch in evm2 7c9f3b6d crates/evm2/src/evm/mod.rs read line by line: fields at 250-264, enter_execution at 464-473, ExecutionGuard and its Drop at 1301-1324, execute_tx at 1399-1420, the inspected frame entry at 1951-1980, and State::clear_transaction_state at evm/state/mod.rs:564-580.",
+   "result": "suspended_frames counts frames suspended under a transaction started while one runs and is used only by the assertion in set_initial_call_depth (1144). execute_tx takes current_frame, sets enclosing_refund to 0 and, when running was already true, tells the guard to put back the outer frame pointer and outer refund; Drop restores running, enclosing_refund, current_frame and the counter on return, on error and on unwinding. enclosing_refund only feeds Evm::tx_refunded for inspectors. Nothing in the new code touches the State: the transient map, journal, checkpoints, warm set and logs are the single State of the Evm, exactly as at 35aa3280 (execute_tx at old 1313-1322 only called enter_execution). A transaction dispatched while another runs therefore shares the outer transient map, and its discard or error path calls clear_transaction_state, which clears transient_storage, the journal, the prewarm set and logs of the outer transaction as well. That behaviour is unchanged by the release. It is not reachable on Tempo because no production caller dispatches a transaction while a user transaction runs (next entry).",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/7c9f3b6deb23005fc84596ba1b13a6492d942014/crates/evm2/src/evm/mod.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 2, caller list. scripts/callers.py listed every call of transact, transact_with_inspector, call_tx, validate_tx, system_call, execute_system_call, committed_copy, execute_tx, enter_execution, set_database, take_transient_storage and clear_transaction_state in both crawled trees (out/callers_old.txt, out/callers_new.txt, 45 production lines each) plus the nine extra files.",
+   "result": "The production lists at the two revisions are the same apart from two guard lines in evm2. In tempo c0c9372 the callers are: transaction-pool validator.rs:572 (validate_tx on a pool EVM), action_replay.rs:66 and block.rs:947 and 973 (Tempo's own per-transaction gas and section checks, not evm2 dispatch), block.rs:589 (the committee system call in finish, after all transactions) and block.rs:862 (the EIP-2935 history call at the block start), genesis.rs:76 and 104 (genesis build), handler/config.rs:454 (take_transient_storage of the storage credits precompile's own slots after a successful top-level message) and handler/config.rs:521 (execute_system_call as the whole body of a top-level system transaction, not inside another), payload builder and zone prewarming on separate EVMs, and zone code that runs on zone nodes. No precompile, fee token handler, 0x76 batch call, keychain or configurable account path, inspector or block hook starts a transaction while a user transaction is on the stack. A precompile that calls out (Host::execute_message) opens a frame, which shares the transient map as a CALL does. With no caller, the three cases (shared map, cleared map, fresh committed map) do not arise on Tempo mainnet. If one ever did, the shared and cleared cases would reset IS_UNLOCKED_SLOT and NONZERO_DELTA_COUNT_SLOT (src/libraries/Lock.sol:13-25, NonzeroDeltaCount.sol:14-32) under an open unlock, and src/PoolManager.sol:112 would then pass with debts unpaid.",
+   "source": "research/network-risk/cycles/033/theme-tempo-v1192-nested-dispatch.work/out/callers_new.txt"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 3, live transient probe. tprobe.py of cycle 19 (copied to scripts/tprobe.py) on rpc.mainnet.tempo.xyz: a driver placed by state override unlocks the deployed PoolManager 0x33620f62c5b9b2086dd6b62f4a297a9f30347029, syncs pathUSD, mints 1 claim, then calls 28 precompile and control targets and reads the lock, NonzeroDeltaCount, synced currency, synced reserves and its own delta through exttload before and after. Run by eth_call at block 51,071,161 and by eth_simulateV1 at block time 1,796,745,600 (T14 rules) at block 51,071,167, client tempo/v1.19.2-c0c9372 before and after both.",
+   "result": "In all 56 runs the five words after the open are lock 1, count 1, currency pathUSD, reserves 0x4abfef3da and delta -1, and no probe changes any of them. Success flags and return sizes of every probe equal the v1.19.1 records of cycle 19 in both modes (out/tprobe_latest.json, out/tprobe_t14.json).",
+   "source": "research/network-risk/cycles/033/theme-tempo-v1192-nested-dispatch.work/out/tprobe_latest.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 3, reruns on v1.19.2 with web3_clientVersion before and after each batch (out/clientversion.log): battery.py, targeted.py, callsem.py, pmdiff.py 250, pmdiff2.py 300, the 23 scen28 scenarios through scen_rpc.py of cycles/029/stablecoin-l1.work under current rules and at block time 1,796,745,600, and the cycle 31 live_take_revert.py (now and T14), live_credit_shapes.py and live_swap_revert_sim.py.",
+   "result": "99,985 battery and 85,544 targeted vectors give 0 mismatches and 0 errors; callsem 50 of 50 as specified. pmdiff gives 240 of 250 identical and pmdiff2 294 of 300, and the differing scripts are exactly the ones recorded for Tempo in cycle 29 (pmdiff 9, 14, 29, 67, 79, 81, 86, 147, 175, 233; pmdiff2 71, 82, 189, 196, 210, 295), the known gas pricing scripts. scen28: 137 of 137 calls equal the reference both times. The four take revert cases, both credit shapes and the three swap revert cases equal pyevm.py now and under T14.",
+   "source": "research/network-risk/cycles/033/theme-tempo-v1192-nested-dispatch.work/out/clientversion.log"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Task 5 (L-1240), the T15 account skip. tempo c0c9372 crates/precompiles/src/storage/evm.rs:164-219 (sload_journal, sstore_journal), :221-300 (sload_inner, sstore_inner), crates/precompiles/src/error.rs:166-173, and evm2 7c9f3b6d evm/state/mod.rs:655-674 (account, account_with_skip).",
+   "result": "The skip flag is set only when the T4 rule finds the remaining gas below the cold storage surcharge. account_with_skip then returns LoadError::ColdLoadSkipped for a cold account, which error.rs:169 maps to TempoPrecompileError::OutOfGas and the precompile halts out of gas; no value is returned. Before T15 the account is always loaded and only the slot load is skipped, with the same out of gas result. A TIP-20 transfer or balanceOf called by the PoolManager therefore fails as a frame. Currency.transfer reverts on failure (src/types/Currency.sol:54-86) and balanceOfSelf is a checked high level call (src/types/Currency.sol:90-95), so sync and settle (src/PoolManager.sol:279-288, 349-364) revert and book nothing. T15 has no mainnet or Moderato time in crates/hardfork/src/lib.rs:413-494 (None), while MAINNET_T14_TIMESTAMP stays 1,796,742,000 (constants.rs:254).",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/c0c9372/crates/precompiles/src/error.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 6 (L-1139), the 100 MiB per-frame memory limit and the changed EIP-7702 check. evm2 version/mod.rs:46-47 and 147, evm/config.rs:191-200, interpreter/runtime.rs:513; ethereum/mod.rs:432-450; Tempo tx gas cap in crates/hardfork/src/constants.rs:91 and lib.rs:319-323.",
+   "result": "The memory limit applies per frame. Reaching 100 MiB needs 3,276,800 words, whose expansion cost 3w + w^2/512 is 20,981,350,400 gas, about 700 times the 30,000,000 transaction cap, so no hook or token frame can hit it before running out of gas, and the PoolManager sees the same failed call it would see for out of gas. The EIP-7702 change is in validate_sender_and_bump_nonce, which checks the transaction sender, not CALL setup; it only rejects a delegated sender when the EIP-7702 feature is off, which is not the case on Tempo's Prague based rules. A delegated account as hook (src/libraries/Hooks.sol:134) or as native take recipient (src/types/Currency.sol:48) runs through the unchanged CALL path. The 575 cycle 26 cases were not rerun because their scripts are not on disk under that cycle's work directory.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/7c9f3b6deb23005fc84596ba1b13a6492d942014/crates/evm2/src/version/mod.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Transient storage shared between the calls of a 0x76 batch transaction, as a path for one call to inherit another call's unlock.",
+   "result": "unlock relocks before it returns and requires NonzeroDeltaCount to be zero (src/PoolManager.sol:104-114), and a reverted call rolls back its transient writes, so no call of a batch can leave the PoolManager unlocked or with an open delta for the next call. The live probe and callsem rollback cases agree.",
+   "source": "src/PoolManager.sol:104-114"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Scope of this unit for the other 20 networks.",
+   "result": "The unit concerns Tempo's client release v1.19.2 and its evm2 pin only. No other network runs Tempo. Ethereum's reth nodes use evm2 at another revision (66687c18 per OPCODES.md), so the nested dispatch change has not reached them; nothing here bears on the other 20 networks.",
+   "source": "research/network-risk/OPCODES.md"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "question": "evm2 now documents and supports a transaction dispatched from inside a running one, but it shares the single State, so its discard or error path clears the outer transaction's transient map and journal. On every Tempo release, rerun scripts/callers.py of this unit against the pinned evm2 and tempo trees and confirm no precompile, handler, fee or keychain path calls transact, call_tx, system_call or execute_system_call while a user transaction runs.",
+   "why": "A single such caller reachable from a hook or token callback would reset IS_UNLOCKED_SLOT and NONZERO_DELTA_COUNT_SLOT under an open unlock, and src/PoolManager.sol:112 would then accept unpaid debts.",
+   "priority": "medium"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1237",
+   "outcome": "cleared",
+   "answer": "The new code in evm2 7c9f3b6d execute_tx (evm/mod.rs:1399-1420) only saves and restores the frame pointer, an inspector refund counter and a counter of suspended frames; the transient map, journal, warm set and logs stay the one shared State, as before. No non-test caller in tempo c0c9372 starts a transaction while a user transaction runs (45 production lines, same as a9d6748). The live probe kept lock, count, synced currency, reserves and delta unchanged across 28 targets, now and under T14, on v1.19.2, and the battery, targeted, callsem, pmdiff, pmdiff2, scen28 and cycle 31 rollback sets match their v1.19.1 records."
+  },
+  {
+   "leadId": "L-1240",
+   "outcome": "cleared",
+   "answer": "A skipped cold account load returns LoadError::ColdLoadSkipped, mapped to OutOfGas (crates/precompiles/src/error.rs:169), so the TIP-20 call fails as a frame and the PoolManager's transfer or balanceOf reverts; no unloaded value reaches sync or settle. The skip only applies when remaining gas is below the cold surcharge. T15 has no activation time."
+  },
+  {
+   "leadId": "L-1139",
+   "outcome": "inconclusive",
+   "answer": "v1.19.2 pins evm2 7c9f3b6d and reth 5537d69 as expected, and the vector and script reruns match. The memory limit cannot be reached under the 30,000,000 gas cap (2.1e10 gas for 100 MiB) and the EIP-7702 change concerns the transaction sender only. The 575 delegated hook and native value cases of cycle 26 were not rerun because their scripts are not on disk."
+  },
+  {
+   "leadId": "L-1189",
+   "outcome": "inconclusive",
+   "answer": "v1.19.2 binaries are not published: download.tempo.xyz/binaries lists v1.19.1 as newest and the v1.19.2 paths return an index page. The pins in the lock are ruint 1.21.1 and evm2 7c9f3b6d, and the instruction, analysis and storage files of evm2 are byte equal to 35aa3280, so the source level reruns hold; the binary relift waits for the archives."
+  }
+ ]
+}

@@ -1,0 +1,22 @@
+{
+  "unit": "theme-persistent-storage-binary-lift",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 2, avalanchego v1.15.3 (libevm d398bc4dbe41): the C-Chain partitionStateKeysHook clears bit 248 of every SLOAD and SSTORE key, and two PoolManager slots alias only if they differ in bit 248 alone, which needs a keccak output pair at XOR distance 2^248.",
+      "agrees": true,
+      "note": "Fetched https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/vms/saevm/cchain/libevm/extstate/statedb.go: TransformStateKey returns storageKey(key), which does key[0] &^= 0x01, the lowest bit of the most significant byte, that is bit 248; asset balance keys set that bit, so they live in a partition the PoolManager's own keys never reach. In src/ the fixed slots are small integers (src/libraries/StateLibrary.sol:11, POOLS_SLOT 6) or keccak constants (src/libraries/CurrencyReserves.sol:11-13, src/libraries/Lock.sol:8, src/libraries/NonzeroDeltaCount.sol:9), and every mapping slot is a keccak output plus a struct offset of a few words. Two such slots alias only when 255 of their 256 bits agree, a second preimage search no caller can run, and a carry from a small offset cannot reach bit 248. The transform is applied in GetState, SetState and GetCommittedState alike per the cycle's binary run, so original value gas reads stay consistent. The one effect left is that a slot whose keccak output has bit 248 set is stored under the cleared key, which is invisible to the contract."
+    },
+    {
+      "check": "Task 2, bor v2.11.2 ParallelStateDB (BlockSTM V2): a worker's reverted SSTORE cannot be seen by another worker before the transaction ends, since SetState keeps the word in localStorage and FlushToMVStore runs after Execute returns.",
+      "agrees": true,
+      "note": "Fetched https://raw.githubusercontent.com/0xPolygon/bor/v2.11.2/core/state/parallel_statedb.go: SetState at 1040-1060 journals the previous word, writes only s.localStorage, and the comment at 1053 says storage writes are always deferred to FlushToMVStore. The saved v2_executor.go:445-449 calls st.FlushToMVStore() after x.env.Execute returns. The mvhashmap.go comment at 429 does mark V1 as test-only. The model stubbed MVStore reads to not-found only, so the cross-transaction branches (a lower transaction's committed word, ESTIMATE waits, SuicidePath) were not run; the unit already records this as a lead. Any divergence there would show as a validator disagreement with the serial result that other bor nodes recompute, not as a path an ordinary caller can steer into PoolManager balances, so the low priority is reasonable."
+    },
+    {
+      "check": "Arbitrum-only steps on the Nitro b72783f persistent storage path: journal snapshot copies unexpectedBalanceDelta, append and revert type-assert entries to possibleZombie, and no arbos or stylus function is in the closure of opSload and opSstore.",
+      "agrees": true,
+      "note": "Fetched https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/state/journal.go: snapshot appends revision{id, j.length(), new(big.Int).Set(s.arbExtraData.unexpectedBalanceDelta)}, a balance accounting value. Fetched journal_arbitrum.go: possibleZombie is documented as implemented only by createZombieChange and isZombie returns false for any other entry, so a storageChange is unaffected. These are master branch texts, not the fork commit pinned by v3.13.0-rc.9, as the unit itself states; the binary run is the stronger evidence. The Stylus storage cache serves a Stylus program's own storage and cannot write PoolManager slots, which agrees with the closure result."
+    }
+  ],
+  "leads": []
+}

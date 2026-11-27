@@ -1,0 +1,22 @@
+{
+  "unit": "theme-tempo-v1192-nested-dispatch",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 2, the new nested dispatch in evm2 7c9f3b6d crates/evm2/src/evm/mod.rs: execute_tx, ExecutionGuard and its Drop, and State::clear_transaction_state.",
+      "agrees": true,
+      "note": "Fetched https://raw.githubusercontent.com/DaniPopes/evm2/7c9f3b6deb23005fc84596ba1b13a6492d942014/crates/evm2/src/evm/mod.rs. execute_tx (1399-1420) saves running, enclosing_refund and current_frame, sets the refund to 0, and on drop of the guard (Drop at 1313-1325) restores running, the refund, the frame and suspended_frames. Nothing there swaps or copies the State. On an error result execute_tx calls self.state.clear_transaction_state(), which (evm/state/mod.rs:564-580 at the same revision) clears accounts, transient_storage, prewarm_set, journal and logs of the single State. So the hazard exists only if a nested dispatch happens, and the unit is right that it would wipe IS_UNLOCKED_SLOT and NONZERO_DELTA_COUNT_SLOT (src/libraries/Lock.sol:13-25, src/libraries/NonzeroDeltaCount.sol:14-32), after which the check at src/PoolManager.sol:111 would read 0. The dependence on there being no production nested caller stands and is carried as a medium lead."
+    },
+    {
+      "check": "Task 2, caller list: no production caller in tempo c0c9372 starts a transaction while a user transaction runs; handler/config.rs:454 and :521 are the handler-level callers.",
+      "agrees": true,
+      "note": "Fetched https://raw.githubusercontent.com/tempoxyz/tempo/c0c9372/crates/evm/src/handler/config.rs. Line 454 is take_transient_storage(&STORAGE_CREDITS_ADDRESS) inside settle_storage_credit_refunds, which returns early unless the top-level message succeeded and takes only that precompile's own slots, not the PoolManager's. Line 521 is execute_system_call inside execute_legacy for the PreparedLegacy::System kind, the whole body of a system transaction and not nested in a user one. I did not repeat the full 45-line scan of the other crates; the two handler lines I read match the description. The Cargo.lock at c0c9372 pins evm2 7c9f3b6d and ruint 1.21.1 (fetched), and web3_clientVersion on https://rpc.mainnet.tempo.xyz returned tempo/v1.19.2-c0c9372 at block 0x30b6f75. eth_getCode of 0x3362...9029 gives 24009 bytes with sha256 prefix f017c3da36573b60, the same as networks.json."
+    },
+    {
+      "check": "Task 5 (L-1240), the T15 account skip in precompile storage returns an error, never an unloaded value.",
+      "agrees": true,
+      "note": "Fetched https://raw.githubusercontent.com/tempoxyz/tempo/c0c9372/crates/precompiles/src/storage/evm.rs and error.rs. sload_inner and sstore_inner (evm.rs:226-300) set skip_cold_load only under T4 when remaining gas is below the cold surcharge, and sload_journal/sstore_journal pass it to account_with_skip gated by is_t15 (173, 201). evm2 State::account_with_skip (state/mod.rs:661-674) returns LoadError::ColdLoadSkipped for a cold account, and error.rs:169 maps that to OutOfGas, so the TIP-20 frame fails. A second, ungated account_with_skip at evm.rs:333 (the account code load path) uses the same T4 flag and also propagates the error through ?. A failed transfer reverts in Currency.transfer and balanceOfSelf is a checked call (src/types/Currency.sol:54-95), so sync and settle book nothing. I did not fetch crates/hardfork/src/lib.rs to recheck that T15 has no mainnet time."
+    }
+  ],
+  "leads": []
+}
