@@ -1,0 +1,22 @@
+{
+  "unit": "theme-native-face-inflows",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Source row: which entries of the PoolManager accept native value, and what a face credit is made of.",
+      "agrees": true,
+      "note": "Read the code myself. settle and settleFor are the only payable entries (src/PoolManager.sol:300-307). No contract under src outside src/test declares receive or fallback (grep finds them only in src/test/MockContract.sol:56 and src/test/EmptyRevertContract.sol:6). sync of a non-zero currency always writes the currency and the reserves slot together (src/PoolManager.sol:285-286, src/libraries/CurrencyReserves.sol:27-31), and sync(0) clears only the currency slot (src/PoolManager.sol:281-283). _settle reverts on msg.value when a currency is synced (src/PoolManager.sol:356), uses checked subtraction for the face credit (src/PoolManager.sol:360) and clears the slot after (line 361). A stale reserves value can therefore never be paired with a later currency, and a native settle can never be counted as a face credit in the same call. unlock reverts while NonzeroDeltaCount is not zero (src/PoolManager.sol:112). The row holds."
+    },
+    {
+      "check": "Celo row: the transfer precompile at 0xfd called directly, from a contract and from an EOA, in both directions with the PoolManager as from or to; CELO.transfer and transferFrom to the PoolManager between sync(CELO) and settle.",
+      "agrees": true,
+      "note": "Fetched celo-kona crates/celo-revm/src/precompiles/transfer.rs from raw.githubusercontent.com: the precompile halts with \"invalid caller for transfer precompile\" unless input.caller equals the CELO token address for the chain, and halts in static context. The only route around that check is a DELEGATECALL from a frame whose caller is the CELO token, which cleared.json already settles. I fetched GoldToken.sol (celo-monorepo master) and its only outbound calls are TRANSFER.call at lines 161 and 252, with from fixed to msg.sender or to an allowance-checked from, so the token never calls a contract that could inherit it as caller. The row holds."
+    },
+    {
+      "check": "Arc row: native value call, face transfers of 0 and 1 unit, forced inflows of 1 wei and of one wei short of the next unit, face take naming the PoolManager, and the Native Coin Authority 0x1800...0000 called directly, all between sync(0x3600...) and settle.",
+      "agrees": true,
+      "note": "Ran read-only queries on https://rpc.mainnet.arc.io at block 33,495,086: eth_getBalance(PoolManager 0x8366a39C...0951) = 2450948375392590707311286 wei, 0x3600...0000 balanceOf(PoolManager) = 2450948375392 with decimals() = 6, which is exactly floor(native / 10^12), remainder 590707311286 wei. So the face credit is a floor of the shared native balance. I also tested the strongest variant the row does not spell out: take native r+1 wei to drop the face by one unit, sync(face), return r+1 wei by SELFDESTRUCT so the face rises by one unit and settle credits one face unit (10^12 wei), then pay the native debt with settle{value: r+1} after the slot is cleared. The code allows each step (src/PoolManager.sol:279-288, 290-297, 349-364) and the deltas net to zero, but each round gains at most 10^12 - r - 1 wei of other holders' backing, and the remainder grows (r becomes 2r+1 modulo 10^12), so the average gain is near 5 x 10^11 wei per round. eth_getBlockByNumber latest gives baseFeePerGas 2 x 10^10 wei, so the gain per round equals about 50 gas while one round needs a contract creation, a SELFDESTRUCT, two settles, a take and a sync (well over 50,000 gas). The rounding hazard is real but unprofitable by more than three orders of magnitude, consistent with cycle 35 row 4."
+    }
+  ],
+  "leads": []
+}

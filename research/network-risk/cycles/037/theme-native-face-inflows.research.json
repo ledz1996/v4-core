@@ -1,0 +1,186 @@
+{
+ "unit": "theme-native-face-inflows",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    42220,
+    137,
+    5042,
+    10,
+    7777777
+   ],
+   "lens": "L1",
+   "check": "Source row: which entries of the PoolManager accept native value, and what a face credit is made of.",
+   "result": "Only settle and settleFor are payable (src/PoolManager.sol:300, 305). No contract in src declares receive or fallback, so a value call with empty calldata or an unknown selector reverts in the dispatcher. sync(face) stores the face address and balanceOf(PoolManager) in transient slots (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-31). _settle with a face synced reverts on any msg.value (src/PoolManager.sol:356) and credits reservesNow minus reservesBefore to the recipient (src/PoolManager.sol:357-363). balanceOfSelf of a face is a call to the face token (src/types/Currency.sol:90-96). A native credit is only ever msg.value (src/PoolManager.sol:353-354), so native value that arrives without a call to settle is seen by nobody except through a face that a caller has synced in the same transaction.",
+   "source": "src/PoolManager.sol:279-288; src/PoolManager.sol:300-307; src/PoolManager.sol:349-364; src/libraries/CurrencyReserves.sol:15-36; src/types/Currency.sol:90-96"
+  },
+  {
+   "chainIds": [
+    42220,
+    137,
+    5042,
+    10,
+    7777777
+   ],
+   "lens": "L2",
+   "check": "Row N1, a plain native transfer to the PoolManager (EOA send, CALL with value, a native take by another account naming the PoolManager, MRC20 deposit, StandardBridge finalizeBridgeETH, fee vault withdraw), tested live through the deployed PoolManager on the five face networks.",
+   "result": "Every such arrival is a CALL into PoolManager code and reverts. Driver by state override at 0x...d21fe035, unlock on the deployed PoolManager, record returned by revert. CALL with value 10^6 wei (10^13 on Arc) and empty calldata, and with selector 0xdeadbeef: ok=0 on all five, PoolManager native balance unchanged. take(address(0), PoolManager, x): reverted with WrappedError(PoolManager, 0x00000000, empty reason, NativeTransferFailed) on all five (src/types/Currency.sol:45-53). Because the payee rejects the value, the paths that end in a value call cannot complete for the PoolManager as recipient: Polygon MRC20.deposit and MRC20._transfer use address.transfer (MRC20.sol lines 44 and 107), OP Stack StandardBridge.finalizeBridgeETH uses SafeCall.call(_to, gasleft(), _amount, empty) and requires success (StandardBridge.sol lines 258-259), and a CrossDomainMessenger replay of such a message reaches the same call (CrossDomainMessenger.sol line 285). A relay message whose calldata is settle() or settleFor(r) does reach the PoolManager: tested as settleFor(X) with value after sync(0), which credited X exactly and left the driver at 0, and after sync(face), which reverted with NonzeroNativeValue 0xb0ec849e. A relayed native payment is therefore credited to the messenger or to the recipient the sender named, never to the account that ran the relay, and a credit to an address that is not the unlock caller leaves NonzeroDeltaCount above zero so that unlock reverts (src/PoolManager.sol:112). Blocks: Celo 83,919,342, Polygon 98,076,417, Arc 33,489,862, OP Mainnet 160,110,665, Zora 54,563,135. Clients before and after: reth/v2.2.0-74cc8bb (Celo), bor v2.11.1-private builds a863b8e5cce1 and ebcfea01452d (Polygon, load balanced), arc/v1 v0.8.6-rc1 37812c61 (Arc), op-reth v0.0.0-dev-unknown and v2.8.1-72207294 (OP Mainnet, load balanced), conduit-op-reth/v2.5.1-8f0ccac (Zora).",
+   "source": "research/network-risk/cycles/037/theme-native-face-inflows.work/out/inflows.json; research/network-risk/cycles/037/theme-native-face-inflows.work/scripts/inflows.py; https://raw.githubusercontent.com/maticnetwork/contracts/main/contracts/child/MRC20.sol; https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/StandardBridge.sol; https://raw.githubusercontent.com/ethereum-optimism/optimism/develop/packages/contracts-bedrock/src/universal/CrossDomainMessenger.sol"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L2",
+   "check": "Celo row: the transfer precompile at 0xfd called directly, from a contract and from an EOA, in both directions with the PoolManager as from or to; CELO.transfer and transferFrom to the PoolManager between sync(CELO) and settle.",
+   "result": "The precompile admits only the CELO token as caller (celo-kona transfer.rs lines 51-57, \"invalid caller for transfer precompile\"). Live: inside the unlock callback 0xfd(from=PoolManager, to=driver, 10^6) and 0xfd(from=driver, to=PoolManager, 10^6) both returned ok=0 and no balance moved; top-level eth_call from an EOA and from the PoolManager address both returned \"EVM error: PrecompileError\". CELO.transfer(PoolManager, 10^6) by the driver raised balanceOf(PoolManager) and the native balance by exactly 10^6 and settle credited exactly 10^6 to the driver, which is its own money. CELO.transferFrom(X, PoolManager, 1) without allowance reverted (\"transfer value exceeded balance of sender\"). The CELO token moves value through 0xfd with msg.sender as from or with an allowance (GoldToken.sol lines 152-162 and 248-253), so the only CELO that a third party pays into the PoolManager inside the attacker's transaction is CELO that third party's own contract sends to a recipient the attacker can name, which is the relay pattern of F-137. take(CELO, PoolManager, x) left the balance unchanged and debited the driver by x. forno answered reth/v2.2.0-74cc8bb before the eth_call pair and Geth/v0.1.0-untagged-c7ed55b8-20260817 after it, so the endpoint is load balanced across two clients; both agreed on the precompile refusal. eth_simulateV1 is not served by forno (HTTP 403, \"rpc method is not whitelisted\").",
+   "source": "research/network-risk/cycles/037/theme-native-face-inflows.work/out/inflows.json; research/network-risk/cycles/037/theme-native-face-inflows.work/out/extra.json; https://raw.githubusercontent.com/celo-org/celo-kona/main/crates/celo-revm/src/precompiles/transfer.rs; https://raw.githubusercontent.com/celo-org/celo-monorepo/master/packages/protocol/contracts/common/GoldToken.sol"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L4",
+   "check": "Celo system contracts that push CELO: CeloUnreleasedTreasury releases during epoch processing, which any account can start, and validator payments.",
+   "result": "CeloUnreleasedTreasury.release is onlyEpochManager (CeloUnreleasedTreasury.sol lines 34-37 and 62-70). EpochManager sends the released CELO to the Reserve, to Governance and to the carbon offsetting partner read from the registry and EpochRewards (EpochManager.sol lines 703-706 and 744-751); validator, group and delegatee payments are in the stable token (lines 406-414). startNextEpochProcess is external without a role (line 206), so an attacker can run it inside its own unlock, but no recipient is attacker chosen and none is the PoolManager unless governance sets it, which F-023 already covers on the governance side. Fee currency debits and refunds act on the transaction sender only (cycle 35 row 7).",
+   "source": "https://raw.githubusercontent.com/celo-org/celo-monorepo/release/core-contracts/12/packages/protocol/contracts-0.8/common/EpochManager.sol; https://raw.githubusercontent.com/celo-org/celo-monorepo/release/core-contracts/12/packages/protocol/contracts-0.8/common/CeloUnreleasedTreasury.sol"
+  },
+  {
+   "chainIds": [
+    137
+   ],
+   "lens": "L2",
+   "check": "Polygon row: a native transfer to the PoolManager seen through 0x1010, 0x1010.transfer to the PoolManager with and without value between sync(0x1010) and settle, Bor transfer logs, burn contract and coinbase credits.",
+   "result": "0x1010.transfer(PoolManager, 10^6) with value 10^6 reverted (MRC20._transfer calls address.transfer into the PoolManager, which has no receive, MRC20.sol line 107). With value 0 it returned false without moving anything (MRC20.sol lines 92-95). Face balance unchanged, settle returned 0, delta 0. take(0x1010, PoolManager, x) reverted with WrappedError(0x1010, transfer, false), as F-008 records. Bor's Transfer only adds a LogTransfer record after the same SubBalance and AddBalance (bor core/evm.go lines 252-275); it does not move value. The base fee credit to the burnt contract and the tip credit to the coinbase run after execution, to addresses from chain config and the block header (bor core/state_transition.go lines 645-668). State sync deposits of POL reach MRC20.deposit, which uses address.transfer (MRC20.sol line 44), so a deposit or a StateReceiver replay naming the PoolManager reverts. The only intra-transaction native inflow left is SELFDESTRUCT, paid by whoever owns the destructing contract (cycle 35 row 3).",
+   "source": "research/network-risk/cycles/037/theme-native-face-inflows.work/out/inflows.json; https://raw.githubusercontent.com/maticnetwork/contracts/main/contracts/child/MRC20.sol; https://raw.githubusercontent.com/maticnetwork/bor/develop/core/evm.go; https://raw.githubusercontent.com/maticnetwork/bor/develop/core/state_transition.go"
+  },
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L2",
+   "check": "Arc row: native value call, face transfers of 0 and 1 unit, forced inflows of 1 wei and of one wei short of the next unit, face take naming the PoolManager, and the Native Coin Authority 0x1800...0000 called directly, all between sync(0x3600...) and settle.",
+   "result": "Native CALL to the PoolManager with value 10^12 wei: ok=0. face.transfer(PoolManager, 0) returned true and moved nothing. face.transfer(PoolManager, 1) raised the face by 1 and the native balance by exactly 10^12 wei. A forced inflow of 1 wei after that left the face unchanged. settle credited 1 face unit, native delta 0. In a second bracket a forced inflow of 10^12 - r - 1 wei, where r is the PoolManager's native remainder modulo 10^12 at the pinned block, left the face unchanged and settle credited 0, so the sub-unit wei stays as surplus that nobody can claim. take(face, PoolManager, 1) succeeded, left both balances unchanged and debited the driver by 1 (block 33,489,946). Native Coin Authority transfer, mint and burn from the driver reverted with \"Not enabled for native coin transfers\", \"Not enabled native coin minter\" and \"Not enabled native coin burner\". The remainder bracket that crosses a face unit was settled by cycle 35 row 4 (unprofitable, at most 10^12 wei per round against at least 1.5 x 10^14 wei of gas). Circle's CCTP mint to the PoolManager is F-137. Arc does not serve eth_simulateV1.",
+   "source": "research/network-risk/cycles/037/theme-native-face-inflows.work/out/inflows.json; research/network-risk/cycles/037/theme-native-face-inflows.work/out/extra.json; https://docs.arc.io/arc/references/evm-differences.md; https://docs.arc.io/arc/concepts/execution-layer.md"
+  },
+  {
+   "chainIds": [
+    10,
+    7777777
+   ],
+   "lens": "L2",
+   "check": "OP Mainnet and Zora rows: fee vault recipients and withdrawal networks, deposit transactions with value, the transient state across transactions in one simulated block.",
+   "result": "SequencerFeeVault, BaseFeeVault and L1FeeVault withdraw to L1 (withdrawal network 0) at recipient 0xa3d596eafab6b13ab18d40fae1a962700c84adea on OP Mainnet and 0xe900b3edc1ba0430cfa9a204a1027b90825ac951 on Zora; OperatorFeeVault withdraws on L2 to BaseFeeVault 0x4200...0019. None names the PoolManager, and a vault withdraw to it would end in a value call that it rejects. eth_simulateV1 with a call typed 0x7e and a mint field was run as an ordinary call and failed with \"insufficient funds for gas * price + value: have 0 want 1000000\" on both, so the deposit shape cannot be simulated there; the row rests on the deposit specification (a deposit is its own transaction and mints to its from account, cycle 35 row 8). eth_simulateV1 with sync(LegacyERC20ETH) in one transaction and exttload of the synced currency and reserves slots in the next returned zero in both slots on OP Mainnet, Zora and Polygon, so a sync never survives to a later transaction of the same block and no arrival between transactions can be credited. Withdrawal finalisation of the OP Stack runs on L1 and moves no L2 value to the L2 PoolManager.",
+   "source": "research/network-risk/cycles/037/theme-native-face-inflows.work/out/extra.json; research/network-risk/cycles/037/theme-native-face-inflows.work/out/inflows.json; https://specs.optimism.io/protocol/deposits.html"
+  },
+  {
+   "chainIds": [
+    42220,
+    137,
+    5042,
+    10,
+    7777777
+   ],
+   "lens": "L4",
+   "check": "Task 2 table: who pays, who triggers, whether the recipient is free, and whether the arrival can run inside one transaction between an attacker's sync(face) and settle.",
+   "result": "SELFDESTRUCT (EIP-6780 keeps the balance transfer): payer is the owner of the destructing contract, any account triggers its own, recipient free, intra-transaction yes, credit equals the payer's own value (cycle 35 row 3). Face token transfer on Celo and Arc: payer is the token holder, recipient free, intra-transaction yes, credited once and exactly to the settler; a third party's funds arrive this way only through a contract that pays a recipient the attacker can name, which for bridge relays is F-137 and otherwise is that contract's own fault. Value CALL, native take, MRC20 deposit, StandardBridge ETH finalisation, fee vault withdraw: every one reverts at the PoolManager (row N1). Relay messages that call settle or settleFor with value: credited to the messenger or the named recipient, never to the executor. Coinbase, base fee, burn contract and priority fee credits on all five: post execution, recipients from the header or chain config, not attacker chosen. OP Stack deposits with value and Celo custom gas deposits: separate transaction. Polygon state sync: system call at sprint start, and its replay ends in address.transfer into the PoolManager, which reverts. Block rewards and staking payouts: none paid on these L2s; Polygon validator rewards are on Ethereum; Celo epoch payouts go to governance registered addresses. Celo transfer precompile and Arc Native Coin Authority: refuse any caller other than the CELO token or an enabled minter. Open relays that deliver face value to a recipient named in the message: CCTP receiveMessage with destinationCaller zero on Arc (native USDC through the face) and on OP Mainnet and Polygon for USDC, which is not a native face there; OP Stack relayMessage replays on OP Mainnet, Zora and Celo; Polygon StateReceiver replays. All are recorded in F-137.",
+   "source": "research/network-risk/state/findings.json (F-137, F-071); research/network-risk/cycles/037/theme-native-face-inflows.work/out/inflows.json; src/PoolManager.sol:349-364"
+  },
+  {
+   "chainIds": [
+    42220,
+    137,
+    5042,
+    10,
+    7777777
+   ],
+   "lens": "L2",
+   "check": "Task 4, value leaving the PoolManager without take while a face is synced: system debits, fees charged to the contract, clawbacks, Arc blocklist enforcement.",
+   "result": "The PoolManager has code and no key, so it is never a transaction sender or a fee payer, and EIP-7702 cannot delegate it. Native leaves it only through Currency.transfer (src/types/Currency.sol:40-53), reached from take and collectProtocolFees. The Celo transfer precompile and the Arc Native Coin Authority refused every non-system caller (rows above). The remaining debits need a privileged party and are recorded: Celo governance moving CELO through the token proxy and 0xfd (F-023), Circle blocklisting the PoolManager on Arc (F-108), Polygon BlockAlloc code writes (F-134). A debit placed by another account between a victim's sync and settle needs a call inside the victim's transaction; in a shared transaction the earlier party can only act before the victim's own sync, which overwrites both slots (src/PoolManager.sol:285-286), and the case of a victim that settles without its own sync is F-071. No path was found by which an ordinary account makes another account's settle underflow at src/PoolManager.sol:360.",
+   "source": "src/types/Currency.sol:40-53; src/PoolManager.sol:279-288; src/PoolManager.sol:357-360; research/network-risk/state/findings.json (F-023, F-108, F-134, F-071)"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L2",
+   "check": "Legacy ETH token address 0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000 on all 21 networks: code, balanceOf(PoolManager) and PoolManager.sync on it.",
+   "result": "Code (3,671 bytes) only on OP Mainnet and Zora, where balanceOf(PoolManager) equals the native balance and sync succeeds. On the other 19 networks the address has no code and eth_call of sync(legacy) reverts, because balanceOfSelf makes a high level call to an account without code (src/types/Currency.sol:94). The plan expected six such networks; the count of OP Stack networks without the code is eight (Base, Unichain, World Chain, Ink, Soneium, MegaETH, Celo, X Layer), and the other eleven are not OP Stack. A pool using the legacy address there cannot even be synced, so this theme has no target on them.",
+   "source": "research/network-risk/cycles/037/theme-native-face-inflows.work/out/legacy.json; research/network-risk/cycles/037/theme-native-face-inflows.work/scripts/legacy.py; src/types/Currency.sol:90-96"
+  },
+  {
+   "chainIds": [
+    1,
+    8453,
+    130,
+    480,
+    57073,
+    1868,
+    196,
+    42161,
+    4663,
+    99901,
+    56,
+    43114,
+    143,
+    4326,
+    4217,
+    999
+   ],
+   "lens": "L1",
+   "check": "Does the native face theme apply to the 16 networks without an ERC-20 face of the native asset?",
+   "result": "No. On these networks no token returns the PoolManager's native balance from balanceOf (cycle 35 row 3 and row 11 tested the protocol tokens on each), and native settlement reads only msg.value (src/PoolManager.sol:353-354), so a native arrival without a call to settle is never credited to anyone. It becomes surplus that no caller can claim.",
+   "source": "src/PoolManager.sol:349-364; research/network-risk/cycles/035/theme-sync-settle-credit-table.research.json"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    5042
+   ],
+   "lens": "L4",
+   "question": "Does Circle Gateway on Arc (gatewayMint) let any account execute a mint attested for someone else to a recipient named in the attestation, as CCTP receiveMessage does with a zero destinationCaller?",
+   "why": "If so, it is one more relay of the F-137 kind that delivers native USDC through the face, and F-137 should list it.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    10,
+    7777777
+   ],
+   "lens": "L2",
+   "question": "Can a deposit transaction (type 0x7e) with value be simulated through any endpoint of OP Mainnet or Zora, for example by debug_traceCall with a block override, to confirm on chain that its mint lands before and outside a user transaction?",
+   "why": "The row rests on the specification only, since eth_simulateV1 ran the 0x7e call as an ordinary call.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1319",
+   "outcome": "cleared",
+   "answer": "On the five face networks every native arrival that does not go through settle was listed and, where possible, tested through the deployed PoolManager. Arrivals that are a call into PoolManager code (value sends, native takes to it, MRC20 deposits, StandardBridge ETH finalisation, fee vault withdrawals) revert because it has no receive or fallback. SELFDESTRUCT and face token transfers are credited once and exactly to the settler and are paid by the settler or by a contract that pays a recipient the settler names; for bridge relays that is F-137. Relayed settle or settleFor calls credit the messenger or the named recipient. Fee, burn, coinbase, deposit, state sync and epoch credits run outside the user transaction or to fixed recipients, and transient state does not survive to the next transaction (tested on OP Mainnet, Zora and Polygon). The Celo transfer precompile and the Arc Native Coin Authority refuse ordinary callers. Outflows without take need governance or the issuer (F-023, F-108, F-134). No new finding. Rows that rest on reading only: OP Stack deposits (not simulable), Celo epoch payouts, Arc Gateway (lead)."
+  }
+ ]
+}
