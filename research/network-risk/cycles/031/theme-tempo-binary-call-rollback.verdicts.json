@@ -1,0 +1,22 @@
+{
+ "unit": "theme-tempo-binary-call-rollback",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Task 5, live: a take of pathUSD by a helper that then reverts leaves every delta, NonzeroDeltaCount and the PoolManager balance as before, and settle reads the restored balance (live_take_revert.py at block 51033487).",
+   "agrees": true,
+   "note": "I queried rpc.mainnet.tempo.xyz myself at block 0x30ac369. web3_clientVersion returned tempo/v1.19.1-a9d6748/x86_64-unknown-linux-gnu. eth_getCode of 0x33620f62c5b9b2086dd6b62f4a297a9f30347029 returned 24,009 bytes with sha256 f017c3da36573b6054d87dcff6c17b77856d97e4feb750f791a90c0020b7d437. balanceOf on 0x20c0000000000000000000000000000000000000 for the PoolManager returned 0x4a810416a, which is 19,999,506,794, the figure the item cites. The code path matches: take (src/PoolManager.sol:291-297) writes the delta and then calls Currency.transfer (src/types/Currency.sol:55-80), and both are state in the reverting frame. _settle (src/PoolManager.sol:349-364) computes paid from balanceOfSelf minus the synced reserves, so it reads whatever balance survives the rollback. The recorded results file shows ref and node outputs for every variant. I did not rerun the script."
+  },
+  {
+   "check": "Task 3: a TIP-20 transfer made by a precompile inside a frame that later reverts is undone by the same journal, and no precompile path commits after a revert status.",
+   "agrees": true,
+   "note": "I fetched crates/precompiles/src/storage/evm.rs at a9d67483. sstore_journal (lines 185-211) writes through state_mut().account(), account.storage() and slot.write(), which is the journaled evm2 path. checkpoint and checkpoint_revert (lines 743-759) call State::checkpoint and State::rollback. call() (lines 677-693) returns NestedCallUnavailable when open_checkpoints is not zero, so a precompile cannot commit a callee inside its own checkpoint and roll back around it. In evm2 35aa3280 evm/mod.rs:1809-1810 rolls back whenever the stop is not a success, and interpreter/mod.rs:55-75 sets Stop 1, Return 2, SelfDestruct 3 and revert codes from 0x10, which matches the rule the item states."
+  },
+  {
+   "check": "Task 4: TIP-1060 storage credit accounting inside SSTORE changes neither the stored word nor its journal entry, and settle_storage_credit_refunds writes no TIP-20 balance of the PoolManager.",
+   "agrees": true,
+   "note": "I fetched crates/evm/src/instructions.rs and crates/evm/src/handler/config.rs at a9d67483. In sstore (instructions.rs:86-139) host().sstore writes the word before sstore_storage_credits runs, and the credit step can only return an error, which halts and rolls back the frame. settle_storage_credit_refunds (config.rs:444-487) runs only on a successful result, reads the StorageCredits precompile's transient slots, writes only STORAGE_CREDITS_ADDRESS slots and records a gas refund. It touches no TIP-20 balance. I also checked the writer note: override_balance and override_nonce exist at evm2 state/account.rs:714-731 and change the snapshot too, and they do not appear in the Tempo evm.rs, instructions.rs, handler/config.rs or lib.rs files I fetched, so they cannot undo a revert in a path the PoolManager reaches through those files. The rest of the Tempo tree was not searched, as the item says."
+  }
+ ],
+ "leads": []
+}

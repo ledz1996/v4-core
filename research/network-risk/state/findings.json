@@ -16916,6 +16916,134 @@
      "severity": "info"
     }
    ]
+  },
+  {
+   "title": "Nethermind's next release pins an integer library eleven days old that rewrites division and remainder and adds Barrett reduction to MULMOD, and no public endpoint lets anyone test a Nethermind node",
+   "chainIds": [
+    1
+   ],
+   "lens": "L1",
+   "assumptions": [
+    "A10"
+   ],
+   "effect": "degrade",
+   "difference": "Ethereum validators run five execution clients with their own 256 bit arithmetic. Nethermind, which reports 25 to 43 percent of validators, publishes 2.3.0-rc on 2026-11-23 with Nethermind.Numerics.Int256 1.15.0 (published 2026-11-16), against 1.11.0 in the current release 2.2.2. The new version changes 24 division and remainder routines, adds three, and adds Barrett reduction for six named moduli and a pseudo-Mersenne fold for moduli 2^256 - c with c below 2^64 - 1. One added test in Remainder512By256Bits and Remainder512By192Bits drops the leading quotient digit when the dividend's top limb is below the divisor's top limb, which is the kind of shortcut that broke ruint 1.21.0. No public Ethereum endpoint names Nethermind, so none of the 200,127 vectors or the script sets has run on it.",
+   "mechanism": "Every swap and liquidity change reaches MULMOD through FullMath. mulDiv computes mulmod(a, b, 2^256 - 1) first (src/libraries/FullMath.sol:24); Nethermind sends that modulus to a fold of the high half into the low half, present unchanged since 1.11.0, before any Barrett or pseudo-Mersenne test. The remainder mulmod(a, b, denominator) at FullMath.sol:48 and :112 and at SqrtPriceMath.sol:252 can reach the new reductions only when a times b is at least 2^384. Read against the callers, that never happens: Position.sol:94-96 multiplies a 256 bit fee growth by a 128 bit liquidity, SqrtPriceMath.sol:47, :71 and :208-209 multiply a liquidity shifted by 96 (below 2^224) by a price below 2^160, SqrtPriceMath.sol:97 and :105 multiply an amount by 2^96, and SwapMath.sol:65, :74 and :104 multiply by at most 10^6. The 4 limb remainder routine is reached at SqrtPriceMath.sol:44-47, where the denominator numerator1 + amount x price can be any value up to 2^256 - 1. Its new leading digit test is correct: with N the dividend, d the divisor and m = uLen - 4, the leading digit is zero exactly when floor(N / b^m) < d, and a top limb below d3 implies that, before or after normalisation. A Python transcription of that routine in both the hardware division arm and the reciprocal arm gave the exact remainder for 489,674 cases, 73,660 of them shaped as SqrtPriceMath.sol:44-47, and a planted <= in place of < gave 586 mismatches. The reciprocal, 64 bit, pseudo-Mersenne, all ones fold, signed remainder, limb negation and power of two exponent routines gave no mismatch on 2,914,162 cases, and six planted faults were caught. A wrong result on a Nethermind node would make it compute a different post-state for a block that contains the swap. The client cannot steal: geth and the other clients hold the majority, so the Nethermind nodes would reject canonical blocks or propose blocks the rest reject. If more than one third of validators ran the faulty build, finality would stall until it was fixed.",
+   "impact": "No loss of pool funds. A fault would cost Nethermind validators missed duties and could delay finality; balances on the canonical chain follow the clients that compute the specified result.",
+   "preconditions": "A fault in a Nethermind Int256 routine that this transcription does not cover (Remainder512By192Bits, MulModBy128Bits, the 128 and 192 bit dividers, the .NET JIT output) and validators that upgrade to 2.3.0 with that fault. An ordinary account cannot choose which client builds or validates its block.",
+   "mitigations": "Nothing for the deployer or LPs on Ethereum. Node operators who use Nethermind can stay on 2.2.2 until 2.3.0 final has run the consensus test suites; the review can rerun the transcriptions on the version 2.3.0 final pins.",
+   "coreRefs": [
+    "src/libraries/FullMath.sol:21-26",
+    "src/libraries/FullMath.sol:46-49",
+    "src/libraries/FullMath.sol:109-116",
+    "src/libraries/SqrtPriceMath.sol:38-47",
+    "src/libraries/SqrtPriceMath.sol:250-253",
+    "src/libraries/Position.sol:92-97",
+    "src/libraries/SwapMath.sol:65"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/NethermindEth/nethermind/2.3.0-rc/Directory.Packages.props",
+     "supports": "2.3.0-rc pins Nethermind.Numerics.Int256 1.15.0"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/NethermindEth/nethermind/2.2.2/Directory.Packages.props",
+     "supports": "2.2.2 pins Int256 1.11.0 (line 69)"
+    },
+    {
+     "url": "https://github.com/NethermindEth/nethermind/releases/tag/2.3.0-rc",
+     "supports": "2.3.0-rc is a pre-release published 2026-11-23 with 1,282 merged pull requests"
+    },
+    {
+     "url": "https://api.nuget.org/v3/registration5-gz-semver2/nethermind.numerics.int256/index.json",
+     "supports": "Int256 1.15.0 published 2026-11-16, 1.11.0 on 2026-10-06"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/NethermindEth/int256/v1.15.0/src/Nethermind.Int256/UInt256.divmod.cs",
+     "supports": "MultiplyMod, MultiplyModWideCore with the 2^256 - 1 fold, Remainder512By256Bits with the new leading digit test, the reciprocal and hardware dividers"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/NethermindEth/int256/v1.15.0/src/Nethermind.Int256/UInt256.barrett.cs",
+     "supports": "Barrett and pseudo-Mersenne reductions"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/NethermindEth/int256/v1.15.0/src/Nethermind.Int256/UInt256.std.cs",
+     "supports": "Remainder512ByFullModulus takes the new reductions only when the high half of the product is at least 2^128 (lines 392-412)"
+    },
+    {
+     "url": "https://raw.githubusercontent.com/NethermindEth/int256/v1.11.0/src/Nethermind.Int256/UInt256.DivideMod.cs",
+     "supports": "the 2^256 - 1 fold already present in 1.11.0"
+    },
+    {
+     "url": "https://clientdiversity.org/",
+     "supports": "execution client shares: Nethermind 25.46 percent in one survey and 43 percent in another"
+    },
+    {
+     "url": "file:research/network-risk/cycles/031/ethereum-reference.work/out/neth-int256.json",
+     "supports": "2,914,162 cases of the transcribed routines, 0 mismatches; planted faults in out/neth-int256-plant1.json to plant6.json"
+    },
+    {
+     "url": "file:research/network-risk/cycles/031/ethereum-reference.work/out/neth-rem512.json",
+     "supports": "489,674 cases of Remainder512By256Bits, 0 mismatches; out/neth-rem512-plant1.json shows 586 mismatches with the planted <="
+    }
+   ],
+   "evidence": "primary",
+   "actor": "operator",
+   "severity": "info",
+   "proposedSeverity": "info",
+   "status": "confirmed",
+   "verification": {
+    "cycle": 31,
+    "factCheck": "Directory.Packages.props at tag 2.3.0-rc pins Nethermind.Numerics.Int256 1.15.0 (line 70) and at tag 2.2.2 pins 1.11.0 (line 69). src/Nethermind/Directory.Build.props at 2.3.0-rc gives VersionPrefix 2.3.0 and VersionSuffix rc. The NuGet registration index lists 1.11.0 published 2026-10-06T21:57Z and 1.15.0 published 2026-11-16T17:51Z, with 1.12.0, 1.13.0 and 1.14.0 between them. clientdiversity.org shows Nethermind at 25.46 percent in one source and 43 percent in another. In Int256 v1.15.0, UInt256.divmod.cs MultiplyMod sends a modulus of 2^256 - 1 to the fold in MultiplyModWideCore (lines 367-404) before any other reduction, and the fold is correct: lo + hi with a carry adds one, which cannot overflow because lo + hi - 2^256 is at most 2^256 - 2, and an all ones result maps to zero. UInt256.std.cs Remainder512ByFullModulus (lines 399-412) takes Remainder512ByKnownModulus only when hi.u2 or hi.u3 is nonzero, that is a product of at least 2^384, and the modulus top limb equals one of five named constants; otherwise it calls Remainder512By256Bits. In Remainder512By256Bits (divmod.cs lines 2507-2571) the new test drops the leading quotient digit when the top nonzero dividend limb t is below d3. I checked the shifted arm by hand: t < d3 < 2^(64 - shift) keeps the extra limb w8 at zero, and the normalised top limb is at most ((d3 - 1) << shift) + 2^shift - 1, which is below d3 << shift and so below nd3, so the skipped digit is zero. The shift of zero arm is the same test with the extra limb already zero. The test is strict. A read-only eth_call against https://ethereum-rpc.publicnode.com (reth/v2.11.0-b9abbcc) with a state override running mulmod on 60 cases, moduli 2^256 - 1, random four limb values and operands at the 2^224 by 2^160 shape and near 2^256, gave 0 mismatches against Python. I could not open the GitHub release page for 2.3.0-rc from this session, so the 2026-11-23 publication date and the pre-release label rest on the research file alone. The tag and its version files exist.",
+    "codeCheck": "Every MULMOD in src is at src/libraries/FullMath.sol:24 (modulus not(0)), FullMath.sol:48 and :112 (modulus the caller's denominator) and src/libraries/SqrtPriceMath.sol:252 (modulus Q96). src has no addmod. I listed every mulDiv caller with grep and bounded each product. Position.sol:94 and :96 multiply a 256 bit difference by a uint128 liquidity, so the product is below 2^384. SqrtPriceMath.sol:47 and :71 multiply numerator1 = liquidity << 96, below 2^224, by a uint160 price. SqrtPriceMath.sol:97 and :105 multiply an amount by 2^96. SqrtPriceMath.sol:208-209 multiply numerator1 by a price difference below 2^160. SqrtPriceMath.sol:250-252 multiply a uint128 by a value below 2^160. SwapMath.sol:65, :74 and :104 multiply by at most 10^6. Pool.sol:403 and :472 use plain arithmetic, not mulDiv. No product other than the one at FullMath.sol:24 reaches 2^384, so the Barrett and known modulus paths cannot run from src, and FullMath.sol:24 takes the fold. The denominator at SqrtPriceMath.sol:44-47 can be any four limb value, so the 4 limb remainder routine with the new leading digit test is reached there, as the finding says. A wrong result would show up in the require at FullMath.sol:30 and in the quotient. That would make one client compute a different post-state, which is a consensus split and not a transfer of value.",
+    "corrections": "",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/NethermindEth/nethermind/2.3.0-rc/Directory.Packages.props",
+      "supports": "line 70 pins Nethermind.Numerics.Int256 1.15.0"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/NethermindEth/nethermind/2.2.2/Directory.Packages.props",
+      "supports": "line 69 pins Nethermind.Numerics.Int256 1.11.0"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/NethermindEth/nethermind/2.3.0-rc/src/Nethermind/Directory.Build.props",
+      "supports": "VersionPrefix 2.3.0 and VersionSuffix rc"
+     },
+     {
+      "url": "https://api.nuget.org/v3/registration5-gz-semver2/nethermind.numerics.int256/index.json",
+      "supports": "1.11.0 published 2026-10-06, 1.15.0 published 2026-11-16"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/NethermindEth/int256/v1.15.0/src/Nethermind.Int256/UInt256.divmod.cs",
+      "supports": "MultiplyMod and MultiplyModWideCore with the 2^256 - 1 fold (lines 325-404); Remainder512By256Bits with the strict leading digit test (lines 2507-2571)"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/NethermindEth/int256/v1.15.0/src/Nethermind.Int256/UInt256.std.cs",
+      "supports": "Remainder512ByFullModulus gates the known modulus reduction on a product of at least 2^384 and a matching top limb (lines 399-412)"
+     },
+     {
+      "url": "https://clientdiversity.org/",
+      "supports": "Nethermind at 25.46 percent and 43 percent in two sources"
+     },
+     {
+      "url": "https://ethereum-rpc.publicnode.com",
+      "supports": "rpc: eth_call with code override running MULMOD on 60 cases, 0 mismatches; web3_clientVersion reth/v2.11.0-b9abbcc, 2026-11-27"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 31,
+   "extends": "F-163",
+   "id": "F-164",
+   "firstCycle": 31,
+   "history": [
+    {
+     "cycle": 31,
+     "unit": "ethereum-reference",
+     "status": "confirmed",
+     "severity": "info"
+    }
+   ]
   }
  ]
 }

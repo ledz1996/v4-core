@@ -1,6 +1,6 @@
 # All findings
 
-163 findings on record after cycle 30, in-scope ones first.
+164 findings on record after cycle 31, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -4124,6 +4124,38 @@ Sources:
 - local run: research/network-risk/cycles/029/theme-geth-family-caches-and-slot-walk.work/results/u256.json (1,845,864 vectors, 0 mismatches on v1.3.2 and on master)
 - local run: research/network-risk/cycles/029/theme-geth-family-caches-and-slot-walk.work/results/u256-planted.json (planted faults in rem5by4 and rem3by2 caught (6 and 669 mismatches); the y[2] mask change is an equivalent mutant (0))
 - local run: research/network-risk/cycles/029/theme-geth-family-caches-and-slot-walk.work/results/u256-planted-p2.json (planted fault in the power-of-two shortcut caught (26,444 mismatches))
+
+## F-164. Nethermind's next release pins an integer library eleven days old that rewrites division and remainder and adds Barrett reduction to MULMOD, and no public endpoint lets anyone test a Nethermind node
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Ethereum.
+
+What differs on the network: Ethereum validators run five execution clients with their own 256 bit arithmetic. Nethermind, which reports 25 to 43 percent of validators, publishes 2.3.0-rc on 2026-11-23 with Nethermind.Numerics.Int256 1.15.0 (published 2026-11-16), against 1.11.0 in the current release 2.2.2. The new version changes 24 division and remainder routines, adds three, and adds Barrett reduction for six named moduli and a pseudo-Mersenne fold for moduli 2^256 - c with c below 2^64 - 1. One added test in Remainder512By256Bits and Remainder512By192Bits drops the leading quotient digit when the dividend's top limb is below the divisor's top limb, which is the kind of shortcut that broke ruint 1.21.0. No public Ethereum endpoint names Nethermind, so none of the 200,127 vectors or the script sets has run on it.
+
+How it meets the code: Every swap and liquidity change reaches MULMOD through FullMath. mulDiv computes mulmod(a, b, 2^256 - 1) first (src/libraries/FullMath.sol:24); Nethermind sends that modulus to a fold of the high half into the low half, present unchanged since 1.11.0, before any Barrett or pseudo-Mersenne test. The remainder mulmod(a, b, denominator) at FullMath.sol:48 and :112 and at SqrtPriceMath.sol:252 can reach the new reductions only when a times b is at least 2^384. Read against the callers, that never happens: Position.sol:94-96 multiplies a 256 bit fee growth by a 128 bit liquidity, SqrtPriceMath.sol:47, :71 and :208-209 multiply a liquidity shifted by 96 (below 2^224) by a price below 2^160, SqrtPriceMath.sol:97 and :105 multiply an amount by 2^96, and SwapMath.sol:65, :74 and :104 multiply by at most 10^6. The 4 limb remainder routine is reached at SqrtPriceMath.sol:44-47, where the denominator numerator1 + amount x price can be any value up to 2^256 - 1. Its new leading digit test is correct: with N the dividend, d the divisor and m = uLen - 4, the leading digit is zero exactly when floor(N / b^m) < d, and a top limb below d3 implies that, before or after normalisation. A Python transcription of that routine in both the hardware division arm and the reciprocal arm gave the exact remainder for 489,674 cases, 73,660 of them shaped as SqrtPriceMath.sol:44-47, and a planted <= in place of < gave 586 mismatches. The reciprocal, 64 bit, pseudo-Mersenne, all ones fold, signed remainder, limb negation and power of two exponent routines gave no mismatch on 2,914,162 cases, and six planted faults were caught. A wrong result on a Nethermind node would make it compute a different post-state for a block that contains the swap. The client cannot steal: geth and the other clients hold the majority, so the Nethermind nodes would reject canonical blocks or propose blocks the rest reject. If more than one third of validators ran the faulty build, finality would stall until it was fixed.
+
+What is at risk: No loss of pool funds. A fault would cost Nethermind validators missed duties and could delay finality; balances on the canonical chain follow the clients that compute the specified result.
+
+What it takes: A fault in a Nethermind Int256 routine that this transcription does not cover (Remainder512By192Bits, MulModBy128Bits, the 128 and 192 bit dividers, the .NET JIT output) and validators that upgrade to 2.3.0 with that fault. An ordinary account cannot choose which client builds or validates its block.
+
+What can be done: Nothing for the deployer or LPs on Ethereum. Node operators who use Nethermind can stay on 2.2.2 until 2.3.0 final has run the consensus test suites; the review can rerun the transcriptions on the version 2.3.0 final pins.
+
+This entry adds to F-163.
+
+Code: `src/libraries/FullMath.sol:21-26`, `src/libraries/FullMath.sol:46-49`, `src/libraries/FullMath.sol:109-116`, `src/libraries/SqrtPriceMath.sol:38-47`, `src/libraries/SqrtPriceMath.sol:250-253`, `src/libraries/Position.sol:92-97`, `src/libraries/SwapMath.sol:65`.
+
+Sources:
+
+- https://raw.githubusercontent.com/NethermindEth/nethermind/2.3.0-rc/Directory.Packages.props (2.3.0-rc pins Nethermind.Numerics.Int256 1.15.0)
+- https://raw.githubusercontent.com/NethermindEth/nethermind/2.2.2/Directory.Packages.props (2.2.2 pins Int256 1.11.0 (line 69))
+- https://github.com/NethermindEth/nethermind/releases/tag/2.3.0-rc (2.3.0-rc is a pre-release published 2026-11-23 with 1,282 merged pull requests)
+- https://api.nuget.org/v3/registration5-gz-semver2/nethermind.numerics.int256/index.json (Int256 1.15.0 published 2026-11-16, 1.11.0 on 2026-10-06)
+- https://raw.githubusercontent.com/NethermindEth/int256/v1.15.0/src/Nethermind.Int256/UInt256.divmod.cs (MultiplyMod, MultiplyModWideCore with the 2^256 - 1 fold, Remainder512By256Bits with the new leading digit test, the reciprocal and hardware dividers)
+- https://raw.githubusercontent.com/NethermindEth/int256/v1.15.0/src/Nethermind.Int256/UInt256.barrett.cs (Barrett and pseudo-Mersenne reductions)
+- https://raw.githubusercontent.com/NethermindEth/int256/v1.15.0/src/Nethermind.Int256/UInt256.std.cs (Remainder512ByFullModulus takes the new reductions only when the high half of the product is at least 2^128 (lines 392-412))
+- https://raw.githubusercontent.com/NethermindEth/int256/v1.11.0/src/Nethermind.Int256/UInt256.DivideMod.cs (the 2^256 - 1 fold already present in 1.11.0)
+- https://clientdiversity.org/ (execution client shares: Nethermind 25.46 percent in one survey and 43 percent in another)
+- file:research/network-risk/cycles/031/ethereum-reference.work/out/neth-int256.json (2,914,162 cases of the transcribed routines, 0 mismatches; planted faults in out/neth-int256-plant1.json to plant6.json)
+- file:research/network-risk/cycles/031/ethereum-reference.work/out/neth-rem512.json (489,674 cases of Remainder512By256Bits, 0 mismatches; out/neth-rem512-plant1.json shows 586 mismatches with the planted <=)
 
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 

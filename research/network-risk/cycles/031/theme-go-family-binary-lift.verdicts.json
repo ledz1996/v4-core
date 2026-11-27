@@ -1,0 +1,22 @@
+{
+  "unit": "theme-go-family-binary-lift",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "bor v2.11.2 caches in front of handlers: the keccak cache keyed by the whole 64-byte input (instructions.go:265-278), used by every mapping and CurrencyDelta slot such as src/libraries/CurrencyDelta.sol:14.",
+      "agrees": true,
+      "note": "I fetched core/vm/instructions.go at a4afe5a9 from raw.githubusercontent.com. opKeccak256 uses the cache only when len(data) == 64. It copies all 64 bytes into a [64]byte key, and on a miss it stores the 32-byte hasherBuf value under that key. A hit therefore returns the keccak of exactly the same 64 bytes, and no two inputs share an entry. CurrencyDelta.sol:14 hashes 64 bytes from memory 0, so it goes through this path and gets the true hash. The cache cannot send two PoolManager slots to the same key."
+    },
+    {
+      "check": "bsc v1.8.2 process-wide 2,048-entry LRU of jump destination bitmaps keyed by code hash (contract.go:30 and :101-113). Every call site takes the hash and the code from the same account, and initcode runs with a zero hash and a local bitmap.",
+      "agrees": true,
+      "note": "I fetched core/vm/contract.go and core/vm/evm.go at 54afaff4. isCode looks in jumpDests, then in codeBitmapCache, and only computes codeBitmap(c.Code) on a miss. contract.go:95-125 matches the cited lines. evm.go:363, :423, :467 and :520 all pass resolveCodeHash(addr) together with resolveCode(addr). Both functions follow the same EIP-7702 delegation through one ParseDelegation of the same GetCode result (:700-725). Initcode gets common.Hash{} at :631, and isCode then builds a local bitmap. A code hash is the keccak of its code, so an entry keyed by a hash always holds the bitmap of that code. I found no path where CodeHash and Code come from different accounts."
+    },
+    {
+      "check": "Avalanche storage key fold (F-040): partitionStateKeysHook.TransformStateKey clears bit 248. It applies to SLOAD and SSTORE but not to TLOAD and TSTORE. Making two PoolManager slots meet needs about 2^128 work.",
+      "agrees": true,
+      "note": "I fetched vms/saevm/cchain/libevm/extstate/statedb.go at 983815fd. storageKey does key[0] &^= 0x01, which clears bit 248, and assetBalanceKey sets it. Two contract slots collide only if they differ in bit 248 alone. The PoolManager's storage keys are small constants, mapping keccak outputs such as _pools[id] at src/PoolManager.sol:387-388, and small struct offsets added to those outputs. An attacker cannot choose a raw slot; it can only choose mapping keys, which pass through keccak first. A collision therefore needs two keccak outputs that agree on the other 255 bits, about 2^127 work. Transient deltas (CurrencyDelta.sol:14) bypass the fold, so they cannot collide this way. I did not check the binary-level claim that only the three StateDB methods call the hook. That claim does not change the conclusion."
+    }
+  ],
+  "leads": []
+}
