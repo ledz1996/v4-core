@@ -1,6 +1,6 @@
 # All findings
 
-157 findings on record after cycle 27, in-scope ones first.
+162 findings on record after cycle 28, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -1427,6 +1427,71 @@ Sources:
 - https://raw.githubusercontent.com/ava-labs/icm-contracts/main/contracts/teleporter/TeleporterMessenger.sol (receiveCrossChainMessage line 242 checks the relayer at line 284; an empty allowed list admits any relayer, lines 596-613)
 - eth_getCode and eth_call on the rpcs in state/networks.json, 2026-11-25 (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/probe2.json, raw/probe3.json) (L2CrossDomainMessenger code and messageNonce on the OP Stack networks and MegaETH (X Layer nonce 0); LxLy bridge 0x2a3D...2EDe on Ethereum (networkID 0) and X Layer (networkID 3); TeleporterMessenger on Avalanche C-Chain; StateReceiver code at 0x1001 on Polygon)
 - https://eth.blockscout.com/api (StateSender logs, research/network-risk/cycles/016/theme-bracketed-credits.work/raw/pol_l1_statesynced_3213072.json) and eth_call failedStateSyncHashes on https://polygon-bor-rpc.publicnode.com (research/network-risk/cycles/016/theme-bracketed-credits.work/raw/pol_pending.json) (the 25 failed state syncs recorded in cycle 8 are still pending; the PoS deposit 3213072 names user 0x08bb17cf..., not the PoolManager)
+
+## F-161. Canonical routers sync before every settle on all 21 networks; one more World Chain contract settles native value without its own sync
+
+Low severity, confirmed. Effect: degrade. Who can trigger it: any account. Networks: Ethereum, Optimism, Base, Unichain, Zora, Worldchain, Ink, Soneium, Celo, X Layer, Arbitrum One, Robinhood Chain, Elysium, Polygon, BNB Smart Chain, Avalanche, Monad, MegaETH, Arc, HyperEVM.
+
+What differs on the network: The code path is the same on Ethereum. The networks differ in how often one transaction carries operations of several parties. In this cycle's sample of the newest Swap and ModifyLiquidity transactions, 195 of 250 on World Chain went to EntryPoint v0.7, 13 of about 250 on Base went to EntryPoint v0.6 or v0.8, and 1 of 126 on Tempo went to EntryPoint v0.6. EntryPoint v0.6 to v0.9 hold code on all 21 networks. Tempo stays out of the chain list because its transactions carry no native value.
+
+How it meets the code: Unchanged from the confirmed record: a foreign sync(token) leaves the synced currency set (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32), and a later settle with msg.value above zero by a caller that did not sync reverts with NonzeroNativeValue (src/PoolManager.sol:349-356). New in this cycle: the canonical periphery on all 21 networks syncs its own currency, native included, before every settle (DeltaResolver._settle, verified source on 44 of 61 official deployments and the same opcode sequence on 14 more), so it is immune; the top unlocker on World Chain, WorldChainSettler 0xdc7f9131df71efda6a7ae247edbe13a13c7dfd94, also syncs before both its token and its native settle (verified source lines 6566 and 6708). One more exposed contract was found by replay on World Chain: 0xabbc01621357ecb29fe89fd50a7a0b95e6e51b31 (8,899 bytes, unverified) reverted with ExecuteError(1, NonzeroNativeValue) after a foreign sync of WETH in transaction 0x8f2204591165a6ab234201905f93cedd013be497571b46f1fe24ee34602b959a, whose own value was zero, and ran again when sync(address(0)) followed the foreign sync. It pays native value from its own balance without a sync. Its caller in that transaction was its creator 0x0bee14506a83fa86c3412daef70c332fbaba7f72, so it looks like a single operator contract.
+
+What is at risk: No funds move and none are locked. The victim's operation reverts and its gas is spent. Users of the Universal Router, the PositionManager and the 0x Settler are unaffected.
+
+What it takes: The victim pays native value through a contract that does not sync before settle, and a foreign sync runs earlier in the same transaction with no sync or token settle in between. Not confirmed: whether 0xabbc0162 serves anyone but its creator. In the replayed transaction the creator calls 0xabbc0162 directly from an externally owned account, so no foreign frame can enter it; it is exposed only if someone routes it through a batch or a user operation.
+
+What can be done: As recorded: integrators call sync(address(0)) before a settle with value. Accounts that batch calls into such routers can put sync(address(0)) first.
+
+This entry adds to F-071.
+
+Second reviewer's corrections: Contract 0xabbc0162 is not shown to have any victim. In the replayed transaction its creator calls it directly from an externally owned account, and a foreign frame cannot enter such a transaction. It can only be hit if someone routes it through a batch or a user operation. The unprivileged reach depends on the same link as the original F-071 record: the attacker has to put a frame before the victim's frame in one transaction, which in practice means building the ERC-4337 bundle. That link is not established for any network.
+
+Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-364`, `src/libraries/CurrencyReserves.sol:27-32`.
+
+Sources:
+
+- src/PoolManager.sol:356 (settle reverts with NonzeroNativeValue when a token is synced and msg.value is above zero)
+- https://worldchain-mainnet.g.alchemy.com/public eth_call at block 38200096 (out/replay_foreign_sync.json) (executeBatch from the sender with Simple7702Account code: control succeeded, [sync(0x4200000000000000000000000000000000000006), original] reverted with 0x5a154675 wrapping 0xb0ec849e, [sync(WETH), sync(0), original] succeeded; endpoint answered world-chain/v2.8.2-9596311 before and after)
+- https://worldchain-mainnet.explorer.alchemy.com/api/v2/addresses/0xabbc01621357ecb29fe89fd50a7a0b95e6e51b31 (contract is not verified; creator 0x0bee14506a83fa86c3412daef70c332fbaba7f72)
+- https://sourcify.dev/server/v2/contract/480/0xdc7f9131df71efda6a7ae247edbe13a13c7dfd94?fields=sources (WorldChainSettler calls unsafeSync(sellToken) before the token transfer and settle (src/flat/WorldChainTakerSubmittedFlat.sol:6557-6576) and unsafeSync(address(0)) before the native settle (6708-6709))
+- https://sourcify.dev/server/v2/contract/1/0x23617e59A5925b2A4Bf75d73ff6711cD0b29De85?fields=sources (Universal Router 2.1.2: lib/v4-periphery/src/base/DeltaResolver.sol:38-48 _settle returns on amount 0, then calls poolManager.sync(currency), then settle{value: amount} for native or _pay then settle() for a token; no other settle site in the source; UniversalRouter.sol:70 execute is isNotLocked and BaseActionsRouter.sol:26 calls poolManager.unlock)
+- https://sourcify.dev/server/v2/contract/1/0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e?fields=sources (PositionManager: every SETTLE, SETTLE_PAIR and CLOSE_CURRENCY path goes through DeltaResolver._settle (src/PositionManager.sol:249, 257, 444-448, 465), which syncs first; CLEAR_OR_TAKE uses clear (line 480), which reads no synced state)
+- https://sourcify.dev/server/v2/contract/<chainId>/<address> for 61 official Universal Router and PositionManager addresses of networks.json (out/periphery_src.json) (verified on 44 of 61; in every verified copy the only PoolManager.settle calls are the two in DeltaResolver._settle and the sync(currency) precedes both)
+- eth_getCode on the networks.json rpc endpoint of each network for the same 61 addresses, 2026-11-26 (out/periphery_code.json) (with PUSH data removed, each unverified copy has the opcode sequence of a verified copy (Universal Router 1.x 55d22501d2fdd506, 2.1.1 055c8f692190c426, 2.1.2 4c62cd3a5abb8da9, PositionManager dcb3d5cf81799507, HyperEVM builds 8def1da8113ecab7 and 6211989b2a1a2b1c), except the router of 21,738 bytes listed on X Layer, MegaETH and Tempo (skeleton 5d8707342b76aa92, the same on all three), which holds one sync(address) selector word and two settle() selector words)
+
+## F-162. An account that runs another user's ERC-4337 operation from inside its own unlock makes every PoolManager router call of that operation revert with AlreadyUnlocked
+
+Low severity, plausible. Effect: degrade. Who can trigger it: any account. Networks: all 21 networks.
+
+What differs on the network: EntryPoint v0.6, v0.7 and v0.8 accept handleOps from a contract, and all three hold code on all 21 networks. A signed user operation is valid in any bundle, so whoever obtains it first decides the frames around it, including running it from inside a contract call. The networks differ in how much PoolManager traffic travels as user operations: 195 of 250 sampled World Chain transactions, about 5 percent on Base, under 1 percent on Tempo and, per F-071, about half on Soneium. Tempo 0x76 batches, Base Everest 0x79 phases and X Layer gasless carriers do not add a foreign frame of their own: their calls are all dispatched from one sender, and a sponsor or fee payer only pays fees.
+
+How it meets the code: 1. unlock sets the transient lock flag, calls back msg.sender and only clears the flag when the callback returns (src/PoolManager.sol:104-114, src/libraries/Lock.sol:13-25). A second unlock while the flag is set reverts with AlreadyUnlocked (src/PoolManager.sol:105). 2. An ordinary account's contract calls unlock, and in its unlockCallback calls EntryPoint.handleOps with the victim's user operation and a beneficiary of its choice. v0.6 to v0.8 allow a contract caller; v0.9 does not. 3. The victim's operation calls the Universal Router or the PositionManager, which call poolManager.unlock (BaseActionsRouter.sol:26) and revert. The EntryPoint catches the failure, emits UserOperationEvent with success false and charges the operation's gas to the account or paymaster, paying it to the beneficiary. 4. The attacker's callback then returns with no deltas of its own, so its unlock completes (src/PoolManager.sol:112-113). 5. While the attacker holds the lock the victim's code cannot reach any onlyWhenUnlocked function under its own unlock, and the deltas it could create there would belong to the victim's contracts, which the attacker cannot take (src/PoolManager.sol:291-297 debits msg.sender). The same holds for the stale sync of F-071 with a stronger reach: holding the lock blocks canonical routers too, where a stale sync does not. Nothing in this path credits the attacker or lowers any pool balance.
+
+What is at risk: No pool funds move and nobody's claims or positions are frozen. The victim's operation fails once, its nonce is used and its gas is paid to the attacker's beneficiary, which is the normal bundler fee. The victim can resubmit through another bundler. The attacker pays the transaction gas and earns only the bundler margin.
+
+What it takes: The attacker must hold the victim's signed user operation before any other bundler includes it, which needs a public user operation mempool or a leak from a bundler. Whether outsiders can read pending user operations on World Chain, Base or Soneium was not confirmed. The operation must target EntryPoint v0.6, v0.7 or v0.8. A bundler that already holds an operation can make it fail in many generic ways, so the wrap adds little that is specific to the PoolManager.
+
+What can be done: Wallets that send PoolManager trades through user operations can use EntryPoint v0.9 or a private bundler. A core change cannot tell a foreign lock holder from a nested call; none is proposed.
+
+This entry adds to F-071.
+
+Second reviewer's corrections: The verdict is plausible, not confirmed, because the attacker needs the victim's pending user operation before an honest bundler includes it. The finding itself lists this as unconfirmed. A bundler holding an operation can make it fail by many generic means, and the AlreadyUnlocked wrap adds little that is specific to the PoolManager. The rating stays low.
+
+Code: `src/PoolManager.sol:104-114`, `src/libraries/Lock.sol:13-25`, `src/PoolManager.sol:96-99`.
+
+Sources:
+
+- src/PoolManager.sol:105 (unlock reverts with AlreadyUnlocked when the lock flag is set)
+- src/PoolManager.sol:112-113 (the flag is cleared only after the callback returns with every delta at zero)
+- https://sourcify.dev/server/v2/contract/1/0x0000000071727De22E5E9d8BAf0edAc6f37da032?fields=sources (EntryPoint v0.7 handleOps is guarded only by OpenZeppelin ReentrancyGuard (contracts/core/EntryPoint.sol:174-205, @openzeppelin ReentrancyGuard.sol:55-59), so a contract may call it; validation of all operations runs first (lines 182-194), then each execution (199-201), then _compensate pays the beneficiary chosen by the caller (63-66, 203))
+- https://sourcify.dev/server/v2/contract/1/0x0000000071727De22E5E9d8BAf0edAc6f37da032?fields=sources (_executeUserOp runs the operation through a self call and on failure emits UserOperationEvent with success false and still charges actualGasCost (EntryPoint.sol:76-135))
+- https://sourcify.dev/server/v2/contract/1/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789?fields=sources (EntryPoint v0.6 handleOps at contracts/core/EntryPoint.sol:92 is guarded by nonReentrant from OpenZeppelin ReentrancyGuard and has no tx.origin check)
+- https://sourcify.dev/server/v2/contract/1/0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108?fields=sources (EntryPoint v0.8 handleOps at contracts/core/EntryPoint.sol:58-61 uses ReentrancyGuardTransient (lines 34-38) with no tx.origin check)
+- https://sourcify.dev/server/v2/contract/1/0x433709009B8330FDa32311DF1C2AFA402eD8D009?fields=sources (EntryPoint v0.9 nonReentrant requires tx.origin == msg.sender and msg.sender.code.length == 0 (contracts/core/EntryPoint.sol:68-75), so only a top level externally owned caller can run handleOps)
+- eth_getCode on the networks.json rpc endpoint of all 21 networks, 2026-11-26 (out/ep_code.json) (EntryPoint v0.6 (23,689 bytes), v0.7 (16,035), v0.8 (21,738), v0.9 (22,425) and Multicall3 (3,808) hold code on all 21 networks; clients named by web3_clientVersion before and after)
+- https://sourcify.dev/server/v2/contract/1/0x23617e59A5925b2A4Bf75d73ff6711cD0b29De85?fields=sources (Universal Router 2.1.2: lib/v4-periphery/src/base/DeltaResolver.sol:38-48 _settle returns on amount 0, then calls poolManager.sync(currency), then settle{value: amount} for native or _pay then settle() for a token; no other settle site in the source; UniversalRouter.sol:70 execute is isNotLocked and BaseActionsRouter.sol:26 calls poolManager.unlock)
+- https://tempo.com/developers/docs/protocol/transactions/spec-tempo-transaction (0x76 calls execute atomically from the sender; the fee payer signature only redirects fee payment and must differ from the sender)
+- https://docs.base.org/specifications/base-transactions (0x79 calls are dispatched from the sender in phases, the payer only pays gas, and the type activates with Everest at a date still TBD)
 
 ## F-006. Source disagrees with two interface comments and two test conditions, and none of the four changes who can move funds
 
@@ -3985,6 +4050,59 @@ Sources:
 
 - https://mainnet.optimism.io (batched web3_clientVersion answers recorded in cycles/027/op-stack-eth.work/batch-clientver.txt)
 
+## F-159. Polygon has one execution client that can follow mainnet, because the 0xPolygon/erigon line stopped before the Austin fork
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Polygon.
+
+What differs on the network: Ethereum has several execution clients, so an arithmetic fault in one is outvoted. On Polygon the last 0xPolygon/erigon tag is v3.7.2, whose mainnet chain spec ends at Valencia (block 89,531,000). Austin, Uburu and Salvador are missing, so every Polygon validator and full node runs bor.
+
+How it meets the code: Every swap computes FullMath.mulDiv, which calls MULMOD with modulus 2^256-1 (src/libraries/FullMath.sol:24) and, when the product needs more than 256 bits, with the pool's denominator (src/libraries/FullMath.sol:48). On Polygon, opMulmod is the only implementation of that result. The current bor v2.11.1 builds use stock holiman/uint256 v1.3.2 MulMod. The unreleased v2.12.0-beta and develop route full-width moduli through a one-entry reciprocal memo (core/vm/mulmod_memo.go:55-66), and its result equals MulMod for every input because MulModWithReciprocal and MulMod run the same reduce4 call on the same reciprocal (uint256.go:688-748). No second client would catch a future fault in that path. Today every vector, script and mined swap matches.
+
+What is at risk: None today. If a future bor release computed a wrong MULMOD or shift result, the chain would accept it, and swaps would pay amounts that differ from the source. Who gains depends on the fault.
+
+What it takes: A fault would have to ship in a bor release that block producers run. No ordinary account can cause one.
+
+What can be done: Before each bor release that touches core/vm (the MULMOD memo of v2.12.0 first), rerun battery.py, targeted.py, run_edges.py and the memo sequences of cycles/026/established-l1.work/memoseq.py against a node on that release.
+
+Code: `src/libraries/FullMath.sol:24`, `src/libraries/FullMath.sol:48`, `src/libraries/SqrtPriceMath.sol:252`.
+
+Sources:
+
+- https://raw.githubusercontent.com/0xPolygon/erigon/v3.7.2/polygon/chain/chainspecs/bor-mainnet.json (the last Erigon chain spec ends at valenciaBlock 89531000)
+- https://forum.polygon.technology/t/bor-v2-9-0-and-erigon-v3-7-2-releases/21987 (Erigon v3.7.2 shipped with Valencia in lockstep with bor v2.9.0)
+- https://docs.tatum.io/changelog/polygon-erigon-eol-migration-to-bor (Polygon Labs ended 0xpolygon/erigon support on 1 August 2026 (secondary))
+- https://raw.githubusercontent.com/0xPolygon/bor/develop/params/config.go (Austin 91949700, Uburu 96787900 and Salvador 98688600 on mainnet)
+- https://raw.githubusercontent.com/0xPolygon/bor/develop/core/vm/mulmod_memo.go (memo logic at lines 55-66)
+- https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go (MulModWithReciprocal and MulMod differ only in where the reciprocal comes from)
+
+## F-160. Celo public endpoints answer from three superseded celo-reth releases, two of them older than a consensus fix
+
+Info severity, plausible. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Celo.
+
+What differs on the network: On Ethereum a provider endpoint normally names one current client. On Celo the stakely.io endpoint rotates four reth builds, three of them older releases: 7680d6d (celo/reth-v1.0.0 or v1.0.1), 3cbf835 (v1.0.3) and 06140ff (v1.0.6 to v1.0.8). Release v1.0.4 changed a consensus rule for CIP-64 transactions with a zero-address feeCurrency, so the two oldest builds would accept a block that current nodes reject.
+
+How it meets the code: A wallet, router or quoter that reads the PoolManager through such an endpoint gets an eth_call answer from whichever build serves that request. All four reth builds lock revm-interpreter 35.0.1 and either ruint 1.18.0 or 1.20.0, and each returned the specified word on every vector it was pinned to (7680d6d 214437 of 215637 vectors pinned, 0 mismatches; 3cbf835 4200 of 30108 large-index and edge vectors pinned before the run was stopped, 0 mismatches; 06140ff 3600 of 30108 large-index and edge vectors pinned before the run was stopped, 0 mismatches), so the PoolManager math (FullMath.mulDiv at src/libraries/FullMath.sol:24, TickMath at src/libraries/TickMath.sol:61-63, TickBitmap.compress at src/libraries/TickBitmap.sol:20-26) is computed the same on all of them. The builds differ in CIP-64 handling (zero-address feeCurrency before v1.0.4, fee-currency pricing of eth_call and eth_estimateGas before v1.0.5), which only changes simulated fees and acceptance of malformed CIP-64 transactions. Blocks come from the Celo sequencer, which runs a current build, so an old follower can only diverge if the sequencer itself includes such a transaction.
+
+What is at risk: No PoolManager funds move and no withdrawal is blocked. A user relying on an old build may see a CIP-64 simulation priced differently from the chain, or a zero-address feeCurrency transaction accepted locally and then rejected.
+
+What it takes: The user's wallet or router uses stakely.io or another provider that still runs a pre v1.0.9 celo-reth build. Producing a divergent block needs the sequencer. The verifier saw only 74cc8bb and 7680d6d in 107 calls, so the rotation of 3cbf835 and 06140ff is unconfirmed. Release v1.0.4 also added the CIP-64 rule balanceOf(caller) >= gasLimit * maxFeePerGas.
+
+What can be done: Integrators should read the PoolManager through an endpoint that reports reth/v2.2.0-74cc8bb or later and check web3_clientVersion; Celo can ask providers to retire builds older than v1.0.4.
+
+This entry adds to F-116.
+
+Second reviewer's corrections: The rotation of 3cbf835 and 06140ff is unconfirmed: in 107 calls I saw only 74cc8bb and 7680d6d. The 7680d6d build alone supports the claim that a pre v1.0.4 build answers public reads. The v1.0.4 delta also has a fee-currency balance rule (#298) that the finding does not list. The actor value operator is right, because a divergent block needs the sequencer.
+
+Code: `src/libraries/FullMath.sol:24`, `src/libraries/TickMath.sol:61-63`, `src/libraries/TickBitmap.sol:20-26`.
+
+Sources:
+
+- https://celo-json-rpc.stakely.io (web3_clientVersion rotates reth/v2.2.0-74cc8bb, 7680d6d, 3cbf835 and 06140ff (queried 2026-11-26, out/celo-*-stakely-*.json stats))
+- https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.3/Cargo.lock (v1.0.3 locks celo-org/reth 3cbf835, revm-interpreter 35.0.1 and ruint 1.18.0)
+- https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.0/Cargo.lock (v1.0.0 locks reth 7680d6d and ruint 1.18.0)
+- https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.6/Cargo.lock (v1.0.6 locks reth 06140ff and ruint 1.20.0)
+- https://github.com/celo-org/celo-kona/tags?after=celo%2Freth-v1.0.5 (v1.0.4 makes a zero-address feeCurrency an unregistered currency and calls it consensus-affecting but fork-free)
+
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 
 High severity, confirmed. Effect: both. Who can trigger it: owner, fee controller or chain governance. Networks: Celo.
@@ -4394,3 +4512,25 @@ Sources:
 - https://forum.arbitrum.foundation/t/constitutional-aip-update-arbitrum-one-and-nova-l1-pricing-parameters-for-ethereum-glamsterdam/31555 (The Glamsterdam change for Arbitrum One is a parameter update that introduces no ArbOS upgrade)
 - https://arb1.arbitrum.io/rpc eth_call 0x6b getScheduledUpgrade() and 0x64 arbOSVersion() at block 527,629,490 (No ArbOS upgrade scheduled; ArbOS 61 (0x74 = 116))
 - https://arb1.arbitrum.io/rpc eth_getCode 0x360e68faccca8ca495c1b759fd9eee466db9fb32 (PoolManager bytecode walked for opcodes at instruction positions)
+
+## F-158. Elysium's announced ArbOS upgrade adds a HyperCore read precompile and a callback predeploy whose addresses and call shapes are not yet published
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: owner, fee controller or chain governance. Networks: Elysium.
+
+What differs on the network: Kinetiq states that an ArbOS upgrade about four weeks after mainnet adds a native precompile that returns live HyperCore state, balances included, and an ElysiumCoreWriter predeploy that keeps per-contract HYPE escrows and calls contracts back with the result of each HyperCore action. Neither exists on Ethereum, and neither is in the 36 precompiles the node lists today.
+
+How it meets the code: The PoolManager reaches a new address in four shapes only. sync(X) staticcalls X.balanceOf(PoolManager) and settle credits the rise of that word as currency X (src/PoolManager.sol:279-288 and 349-364). take(X, to, amount) calls X.transfer(to, amount) and accepts empty return data or a 32 byte one (src/types/Currency.sol:53-80). take(address(0), X, amount) sends value with empty calldata (src/types/Currency.sol:44-52). A hook address with valid low flag bits receives the IHooks selectors (src/libraries/Hooks.sol:109-124 and 131-160). If the read precompile answered the balanceOf selector with a word that moves, an account could book that movement as a delta of currency X, but X is the precompile address, which no pool of real tokens names, so the booked credit is worth nothing to other users. A value call into the predeploy that it treats as an escrow deposit is paid by the caller of take, who is debited the full amount. A result callback goes to the contract that emitted the intent; the PoolManager cannot emit one, because none of its four call shapes carries caller-chosen calldata to an address other than the hook. The hazard therefore rests on the precompile or predeploy answering one of these selectors in a way the published text does not describe.
+
+What is at risk: None found today. Recorded so that the day-one check of the upgrade calls both new addresses from the PoolManager address in the four shapes above.
+
+What it takes: Elysium governance must ship the upgrade; nothing is scheduled at block 11,231,491.
+
+What can be done: After activation, run the cycle 16 precompile sweep against the new addresses from the PoolManager address, and check whether either address has low 14 bits that form a valid hook flag set.
+
+Code: `src/PoolManager.sol:279-297`, `src/PoolManager.sol:349-364`, `src/types/Currency.sol:44-80`, `src/libraries/Hooks.sol:109-160`.
+
+Sources:
+
+- https://elysium.kinetiq.xyz/docs/trading-on-hypercore-from-elysium (ElysiumCoreWriter predeploy, escrow and callbacks ship in an ArbOS upgrade about four weeks after mainnet)
+- https://elysium.kinetiq.xyz/docs/what-is-elysium (HyperCore data precompile as a post-launch upgrade; stock ArbOS 61 today)
+- https://rpc.elysium.kinetiq.xyz (getScheduledUpgrade() returns zeros at block 11,231,491 (raw/arbos_state.txt))

@@ -1,0 +1,137 @@
+"""Writes cycles/028/established-l1.research.json from the results in this work directory."""
+import json
+W = 'research/network-risk/cycles/028/established-l1.work'
+RAW = 'https://raw.githubusercontent.com'
+BOR = RAW + '/0xPolygon/bor'
+BSC = RAW + '/bnb-chain/bsc'
+LIBEVM = RAW + '/ava-labs/libevm'
+RBSC = RAW + '/bnb-chain/reth-bsc/23b510f'
+U256 = RAW + '/holiman/uint256/v1.3.2/uint256.go'
+AVAGO = RAW + '/ava-labs/avalanchego/master/upgrade/upgrade.go'
+
+profiles = [
+    {"chainId": 137, "lens": "L1", "summary": "No new tagged bor release since cycle 26: of 12 candidate tags only v2.12.0-beta exists beyond v2.11.2, and develop core/vm is byte equal to the cycle 26 copy. The 30,108 cycle 27 vectors match on all five private bor builds behind publicnode, on QuikNode and on drpc. Polygon's second client, 0xPolygon/erigon, has no release after v3.7.2, whose chain spec stops at Valencia, so bor is the only client that can follow mainnet.",
+     "deltas": [
+         {"delta": "Polygon mainnet runs CLZ (EIP-7939) since Lisovo at block 83,756,500 (lisovoInstructionSet at core/vm/jump_table.go:93-97 on develop). An eth_call on bor ebcfea01452d returned 251 for CLZ(0x1e). The PoolManager runtime holds no 0x1e byte at an instruction position in a linear sweep of its 24,009 bytes, so the opcode never runs.", "source": BOR + "/develop/core/vm/jump_table.go", "relevance": "none"},
+         {"delta": "0xPolygon/erigon v3.7.2 is the last tag (v3.7.3, v3.8.0, v3.8.1 and v3.9.0 return 404) and its bor-mainnet chain spec ends at valenciaBlock 89,531,000. Austin (91,949,700), Uburu (96,787,900) and Salvador (98,688,600) are absent, so no Erigon node can import current blocks. Tatum records that Polygon ended Erigon support on 1 August 2026.", "source": RAW + "/0xPolygon/erigon/v3.7.2/polygon/chain/chainspecs/bor-mainnet.json", "relevance": "low"},
+         {"delta": "web3_clientVersion on 2026-11-26 22:09 UTC: publicnode rotated f2a2d63e69f6, 280514fa9fb7, a863b8e5cce1, ebcfea01452d and cb3d19c5f690 (all v2.11.1-private, go1.26.10); QuikNode answered bor/qn-*/v2.11.1/go1.26.11 from at least 14 hosts.", "source": W + "/clientversions.txt and " + W + "/out/edges-pol-pn.json", "relevance": "none"},
+     ]},
+    {"chainId": 137, "lens": "L2", "summary": "Nothing new on transient storage or transaction boundaries. 25 multi-step mined swaps replay to the unit from parent-block storage read on a named bor build.",
+     "deltas": []},
+    {"chainId": 137, "lens": "L3", "summary": "No change. Chicago's PIP-88 cold storage repricing (core/vm/jump_table.go:105-109 on develop) changes gas only, and the 19 set 1 and 20 set 2 scripts that differ are the same full-range swaps recorded before.",
+     "deltas": []},
+    {"chainId": 137, "lens": "L4", "summary": "Salvador is still only on develop (SalvadorBlock 98,688,600 at params/config.go:478); master and v2.12.0-beta carry no Salvador entry. The next named fork, Hampi, is unscheduled (HampiBlock nil at params/config.go:476).",
+     "deltas": [{"delta": "Hampi exists in the develop chain config with no block on mainnet or Amoy.", "source": BOR + "/develop/params/config.go", "relevance": "none"}]},
+    {"chainId": 56, "lens": "L1", "summary": "BSC v1.8.2 is still the newest tag (v1.8.3, v1.8.4 and v1.9.0 return 404) and develop and master equal v1.8.2 in core/vm/instructions.go and evm.go. The 30,108 cycle 27 vectors match on both dataseed builds, both 48 Club builds and reth-bsc. reth-bsc's own crates use the stock revm instruction table; they add only a halt for frames whose target is the block coinbase and Hertz storage patches keyed by historical transaction hash.",
+     "deltas": [
+         {"delta": "reth-bsc 23b510f halts any frame whose target address is the block coinbase, burning its gas (src/evm/api/mod.rs:237-268, ported from go-bsc). revm runs frame_run only for accounts with code, so a native payout to a coinbase account without code is unaffected.", "source": RBSC + "/src/evm/api/mod.rs", "relevance": "none"},
+         {"delta": "BSC v1.8.2 EVM keeps a pooled stack arena (core/vm/evm.go:169-170, Release at 268-284) inherited from go-ethereum's design; geth master has the same field (core/vm/evm.go:135).", "source": BSC + "/v1.8.2/core/vm/evm.go", "relevance": "none"},
+     ]},
+    {"chainId": 56, "lens": "L2", "summary": "reth-bsc applies Hertz storage patches only on block import and only for fixed mainnet transaction hashes, to one mainnet address (0x00000000001f8b68515EfB546542397d3293CCfd), which is not the PoolManager. Storage writes use full 256 bit slot keys.",
+     "deltas": [{"delta": "Hertz patch tables MAINNET_PATCHES_BEFORE_TX and MAINNET_PATCHES_AFTER_TX are keyed by transaction hash (src/node/evm/patch/mod.rs:16, 372, 676-708) and applied only in BscExecutionMode::Import (src/node/evm/executor.rs:818-822).", "source": RBSC + "/src/node/evm/patch/mod.rs", "relevance": "none"}]},
+    {"chainId": 56, "lens": "L3", "summary": "No change.", "deltas": []},
+    {"chainId": 56, "lens": "L4", "summary": "Jenner is still set for 2026-12-08 02:30 UTC with BEP-702, BEP-703 and BEP-706, all judged in earlier cycles. No later BSC fork has a date.",
+     "deltas": []},
+    {"chainId": 43114, "lens": "L1", "summary": "avalanchego 1.15.3 (commit 983815fd) still answers. It pins libevm d398bc4dbe41, not a335c2ecf4df, which cycle 26 read; the two commits are byte equal in instructions.go, interpreter.go, jump_table.go, evm.go, memory.go, analysis.go and stack.go, and instructions.go equals go-ethereum v1.13.15 except for import paths. Avalanche refuses CLZ while Ethereum, Polygon and BNB Chain run it, which does not touch the PoolManager.",
+     "deltas": [
+         {"delta": "avalanchego v1.15.3 go.mod line 30 pins github.com/ava-labs/libevm v1.13.15-0.20261028200218-d398bc4dbe41; master go.mod line 31 pins a335c2ecf4df.", "source": RAW + "/ava-labs/avalanchego/v1.15.3/go.mod", "relevance": "none"},
+         {"delta": "eth_call of PUSH1 1, PUSH1 0x1e, CLZ on api.avax.network returns 'invalid opcode: opcode 0x1e not defined'.", "source": W + "/out/clz-probe.txt", "relevance": "none"},
+     ]},
+    {"chainId": 43114, "lens": "L2", "summary": "The failed transaction of L-1097 reverts inside the ParaSwap AugustusV6 router with InsufficientReturnAmount() after its executor returned, so the PoolManager did not decide it.",
+     "deltas": []},
+    {"chainId": 43114, "lens": "L3", "summary": "No change.", "deltas": []},
+    {"chainId": 43114, "lens": "L4", "summary": "The next upgrade, Igloo, has UnscheduledActivationTime on mainnet and Fuji (upgrade/upgrade.go:69 and 94 on master), so no Avalanche fork is scheduled for the next six months.",
+     "deltas": [{"delta": "IglooTime = UnscheduledActivationTime (9999-12-01) for mainnet and Fuji.", "source": AVAGO, "relevance": "none"}]},
+]
+
+findings = [
+    {"ref": "new",
+     "title": "Polygon has one execution client that can follow mainnet, because the 0xPolygon/erigon line stopped before the Austin fork",
+     "chainIds": [137], "lens": "L1", "assumptions": ["A10"], "effect": "degrade", "actor": "operator", "severity": "info",
+     "difference": "Ethereum has several execution clients, so an arithmetic fault in one is outvoted. On Polygon the last 0xPolygon/erigon tag is v3.7.2, whose mainnet chain spec ends at Valencia (block 89,531,000). Austin, Uburu and Salvador are missing, so every Polygon validator and full node runs bor.",
+     "mechanism": "Every swap computes FullMath.mulDiv, which calls MULMOD with modulus 2^256-1 (src/libraries/FullMath.sol:24) and, when the product needs more than 256 bits, with the pool's denominator (src/libraries/FullMath.sol:48). On Polygon, opMulmod is the only implementation of that result. The current bor v2.11.1 builds use stock holiman/uint256 v1.3.2 MulMod. The unreleased v2.12.0-beta and develop route full-width moduli through a one-entry reciprocal memo (core/vm/mulmod_memo.go:55-66), and its result equals MulMod for every input because MulModWithReciprocal and MulMod run the same reduce4 call on the same reciprocal (uint256.go:688-748). No second client would catch a future fault in that path. Today every vector, script and mined swap matches.",
+     "impact": "None today. If a future bor release computed a wrong MULMOD or shift result, the chain would accept it, and swaps would pay amounts that differ from the source. Who gains depends on the fault.",
+     "preconditions": "A fault would have to ship in a bor release that block producers run. No ordinary account can cause one.",
+     "mitigations": "Before each bor release that touches core/vm (the MULMOD memo of v2.12.0 first), rerun battery.py, targeted.py, run_edges.py and the memo sequences of cycles/026/established-l1.work/memoseq.py against a node on that release.",
+     "coreRefs": ["src/libraries/FullMath.sol:24", "src/libraries/FullMath.sol:48", "src/libraries/SqrtPriceMath.sol:252"],
+     "sources": [
+         {"url": RAW + "/0xPolygon/erigon/v3.7.2/polygon/chain/chainspecs/bor-mainnet.json", "supports": "the last Erigon chain spec ends at valenciaBlock 89531000"},
+         {"url": "https://forum.polygon.technology/t/bor-v2-9-0-and-erigon-v3-7-2-releases/21987", "supports": "Erigon v3.7.2 shipped with Valencia in lockstep with bor v2.9.0"},
+         {"url": "https://docs.tatum.io/changelog/polygon-erigon-eol-migration-to-bor", "supports": "Polygon Labs ended 0xpolygon/erigon support on 1 August 2026 (secondary)"},
+         {"url": BOR + "/develop/params/config.go", "supports": "Austin 91949700, Uburu 96787900 and Salvador 98688600 on mainnet"},
+         {"url": BOR + "/develop/core/vm/mulmod_memo.go", "supports": "memo logic at lines 55-66"},
+         {"url": U256, "supports": "MulModWithReciprocal and MulMod differ only in where the reciprocal comes from"}],
+     "evidence": "primary"},
+]
+
+cleared = [
+    {"chainIds": [137, 56, 43114], "lens": "L1", "check": "L-1158: the 15,510 large-index vectors of cycles/027/op-stack-eth.work/scripts/hiword.py and the 14,598 edge vectors of cycles/027/ethereum-reference.work/pinrun.py (30,108 in all) on every endpoint and build of the three networks. Each batch was sent as one HTTP request [web3_clientVersion, eth_call, web3_clientVersion] and credited to a build when both strings agreed.",
+     "result": "0 mismatches and 0 failed batches on all eight endpoints. Polygon publicnode, all batches matching their brackets: ebcfea01452d 5,508, a863b8e5cce1 6,600, cb3d19c5f690 8,100, f2a2d63e69f6 6,900, 280514fa9fb7 3,000. BNB dataseed1: v1.8.2-4e1c8247 25,908 and v1.8.2 (no commit) 4,200. 48 Club: 132104cd 16,008 and 9b93ce23 14,100. reth-bsc v0.1.4-hotfix-23b510f 30,108. Avalanche api.avax.network and publicnode: avalanchego 1.15.3 983815fd 30,108 each. QuikNode Polygon and drpc 30,108 each (QuikNode backends mixed inside most requests, all qn-* v2.11.1 hosts).",
+     "source": W + "/out/edges-*.json, script " + W + "/run_edges.py"},
+    {"chainIds": [137, 56, 43114], "lens": "L1", "check": "Rerun of battery.py (99,985 vectors) and targeted.py (85,544) on the networks.json endpoints on 2026-11-26.",
+     "result": "All 185,529 vectors return the specified word on Polygon, BNB Smart Chain and Avalanche, with no errors.",
+     "source": W + "/out/battery.log and " + W + "/out/targeted.log"},
+    {"chainIds": [137, 56, 43114], "lens": "L1", "check": "Rerun of script sets 1 (pmdiff.py, 250 scripts) and 2 (pmdiff2.py, 300 scripts) against the Ethereum reference from ethereum-rpc.publicnode.com (reth/v2.11.0-b9abbcc).",
+     "result": "BNB Smart Chain and Avalanche are identical on all 550. Polygon differs on exactly the 19 set 1 scripts and 20 set 2 scripts recorded in opcodes/pmdiff.json and opcodes/pmdiff2.json, the full-range swaps that run out of gas at 25 million. The Ethereum reference hashes equal the stored ones.",
+     "source": W + "/out/pmdiff.json and " + W + "/out/pmdiff2.json"},
+    {"chainIds": [137, 56, 43114], "lens": "L1", "check": "New mined swaps (swaps.py) and step replays (replay.py) on the three networks.",
+     "result": "Polygon 6,734 swaps, BNB Smart Chain 5,607 and Avalanche 70 all satisfy the tick relation (src/libraries/TickMath.sol:121) and every paired swap fits one of the single-step outcomes or is multi-step. 25 multi-step swaps replay to the unit on BNB Smart Chain (up to 6 steps) and 25 on Polygon (up to 4 steps), the Polygon ones from parent-block storage read on QuikNode bor v2.11.1 because publicnode refuses archive reads with HTTP 403. Avalanche had no multi-step swap in the window.",
+     "source": W + "/out/swaps.log, " + W + "/out/replay.log and " + W + "/out/replay-137-quiknode.json"},
+    {"chainIds": [137], "lens": "L1", "check": "bor releases since cycle 26 and the core/vm files of develop.",
+     "result": "Of v2.11.3, v2.11.4, v2.12.0, v2.12.0-beta2, -beta3, -rc1, -rc2, v2.12.1, v2.12.2, v2.13.0 and v2.13.0-beta only v2.12.0-beta exists (core/vm/mulmod_memo.go 200 there, 404 elsewhere). develop core/vm instructions.go, evm.go, mulmod_memo.go, interpreter.go, jump_table.go, analysis_legacy.go, memory.go, common.go, contract.go, keccak_cache.go and shared_cache.go are byte equal to the cycle 26 copies. develop params/version.go still reads 2.11.1.",
+     "source": BOR + "/develop/core/vm/mulmod_memo.go"},
+    {"chainIds": [137], "lens": "L1", "check": "bor's MULMOD memo against holiman/uint256 v1.3.2, the version develop pins (go.mod line 59), and whether a newer uint256 exists.",
+     "result": "opMulmod pops x and y by value and passes the stack top as z (core/vm/instructions.go:200-205). The memo copies the modulus before computing Reciprocal(z) and reuses it only when all four limbs equal (mulmod_memo.go:55-63). MulModWithReciprocal (uint256.go:688-715) and MulMod (720-748) run identical code except that MulMod computes Reciprocal(m) on line 728, so the result is a pure function of x, y and m. The Go module proxy lists v1.3.2 as the newest uint256 release.",
+     "source": U256 + " and https://proxy.golang.org/github.com/holiman/uint256/@v/list"},
+    {"chainIds": [137, 56], "lens": "L1", "check": "CLZ (EIP-7939) is live on Polygon (Lisovo) and BNB Chain, refused on Avalanche. Does the PoolManager bytecode ever execute 0x1e?",
+     "result": "A linear sweep of the 24,009 byte runtime read from the Polygon PoolManager finds no 0x1e at an instruction position; the first INVALID is at offset 23,996, where the metadata area starts. The source uses no clz (BitMath.sol:12 and :31 use table lookups), so the opcode set difference changes nothing for the pool math.",
+     "source": W + "/out/clz-probe.txt and src/libraries/BitMath.sol:12-31"},
+    {"chainIds": [56], "lens": "L1", "check": "L-1148 for BNB Chain: any per-EVM arithmetic cache like bor's memo in BSC v1.8.2, master or develop.",
+     "result": "None. opMulmod is z.MulMod(&x, &y, z) at core/vm/instructions.go:179-183 on all three refs, and master equals v1.8.2 byte for byte. The EVM struct (core/vm/evm.go:129-171) holds context, StateDB, jump table, depth, config, precompiles, a jump destination cache keyed by code hash and a pooled stack arena, and no operand or result cache. BSC pins holiman/uint256 v1.3.2 on v1.8.2 and develop.",
+     "source": BSC + "/v1.8.2/core/vm/instructions.go"},
+    {"chainIds": [43114], "lens": "L1", "check": "L-1148 for Avalanche: any per-EVM arithmetic cache in libevm, at the commit avalanchego 1.15.3 pins (d398bc4dbe41) and at main.",
+     "result": "None. opMulmod is stock at core/vm/instructions.go:183-187, the EVM struct adds only executionInvalidated (evm.go:133), and instructions.go equals go-ethereum v1.13.15 apart from import paths. The cycle 26 reading was made at a335c2ecf4df, which master pins; the seven core/vm files compared are byte equal between the two commits.",
+     "source": LIBEVM + "/d398bc4dbe41/core/vm/instructions.go"},
+    {"chainIds": [56], "lens": "L2", "check": "L-1073: how reth-bsc keys storage and transient storage and whether it carries the Hertz shared storage path.",
+     "result": "reth-bsc 23b510f uses revm 38.0.0 with revm-interpreter 35.0.1 and ruint 1.18.0 (Cargo.lock) and the stock EthInstructions table (src/evm/api/mod.rs:74-90). Storage and transient storage are revm's maps keyed by address and full U256 slot. The Hertz fix is a table of fixed historical mainnet transaction hashes whose slots are written before or after those transactions on import only (src/node/evm/patch/mod.rs:16-708, executor.rs:818-822, 931); it has no shared storage read path, and no patched address is the PoolManager.",
+     "source": RBSC + "/src/node/evm/patch/mod.rs"},
+    {"chainIds": [56], "lens": "L4", "check": "reth-bsc's own frame rule for the block coinbase.",
+     "result": "A frame whose target is the coinbase halts with PrecompileError and burns its gas (src/evm/api/mod.rs:237-268). That frame is a call to the validator's own address, which only the party naming the address can arrange, as recipient of its own take or as a hook address it chose. A coinbase account without code is paid normally because revm returns before frame_run for empty code.",
+     "source": RBSC + "/src/evm/api/mod.rs"},
+    {"chainIds": [137], "lens": "L1", "check": "Which validators could run a code path other than the public endpoint's on Polygon: is Erigon still a validator client?",
+     "result": "No. The last 0xPolygon/erigon tag is v3.7.2 and its chain spec ends at Valencia, and Austin, Uburu and Salvador are missing, so an Erigon node cannot import current blocks. All validators run bor. The differences left are the private v2.11.1 builds and the BlockSTM parallel processor, which cycle 26 read as byte identical between v2.11.1, v2.11.2 and v2.12.0-beta.",
+     "source": RAW + "/0xPolygon/erigon/v3.7.2/polygon/chain/chainspecs/bor-mainnet.json"},
+    {"chainIds": [43114], "lens": "L2", "check": "L-1131: the selector 0xcea9e31d of the failed transaction 0x52cea783...c269.",
+     "result": "It is InsufficientReturnAmount() of ParaSwap's AugustusV6 at 0x6a000f20005980200259b80c5102003040001068 (verified source from routescan, src/interfaces/IErrors.sol:12). The transaction calls swapExactAmountIn (selector 0xe3ead59e), which runs its executor and then reverts at src/routers/swapExactAmountIn/GenericSwapExactAmountIn.sol:85-86 when the received balance is below minAmountOut. The revert is the router's slippage check after the executor, and with it the PoolManager unlock, returned. The same call succeeds at the parent block and fails at its own block because earlier transactions moved the price.",
+     "source": "https://api.routescan.io/v2/network/mainnet/evm/43114/etherscan/api?module=contract&action=getsourcecode&address=0x6a000f20005980200259b80c5102003040001068"},
+    {"chainIds": [43114], "lens": "L4", "check": "Upcoming forks on Avalanche in the next six months.",
+     "result": "None scheduled. Helicon went live on 2026-09-22 15:00 UTC (upgrade/upgrade.go:68) and Igloo, the next entry, is UnscheduledActivationTime on mainnet and Fuji (lines 69 and 94).",
+     "source": AVAGO},
+    {"chainIds": [137], "lens": "L4", "check": "Upcoming forks on Polygon: Salvador at 98,688,600 and anything after it, the day after for an ordinary account.",
+     "result": "Salvador's code rewrites are F-134 (governance) and the cycle 15 clearance stands: the five targets hold no claims or positions, and pools naming them already fail. Salvador adds no instruction; the develop jump tables are unchanged since cycle 26. Hampi is unscheduled. If the Salvador release also carries the MULMOD memo, its result equals stock MulMod, as above.",
+     "source": BOR + "/develop/params/config.go"},
+    {"chainIds": [56], "lens": "L4", "check": "Upcoming forks on BNB Chain: Jenner on 2026-12-08 02:30 UTC.",
+     "result": "No new release (v1.8.2 is newest) and develop equals v1.8.2 in core/vm. BEP-702 CAS20 (F-007, F-076, F-139), BEP-703 payment lane and BEP-706 at 0x70 were judged in cycles 5 to 21, and nothing found this cycle changes those results.",
+     "source": "https://docs.chainstack.com/docs/bnb-jenner-hardfork"},
+]
+
+leads = [
+    {"chainIds": [137], "lens": "L1", "question": "When bor publishes the release that carries Salvador (first block 98,688,600 on 8 December 2026), does it include core/vm/mulmod_memo.go, does any other core/vm file differ from develop at 2026-11-26, and do battery.py, targeted.py, run_edges.py and cycles/026/established-l1.work/memoseq.py give the specified words on a node that reports it?", "why": "Polygon has one client, and the memo sits on the FullMath.mulDiv path of every swap.", "priority": "medium"},
+    {"chainIds": [56], "lens": "L2", "question": "Continue the BNB Smart Chain traced replay from cycles/024 raw/56/window.json to 20,000 transactions on the reth-bsc backend of bsc.api.pocket.network.", "why": "L-1024 is still at 14,274 transactions.", "priority": "low"},
+]
+
+leadResults = [
+    {"leadId": "L-1158", "outcome": "cleared", "answer": "All 30,108 vectors (15,510 large-index and 14,598 edge) return the specified word on Polygon (each of the five private bor builds behind publicnode, QuikNode v2.11.1 hosts and drpc), BNB Chain (dataseed1 v1.8.2-4e1c8247 and v1.8.2 without commit, 48 Club 132104cd and 9b93ce23, reth-bsc 23b510f) and Avalanche (avalanchego 1.15.3 on two endpoints). Per-build counts are in cycles/028/established-l1.work/out/edges-*.json."},
+    {"leadId": "L-1148", "outcome": "cleared", "answer": "For this unit's clients: BSC v1.8.2, master and develop and libevm d398bc4dbe41 (pinned by avalanchego 1.15.3), a335c2ecf4df and main all call stock MulMod, and their EVM structs hold no operand or result cache. BSC has a pooled stack arena and a jump destination cache keyed by code hash, both from go-ethereum. Nitro's submodule at b72783f and geth's next release belong to other units and were not read here."},
+    {"leadId": "L-1039", "outcome": "inconclusive", "answer": "Script set 1 and set 2 were rerun through polygon-bor-rpc.publicnode.com, whose five private builds all gave the stored hashes on the edge vectors with matching brackets. pmdiff.py does not record the build per call, so the set 1 result (231 of 250, the recorded 19 gas-limited scripts different) is not pinned to one build. 25 multi-step swaps replay to the unit from state read on QuikNode bor v2.11.1. The theme-state-replay window was not rerun."},
+    {"leadId": "L-1024", "outcome": "inconclusive", "answer": "Not continued this cycle; carried as a new low lead with the same collector. The PoolManager window on BNB Chain is still 14,274 traced transactions with no mismatch."},
+    {"leadId": "L-1073", "outcome": "cleared", "answer": "reth-bsc 23b510f keys storage and transient storage by address and full U256 slot through stock revm 38.0.0 and revm-interpreter 35.0.1. Its Hertz equivalent is a set of storage writes tied to fixed historical transaction hashes, applied only on import (src/node/evm/patch/mod.rs:16-708, src/node/evm/executor.rs:818-822 and 931), with no shared storage read path."},
+    {"leadId": "L-1131", "outcome": "cleared", "answer": "0xcea9e31d is InsufficientReturnAmount() of AugustusV6 at 0x6a00...1068. The transaction calls swapExactAmountIn, and GenericSwapExactAmountIn.sol:85-86 reverts with it after the executor returned, when the received balance is below minAmountOut. The PoolManager did not make the decision."},
+    {"leadId": "L-1097", "outcome": "inconclusive", "answer": "The failed transaction is explained by L-1131 as a router slippage revert after the PoolManager returned. The 5,259 untraced window transactions remain, because no public Avalanche endpoint serves debug_traceTransaction (cycle 26 probe, unchanged)."},
+    {"leadId": "L-1120", "outcome": "cleared", "answer": "Avalanche has no scheduled fork in the next six months: Igloo is UnscheduledActivationTime on mainnet and Fuji (avalanchego master upgrade/upgrade.go:69 and 94), and no published ACP was found that adds EIP-2537 at 0x0b to 0x11. P-256 at 0x100 is already live since Granite. A payout to those addresses affects only the caller's own take. HyperEVM belongs to another unit."},
+]
+
+doc = {"unit": "established-l1", "_lenses": ["L1", "L2", "L3", "L4"], "profiles": profiles, "findings": findings,
+       "cleared": cleared, "leads": leads, "leadResults": leadResults}
+json.dump(doc, open('research/network-risk/cycles/028/established-l1.research.json', 'w'), indent=1)
+print('written')

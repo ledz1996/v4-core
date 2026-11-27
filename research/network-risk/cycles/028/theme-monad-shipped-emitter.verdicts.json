@@ -1,0 +1,22 @@
+{
+ "unit": "theme-monad-shipped-emitter",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Task 1 (L-1145), literal sites: deployed Monad code equals the build except the 20-byte immutable self address at pc 13618-13637, and MULMOD has a literal power-of-two modulus only at pc 22378 (2^128) and pc 22639 (2^96).",
+   "agrees": true,
+   "note": "I ran web3_clientVersion, eth_blockNumber and eth_getCode for 0x188d586ddcf52439676ca21a244753fa19f9ea8e on https://rpc.monad.xyz: Monad/0.16.7, block 0x77e3c52, 24,009 bytes. Byte comparison with research/network-risk/build/PoolManager.json runtime gives 20 differing bytes at pc 13618-13637, which hold 188d586ddcf52439676ca21a244753fa19f9ea8e, the contract's own address. A linear disassembly finds 13 MULMOD opcodes. pc 22378 follows PUSH17 0x01 followed by 32 zero hex digits (2^128) and pc 22639 follows PUSH13 2^96, as stated. The three MULMODs not in the literal list (pc 22921, 23094, 23678) start new basic blocks after JUMPI or JUMPDEST, so no literal is known to the block-local model. The cycle 27 harness listing pm-asm-0.16.7.txt:45272 shows pc 0x5989 calling the runtime mulmod through [ROD+5592], so the emitter also carries no literal across that block edge, and the list of power-of-two arms is complete for MULMOD."
+  },
+  {
+   "check": "Task 2 (L-1145), the run-time sequence of the two MULMOD literal-modulus sites gives a*b mod 2^128 and a*b mod 2^96.",
+   "agrees": true,
+   "note": "The 15 instructions in out/seq.json equal pm-asm-0.16.7.txt:44004-44019 and :44506-44521. I traced them by hand. For 2^128: r10 = lo(a0*b0) from mulx, r11 = lo(b0*a1) + hi(a0*b0) + lo(b1*a0) in 64-bit arithmetic, r8 = r9 = 0, which is a*b mod 2^128. For 2^96 the same terms are summed in 32-bit registers, and a 32-bit write clears the upper half, so limb 1 holds bits 64-95, which is a*b mod 2^96. These sites serve FullMath.mulDiv(x, liquidity, Q128) at src/libraries/Position.sol:94-96 and the Q96 path of getAmount1Delta. The finding still rests on the clang harness's output standing for the gcc-built emitter, and the research file says so."
+  },
+  {
+   "check": "Task 4 (L-1142), call_impl<MonadTraits<11>>, returndatacopy, tload and tstore of monad 0.16.7 implement the tagged source; hook return data is read as on Ethereum.",
+   "agrees": true,
+   "note": "call.cpp:68 calls clear_return_data before anything else. The disassembly out/fn/call_impl_monad11.s at 42ed72-42ed93 frees [rsi+0xa0] and stores 0 to +0xb0 and +0xa0. call.cpp sets return data from result.output_data and output_size after host->call whatever the status. It applies min(gas, gas_left_here - gas_left_here/64), where gas_left_here includes remaining_block_base_gas, and returns 0 at depth 1024 or more (cmp edx,0x3ff at 42f03b). data.cpp:164-191 makes returndatacopy exit when offset+size overflows or exceeds return_data_size. src/libraries/Hooks.sol:130-150 reads only returndatasize and returndatacopy of the hook's own successful call and checks length >= 32 and the selector, so these routines give the PoolManager the same bytes as on Ethereum. tload and tstore were not re-read in this spot check."
+  }
+ ],
+ "leads": []
+}

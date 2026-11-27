@@ -1,0 +1,43 @@
+{
+  "unit": "established-l1",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "The 0xPolygon/erigon v3.7.2 bor-mainnet.json chain spec ends at valenciaBlock 89531000 (line 106) and names no Austin, Uburu or Salvador block. Tags v3.7.3, v3.8.0 and v3.9.0 return 404. The main branch exists but its version file reads 3.2.0 and its chain spec stops at bhilaiBlock, so it is older still. bor develop params/config.go lines 475-478 set Austin 91949700, Hampi nil, Uburu 96787900 and Salvador 98688600 for mainnet. The Polygon forum post of 2 July 2026 says bor v2.9.0 and Erigon v3.7.2 shipped in lockstep with Valencia at 89,531,000. Tatum's changelog says Polygon Labs ends 0xpolygon/erigon support on 1 August 2026. core/vm/mulmod_memo.go returns 404 at bor v2.11.1 and v2.11.2 and 200 at v2.12.0-beta and develop. In mulmod_memo.go:55-66 the memo copies the modulus and stores Reciprocal(z) together, then calls MulModWithReciprocal; holiman/uint256 v1.3.2 uint256.go:688-715 and 720-748 are the same code except that MulMod computes mu := Reciprocal(m) itself, so the result is a pure function of x, y and m. bor develop go.mod:59 pins uint256 v1.3.2, the newest version on proxy.golang.org. The parallel processor builds a fresh EVM per task (core/parallel_state_processor.go:132 and 628), so the unsynchronised memo is not shared between goroutines. I ran 41 MULMOD vectors (full width moduli 2^256-1, 2^255, 2^255+1, 2^256-2^64, 2^192, 2^192+1 and (2^256-1)/3, including max operands and alternating moduli) by eth_call with a code override, twice against polygon-bor-rpc.publicnode.com; the brackets reported bor f2a2d63e69f6 and cb3d19c5f690 v2.11.1-private and all 82 results equal (x*y) mod m.",
+      "codeCheck": "src/libraries/FullMath.sol:24 computes mulmod(a, b, not(0)), a full width modulus that takes the memo path on bor develop. FullMath.sol:48 computes mulmod(a, b, denominator), reached only when prod1 is nonzero after the require at line 30. src/libraries/SqrtPriceMath.sol:252 rounds amount1 with mulmod(_liquidity, numerator, denominator). These are the lines the finding names, and a wrong MULMOD there would change prod1, the remainder and the rounding of swap amounts. No guard in src/ checks the MULMOD result, so the code depends on the client being correct. The finding claims no present fault and none exists.",
+      "corrections": "",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/0xPolygon/erigon/v3.7.2/polygon/chain/chainspecs/bor-mainnet.json", "supports": "last Erigon chain spec ends at valenciaBlock 89531000"},
+        {"url": "https://raw.githubusercontent.com/0xPolygon/erigon/main/polygon/chain/chainspecs/bor-mainnet.json", "supports": "the main branch spec is older and ends at bhilaiBlock"},
+        {"url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/params/config.go", "supports": "mainnet Austin 91949700, Uburu 96787900, Salvador 98688600 at lines 475-478"},
+        {"url": "https://forum.polygon.technology/t/bor-v2-9-0-and-erigon-v3-7-2-releases/21987", "supports": "bor v2.9.0 and Erigon v3.7.2 shipped together with Valencia"},
+        {"url": "https://docs.tatum.io/changelog/polygon-erigon-eol-migration-to-bor", "supports": "0xpolygon/erigon support ends 1 August 2026 (secondary source)"},
+        {"url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/core/vm/mulmod_memo.go", "supports": "memo stores modulus and reciprocal together and calls MulModWithReciprocal"},
+        {"url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/core/vm/instructions.go", "supports": "opMulmod calls evm.mulmodMemo.mulmod at lines 200-205"},
+        {"url": "https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go", "supports": "MulModWithReciprocal and MulMod differ only in where mu comes from"},
+        {"url": "https://proxy.golang.org/github.com/holiman/uint256/@v/list", "supports": "v1.3.2 is the newest uint256 release"},
+        {"url": "https://polygon-bor-rpc.publicnode.com", "supports": "eth_call of 41 MULMOD vectors on bor v2.11.1-private builds f2a2d63e69f6 and cb3d19c5f690, 0 mismatches"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "bor's MULMOD memo against holiman/uint256 v1.3.2, the version develop pins (go.mod line 59), and whether a newer uint256 exists.",
+      "agrees": true,
+      "note": "I read mulmod_memo.go:55-66, instructions.go:200-205 and uint256.go:688-748 myself. The memo writes mod and mu together on a miss and compares all four limbs on a hit, the aliasing of z as modulus and destination is the same as in stock z.MulMod(&x, &y, z), and the zero checks are identical. The parallel processor creates one EVM per task, so there is no cross goroutine sharing of the memo. go.mod:59 pins v1.3.2 and the module proxy lists nothing newer."
+    },
+    {
+      "check": "CLZ (EIP-7939) is live on Polygon (Lisovo) and BNB Chain, refused on Avalanche. Does the PoolManager bytecode ever execute 0x1e?",
+      "agrees": true,
+      "note": "eth_getCode of 0x6736...5cd6 on polygon-bor-rpc.publicnode.com returned 24,009 bytes. A linear sweep that skips PUSH data finds no 0x1e at an instruction position and the first INVALID at offset 23,996. Jump destination analysis uses the same linear sweep, so no jump can reach a 0x1e hidden in push data."
+    },
+    {
+      "check": "L-1148 for BNB Chain: any per-EVM arithmetic cache like bor's memo in BSC v1.8.2, master or develop.",
+      "agrees": true,
+      "note": "bnb-chain/bsc v1.8.2 core/vm/instructions.go:179-183 reads z.MulMod(&x, &y, z), the stock call with no memo. I did not reread master, develop or the EVM struct and rely on the research file for those."
+    }
+  ],
+  "leads": []
+}

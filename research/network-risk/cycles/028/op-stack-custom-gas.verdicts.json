@@ -1,0 +1,38 @@
+{
+  "unit": "op-stack-custom-gas",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "plausible",
+      "severity": "info",
+      "factCheck": "I sent 107 web3_clientVersion calls to https://celo-json-rpc.stakely.io on 2026-11-27. 77 answered reth/v2.2.0-74cc8bb and one run of 30 consecutive calls answered reth/v2.2.0-7680d6d, so the endpoint does serve at least one superseded build. I did not see 3cbf835 or 06140ff in my samples. The Cargo.lock files at celo/reth-v1.0.0, v1.0.3, v1.0.6 and v1.0.10 lock celo-org/reth 7680d6d, 3cbf835, 06140ff and 74cc8bb in that order. All four lock revm-interpreter 35.0.1 and revm-bytecode 10.0.0; v1.0.0 and v1.0.3 lock ruint 1.18.0 and v1.0.6 and v1.0.10 lock ruint 1.20.0, and v1.0.10 takes revm from celo-org/revm bd28f942. The v1.0.4 release notes say a zero-address feeCurrency became an unregistered currency, that op-geth marks a block holding that shape invalid, and that the change is fork-free because no canonical block carries it. The same release also added the CIP-64 rule balanceOf(caller) >= gasLimit * maxFeePerGas (#298), which the finding leaves out.",
+      "codeCheck": "src/libraries/FullMath.sol:24 is the mulmod(a, b, not(0)) that builds prod1. src/libraries/TickMath.sol:61-63 are signextend(2, tick) and sar(255, tick). src/libraries/TickBitmap.sol:20-26 are signextend, sdiv and smod in compress. These are the instructions the pinned vectors cover. The CIP-64 differences between the builds touch fee handling and transaction admission. They do not touch any instruction these lines run. No PoolManager path reads which client answered.",
+      "corrections": "The rotation of 3cbf835 and 06140ff is unconfirmed: in 107 calls I saw only 74cc8bb and 7680d6d. The 7680d6d build alone supports the claim that a pre v1.0.4 build answers public reads. The v1.0.4 delta also has a fee-currency balance rule (#298) that the finding does not list. The actor value operator is right, because a divergent block needs the sequencer.",
+      "sources": [
+        {"url": "https://celo-json-rpc.stakely.io", "supports": "web3_clientVersion on 2026-11-27: 77 of 107 answers reth/v2.2.0-74cc8bb and 30 answers reth/v2.2.0-7680d6d"},
+        {"url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.0/Cargo.lock", "supports": "reth 7680d6d, revm-interpreter 35.0.1, ruint 1.18.0"},
+        {"url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.3/Cargo.lock", "supports": "reth 3cbf835, revm-interpreter 35.0.1, ruint 1.18.0"},
+        {"url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.6/Cargo.lock", "supports": "reth 06140ff, revm-interpreter 35.0.1, ruint 1.20.0"},
+        {"url": "https://github.com/celo-org/celo-kona/releases/tag/celo%2Freth-v1.0.4", "supports": "the zero-address feeCurrency change is consensus-affecting and fork-free, and #298 adds the CIP-64 balance rule"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Whether celo-revm at celo/reth-v1.0.10 installs its own instruction table or overrides any instruction.",
+      "agrees": true,
+      "note": "evm.rs at celo/reth-v1.0.10 builds EthInstructions::new_mainnet_with_spec(spec.into_eth_spec()) and swaps only the precompiles. The item does not mention that v1.0.10 takes revm-interpreter from the git fork celo-org/revm bd28f942. I checked that fork too: instructions/bitwise.rs, arithmetic.rs, i256.rs, control.rs, system.rs, memory.rs, host.rs, instructions.rs and interpreter.rs at bd28f942 are byte-identical to the revm-interpreter 35.0.1 crate on crates.io."
+    },
+    {
+      "check": "revm-interpreter 37.0.3 (X Layer) read against the edges OPCODES.md lists: shl, shr, sar, byte, signextend, div, sdiv, mod, smod, addmod, mulmod, exp, jump, jumpi, and the step loop.",
+      "agrees": true,
+      "note": "In the 37.0.3 crate, byte, shl, shr and sar saturate the index with as_usize_saturated and compare it with 32 or 256 before they compute. sar returns MAX for a negative operand and a shift of 256 or more. This matches the EVM rules that TickMath.sol:61-63 and TickBitmap.sol:20-26 depend on."
+    },
+    {
+      "check": "The three older reth builds on stakely.io (7680d6d, 3cbf835, 06140ff), each pinned the same way.",
+      "agrees": true,
+      "note": "The result is thin for 3cbf835 and 06140ff, with 4,200 and 3,600 of 30,108 vectors. It stands because 3cbf835 locks the same interpreter, bytecode crate and ruint (35.0.1, 10.0.0, 1.18.0) as 7680d6d, which passed 214,437 vectors. 06140ff locks the same interpreter and ruint 1.20.0 as 74cc8bb, which passed in full. I did not see either build in my own 107 version calls."
+    }
+  ],
+  "leads": []
+}

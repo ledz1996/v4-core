@@ -1,0 +1,52 @@
+{
+ "unit": "theme-stale-sync-in-shared-transactions",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "low",
+   "factCheck": "I reran the World Chain replay myself with eth_call and a state override at block 38200096, using the Simple7702Account code read from 0xe6Cae83BdE06E4c305530e199D7217f42808555B. Transaction 0x8f2204591165a6ab234201905f93cedd013be497571b46f1fe24ee34602b959a is a type 2 call from 0x0bee14506a83fa86c3412daef70c332fbaba7f72 to 0xabbc01621357ecb29fe89fd50a7a0b95e6e51b31 with value 0. The control batch succeeded. The batch [sync(0x4200000000000000000000000000000000000006), original] reverted with 0x5a154675, which is ExecuteError(uint256,bytes), wrapping 0xb0ec849e. I computed 0xb0ec849e as the selector of NonzeroNativeValue(), declared at src/interfaces/IPoolManager.sol:46. The batch [sync(WETH), sync(0), original] succeeded. The endpoint answered world-chain/v2.8.2-9596311 before and after. eth_getCode gives 8,899 bytes for 0xabbc0162. I fetched the Sourcify source of WorldChainSettler 0xdc7f9131df71efda6a7ae247edbe13a13c7dfd94 on chain 480. src/flat/WorldChainTakerSubmittedFlat.sol:6566 calls unsafeSync(sellToken) before the transfer and line 6576 settles. Lines 6708-6709 call unsafeSync(address(0)) and then unsafeSettle(debt). So the settler is immune, as the finding says. I did not recheck the 61 periphery addresses one by one.",
+   "codeCheck": "sync has no lock modifier (src/PoolManager.sol:279). For a token it writes currency and reserves together (src/libraries/CurrencyReserves.sol:27-32). For address(0) it only resets the currency (src/PoolManager.sol:283). _settle reads the synced currency (line 350). When that currency is nonzero and msg.value is above zero it reverts NonzeroNativeValue (line 356). Both settle and settleFor reach this path (lines 300-307). The slots live in transient storage, so they last across every frame of the transaction, ERC-4337 user operations of one bundle included. A sync(address(0)) by the payer clears the stale currency (line 283). No credit goes to the party that synced, because _accountDelta credits recipient (line 364). The only harm is a revert.",
+   "corrections": "Contract 0xabbc0162 is not shown to have any victim. In the replayed transaction its creator calls it directly from an externally owned account, and a foreign frame cannot enter such a transaction. It can only be hit if someone routes it through a batch or a user operation. The unprivileged reach depends on the same link as the original F-071 record: the attacker has to put a frame before the victim's frame in one transaction, which in practice means building the ERC-4337 bundle. That link is not established for any network.",
+   "sources": [
+    {"url": "https://worldchain-mainnet.g.alchemy.com/public", "supports": "my own eth_call at block 38200096 with a code override on 0x0bee1450: control ok, a foreign sync of WETH reverted 0x5a154675 wrapping 0xb0ec849e, adding sync(0) made it succeed; web3_clientVersion world-chain/v2.8.2-9596311 before and after; eth_getCode of 0xabbc0162 returned 8,899 bytes"},
+    {"url": "https://sourcify.dev/server/v2/contract/480/0xdc7f9131df71efda6a7ae247edbe13a13c7dfd94?fields=sources", "supports": "WorldChainTakerSubmittedFlat.sol:6566 unsafeSync(sellToken) before transfer and settle at 6576; 6708-6709 unsafeSync(address(0)) then unsafeSettle(debt)"},
+    {"url": "src/PoolManager.sol:349-364", "supports": "the NonzeroNativeValue revert at 356 when a token is synced and msg.value is nonzero; credit to recipient at 364"}
+   ]
+  },
+  {
+   "findingIndex": 1,
+   "verdict": "plausible",
+   "severity": "low",
+   "factCheck": "I fetched the Sourcify sources of the four EntryPoints on chain 1. v0.6 handleOps (contracts/core/EntryPoint.sol:92) uses OpenZeppelin ReentrancyGuard nonReentrant. v0.7 handleOps (174-205) uses the OpenZeppelin utils ReentrancyGuard. v0.8 handleOps (58-61) uses ReentrancyGuardTransient. None of these three source sets contains tx.origin, so a contract may call handleOps. v0.9 has its own nonReentrant at 68-75, which requires tx.origin == msg.sender and msg.sender.code.length == 0. In v0.7, validation of all operations runs first (182-194), then each execution (199-201), then _compensate pays the beneficiary the caller chose (203). eth_getCode on World Chain, Tempo, HyperEVM, Soneium and Base returned 23,689 bytes for v0.6, 16,035 for v0.7 and 21,738 for v0.8. I fetched EIP-4337. It defines the canonical mempool as a permissionless P2P network where bundlers exchange UserOperations. It does not show that such a mempool is live on any of these 21 networks, and it does not show that an outsider can read pending operations there. That is the link I could not confirm.",
+   "codeCheck": "unlock reverts AlreadyUnlocked when the transient flag is set (src/PoolManager.sol:105). The flag is set at line 107 and cleared only at line 113, after the callback returns and the delta count is zero (line 112). A victim router that calls unlock inside the attacker's callback therefore reverts. While the attacker holds the lock, any delta the victim's contracts might create is keyed to msg.sender or the named recipient (src/PoolManager.sol:291-297, 364, src/libraries/CurrencyDelta.sol:28-41). The attacker cannot take those deltas. Any nonzero delta left behind makes the attacker's own unlock revert at line 112. No pool balance moves.",
+   "corrections": "The verdict is plausible, not confirmed, because the attacker needs the victim's pending user operation before an honest bundler includes it. The finding itself lists this as unconfirmed. A bundler holding an operation can make it fail by many generic means, and the AlreadyUnlocked wrap adds little that is specific to the PoolManager. The rating stays low.",
+   "sources": [
+    {"url": "https://sourcify.dev/server/v2/contract/1/0x0000000071727De22E5E9d8BAf0edAc6f37da032?fields=sources", "supports": "v0.7 handleOps at EntryPoint.sol:174-205 is guarded only by OpenZeppelin nonReentrant; no tx.origin anywhere in the sources"},
+    {"url": "https://sourcify.dev/server/v2/contract/1/0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108?fields=sources", "supports": "v0.8 handleOps at EntryPoint.sol:58-61 uses ReentrancyGuardTransient; no tx.origin"},
+    {"url": "https://sourcify.dev/server/v2/contract/1/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789?fields=sources", "supports": "v0.6 handleOps at EntryPoint.sol:92 nonReentrant; no tx.origin"},
+    {"url": "https://sourcify.dev/server/v2/contract/1/0x433709009B8330FDa32311DF1C2AFA402eD8D009?fields=sources", "supports": "v0.9 nonReentrant at EntryPoint.sol:68-75 requires tx.origin == msg.sender and no code at the caller"},
+    {"url": "https://eips.ethereum.org/EIPS/eip-4337", "supports": "the canonical mempool is defined as a permissionless P2P network of bundlers; nothing about its availability on specific networks"},
+    {"url": "https://rpc.soneium.org", "supports": "eth_getCode at latest: v0.6 23,689 bytes, v0.7 16,035, v0.8 21,738; the same lengths on worldchain-mainnet.g.alchemy.com/public, rpc.mainnet.tempo.xyz, rpc.hyperliquid.xyz/evm and mainnet.base.org"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Task 1. Every PoolManager value an ordinary account can leave for a later frame of the same transaction without holding the lock: lock flag, nonzero delta count, currency deltas, synced currency, synced reserves.",
+   "agrees": true,
+   "note": "The substance holds under my reading. Only sync runs without the lock (src/PoolManager.sol:279). Every delta writer is onlyWhenUnlocked (lines 145-147, 187-189, 256-258, 291, 300, 305, 310, 322, 332). _accountDelta skips zero deltas and keeps the count equal to the number of nonzero slots (368-378). One citation is wrong: src/libraries/CurrencyDelta.sol has only 42 lines, so lines 130-143 do not exist. applyDelta is at lines 28-41, and the checked int256 addition is at line 37. OPCODES.md records that transient storage is cleared between transactions, so the slots cannot carry into a later transaction."
+  },
+  {
+   "check": "Task 1. Effect of a leftover (currency C, reserves R) on a later party's settle, settleFor, take, sync, clear, mint, burn and fee collection.",
+   "agrees": true,
+   "note": "These match src/PoolManager.sol:349-364. The credit goes to msg.sender or the named recipient (364), and a fall in the balance underflows and reverts at 360. A token settle resets the currency (361), so after a victim's own token settle any later settle by the attacker takes the native path and credits only msg.value. take, clear, mint and burn do not read the synced slots. collectProtocolFees reverts when C is synced (src/ProtocolFees.sol:49-52). That needs the fee controller and is already recorded."
+  },
+  {
+   "check": "Task 4. Can a foreign sync or a foreign lock make the attacker profit from another party, or make a pool user lose funds?",
+   "agrees": true,
+   "note": "The only way to profit is to settle against a stale snapshot while another party's payment sits between that party's sync and its settle, or while value arrives without a settle. Canonical DeltaResolver._settle and the World Chain Settler (Sourcify lines 6566-6576 and 6708-6709) sync, pay and settle in one frame, so their payment never sits in that window. Value that arrives without a settle is covered by F-135 and F-137. I found no path that reaches pool or claim balances."
+  }
+ ],
+ "leads": []
+}
