@@ -1,0 +1,22 @@
+{
+ "unit": "theme-monad-gcc-literal-folds",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Task 1: which PoolManager sites take a literal shift, SIGNEXTEND or BYTE arm of Monad's emitter, with pc, literal and src/ line.",
+   "agrees": true,
+   "note": "I fetched eth_getCode for 0x188d586ddcf52439676ca21a244753fa19f9ea8e from https://rpc.monad.xyz (web3_clientVersion Monad/0.16.7): 24,009 bytes, sha256 prefix 288b97729c9e4f34. Against research/network-risk/build/PoolManager.json it differs in 20 bytes only, offsets 13618 to 13637, the tail of the PUSH32 at pc 13605 (immediate from 13606) that carries the PoolManager address and is followed by AND. A plain decode finds 114 SIGNEXTEND, 99 SHR, 46 SHL, 19 SAR and 3 BYTE opcodes; the third BYTE (0x1a at pc 24006) is the solc version byte in the CBOR metadata, so the code has 2 BYTE sites, as stated. Counting only sites whose operand comes from the instruction just before gives 109 SIGNEXTEND (index 1 once, 2 at 68, 15 at 40), 77 SHR, 39 SHL and 18 SAR. The remaining literal sites reach their operand through DUP and SWAP, which fits the stack model's 114, 40 and 19. Minor correction: the BYTE source lines are BitMath.sol:22 and :45 and the TickBitmap operations sit on TickBitmap.sol:38; the cited :15, :34 and :36 are the openings of the assembly blocks the source map gives. This does not change any conclusion."
+  },
+  {
+   "check": "Task 2 and 3 for shift_by_literal: the gcc 15.2.0 code of monad 0.16.7 for SHL, SHR and SAR by a literal count, run in the x86 model over every PoolManager count and edge counts in 10 operand locations.",
+   "agrees": true,
+   "note": "The cited URL .../category/vm/compiler/native/emitter.cpp returns 404. The file is at https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/compiler/ir/x86/emitter.cpp. I fetched it (8,539 lines) and its sha256 097111ca... equals the cycle 25 copy byte for byte, so the line numbers still hold. Emitter::shift_by_literal (lines 5169-5195) compares the whole uint256 count with 256. A count of 256 or more returns literal 0 for SHL and SHR and sets the count to 256 for SAR. A count of 0 returns the operand. shift_general_reg_or_stack_offset_by_literal (lines 4945-4990) computes dword_shift = shift >> 6 and bit_shift = shift & 63. Its 256 arm does sar 63 on limb 3 and copies the result to limbs 0 to 2. This matches the decisions the unit lifted from the binary. The PoolManager counts read from bytecode are 3 to 255 for SHL, SHR and SAR (SAR 8, 128, 255). TickMath.sol:63 sar(255, tick) and TickMath.sol:111 shr(32, ...) are on the lines cited. I did not rerun the 540,000 emitted sequences. Like the unit, I rely on the planted fault runs to show the harness can detect an error. The register allocator was stubbed, so an allocator fault in the gcc build is still open (the unit's medium lead)."
+  },
+  {
+   "check": "Task 2 and 3 for the literal index arm of SIGNEXTEND (Emitter::signextend 0x388440 with signextend_by_literal_ix and signextend_general_reg_or_stack_offset_by_int8), and Task 4 that no src/ line reads a wrong word from these arms.",
+   "agrees": true,
+   "note": "In the v0.16.7 source, signextend_by_literal_ix (emitter.cpp:4660-4676) pushes the operand unchanged when the index is 31 or more. Otherwise it computes sign_reg_ix = ix / 8 and sign_reg_offset = ix % 8 (lines 4558-4559). Offset 1 uses movsx from r16, offset 7 uses a plain mov (or nothing when the register is reused), other offsets use shl and sar by 8 * (7 - offset), and the limbs above get sar 63 (lines 4645-4653). Index 1 is a 16-bit sign extension, 2 is shl and sar by 40, and 15 copies limb 1 and fills limbs 2 and 3 with its sign. These are what EVM SIGNEXTEND specifies for int16, int24 and int128, and what the unit reports. The index values 1, 2 and 15 appear in the deployed bytecode. The src/ sites read as stated: LiquidityMath.sol:12 signextend(15, y), BalanceDelta.sol:23-26 sar(128) and signextend(15), TickMath.sol:61 signextend(2, tick), TickBitmap.sol:38 sar(8, signextend(2, tick)). One caveat: src_sign_reg is taken before alloc_or_release_general_reg, so the result is right only if the allocator never gives back a register that holds a live value. That is the allocator lead. I agree no ordinary account can make these arms compute a different amount in a swap, tick crossing, liquidity change or settlement. F-130 is right that eth_call cannot show compiled execution, because RPC uses an InterpreterOnly VM."
+  }
+ ],
+ "leads": []
+}

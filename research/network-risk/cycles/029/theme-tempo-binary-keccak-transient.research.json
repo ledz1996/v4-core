@@ -1,0 +1,111 @@
+{
+ "unit": "theme-tempo-binary-keccak-transient",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 1 (L-1168): whether a Tempo release newer than v1.19.1 exists and which release carries T14. At 2026-11-27 01:30 UTC download.tempo.xyz/binaries/ listed v1.14.0 to v1.19.1 and nothing later, the main branch Cargo.toml still read version 1.19.0, and rpc.mainnet.tempo.xyz answered tempo/v1.19.1-a9d6748/x86_64-unknown-linux-gnu at 01:30 and again at 01:41 UTC. The GitHub release pages were refused by the session proxy with HTTP 403. Tempo's upgrade page and its v1.19.0 release notes say T14 needs tempo/v1.19.0 and activates on mainnet on 8 December 2026 at 15:00 UTC (timestamp 1796742000).",
+   "result": "No newer release exists yet. v1.19.1 (commit a9d67483, evm2 35aa328, ruint 1.21.1, alloy-primitives 1.7.3, fixed-cache 0.1.10, rustc 1.100.0 0ef1bc386, build 2026-11-24) already carries T14, so the binaries that cycle 28 and this unit read are the ones that will run T14 unless a later release replaces them before 8 December. The binary hashes still match cycle 28 (x86_64 77ea6e60..., aarch64 aa038545...), so the cycle 28 lifts did not need to be rerun or re-located. T14 changes accounts, consensus checks, Zone Portal refunds and the cold access charge for later calls in a Tempo batch transaction; the pages list no instruction, hashing, memory or transient storage change.",
+   "source": "https://tempo.com/developers/docs/protocol/upgrades/t14"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 2 (L-1169), source: how keccak_cache_global keys its cache. Read in alloy-primitives 1.7.3 src/utils/keccak_cache.rs (crate sha256 d5e9dbd4... equal to the Cargo.lock checksum of v1.19.1) and fixed-cache 0.1.10 src/lib.rs (sha256 2fe63500..., equal to the lock). evm2's KECCAK256 handler (crates/evm2/src/interpreter/instructions/crypto.rs:5-17) returns KECCAK256_EMPTY for length 0 and otherwise calls alloy_primitives::keccak256 on the memory slice, which goes through the cache.",
+   "result": "Inputs of 1 to 87 bytes are cached (MAX_INPUT_LEN = 128 - 32 - 1 - 8 = 87); longer ones are hashed directly. The bucket is chosen by a 64 bit rapidhash v3 of the input; the bucket tag holds the hash bits above the index. A hit needs the tag to match, the stored one-byte length to equal the input length, and Key::eq, which compares the full stored slice with the input (keccak_cache.rs:126-131, fixed-cache lib.rs:322-345). A tag match with a different key, a prefix or an extension is a miss. Insert and lookup hold a per-bucket lock bit taken by compare-and-swap, so a reader never sees half of a write. A partial key match cannot return a stored digest.",
+   "source": "https://static.crates.io/crates/alloy-primitives/alloy-primitives-1.7.3.crate"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 2, aarch64 binary: KECCAK256 handler (family B 0x3b5aafc, A 0x3b5c3c8 wraps it) and the inlined cache compute at 0x3b487d4 read from the disassembly, then the cache compute and the four Keccak-256 routines it calls (20 byte 0x18ead54, 32 byte 0x18eb104, 64 byte 0x18eb4c4, generic 0x18ea188, long entry 0x18ef7e8) run in the cycle 28 a64emu model extended with ld1r, shl, usra, fneg, zip1 and stlr (scripts/keccak_a64.py, seed 2026112729). The model cache had 256 buckets; the shipped code reads the capacity from the cache global and only the index and tag masks depend on it.",
+   "result": "7,687 cases, no mismatch with Python Keccak-256 and no model error: 764 direct calls of the four routines (lengths 1 to 299 and 1,023 and 1,024 for the generic one), the 114 battery KECCAK256 offset and length pairs with non-zero length, each twice so the second is a cache hit, 900 CurrencyDelta preimages (target, currency) over 30 addresses including 0, 1, 2^160-1, Tempo's 0x20c0... token prefix, and their 900 cache hits (900 distinct digests), 2,800 PoolManager mapping preimages (pools with slot 6, ticks, bitmap, positions, 58 byte position keys, ERC-6909 nested keys), 1,796 near-miss cache cases (last bit flipped, one byte shorter, one byte longer) and 299 hand-planted buckets that carry the right tag with another key of the same length, a one byte shorter prefix, or a one byte longer extension and a poison digest. No planted bucket returned the poison digest. The handler checks the upper limbs of offset and length (status 36), charges words times the keccak word cost, saturates offset+length before the memory size check, and writes the digest byte-reversed into the stack word. 1,736 of the 1,771 extracted instructions ran. Planted faults are caught: one eor of the 64 byte routine turned into orr fails 4,388 cases, a cache that ignores the bcmp result gives 115 false hits, and removing the length byte comparison gives 88.",
+   "source": "research/network-risk/cycles/029/theme-tempo-binary-keccak-transient.work/results/keccak_a64_none.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 2, x86_64 binary (the build behind rpc.mainnet.tempo.xyz): KECCAK256 handler 0x42a5f70 (family B) and cache compute 0x416a680 read, then the cache compute, the 20, 32 and 64 byte routines 0x19129d0, 0x1912ae0, 0x1912be0, the generic routine 0x1912820, the long entry 0x1915ec0 and keccak-asm's CRYPTOGAMS SHA3_absorb 0x6a0ab80, SHA3_squeeze 0x6a0ac60 and KeccakF1600 0x6a0a800 run in the cycle 28 x86emu2 model extended with rol, cmpxchg with lock, rep movs and repz ret (scripts/keccak_x64.py, same seed and the same 7,687 cases as aarch64). The absorb and squeeze routines are reached through R_X86_64_RELATIVE GOT slots 0x6c845d8 and 0x6c845e0 and bcmp through the GLOB_DAT slot 0x6c84590.",
+   "result": "No mismatch and no model error on all 7,687 cases, and no planted bucket returned the poison digest. The 64 byte routine pads with 0x01 at byte 64 and 0x80 at byte 135 of the 136 byte rate block, as Keccak-256 requires. The x86_64 cache path takes the hit only after the tag, a locked compare-and-swap, the length byte and a bcmp over the whole input, the same rule as aarch64. There is one Keccak path per architecture with no CPU feature dispatch, so validator hardware does not change a slot. Planted faults are caught: the first xor of KeccakF1600 turned into or fails all 7,687 cases, the bcmp fault gives 115 false hits and removing the length check 88. The empty-input constant written by the handler equals keccak256 of the empty string.",
+   "source": "research/network-risk/cycles/029/theme-tempo-binary-keccak-transient.work/results/keccak_x64_none.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 3, source and aarch64 binary: TLOAD and TSTORE. evm2 tload and tstore (crates/evm2/src/interpreter/instructions/host.rs:108-118) and the transaction state (crates/evm2/src/evm/state/mod.rs:830-918) key transient storage by StorageKey, a 52 byte address plus slot compared as 52 bytes (src/storage_key.rs:18-62), remove a slot when it is set to zero, journal every change, and on rollback put back the previous value or remove the slot. clear_transaction_state clears it at the end of the transaction. The aarch64 handlers 0x3b61814 and 0x3b61870 and the TLOAD host routine 0x1d97448 were read.",
+   "result": "The TLOAD handler passes the frame's destination address and the top word, and the host routine builds the 52 byte key (20 address bytes, then the slot byte-reversed to big-endian), probes the hash table and accepts an entry only when all 52 bytes compare equal (three 16 byte and one 4 byte comparison), reading the value at entry offset 0x38. The TSTORE handler fails a static frame with status 39, takes the key from the top word and the value from the second, as the specification orders them. No path keys a transient slot by a hash alone, so two CurrencyDelta slots cannot alias. The TSTORE host routine, the journal rollback code and the x86_64 handlers were not lifted; the live calls below exercised them on x86_64.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/35aa32800b147b00e616d4e1869a3835aa86701f/crates/evm2/src/evm/state/mod.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 3, live: read-only eth_call on rpc.mainnet.tempo.xyz at block 50,998,229 (tempo/v1.19.1-a9d6748/x86_64 before and after, 2026-11-27 01:41 UTC), with Ethereum's reth/v2.11.0 endpoint as the comparison. Part A ran the deployed Tempo PoolManager 0x33620f62... with its real state under a driver placed by state override: in one unlock it minted ERC-6909 ids for two currencies, read both CurrencyDelta slots of the driver, NonzeroDeltaCount, the slot of another target for the same currency and the slot with target and currency swapped, burned one id and read again; the callback then reverted. Part B was a probe without the PoolManager that wrote keccak-derived slots for (t,c) and (c,t), ran a child frame that overwrote them and wrote a third slot and then reverted, and a child frame that wrote a fourth slot of a pair differing in one bit and returned.",
+   "result": "Both networks returned the expected words. Part A read -5 and -7 in the two delta slots, a count of 2, zero for the other target and for the swapped pair, then 0, -7 and a count of 1 after the burn. Part B read the two values written by the top frame unchanged after the reverted child, zero in the slot only the reverted child wrote, and the fourth value written by the returning child. The same probe run in the reference interpreter catches a client that keeps transient writes of a reverted frame and a KECCAK256 that hashes only the first 32 bytes (tprobe_ref.json). This adds to the 12,198 transient slot reads of cycle 13 on v1.19.1.",
+   "source": "research/network-risk/cycles/029/theme-tempo-binary-keccak-transient.work/results/tprobe_tempo_eth.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 3, aarch64 binary: CALLDATALOAD (B 0x3b60e34, A 0x3b5c6cc) and MCOPY (B 0x3b561e4, A 0x3b5db9c) handlers run in the a64emu model, extended with rev64 and ext (scripts/mem_a64.py, seed 2026112730). Calldata buffers of 14 lengths from 0 to 260 bytes were followed by junk bytes 0x5a, and offsets were taken around each length and at 2^32, 2^64, 2^255 and 2^256-1. MCOPY ran on the 310 battery vectors, 600 overlapping copies within 0x400 bytes and zero-length copies with huge offsets. The evm2 source of both handlers (instructions/env.rs:73-76, utils.rs:297-310, instructions/memory.rs:31-40, interpreter/memory.rs:230-232) was read.",
+   "result": "3,138 cases, no mismatch and no model error. CALLDATALOAD saturates an offset whose upper limbs are non-zero, returns zero when the offset is at or past the end, and copies only the remaining bytes into a zeroed word, so no byte past calldata is read. MCOPY with zero length skips the offset checks and memory growth, checks the upper limbs of the other operands (status 36), sizes memory to max(dst, src) + length with saturation, and copies with memmove. Faults are caught: a forward byte loop in place of memmove fails 466 overlap cases, and an in-bounds test of 31 in place of 32 fails 11 CALLDATALOAD cases by reading a junk byte. The x86_64 versions were not lifted; the live x86_64 endpoint passed the battery's CDLOAD and MCOPY vectors in earlier cycles.",
+   "source": "research/network-risk/cycles/029/theme-tempo-binary-keccak-transient.work/results/mem_a64_none.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 4: which src/ lines depend on these handlers, and whether any difference was found. CurrencyDelta._computeSlot (src/libraries/CurrencyDelta.sol:10-15) hashes two masked words at memory 0 and 32, so its preimage is always 64 bytes and goes through the cached 64 byte routine. applyDelta (src/libraries/CurrencyDelta.sol:28-41) loads and stores that slot. unlock (src/PoolManager.sol:104-114) reverts unless NonzeroDeltaCount reads zero. The transient constants were recomputed: NONZERO_DELTA_COUNT_SLOT, IS_UNLOCKED_SLOT, CURRENCY_SLOT and RESERVES_OF_SLOT each equal keccak256 of their name minus 1.",
+   "result": "Neither architecture differed on any case, so no src/ line computes or decides anything else on Tempo because of these handlers. A cache that aliased two 64 byte preimages, or a transient map that aliased two keys, would have booked one account's debt against another's credit and let unlock pass with a debt outstanding. The reading shows the cache compares the whole input and the transient map compares the whole 52 byte key, and every test with planted faults shows the checks can see such a fault. Nothing in this unit gives an ordinary account a way to take or lock funds.",
+   "source": "src/libraries/CurrencyDelta.sol:10-41"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "question": "Lift the SLOAD and SSTORE handlers and their host routines (account and storage overlay, the EIP-2929 skip-cold-load path and the journal entry for StorageChange) of both tempo v1.19.1 binaries, and the TSTORE host routine and rollback loop of both, which this unit read only in source or exercised only live on x86_64.",
+   "why": "Pool, position and ERC-6909 balances live in storage; an overlay or journal fault in the shipped code would let a reverted frame keep a write. Still unread in the binaries: SLOAD, SSTORE, the CALL family, LOG, the TSTORE host and the host interface.",
+   "priority": "medium"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "question": "If Tempo publishes a release after v1.19.1 before 8 December 2026 15:00 UTC, check its alloy-primitives, fixed-cache, keccak-asm, evm2 and ruint pins and rerun keccak_a64.py, keccak_x64.py and mem_a64.py of this unit together with the cycle 28 lifts. If its evm2 pin has moved past 7c9f3b6d (evm2 main rewrites DIV, MOD and the word to address conversion), also compare the instruction and analysis files and rerun battery.py, targeted.py and the scen28 scenarios with scen_rpc.py of cycles/029/stablecoin-l1.work on an endpoint that names that release.",
+   "why": "Tempo has one client and the release that is live at T14 is the network's answer; v1.19.1 carries T14 now.",
+   "priority": "medium"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1168",
+   "outcome": "cleared",
+   "answer": "No release newer than v1.19.1 at 2026-11-27 01:30 UTC (download index, main branch Cargo.toml and the endpoint's version; the GitHub release pages gave HTTP 403). T14 needs tempo/v1.19.0, so the shipped v1.19.1 binaries (commit a9d67483, evm2 35aa328, ruint 1.21.1, rustc 1.100.0) are the T14 build. Their hashes are unchanged, so no lift had to be rerun or re-located."
+  },
+  {
+   "leadId": "L-1169",
+   "outcome": "cleared",
+   "answer": "The KECCAK256 cache compute and every Keccak routine it reaches were lifted from both v1.19.1 binaries and agree with Keccak-256 on 7,687 cases each. Those cases include the battery offset and length pairs, CurrencyDelta and the PoolManager's mapping preimages, and 299 planted buckets, none of which gave a false hit. The cache compares length and every input byte before a hit. Transient storage is keyed by the full 52 byte address and slot, both in source and in the aarch64 TLOAD host code. CALLDATALOAD and MCOPY match on 3,138 aarch64 cases. A live eth_call on Tempo read back two CurrencyDelta slots of the deployed PoolManager and rolled back a reverted frame correctly. Planted faults are caught in every test."
+  }
+ ]
+}

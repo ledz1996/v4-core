@@ -1,0 +1,39 @@
+{
+  "unit": "op-stack-eth",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "low",
+      "factCheck": "I fetched docs.erc4337.io/bundlers/censorship-resistance.html. It says the shared mempool has been live on Ethereum, Arbitrum and Optimism since November 2024 and that the ecosystem is moving from stage 1, where only whitelisted bundlers propagate operations, to stage 2. I fetched the Etherspot post of 28 October 2025. It lists Ethereum and Optimism as supported, lists Base, World Chain and Unichain as upcoming, and tells bundlers to contact Etherspot to join. Joining therefore takes permission. I read the EntryPoint v0.9 source from sourcify (chain 1, 0x4337...D009). Its nonReentrant modifier requires tx.origin == msg.sender and msg.sender.code.length == 0. The v0.7 source (0x0000000071727De2...a032) uses OpenZeppelin ReentrancyGuard and has no tx.origin check, so a contract can call its handleOps. I ran eth_getCode against mainnet.optimism.io and mainnet.base.org. v0.7 returns 16,035 bytes, v0.8 21,738 and v0.9 22,425 on both. txpool_content on mainnet.optimism.io returns 'rpc method is not whitelisted', so the L2 transaction pool gives no public view of bundle transactions either. No source I found documents a shared mempool for Base, Unichain, Zora, World Chain, Ink or Soneium. That part rests on the absence of documentation, not on a source that denies it.",
+      "codeCheck": "unlock reverts with AlreadyUnlocked when the transient flag is set (src/PoolManager.sol:105). It sets the flag at line 107 and clears it only at line 113, after the callback returns and the NonzeroDeltaCount check at line 112 passes. The flag is the single transient slot IS_UNLOCKED_SLOT (src/libraries/Lock.sol:8, 10-28). A router in the victim's operation that calls unlock inside the attacker's callback reverts at line 105 before it touches any delta, balance or pool. Nothing credits the attacker. take and the other operations key deltas to msg.sender (src/PoolManager.sol:291-297), and the attacker's own unlock still has to end with zero nonzero deltas. The effect is one failed operation, as the finding says.",
+      "corrections": "actor: operator. The finding's own preconditions say the attacker must be a whitelisted shared-mempool bundler on OP Mainnet, or the bundler the victim chose (or someone it feeds) on the other six chains. The Etherspot post confirms that joining the shared mempool needs permission. A party that holds a victim's pending operation only through permissioned relay infrastructure or the victim's choice of relayer is not an ordinary account under SCHEMA.md. The hazard is out of scope for an unprivileged attacker. Severity low stands: there is no loss or freeze, only a failed operation whose gas goes to the beneficiary.",
+      "sources": [
+        {"url": "https://docs.erc4337.io/bundlers/censorship-resistance.html", "supports": "the shared mempool is live on Ethereum, Arbitrum and Optimism, at stage 1 moving to stage 2, where only whitelisted bundlers propagate"},
+        {"url": "https://etherspot.io/blog/eip-7702-infrastructure-launches-to-support-account-abstraction-for-eoas/", "supports": "supported networks are Ethereum and Optimism; Base, World Chain and Unichain are upcoming; bundlers join by contacting Etherspot"},
+        {"url": "https://sourcify.dev/server/v2/contract/1/0x433709009B8330FDa32311DF1C2AFA402eD8D009?fields=sources", "supports": "EntryPoint v0.9 nonReentrant requires tx.origin == msg.sender and an empty caller code"},
+        {"url": "https://sourcify.dev/server/v2/contract/1/0x0000000071727De22E5E9d8BAf0edAc6f37da032?fields=sources", "supports": "EntryPoint v0.7 uses OpenZeppelin ReentrancyGuard and has no tx.origin restriction on handleOps"},
+        {"url": "https://mainnet.base.org/", "supports": "eth_getCode at latest: v0.7 16,035 bytes, v0.8 21,738, v0.9 22,425; same lengths on mainnet.optimism.io"},
+        {"url": "https://mainnet.optimism.io", "supports": "txpool_content returns 'rpc method is not whitelisted'"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Interpreter, integer library and jump analysis releases since cycle 27 for the builds the seven endpoints report.",
+      "agrees": true,
+      "note": "crates.io shows revm 43.0.3 and revm-interpreter 43.0.2, both of 24 September 2026, as the latest releases. After that date ruint has 1.21.0 (20 October) and 1.21.1 (23 October). The item names only 1.21.1, but neither version is pinned. The op-reth/v2.10.0 Cargo.lock pins revm 43.0.3, revm-interpreter 43.0.2 and ruint 1.20.0. base v1.6.0-rc.7 pins revm-interpreter 43.0.2 and ruint 1.19.0. world-chain v2.9.0-rc.1 pins revm-interpreter 43.0.2 and ruint 1.20.0. op-rbuilder main pins 41.0.0 and ruint 1.20.0. I re-fetched all of these."
+    },
+    {
+      "check": "Standard battery (99,985), targeted set (85,544), pmdiff set 1 (250 scripts), set 2 (300), mined swaps and multi-step replay, rerun on 2026-11-27.",
+      "agrees": true,
+      "note": "The logs in cycles/029/op-stack-eth.work/out show 0 mismatches and 0 errors on all seven chains for battery.log, targeted.log, pmdiff.log and pmdiff2.log, and 0 tick mismatches in swaps.log. One Optimism swap is classed 'boundary', not 'mismatch'. replay.log shows 0 failures, with a longest replay of 26 steps on Base. I did not rerun the vectors myself. The item relies on the stored logs."
+    },
+    {
+      "check": "Behaviour of eth_simulateV1 that the scenario reruns depend on: does persistent storage carry from one simulated transaction to the next while transient storage is cleared?",
+      "agrees": true,
+      "note": "I ran the same probe code through eth_simulateV1 on mainnet.base.org with two calls in one block. The words returned were (1,1) then (2,1). Storage carried over and transient storage was reset between transactions, which matches the EIP-1153 boundary that Lock.sol relies on. The scenario comparison of L-1177 part 2 therefore rests on a valid harness on Base. I probed only Base."
+    }
+  ],
+  "leads": []
+}

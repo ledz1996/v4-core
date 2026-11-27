@@ -1,6 +1,6 @@
 # All findings
 
-162 findings on record after cycle 28, in-scope ones first.
+163 findings on record after cycle 29, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -1458,40 +1458,6 @@ Sources:
 - https://sourcify.dev/server/v2/contract/1/0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e?fields=sources (PositionManager: every SETTLE, SETTLE_PAIR and CLOSE_CURRENCY path goes through DeltaResolver._settle (src/PositionManager.sol:249, 257, 444-448, 465), which syncs first; CLEAR_OR_TAKE uses clear (line 480), which reads no synced state)
 - https://sourcify.dev/server/v2/contract/<chainId>/<address> for 61 official Universal Router and PositionManager addresses of networks.json (out/periphery_src.json) (verified on 44 of 61; in every verified copy the only PoolManager.settle calls are the two in DeltaResolver._settle and the sync(currency) precedes both)
 - eth_getCode on the networks.json rpc endpoint of each network for the same 61 addresses, 2026-11-26 (out/periphery_code.json) (with PUSH data removed, each unverified copy has the opcode sequence of a verified copy (Universal Router 1.x 55d22501d2fdd506, 2.1.1 055c8f692190c426, 2.1.2 4c62cd3a5abb8da9, PositionManager dcb3d5cf81799507, HyperEVM builds 8def1da8113ecab7 and 6211989b2a1a2b1c), except the router of 21,738 bytes listed on X Layer, MegaETH and Tempo (skeleton 5d8707342b76aa92, the same on all three), which holds one sync(address) selector word and two settle() selector words)
-
-## F-162. An account that runs another user's ERC-4337 operation from inside its own unlock makes every PoolManager router call of that operation revert with AlreadyUnlocked
-
-Low severity, plausible. Effect: degrade. Who can trigger it: any account. Networks: all 21 networks.
-
-What differs on the network: EntryPoint v0.6, v0.7 and v0.8 accept handleOps from a contract, and all three hold code on all 21 networks. A signed user operation is valid in any bundle, so whoever obtains it first decides the frames around it, including running it from inside a contract call. The networks differ in how much PoolManager traffic travels as user operations: 195 of 250 sampled World Chain transactions, about 5 percent on Base, under 1 percent on Tempo and, per F-071, about half on Soneium. Tempo 0x76 batches, Base Everest 0x79 phases and X Layer gasless carriers do not add a foreign frame of their own: their calls are all dispatched from one sender, and a sponsor or fee payer only pays fees.
-
-How it meets the code: 1. unlock sets the transient lock flag, calls back msg.sender and only clears the flag when the callback returns (src/PoolManager.sol:104-114, src/libraries/Lock.sol:13-25). A second unlock while the flag is set reverts with AlreadyUnlocked (src/PoolManager.sol:105). 2. An ordinary account's contract calls unlock, and in its unlockCallback calls EntryPoint.handleOps with the victim's user operation and a beneficiary of its choice. v0.6 to v0.8 allow a contract caller; v0.9 does not. 3. The victim's operation calls the Universal Router or the PositionManager, which call poolManager.unlock (BaseActionsRouter.sol:26) and revert. The EntryPoint catches the failure, emits UserOperationEvent with success false and charges the operation's gas to the account or paymaster, paying it to the beneficiary. 4. The attacker's callback then returns with no deltas of its own, so its unlock completes (src/PoolManager.sol:112-113). 5. While the attacker holds the lock the victim's code cannot reach any onlyWhenUnlocked function under its own unlock, and the deltas it could create there would belong to the victim's contracts, which the attacker cannot take (src/PoolManager.sol:291-297 debits msg.sender). The same holds for the stale sync of F-071 with a stronger reach: holding the lock blocks canonical routers too, where a stale sync does not. Nothing in this path credits the attacker or lowers any pool balance.
-
-What is at risk: No pool funds move and nobody's claims or positions are frozen. The victim's operation fails once, its nonce is used and its gas is paid to the attacker's beneficiary, which is the normal bundler fee. The victim can resubmit through another bundler. The attacker pays the transaction gas and earns only the bundler margin.
-
-What it takes: The attacker must hold the victim's signed user operation before any other bundler includes it, which needs a public user operation mempool or a leak from a bundler. Whether outsiders can read pending user operations on World Chain, Base or Soneium was not confirmed. The operation must target EntryPoint v0.6, v0.7 or v0.8. A bundler that already holds an operation can make it fail in many generic ways, so the wrap adds little that is specific to the PoolManager.
-
-What can be done: Wallets that send PoolManager trades through user operations can use EntryPoint v0.9 or a private bundler. A core change cannot tell a foreign lock holder from a nested call; none is proposed.
-
-This entry adds to F-071.
-
-Second reviewer's corrections: The verdict is plausible, not confirmed, because the attacker needs the victim's pending user operation before an honest bundler includes it. The finding itself lists this as unconfirmed. A bundler holding an operation can make it fail by many generic means, and the AlreadyUnlocked wrap adds little that is specific to the PoolManager. The rating stays low.
-
-Code: `src/PoolManager.sol:104-114`, `src/libraries/Lock.sol:13-25`, `src/PoolManager.sol:96-99`.
-
-Sources:
-
-- src/PoolManager.sol:105 (unlock reverts with AlreadyUnlocked when the lock flag is set)
-- src/PoolManager.sol:112-113 (the flag is cleared only after the callback returns with every delta at zero)
-- https://sourcify.dev/server/v2/contract/1/0x0000000071727De22E5E9d8BAf0edAc6f37da032?fields=sources (EntryPoint v0.7 handleOps is guarded only by OpenZeppelin ReentrancyGuard (contracts/core/EntryPoint.sol:174-205, @openzeppelin ReentrancyGuard.sol:55-59), so a contract may call it; validation of all operations runs first (lines 182-194), then each execution (199-201), then _compensate pays the beneficiary chosen by the caller (63-66, 203))
-- https://sourcify.dev/server/v2/contract/1/0x0000000071727De22E5E9d8BAf0edAc6f37da032?fields=sources (_executeUserOp runs the operation through a self call and on failure emits UserOperationEvent with success false and still charges actualGasCost (EntryPoint.sol:76-135))
-- https://sourcify.dev/server/v2/contract/1/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789?fields=sources (EntryPoint v0.6 handleOps at contracts/core/EntryPoint.sol:92 is guarded by nonReentrant from OpenZeppelin ReentrancyGuard and has no tx.origin check)
-- https://sourcify.dev/server/v2/contract/1/0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108?fields=sources (EntryPoint v0.8 handleOps at contracts/core/EntryPoint.sol:58-61 uses ReentrancyGuardTransient (lines 34-38) with no tx.origin check)
-- https://sourcify.dev/server/v2/contract/1/0x433709009B8330FDa32311DF1C2AFA402eD8D009?fields=sources (EntryPoint v0.9 nonReentrant requires tx.origin == msg.sender and msg.sender.code.length == 0 (contracts/core/EntryPoint.sol:68-75), so only a top level externally owned caller can run handleOps)
-- eth_getCode on the networks.json rpc endpoint of all 21 networks, 2026-11-26 (out/ep_code.json) (EntryPoint v0.6 (23,689 bytes), v0.7 (16,035), v0.8 (21,738), v0.9 (22,425) and Multicall3 (3,808) hold code on all 21 networks; clients named by web3_clientVersion before and after)
-- https://sourcify.dev/server/v2/contract/1/0x23617e59A5925b2A4Bf75d73ff6711cD0b29De85?fields=sources (Universal Router 2.1.2: lib/v4-periphery/src/base/DeltaResolver.sol:38-48 _settle returns on amount 0, then calls poolManager.sync(currency), then settle{value: amount} for native or _pay then settle() for a token; no other settle site in the source; UniversalRouter.sol:70 execute is isNotLocked and BaseActionsRouter.sol:26 calls poolManager.unlock)
-- https://tempo.com/developers/docs/protocol/transactions/spec-tempo-transaction (0x76 calls execute atomically from the sender; the fee payer signature only redirects fee payment and must differ from the sender)
-- https://docs.base.org/specifications/base-transactions (0x79 calls are dispatched from the sender in phases, the payer only pays gas, and the type activates with Everest at a date still TBD)
 
 ## F-006. Source disagrees with two interface comments and two test conditions, and none of the four changes who can move funds
 
@@ -3458,6 +3424,33 @@ Sources:
 - https://docs.optimism.io/notices/upgrade-22.md (Lagoon activation dates and ETHLiquidity pause)
 - https://specs.optimism.io/interop/derivation.html (a block with an invalid executing message is replaced by a deposits-only block)
 
+## F-162. An account that runs another user's ERC-4337 operation from inside its own unlock makes every PoolManager router call of that operation revert with AlreadyUnlocked
+
+Low severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: all 21 networks.
+
+What differs on the network: EntryPoint v0.6, v0.7 and v0.8 accept handleOps from a contract, so whoever holds a signed user operation first decides the frames around it. On these seven chains the only documented way for an outsider to obtain other users' pending operations is the ERC-4337 shared mempool, which the ERC-4337 documentation lists as live on Ethereum, Arbitrum and Optimism only, at a stage where only whitelisted bundlers propagate operations. No shared mempool is documented for Base, Unichain, Zora, World Chain, Ink or Soneium, where operations sit in the queue of the bundler the wallet chose.
+
+How it meets the code: 1. unlock reverts with AlreadyUnlocked while the transient lock flag is set and clears it only after the callback returns (src/PoolManager.sol:104-114). 2. A contract of the attacker calls unlock and, inside unlockCallback, calls EntryPoint.handleOps with the victim's operation. 3. The victim's router calls unlock and reverts; the EntryPoint records the operation as failed and charges its gas to the victim's account or paymaster, paid to the beneficiary the attacker named. 4. The attacker's callback returns with no delta and its unlock completes. Nothing credits the attacker or lowers a pool balance, because every delta the victim's contracts could open is keyed to their own address (src/PoolManager.sol:291-297). The new evidence narrows step 2: on OP Mainnet the attacker must be a whitelisted shared-mempool bundler, and on the other six chains it must be the bundler the victim submitted to, or obtain operations from it.
+
+What is at risk: No pool funds move and no claim or position is frozen. One user operation fails, its nonce is used and its gas goes to the attacker's beneficiary. The victim resubmits through another bundler.
+
+What it takes: The attacker must hold the victim's signed operation before an honest bundler includes it. On OP Mainnet that requires a whitelisted bundler in the stage 1 shared mempool; on the other six chains the documented sources give no public view of pending operations, so the attacker must be, or be fed by, the victim's chosen bundler, which is an operator role in practice. The operation must target EntryPoint v0.6, v0.7 or v0.8. The cycle 29 recheck covered the seven OP Stack chains with ETH gas. The other 14 networks stay on the record because the same EntryPoint versions are deployed widely, but their bundler arrangements were not read.
+
+What can be done: Wallets can submit PoolManager trades through EntryPoint v0.9, whose handleOps accepts only an externally owned caller, or through a bundler they trust. No core change is proposed.
+
+This entry adds to F-071.
+
+Second reviewer's corrections: actor: operator. The finding's own preconditions say the attacker must be a whitelisted shared-mempool bundler on OP Mainnet, or the bundler the victim chose (or someone it feeds) on the other six chains. The Etherspot post confirms that joining the shared mempool needs permission. A party that holds a victim's pending operation only through permissioned relay infrastructure or the victim's choice of relayer is not an ordinary account under SCHEMA.md. The hazard is out of scope for an unprivileged attacker. Severity low stands: there is no loss or freeze, only a failed operation whose gas goes to the beneficiary.
+
+Code: `src/PoolManager.sol:104-114`, `src/PoolManager.sol:291-297`, `src/libraries/Lock.sol:13-25`.
+
+Sources:
+
+- https://docs.erc4337.io/bundlers/censorship-resistance.html (the shared mempool is live on Ethereum, Arbitrum and Optimism, and the ecosystem is moving from stage 1 (only whitelisted bundlers propagate operations) to stage 2)
+- https://etherspot.io/blog/erc-4337-shared-mempool-official-launch-on-ethereum-mainnet-arbitrum-and-optimism/ (launch announcement of 12 November 2024 naming Ethereum, Arbitrum and Optimism)
+- https://etherspot.io/blog/eip-7702-infrastructure-launches-to-support-account-abstraction-for-eoas/ (October 2025: the free shared-mempool infrastructure is live on Ethereum and Optimism, with Base, World Chain and Unichain listed as upcoming)
+- https://sourcify.dev/server/v2/contract/1/0x433709009B8330FDa32311DF1C2AFA402eD8D009?fields=sources (EntryPoint v0.9 nonReentrant requires tx.origin == msg.sender (recorded in cycle 28, F-162))
+
 ## F-117. Six go-ethereum family nodes run a Go toolchain with a published silent dead store miscompile, and no function on the opcode or state path has the triggering shape
 
 Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Ethereum, Arbitrum One, Robinhood Chain, Polygon, BNB Smart Chain, Avalanche.
@@ -4102,6 +4095,36 @@ Sources:
 - https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.0/Cargo.lock (v1.0.0 locks reth 7680d6d and ruint 1.18.0)
 - https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.6/Cargo.lock (v1.0.6 locks reth 06140ff and ruint 1.20.0)
 - https://github.com/celo-org/celo-kona/tags?after=celo%2Freth-v1.0.5 (v1.0.4 makes a zero-address feeCurrency an unregistered currency and calls it consensus-affecting but fork-free)
+
+## F-163. The main branch of holiman/uint256 replaces division and remainder on the path every go-ethereum family network takes, and no client pins it yet
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Ethereum, BNB Smart Chain, Polygon, Avalanche, Arbitrum One, Robinhood Chain, Elysium, Celo.
+
+What differs on the network: holiman/uint256 master de2a038 (2026-11-22, proxy version v1.3.3-0.20261122165954-de2a0381370e) adds a power-of-two shortcut to Div, new register-only routines udiv and umod with one Knuth step per divisor size (rem5by4, rem4by3, quoRem4by3, rem3by2), and rewrites SDiv, SMod, Slt, Sgt, Eq, WriteToSlice and PaddedBytes. Mod is now umod, and MulMod and AddMod reach it whenever the product or sum fits in 256 bits. go-ethereum master bbafd66, bor develop, bsc develop, celo-org/op-geth master, OffchainLabs/go-ethereum master and nitro master all still require v1.3.2, and avalanchego 1.15.3 and libevm main require v1.2.4.
+
+How it meets the code: 1. The PoolManager reaches these routines on every swap and liquidity change: DIV and MOD in UnsafeMath.divRoundingUp and TickMath, SDIV and SMOD in TickBitmap.compress and flipTick, MULMOD in FullMath.mulDiv and mulDivRoundingUp, SLT and SGT in the tick checks. 2. When a client bumps its uint256 requirement, the go-ethereum handlers call the new code with the same operand aliasing as today (y.Div(x, y), z.MulMod(x, y, z), instructions.go of go-ethereum master). 3. A fault in the new Knuth steps would change a quotient or a remainder for divisors of a particular limb count, which would change prices, amounts and tick indexes in mined blocks on that network. 4. This cycle built v1.3.2 and master with the local go1.24.7 and ran 1,845,864 vectors through both, with the aliasing of the go-ethereum handlers, against Python integers: no mismatch in either. The set includes every edge pair, every power of two and its neighbours as divisor, divisors of one to four limbs with the top limb normalised and not, quotients at a limb boundary, FullMath shapes and the 21,537 MULMOD and ADDMOD records of cycle 25. Three planted faults that change results were caught (6, 669 and 26,444 mismatches); a fourth planted change turned out to be equivalent and changes nothing.
+
+What is at risk: None today. No network runs the new code. If a release adopts it with a fault the tests above missed, every pool on that network would compute different amounts from other clients and from the reference, which is a consensus split before it is a loss to any user.
+
+What it takes: A client release that requires a uint256 version later than v1.3.2. None does as of 2026-11-27.
+
+What can be done: Rerun scripts/u256vectors.py of this work directory against the uint256 version of each geth-family release before deployment, and the battery and targeted sets against an endpoint that runs it.
+
+Code: `src/libraries/FullMath.sol:24`, `src/libraries/FullMath.sol:48`, `src/libraries/UnsafeMath.sol:12-16`, `src/libraries/TickBitmap.sol:21-29`, `src/libraries/TickBitmap.sol:59-74`.
+
+Sources:
+
+- https://proxy.golang.org/github.com/holiman/uint256/@v/master.info (master is de2a0381370e of 2026-11-22T16:59:54Z)
+- https://proxy.golang.org/github.com/holiman/uint256/@v/v1.3.3-0.20261122165954-de2a0381370e.zip (uint256.go Div lines 641-683 (power-of-two shortcut, udiv), Mod 687-704 (umod), MulMod 818-846, AddMod 245-311; div.go udiv, umod, rem5by4, rem4by3, quoRem4by3, rem3by2)
+- https://proxy.golang.org/github.com/holiman/uint256/@v/v1.3.2.zip (the v1.3.2 routines that every client pins)
+- https://proxy.golang.org/github.com/ethereum/go-ethereum/@v/v1.17.11-0.20261125134423-bbafd66b66f5.zip (go-ethereum master bbafd66 go.mod line 43 requires github.com/holiman/uint256 v1.3.2; core/vm/instructions.go handlers call Div, SDiv, Mod, SMod, AddMod, MulMod with the result aliased to an operand)
+- https://raw.githubusercontent.com/0xPolygon/bor/develop/go.mod (bor develop requires uint256 v1.3.2)
+- https://raw.githubusercontent.com/bnb-chain/bsc/develop/go.mod (bsc develop requires uint256 v1.3.2)
+- https://raw.githubusercontent.com/OffchainLabs/nitro/master/go.mod (nitro master requires uint256 v1.3.2)
+- https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/go.mod (avalanchego v1.15.3 requires uint256 v1.2.4)
+- local run: research/network-risk/cycles/029/theme-geth-family-caches-and-slot-walk.work/results/u256.json (1,845,864 vectors, 0 mismatches on v1.3.2 and on master)
+- local run: research/network-risk/cycles/029/theme-geth-family-caches-and-slot-walk.work/results/u256-planted.json (planted faults in rem5by4 and rem3by2 caught (6 and 669 mismatches); the y[2] mask change is an equivalent mutant (0))
+- local run: research/network-risk/cycles/029/theme-geth-family-caches-and-slot-walk.work/results/u256-planted-p2.json (planted fault in the power-of-two shortcut caught (26,444 mismatches))
 
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 

@@ -1,0 +1,22 @@
+{
+ "unit": "theme-tempo-binary-keccak-transient",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Task 2 (L-1169), source: how keccak_cache_global keys its cache. Inputs of 1 to 87 bytes are cached; a hit needs the tag, the stored length and the full stored slice to equal the input.",
+   "agrees": true,
+   "note": "I downloaded alloy-primitives-1.7.3.crate (sha256 d5e9dbd49258ac3a...) and fixed-cache-0.1.10.crate (sha256 2fe63500644ef026...) from static.crates.io; both hashes match the research file. keccak_cache.rs compute() sends empty input to KECCAK256_EMPTY and inputs over MAX_INPUT_LEN (128-32-1-8 = 87) to the uncached hash. Key::eq and Borrow<[u8]> both use get(), the slice of the stored length, so the Equivalent check in fixed-cache get_inner (lib.rs:322-345) is a full slice comparison, which includes the length. A tag collision alone cannot return a stored digest. I also checked the case the research file did not mention: the bucket array is allocated with alloc_zeroed (lib.rs:164), so an unwritten bucket holds a Key of length 0. If a computed tag happened to be 0 and matched an empty bucket, the comparison with a non-empty input still fails. CurrencyDelta._computeSlot (src/libraries/CurrencyDelta.sol:10-15) always hashes 64 bytes, so it uses the cached path and is covered by this rule."
+  },
+  {
+   "check": "Task 3, source and aarch64 binary: TLOAD and TSTORE are keyed by the full 52 byte StorageKey, zero writes remove the slot, every change is journaled and rollback restores or removes the slot.",
+   "agrees": true,
+   "note": "I fetched crates/evm2/src/evm/state/mod.rs and src/storage_key.rs at evm2 commit 35aa3280 from raw.githubusercontent.com. tload and tstore build StorageKey::new(address, key). PartialEq compares the 52 bytes as FixedBytes<52>, so a hash collision in the map cannot alias two keys. tstore journals TransientStorageChange with the previous value before every change and skips the journal only when nothing changes (same value, or zero written to an absent slot). rollback reinserts a non-zero previous value or removes the slot. This gives EIP-1153 revert semantics for applyDelta (src/libraries/CurrencyDelta.sol:28-41) and the NonzeroDeltaCount check in unlock (src/PoolManager.sol:104-114). One thing the research file did not note: the same file has take_transient_storage(address), which removes every transient slot of a given address for a transaction-finalization policy. It runs after the transaction body, and the PoolManager's lock and deltas only need to hold during unlock, so it cannot change an unlock result. I did not confirm which addresses Tempo passes to it. That is logged as a low lead."
+  },
+  {
+   "check": "Task 3, live: read-only eth_call on rpc.mainnet.tempo.xyz showed transient writes and KECCAK256 of 64 byte preimages behave as on Ethereum.",
+   "agrees": true,
+   "note": "I ran my own read-only eth_call on https://rpc.mainnet.tempo.xyz (web3_clientVersion tempo/v1.19.1-a9d6748/x86_64-unknown-linux-gnu, block 0x30a3960). Code placed by state override did tstore(1,42), tload(1), mstore(0), then keccak256(0,64) over 42 followed by 32 zero bytes. It returned 0x...2a and 64d962e4eec2a0d2e4053fc69d3b480f61c5923c09e4bad52cdeec343ff95073, which equals the digest from an independent pure Python Keccak-256. This is the same 64 byte preimage shape that CurrencyDelta._computeSlot builds (src/libraries/CurrencyDelta.sol:12-14). It does not retest the reverted child frame case. That case is supported by the evm2 rollback source I read."
+  }
+ ],
+ "leads": []
+}

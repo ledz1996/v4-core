@@ -1,0 +1,97 @@
+{
+ "unit": "theme-monad-gcc-literal-folds",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 1: which PoolManager sites take a literal shift, SIGNEXTEND or BYTE arm of Monad's emitter, with pc, literal and src/ line. The 1,205 literal sites of cycle 28 (sitearms.json) were joined with the solc source map of the same build (cycle 12 build-srcmap.json, whose runtime equals build/PoolManager.json byte for byte).",
+   "result": "136 sites take shift_by_literal (40 SHL, 77 SHR, 19 SAR) with 41 distinct pairs of opcode and count; 6 sites shift a literal by a run-time count (4 SHL, 2 SHR) with 5 distinct literals (1 twice, 0xffffffff << 224, BitMath's 0x8040...7077 table, all ones, BitMath's 0x8421...54be table); 114 SIGNEXTEND sites take a literal index (index 1 at 2 sites, 2 at 72, 15 at 40). No BYTE site has a literal index: both BYTE sites (BitMath.sol:15 and :34) index a literal table by a run-time value. The critic's 142 is the sum of the two shift arms (136 + 6), and its 5 shifted literals are the 5 distinct values at 6 sites. No shift, SIGNEXTEND or BYTE site has two literal operands. Deployed code on Monad differs from the build only in the 20 bytes of the address(this) immutable at pc 13606, which feeds no such site. Per site rows: out/sites.json.",
+   "source": "research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/out/sites.json ; research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/scripts/sites.py ; src/libraries/TickMath.sol:63 ; src/libraries/TickMath.sol:111 ; src/libraries/BitMath.sol:15 ; src/libraries/BitMath.sol:34 ; src/libraries/TickBitmap.sol:36 ; eth_getCode 0x188d586ddcf52439676ca21a244753fa19f9ea8e at https://rpc.monad.xyz, Monad/0.16.7, research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/rpc/log.txt"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 2 and 3 for shift_by_literal: the gcc 15.2.0 code of monad 0.16.7 at 0x372dc0 (SHL), 0x374090 (SHR) and the SAR arm inlined in Emitter::sar() at 0x38a5d0, with shift_avx_reg_by_literal at 0x39acd0, 0x39bf90 and 0x39e1d0, was run whole in the cycle 27 x86 model (rip-relative constants read from the ELF segments, calls to allocation, reference counting and the deferred comparison stubbed, every asmjit _emitI call recorded with its instruction id and operands). Counts: every count the PoolManager carries plus 0, 1, 2, 7, 8, 63, 64, 65, 127, 128, 129, 191, 192, 193, 254, 255, 256, 257, 300, 511, 512, 2^64, 2^64 + 1, 2^64 + 5, 2^128, 2^128 + 255, 2^192, 2^192 + 3, 2^255 and 2^256 - 1. Operand locations: general register reused as destination (each of the three register quads), copied to a new register, stack slot (offsets 0 and 7) and AVX register.",
+   "result": "1,210 cases. The decision matches the v0.16.7 source rule in every case: count 0 returns the operand, SHL and SHR with a count of 256 or more (including counts whose low limb is below 256 and a high limb is set) allocate the literal 0, SAR with such a count takes the 256 arm (sar 63 and three copies, or vpcmpgtq and vpermq 0xff). The lifted arithmetic is the whole-word compare with 256 (372e01..372e27 and the SAR copy at 38a697..38a6bd), dword_shift = count >> 6 and bit_shift = count & 63 (372f78..372f95, 374237..37423d, 38ab90..38aba7), the limb loop bounds and the operand table offsets 16 * (4 * reg + limb), the stack displacement 32 * offset + 8 * limb, the register name swaps of the reused-register path (3736d0..373717) and the AVX permutation and blend masks (0xe4 << 2d, 0xff << 2d and their right shifts). 900 emitted sequences ran on 600 operand words each (540,000 runs; random, negative, only high limbs set, single bits, all ones, tick edges; seed 2929) with random values in every other register, and every result equals pyevm.py running the opcode. The 42 PoolManager pairs of opcode and count got 6,000 operands each over the 10 locations. Instructions reached: 372dc0 362 of 548, 374090 346 of 520, 38a5d0 485 of 1803, 39acd0 189 of 306, 39bf90 188 of 305, 39e1d0 311 of 425.",
+   "source": "research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/scripts/shiftcheck.py ; research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/scripts/emdrv.py ; research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/out/shiftcheck.json ; research/network-risk/tools/opdiff/pyevm.py:140-142 ; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/compiler/ir/x86/emitter.cpp (read from the cycle 25 download, research/network-risk/cycles/025/high-throughput.work/dl/v0.16.7/emitter.cpp:4943-5240)"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 2 and 3 for a literal shifted by a run-time count: Emitter::shl() 0x391590 with shl<> 0x38f190, Emitter::shr() 0x38d1a0 and Emitter::sar() 0x38a5d0, which inline shift_literal_by_non_literal, run whole with destructive_mov_stack_elem_to_bounded_rax 0x389330 from its own gcc code and RoData::add96, add32, add4 and add<8> stubbed to record the words passed and place them where the emitted loads read. Values: the 5 PoolManager literals plus 0, 1, all ones, 2^255, 2^255 - 1, 2^63, 2^64, 2^64 - 1, 2^192 + 255 and two random words (seed 2930). Count locations: each general register quad, AVX register and two stack slots, with and without a free general register.",
+   "result": "432 cases, 384 emitted sequences, 230,400 runs over counts 0 to 299, 511, 512, 2^64, 2^64 + 3, 2^128 + 1, 2^192, 2^255 + 8, all ones and random counts with high limbs set. Every result equals pyevm.py. The gcc code passes add96 the words {7, 0, value} with line offset 32 for SHL and {value, fill, fill low 128 bits with 7 at bit 128} with offset 0 for SHR and SAR, the fill being all ones only for a negative SAR value, as the source states. Value 0, and all ones under SAR, return the operand without code. reg_context (rbx) is restored on the push path. Instructions reached: 391590 59 of 116, 38f190 391 of 1020, 38d1a0 416 of 1183, 38a5d0 446 of 1803, 389330 343 of 485, 3a7790 0 of 511; the live-set variant 0x3a7790 is not entered by these arms.",
+   "source": "research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/scripts/litshift.py ; research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/out/litshift.json ; research/network-risk/cycles/025/high-throughput.work/dl/v0.16.7/emitter.cpp:5254-5310 ; research/network-risk/cycles/025/high-throughput.work/dl/v0.16.7/emitter.cpp:4122-4196"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Compile-time folds of two literals in the gcc code: shl<> 0x38f1e2.., shr() and sar() 0x38a7a0.. for shifts, signextend() and byte() for SIGNEXTEND and BYTE, over counts 0 to 259 and edge counts against 50 to 60 words each, and indexes 0 to 33 and edge indexes.",
+   "result": "43,092 shift folds and 5,332 SIGNEXTEND and BYTE folds give the literal pyevm.py computes. No PoolManager site folds two literals at these opcodes, so this only rules out a fold reached through a literal the site model of cycle 28 did not see.",
+   "source": "research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/out/litshift.json ; research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/out/sxbyte.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 2 and 3 for the literal index arm of SIGNEXTEND: Emitter::signextend() 0x388440, which inlines signextend_by_literal_ix and signextend_general_reg_or_stack_offset_by_int8, with signextend_avx_reg_by_int8 0x37ba80 (glibc __memset_chk modelled by its specification). Indexes 0 to 31, 32, 33, 255, 256, 2^64, 2^64 + 1, 2^128, 2^255 and all ones, in the same 10 operand locations.",
+   "result": "410 cases: an index of 31 or more pushes the operand unchanged, every other index emits code. 310 sequences ran on 600 words each (186,000 runs, seed 2931, including negative words and words with only high limbs set). Every result equals pyevm.py. The lifted arithmetic is sign_reg_ix = ix >> 3 and sign_reg_offset = ix & 7 (3889ce..3889e3), the choice of movsx r8, movsx r16, movsxd, plain mov or shl and sar by 8 * (7 - offset), the fill of the limbs above, and the AVX shuffle mask built with memset at ix + 1 for 31 - ix bytes. PoolManager indexes give: 1 movsx from the 16-bit register, 2 shl and sar by 40, 15 a plain copy of limb 1 and sar 63 into limbs 2 and 3.",
+   "source": "research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/scripts/sxbyte.py ; research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/out/sxbyte.json ; research/network-risk/cycles/025/high-throughput.work/dl/v0.16.7/emitter.cpp:4492-4676"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 2 and 3 for BYTE: Emitter::byte() 0x37f1f0 with byte_literal_ix_stack_offset_src 0x370830, byte_literal_ix_avx_reg_src 0x37ea20 and test_high_bits192 0x39dcb0. Literal indexes 0 to 31 and the edge indexes in the 10 operand locations, and the two PoolManager tables (plus a counting word, all ones, 2^255 and 0xff) read at a run-time index held in each general register quad, the AVX register or a stack slot, with and without a free general register.",
+   "result": "494 cases. Indexes of 32 or more give the literal 0. 404 sequences ran (320 literal-index sequences on 300 words and 84 table sequences on 600 indexes, 146,400 runs; literal tables against indexes 0 to 69, 255, 256, 2^32, 2^63 + 2, 2^64, 2^64 + 3, 2^128, 2^192 + 1, 2^255, all ones and random words with high limbs set). Every result equals pyevm.py. For the PoolManager tables the emitted code computes 31 - ix, clears it on borrow, loads the byte from the table placed by add32, clears again on borrow and clears when test_high_bits192 finds a high limb set, so BitMath.sol:15 and :34 read the table byte the source names.",
+   "source": "research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/out/sxbyte.json ; research/network-risk/cycles/025/high-throughput.work/dl/v0.16.7/emitter.cpp:4198-4434 ; src/libraries/BitMath.sol:15 ; src/libraries/BitMath.sol:34"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Planted one-instruction faults in the package text, to show the checks can fail: wrong limb index in the SHL copy loop (3730c6 mov edx,3 to 2), SHR bit offset off by one for odd counts (37423d and eax,0x3f to 0x3e), SAR sign fill of vacated limbs not emitted (38ad93 call to nop), SAR bit offset off by one (38aba4), wrong AVX lane permutation (39ae3f 0xe4 to 0xe5), the neg of the SHL window load dropped (38f86d), SIGNEXTEND sign limb ix >> 4 (3889df), SIGNEXTEND sar 63 fill dropped (388d1e), AVX shuffle mask one byte short (37bb03), BYTE index 31 - i off by one (37fad4), and cmovnz after test_high_bits192 turned into cmovz (3801be).",
+   "result": "All 11 faults are caught, with by-off 255, byv-hi 896, sar-bit 1190, sar-fill 1733, shl-avx-perm 819, shl-limb 1281, shl-negdrop 1680, shr-bit 3232, sx-avx 869, sx-fill 1985, sx-limb 1904 mismatching words or decisions.",
+   "source": "research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/out/shiftcheck-shl-limb.json ; research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/out/litshift-shl-negdrop.json ; research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/out/sxbyte-sx-fill.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 4: whether any src/ line reads a word that the gcc emitter's shift, SIGNEXTEND or BYTE literal arms compute wrongly in Monad validator native code: getSqrtPriceAtTick's sar(255, tick) and shr(32, ...), the shr(127) and shr(255) steps of getTickAtSqrtPrice, BitMath's two tables and shifts, TickBitmap.position's sar(8, signextend(2, tick)), LiquidityMath's signextend(15, y), and the Slot0 and BalanceDelta packing.",
+   "result": "No arm gives a wrong word for any literal the PoolManager carries in any operand location, so no swap, tick crossing, liquidity change or settlement computes a different amount through these arms, and an ordinary account has nothing to exploit there. eth_call cannot test this (it runs the interpreter, F-130), which is why the test runs the validator's own emitter code.",
+   "source": "src/libraries/TickMath.sol:63 ; src/libraries/TickMath.sol:111 ; src/libraries/TickBitmap.sol:36 ; src/libraries/LiquidityMath.sol:12 ; src/types/BalanceDelta.sol:25 ; research/network-risk/cycles/029/theme-monad-gcc-literal-folds.work/out/sites.json"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "question": "Do the non-literal arms in the gcc build (shift_general_reg_by_non_literal 0x38e8c0, 0x38c8d0 and 0x389c90, shift_avx_reg_by_non_literal, signextend_by_non_literal with its bounded-rax helpers, byte with a non-literal index and a register source) and RoData's deduplication map and label offsets give the specified words for the PoolManager's run-time shift counts and indexes?",
+   "why": "These arms and the RoData offset map were not lifted in cycle 29; RoData's add* routines were stubs that placed the recorded words correctly.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1166",
+   "outcome": "cleared",
+   "answer": "The shift_by_literal arms for SHL, SHR and SAR, the literal shifted by a run-time count, the literal index arms of SIGNEXTEND and BYTE, BYTE of a literal table at a run-time index and the two-literal folds were run from the gcc-built code of the shipped monad 0.16.7 validator in the x86 model, and the sequences they hand to asmjit were rebuilt and run. 1,122,300 runs of emitted sequences and 48,424 folds give the word pyevm.py gives, for every literal the PoolManager carries in every operand location, and 11 planted one-instruction faults are caught. Counts corrected: 136 shift_by_literal sites plus 6 literal-by-variable sites make the critic's 142, the 5 shifted literals sit at 6 sites, and the indexes 1, 2 and 15 are SIGNEXTEND indexes; no BYTE site has a literal index. Not lifted: the register allocator, RoData's offset map, the non-literal arms, asmjit's encoder (byte-identical to the harness build per cycle 27), and the storage, keccak and memory growth routines."
+  }
+ ]
+}

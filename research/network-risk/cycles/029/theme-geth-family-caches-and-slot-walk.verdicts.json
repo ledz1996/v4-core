@@ -1,0 +1,44 @@
+{
+ "unit": "theme-geth-family-caches-and-slot-walk",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "proxy.golang.org master.info returns v1.3.3-0.20261122165954-de2a0381370e, time 2026-11-22T16:59:54Z, hash de2a0381370e. The version list of holiman/uint256 ends at v1.3.2, so the new code is in no release. I fetched go.mod of go-ethereum master, bor develop, bsc develop, nitro master, OffchainLabs/go-ethereum master and celo-org/op-geth master: each requires holiman/uint256 v1.3.2. ava-labs/libevm main and avalanchego v1.15.3 require v1.2.4. I unpacked the master zip and read uint256.go:641-704 and div.go:40-115. Div has the power-of-two shortcut; Go gives & a higher precedence than |, so y[0]|y[1]|y[2]|y[3]&(y[3]-1) reads as intended, and the default branch is reached only with y[0] a nonzero power of two. Mod calls umod, Div calls udiv. Both read every divisor limb into call arguments before the first write to z, so the y.Div(x, y) aliasing of the handlers is safe. A normalisation shift of 0 gives x>>64 == 0 in Go, and the s == 0 case with four limbs returns early. I did not rerun the 1,845,864 vectors; results/u256.json reports 0 mismatches for build/h132 and build/hmaster.",
+   "codeCheck": "src/libraries/FullMath.sol:24 and :48 use mulmod, UnsafeMath.sol:12-16 uses div and mod, TickBitmap.sol:21-29 uses signextend, sdiv, smod and slt, TickBitmap.sol:66 uses sdiv. Every swap and liquidity change reaches these lines, so a fault in a future Div or Mod would change amounts and ticks. Nothing is faulty today.",
+   "corrections": "",
+   "sources": [
+    {"url": "https://proxy.golang.org/github.com/holiman/uint256/@v/master.info", "supports": "master is de2a0381370e of 2026-11-22"},
+    {"url": "https://proxy.golang.org/github.com/holiman/uint256/@v/list", "supports": "the newest release is v1.3.2"},
+    {"url": "https://proxy.golang.org/github.com/holiman/uint256/@v/v1.3.3-0.20261122165954-de2a0381370e.zip", "supports": "uint256.go:641-704 Div and Mod, div.go:40-115 umod and udiv"},
+    {"url": "https://raw.githubusercontent.com/ethereum/go-ethereum/master/go.mod", "supports": "requires uint256 v1.3.2"},
+    {"url": "https://raw.githubusercontent.com/0xPolygon/bor/develop/go.mod", "supports": "requires uint256 v1.3.2"},
+    {"url": "https://raw.githubusercontent.com/bnb-chain/bsc/develop/go.mod", "supports": "requires uint256 v1.3.2"},
+    {"url": "https://raw.githubusercontent.com/OffchainLabs/nitro/master/go.mod", "supports": "requires uint256 v1.3.2"},
+    {"url": "https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/go.mod", "supports": "requires uint256 v1.3.2"},
+    {"url": "https://raw.githubusercontent.com/celo-org/op-geth/master/go.mod", "supports": "requires uint256 v1.3.2"},
+    {"url": "https://raw.githubusercontent.com/ava-labs/libevm/main/go.mod", "supports": "requires uint256 v1.2.4"},
+    {"url": "https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/go.mod", "supports": "requires uint256 v1.2.4, libevm v1.13.15-0.20261028200218-d398bc4dbe41"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "L-1176 on chain: on Avalanche, is a storage write to slot s read back at s xor 2^248, does the same hold for other high bits, and does TSTORE alias? Polygon and BNB Chain as controls.",
+   "agrees": true,
+   "note": "I reran it with eth_call and a code override (SSTORE 0xa11ce at the first calldata word, SLOAD the second) on https://api.avax.network/ext/bc/C/rpc, which reported avalanchego/1.15.3 commit 983815fd. The pool slot0 key 0x4e2e...50b7 read back at 0x4f2e...50b7 and the reverse, slot 0 read back at 2^248, and 0x4c2e...50b7 (bit 249) read 0. The same probe with TSTORE and TLOAD did not alias at 2^248. Polygon returned 0 for every aliased read. The cause is coreth core/extstate/statedb.go normalizeStateKey, key[0] &^= 0x01, applied to every storage key through the libevm TransformStateKey hook. Multicoin balances use the same storage with that bit set (normalizeCoinID) and skip the transform, so they never meet a normal slot. The fold changes nothing for the PoolManager unless two of its own slots differ only in bit 248."
+  },
+  {
+   "check": "L-1176, bytecode walk: is the slot operand of every SSTORE, SLOAD, TSTORE and TLOAD of the build a constant, a KECCAK256 output, or a KECCAK256 output plus a constant below 8?",
+   "agrees": true,
+   "note": "I did not rerun taintevm.py. A grep of src/ finds sstore, tstore, sload and tload in assembly only at TickBitmap.sol:73 (keccak slot), CurrencyDelta.sol:21-39 (keccak hashSlot), Lock, NonzeroDeltaCount and CurrencyReserves (constant slots), and the read-only Extsload.sol and Exttload.sol. The Solidity storage in Pool.sol:83-91 (struct State, three mappings) and ERC6909 are keccak mappings with member offsets of at most 3 inside a struct. Two attacker-chosen keccak outputs that differ only in bit 248 need about 2^127 hashes, and hitting a given victim slot needs a preimage. extsload on Avalanche returns the value of s for s or 2^248 and s, which can mislead an off-chain reader but moves no funds. Token storage lives in each token contract and is a token matter."
+  },
+  {
+   "check": "L-1171, forks: do bor develop, bsc develop, libevm main, celo op-geth master or OffchainLabs/go-ethereum master put a cache or a different routine in front of the arithmetic handlers?",
+   "agrees": true,
+   "note": "bor develop core/vm/mulmod_memo.go fetched today has sha256 9a721f0c689d5e28..., which matches the version cited. It reuses the reciprocal only when mm.mod != *z is false, which compares the whole four-limb array, and only for z[3] != 0. opMulmod passes z as both modulus and result. In uint256 v1.3.2 mod.go reduce4 reads m only into locals and writes z[3..0] in one statement at the end, so the aliasing is safe. I did not rerun the 1,845,864-vector memo harness."
+  }
+ ],
+ "leads": []
+}
