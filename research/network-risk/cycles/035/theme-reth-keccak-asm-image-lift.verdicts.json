@@ -1,0 +1,22 @@
+{
+ "unit": "theme-reth-keccak-asm-image-lift",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Task 1 and Task 2 (L-1275), X Layer chain 196: the official image links the generic x86-64 CRYPTOGAMS keccak routine and the alloy-primitives 1.6.0 global keccak cache, and the cache returns a stored hash only when the full input and its length match.",
+   "agrees": true,
+   "note": "The binary usr/local/bin/op-reth extracted from dl/xlayer-rc1/amd64-layer3.tgz has sha256 7a9230ac67a539a14e34ea243f64f466c2b5cf0bbc8cf4bd37642f1393019c2e, commit f60420aaac6457295a38b66bd544bab28ab6ec5d and 'Build Features: asm_keccak,jemalloc,keccak_cache_global,min_trace_logs,otlp,otlp_logs', as the item says. I read the cache source myself from https://static.crates.io/crates/alloy-primitives/alloy-primitives-1.6.0.crate: src/utils/keccak_cache.rs lines 10-11 set MAX_INPUT_LEN to 128-32-1-8 = 87, lines 24-25 send empty and longer inputs to the uncached routine, and lines 86-90 and 108-111 make key equality a comparison of the full stored slice of the stored length. In https://static.crates.io/crates/fixed-cache/fixed-cache-0.1.10.crate, src/lib.rs lines 322-343 return a value only after try_lock on the matching tag and key.equivalent on the stored key, and lines 517-523 insert only the value computed by the real routine. A bucket that was never written has tag 0 and a zero length key, so a tag 0 probe compares a nonempty input with an empty slice and misses. A tag or hash collision therefore cannot return another input's hash. My own endpoint check: 450 eth_call cases on https://rpc.xlayer.tech (client reth/v2.3.0-f60420a/.../xlayer/v0.0.7), 150 random inputs of 1 to 200 bytes with block and cache boundary lengths, each sent twice, plus a copy with the last bit flipped; each call hashed the input, the input less its last byte, and the input again in the same frame. All 450 matched the Python Keccak-256 of tools/opdiff/evm.py, 0 errors. The PoolId, position and CurrencyDelta hashes of src/types/PoolId.sol, src/libraries/Position.sol and src/libraries/CurrencyDelta.sol thus get correct digests whether or not they hit the cache."
+  },
+  {
+   "check": "Task 3 (L-1279), BNB Chain chain 56: reth-bsc v0.1.4 and v0.1.4-hotfix enable asm-keccak and keccak-cache-global with the same generic routine and cache as X Layer, and the build bsc-rpc.publicnode.com serves passes.",
+   "agrees": true,
+   "note": "The cache logic is the same alloy-primitives 1.6.0 and fixed-cache 0.1.10 source read above, so the full-key comparison argument carries over. My own run of the same 450-case check against https://bsc-rpc.publicnode.com, which reported reth-bsc/v0.1.4-hotfix-23b510f/linux, returned 450 of 450 correct hashes, 0 errors, including repeated inputs that hit the cache and flipped-bit near-duplicates of lengths 1 to 87. I did not re-lift the hotfix binary instruction by instruction; I rely on the endpoint result and the shared source for that part."
+  },
+  {
+   "check": "Task 3 (L-1279), Celo chain 42220: the celo-v1.0.10 image has empty build features, no CRYPTOGAMS routine and no keccak cache, and the KECCAK256 handlers call alloy_primitives::utils::keccak256_impl directly.",
+   "agrees": true,
+   "note": "usr/local/bin/celo-reth extracted from dl/celo-v1.0.10/amd64-layer2.tgz has sha256 ca81b8701ff8bb3ba31d3462ddd5123740e7da7051e0e2269753f68e208cbfac, commit 74cc8bbce7631c3586ab446460590fef6630d258 and an empty 'Build Features:' line. nm shows four revm_interpreter::instructions::system::keccak256 handlers; the first (0x1e6fc80) calls through GOT slot 0x52b89f0, whose R_X86_64_RELATIVE relocation targets 0x5073240, alloy_primitives::utils::keccak256_impl. The item omits that the binary also holds XKCP symbols KeccakF1600_XORBytes and KeccakF1600_ExtractBytes; objdump shows their callers are aws_lc_0_44_0_Keccak1600_Absorb, the TLS library, not the interpreter, so this does not change the result. fixed_cache symbols present are typed for Address/Account and FixedBytes<32>/Bytecode execution caches only, matching the item."
+  }
+ ],
+ "leads": []
+}

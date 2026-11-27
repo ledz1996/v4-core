@@ -1,0 +1,41 @@
+{
+ "unit": "ethereum-reference",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "Fetched erigon main go.mod: it pins github.com/holiman/uint256 v1.3.3-0.20261109190209-808a9d02b85f, and v3.8.2 go.mod pins v1.3.3-0.20260228135838-087f4b32f234. db/version/app.go on main reads Major 3, Minor 9, Micro 0, Modifier dev. Tags v3.8.3, v3.9.0 and v3.9.0-rc.1 return 404 on raw.githubusercontent.com, so no release carries the new code. proxy.golang.org .info for 808a9d02 gives Time 2026-11-09T19:02:09Z, and master.info gives de2a038 (2026-11-22). instructions.go on main (1767 lines) has opDiv with log2Exact at lines 78-103, where y is shifted right when it is an exact power of two and a zero divisor falls through to Div (log2Exact returns false for y = 0). opMulmod at 374-388 sends a modulus with z[3] = 0 to MulMod, and otherwise reuses scope.mulmodModulus and mulmodReciprocal, setting both in one statement from uint256.Reciprocal(z) on a change. opSload at 859-880 serves hits from scope.slots. interpreter.go holds mulmodModulus and mulmodReciprocal at 105-108, frameSlots at 124-171, the reset of slots.ok in putCallContext at 251-253 and the per-frame switch from ReadStamp at 577. In the 808a9d02 zip, MulModWithReciprocal (uint256.go:781-808) returns zero when x, y or m is zero, so a cache hit with a zero operand gives the right result. ReadStamp is not defined in execution/state/intra_block_state.go, journal.go, versionmap.go, versionedio.go or access_list.go at main, and read_stamp.go does not exist (404). read_stamp_test.go confirms that a serial IBS reports a usable stamp. The local outputs agree with the finding: u256-erigon-main.json shows 1,845,864 vectors with 0 mismatches for build/herigon/harness, and erigon-fastpaths.json (224,164) and erigon-fullmath-div.json (120,000) both report 0 mismatches. I did not rerun the harness.",
+   "codeCheck": "src/libraries/FullMath.sol:24 is mulmod(a, b, not(0)), so on erigon main it takes the reciprocal path because not(0) has a nonzero top limb. :48 is mulmod(a, b, denominator), which takes the reciprocal path only for a denominator of 2^192 or more. :62, :67 and :73 divide by twos = (0 - denominator) & denominator, which is a power of two, so all three take the log2Exact shift. src/PoolManager.sol:196 calls checkPoolInitialized, which reads slot0, :202 calls key.hooks.beforeSwap and :206 calls _swap, which reads the pool again. The finding describes this path correctly. In a pool without an attacker hook there is no reentry between those reads, so the SLOAD cache matters only for honest hooks and token callbacks. Even then, a stale read would show up as a state root mismatch on erigon validators. It would not move funds on a chain where the other clients reject the block.",
+   "corrections": "",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/main/go.mod", "supports": "uint256 pinned at v1.3.3-0.20261109190209-808a9d02b85f"},
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.2/go.mod", "supports": "v3.8.2 pins 087f4b32f234"},
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/main/db/version/app.go", "supports": "main is 3.9.0-dev"},
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/main/execution/vm/instructions.go", "supports": "opDiv/log2Exact 78-103, opMulmod 374-388, opSload 859-880"},
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/main/execution/vm/interpreter.go", "supports": "mulmod cache fields 105-108, frameSlots 124-171, reset 251-253, ReadStamp gating 577"},
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/main/execution/state/read_stamp_test.go", "supports": "a serial IBS reports a usable stamp and tracing disables it"},
+    {"url": "https://proxy.golang.org/github.com/holiman/uint256/@v/v1.3.3-0.20261109190209-808a9d02b85f.zip", "supports": "MulModWithReciprocal returns zero for zero operands (uint256.go:781-808)"},
+    {"url": "https://proxy.golang.org/github.com/holiman/uint256/@v/master.info", "supports": "uint256 master is de2a038, 2026-11-22"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "erigon main's DIV, EXP and MULMOD handlers on uint256 808a9d02, with the PoolManager's operand shapes (FullMath.sol:24, :48, :62, :67, :73).",
+   "agrees": true,
+   "note": "My reading of opDiv and log2Exact finds them correct. Go gives & higher precedence than |, so each case requires the lower limbs to be zero and the top limb to be a single bit, and a zero divisor falls through to Div. opMulmod caches the modulus and the reciprocal together, keyed on the full modulus, and MulModWithReciprocal handles zero operands on a cache hit. The local output files report 0 mismatches over 2,190,028 vectors. I did not reread expOdd."
+  },
+  {
+   "check": "Can the SELFBALANCE memo of erigon v3.8.2 and main change a value the PoolManager computes?",
+   "agrees": true,
+   "note": "src/types/Currency.sol:92 is the only address(this).balance in src outside tests. Its only callers are src/PoolManager.sol:285 and :359, both in the non-native arm after isAddressZero (:281 and :352). Native settlement uses msg.value at :353. The memo therefore never feeds a value the PoolManager computes."
+  },
+  {
+   "check": "Battery, targeted set and the 14,598 cycle 27 edge vectors (200,127 vectors) on sentio-super-node v2.596.0-2c2c6b02, and the two script sets against the reth reference.",
+   "agrees": true,
+   "note": "The item clears only the opcode vectors and states that the two script sets did not complete, which is accurate. It cites sentio-pmdiff.json and sentio-pmdiff2.json, but only sentio-pmdiff.log exists in the work directory, so whole-bytecode coverage on sentio is still missing. Sentio is an RPC service and does not validate blocks, so a fault there would only change quotes."
+  }
+ ],
+ "leads": []
+}

@@ -1,0 +1,22 @@
+{
+  "unit": "theme-tempo-main-nested-entry",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 2, every precompile path that runs other code: crates/precompiles/src/storage/evm.rs:683-746 (EvmPrecompileStorageProvider::call) is a CALL frame on the shared journal and transient map, with no transaction environment and no clear_transaction_state.",
+      "agrees": true,
+      "note": "I fetched crates/precompiles/src/storage/evm.rs at tempo 0fe724b from raw.githubusercontent.com and read lines 683-746. The function builds a MessageExt of kind Call or StaticCall at frame.depth + 1 with the precompile as caller, refuses the call when open_checkpoints is nonzero or nested_calls reaches MAX_NESTED_CALLS, and runs self.evm.execute_call. It does not build a TxEnv and does not touch transient storage. A callee therefore sees the PoolManager's IS_UNLOCKED_SLOT, NONZERO_DELTA_COUNT_SLOT, deltas and synced currency as they stand, as a contract CALL would, and the check at src/PoolManager.sol:112 still runs on the same values."
+    },
+    {
+      "check": "Task 4, transient storage across the phases of one 0x76 transaction: cleared once at commit or discard of the whole transaction; a batch failure rolls back every TSTORE through the journal; a sync carried between calls of one batch credits only the same account.",
+      "agrees": true,
+      "note": "evm2 7c9f3b6d crates/evm2/src/evm/state/mod.rs, fetched from raw.githubusercontent.com: clear_transaction_state at :564-580 clears transient_storage together with the journal; tstore at :846-870 pushes a TransientStorageChange journal entry for every changed value, so rollback undoes it; take_transient_storage at :882-887 removes only the slots of the address it is given. Tempo 0fe724b crates/evm/src/handler.rs, fetched the same way, takes one checkpoint at :1296 before the calls and rolls back to it at :1302 and :1346, and contains no transient clear. In src/, unlock reverts unless NonzeroDeltaCount is zero and relocks before returning (src/PoolManager.sol:104-114), so no later call inherits an unlocked state. sync writes synced currency and reserves (src/PoolManager.sol:279-288) and _settle credits balanceOf minus synced reserves to the caller or its named recipient and resets the currency (src/PoolManager.sol:349-364). All calls of a 0x76 batch share one sender and no other transaction can run between them, so a carried sync credits only tokens the batch itself sent. This matches one contract doing sync and settle in one Ethereum transaction."
+    },
+    {
+      "check": "Task 3, live probe on rpc.mainnet.tempo.xyz: 28 targets leave lock, count, synced currency, reserves and delta unchanged, under v1.19.2 now and under T14 by eth_simulateV1.",
+      "agrees": true,
+      "note": "I ran web3_clientVersion and eth_blockNumber on https://rpc.mainnet.tempo.xyz: tempo/v1.19.2-c0c9372/x86_64-unknown-linux-gnu at block 0x30bf47e (51,115,134), the build named in the probe files. eth_getCode of 0x33620f62c5b9b2086dd6b62f4a297a9f30347029 returns 24,009 bytes with sha256 prefix f017c3da36573b60, equal to networks.json. tprobe_latest.json and tprobe_t14.json record the same client version before and after. I did not rerun the 56 probe calls. The probe cannot reach T15 because no build gives T15 an activation time, so the clearing holds for the code running today and the T15 question stays open in the unit's lead."
+    }
+  ],
+  "leads": []
+}

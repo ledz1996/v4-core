@@ -1,0 +1,22 @@
+{
+  "unit": "stablecoin-l1",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "L-1278 and the cycle 34 critic gap: is transient storage reset between transactions on an Arc build, so a sync or an open delta cannot leak into the next transaction (src/libraries/CurrencyReserves.sol:11-36, src/PoolManager.sol:349-365)?",
+      "agrees": true,
+      "note": "I ran eth_simulateV1 on https://arc-rpc.publicnode.com (web3_clientVersion reth/v2.2.0-508cbdf) on 2026-11-27 with two calls in one simulated block against PoolManager 0x8366a39CC670B4001A1121B8F6A443A643e40951. Call 1, sync(0x3600000000000000000000000000000000000000), succeeded with gas 0x80b9. Call 2, exttload(0x27e098c5...93b9), which is CURRENCY_SLOT at src/libraries/CurrencyReserves.sol:13 read by src/Exttload.sol:10-14, returned zero. sync writes that slot with tstore at src/PoolManager.sol:279-288 and src/libraries/CurrencyReserves.sol:28-32, so the next transaction does not see the synced currency. The official endpoint https://rpc.mainnet.arc.io answers that eth_simulateV1 is not supported, so the item's limit to the PublicNode and drpc builds is correct. I did not run a same-transaction positive control. The gas figure is consistent with a balanceOf call and two TSTOREs."
+    },
+    {
+      "check": "Does any production code on the main branch start a transaction while a user transaction of the Tempo chain runs, which would clear the lock and deltas of an open unlock (src/PoolManager.sol:104-114)?",
+      "agrees": true,
+      "note": "I fetched https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/payload/builder/src/prewarming.rs (1,390 lines). Its only transact call is at line 193. It runs on an EVM taken from a WorkerStatefulPool that evm_for_ctx fills at lines 87-93 and 181, which is a separate pooled EVM per worker and executes on top of the latest state. It is not the block executor's EVM and does not run inside a user transaction's frame. The lock and the delta count that unlock checks at src/PoolManager.sol:104-114 live in transient storage (src/libraries/Lock.sol), so this path cannot reach them. I did not repeat the item's count of all 17 call sites."
+    },
+    {
+      "check": "From T15, what does a take of a TIP-20 currency to a zone deposit address do inside the PoolManager (src/PoolManager.sol:291-297)?",
+      "agrees": true,
+      "note": "In https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/precompiles/src/tip20/mod.rs, transfer (lines 869-884) runs _transfer and then deposit_virtual with originator equal to msg_sender, which here is the PoolManager. deposit_virtual (lines 1073-1117) calls the portal's depositVirtual, and a Failure outcome returns RawRevert, which reverts the whole transfer. A zone deposit address used from another precompile's frame gets invalid_recipient (lines 1083-1088). take debits the caller's delta before the transfer (src/PoolManager.sol:291-297), so a revert also undoes the debit. A later failed zone deposit refunds the originator, the PoolManager, asynchronously. The taker loses those funds and they become unclaimed surplus, which F-135 already records. No other user's delta or balance changes."
+    }
+  ],
+  "leads": []
+}

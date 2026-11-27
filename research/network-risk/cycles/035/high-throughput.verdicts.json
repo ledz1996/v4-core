@@ -1,0 +1,38 @@
+{
+ "unit": "high-throughput",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "I fetched aot_instructions.hpp from evmone-compiler master on 2026-11-27; its sha256 is 5812d1bcf6de21acb65d9d2d9cb64e482aa32026ecc6f9fc58a0c5875cbf28a5, which matches the prefix in the finding. The handlers read as described. signextend (lines 207-219) builds the mask as 1u << (b - 1), with b = (ext + 1) * 8, so the shift is undefined from ext 4 upward, and the xor and subtract form keeps bits above the sign byte. byte (276-285) shifts x right by index = 31 - n bits, not by 8 * (31 - n) bits. shl and shr (287-295) apply <<= and >>= to _BitInt with the raw count. sar (297-306) sets is_neg from x < 0 on a uint256, which is never true. aot_execution_state.hpp defines uint256 as unsigned _BitInt(256) and int256 as signed _BitInt(256). aot_intx.hpp:167-171 returns result << exponent when the base is 2. megaeth.com/research says one active sequencer executes, replica nodes apply its state diffs without execution, and full nodes re-execute. I ran my own eth_call with a code override on mainnet.megaeth.com. SAR(1, -2) returned 0xff..ff, BYTE(0, 0x7fff..ff) returned 0x7f, SIGNEXTEND(3, 0x0180000000) returned 0xff..ff80000000, and SHL(0xffff, 0x100) returned 0. All four match the specification. This tests the RPC node and not the sequencer. The finding's claim about the producer therefore rests on the stored census and on the swaps.log tick relation counts (MegaETH 5,901 exact, 0 mismatch). I read both files. I did not recompute them.",
+   "codeCheck": "The cited sites use these opcodes as stated. BitMath.sol:22-23 uses byte for the msb table lookup, and BitMath.sol:45-46 uses byte for the lsb lookup. TickBitmap.sol:38 computes sar(8, signextend(2, tick)). TickMath.sol:61-63 computes signextend(2, tick) and then sar(255, tick). TickMath.sol:228 and 233 shift a signed int256 with >> 128, which compiles to SAR. BalanceDelta.sol:24-27 and 38-41 use sar(128) and signextend(15), and BalanceDelta.sol:63 uses sar(128). Slot0.sol:49 computes signextend(2, shr(TICK_OFFSET, _packed)). If a producer used these handlers, all of these sites would compute different values. No unprivileged input selects which executor the sequencer runs.",
+   "corrections": "The mechanism says 74,456 vectors. aot-handlers.json records 73,456 cases. The per-opcode mismatch counts match the file.",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/master/lib/compiler/aot_instructions.hpp", "supports": "signextend 207-219, byte 276-285, shl and shr 287-295, sar 297-306 as described; sha256 5812d1bc..."},
+    {"url": "https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/master/lib/compiler/aot_execution_state.hpp", "supports": "uint256 and int256 are _BitInt(256)"},
+    {"url": "https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/master/lib/compiler/aot_intx.hpp", "supports": "exp with base 2 returns 1 << exponent (lines 167-171)"},
+    {"url": "https://www.megaeth.com/research", "supports": "Single active sequencer executes; replica nodes apply state diffs; full nodes re-execute"},
+    {"url": "https://mainnet.megaeth.com/rpc", "supports": "eth_call with code override: SAR, BYTE, SIGNEXTEND and SHL by 0xffff return the specification values"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Four-transaction stale sync test on rpc3.monad.xyz, rpc.ankr.com/monad_mainnet, rpc-megaeth-mainnet.globalstake.io and megaeth.drpc.org: a bare sync does not survive into the next transaction.",
+   "agrees": true,
+   "note": "The stored result for drpc shows transaction 2 returning zero for both slots, and the same-transaction control in transaction 4 shows 0x70c0e1 and 0x1234. That supports the result for these endpoints. megaeth.drpc.org answers web3_clientVersion as Geth/v10.0.0/drpc, so its backend build is unknown. None of the four endpoints is the producer or the official build. The finding's own lead records this gap. A stale sync would matter in _settle (src/PoolManager.sol:349-364), so the residual risk is on the official builds, which have not been tested."
+  },
+  {
+   "check": "What a wrong word from Monad block 0xde6 (the delta TLOAD of clear) could let an account do.",
+   "agrees": true,
+   "note": "clear uses the read value only in the equality check (src/PoolManager.sol:311-314). toInt128 reverts at 2^127 or more (src/libraries/SafeCast.sol:56-58), so amountDelta is not negative. The booked change, -amountDelta, goes through applyDelta, which reads the slot again with tload (src/libraries/CurrencyDelta.sol:28-40). The nonzero count follows from that second read (src/PoolManager.sol:368-377). A wrong first read can only cause a revert or lower the caller's own balance. It cannot create a credit."
+  },
+  {
+   "check": "Rerun of the general battery (99,985 vectors) and the targeted set (85,544 vectors) on four Monad and MegaETH endpoints.",
+   "agrees": true,
+   "note": "All six logs show zero mismatches and zero errors at full counts. My own four probes on mainnet.megaeth.com and the SIGNEXTEND probe on rpc.monad.xyz agree. The other probes on rpc.monad.xyz hit its rate limit. These runs test eth_call nodes and not the MegaETH sequencer. That gap is covered by the finding above and by F-118."
+  }
+ ],
+ "leads": []
+}

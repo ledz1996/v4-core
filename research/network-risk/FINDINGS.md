@@ -1,6 +1,6 @@
 # All findings
 
-164 findings on record after cycle 34, in-scope ones first.
+166 findings on record after cycle 35, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -4156,6 +4156,66 @@ Sources:
 - https://clientdiversity.org/ (execution client shares: Nethermind 25.46 percent in one survey and 43 percent in another)
 - file:research/network-risk/cycles/031/ethereum-reference.work/out/neth-int256.json (2,914,162 cases of the transcribed routines, 0 mismatches; planted faults in out/neth-int256-plant1.json to plant6.json)
 - file:research/network-risk/cycles/031/ethereum-reference.work/out/neth-rem512.json (489,674 cases of Remainder512By256Bits, 0 mismatches; out/neth-rem512-plant1.json shows 586 mismatches with the planted <=)
+
+## F-165. Erigon's main branch rewrites DIV, EXP and MULMOD handlers on FullMath's path and caches storage reads per frame, and no release carries either yet
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Ethereum.
+
+What differs on the network: erigon main, the code its next release (3.9.0) will be cut from, computes DIV by a power of two as a right shift, EXP with an odd base and a large exponent by a binomial series, and MULMOD with a modulus of 2^192 or more through a reciprocal cached in the call frame, on uint256 commit 808a9d02 that no client release pins. It also returns SLOAD results from a two-entry per-frame cache while a state read stamp is unchanged. Geth, reth and Nethermind run none of this.
+
+How it meets the code: FullMath.mulDiv computes mulmod(a, b, not(0)) at FullMath.sol:24, then on the 512 bit path mulmod(a, b, denominator) at :48 and three divisions by twos, a power of two, at :62, :67 and :73. On erigon main the first two go through the cached reciprocal whenever the modulus is 2^192 or more, and the three divisions go through log2Exact and Rsh. SqrtPriceMath and SwapMath call mulDiv on every swap step, so a wrong shortcut would change prices and amounts in blocks an erigon validator builds or checks, and that validator would part from the other clients. This cycle copied the four handlers verbatim into a harness linked with uint256 808a9d02 and ran 1,845,864 vectors of cycle 29 (every opcode the PoolManager uses), 224,164 vectors aimed at the shortcuts (DIV by 2^n and its neighbours for all n, EXP with base 2^256 - 1, odd bases with exponents from 2^64 to 2^256 - 1 and the small loop, MULMOD runs that reuse one modulus with zero operands on a cache hit) and 120,000 FullMath division triples: no mismatch. Two planted changes were caught (20,747 and 262 mismatches) and a third, a stale reciprocal, made the harness stop answering. CALLDATALOAD and PUSH fast paths gave the v3.8.2 and specified result on 4,000,000 random cases. The SLOAD cache meets PoolManager.swap, which reads slot0 at PoolManager.sol:196, calls the hook at :202 (the hook may reenter and change the pool) and reads the pool again in _swap at :206; it is right only if every storage write and every revert changes the stamp, and the stamp's definition was not found.
+
+What is at risk: None for funds today. A fault in these paths on an erigon validator would give that node a different state root, which the other clients reject; it is a consensus split for the operator, not a transfer of pool funds by an ordinary account. Simulated calls on an erigon RPC node would quote other amounts.
+
+What it takes: An erigon release cut from main, and a fault in one of the rewritten paths. The arithmetic paths tested clean; the SLOAD cache is unverified.
+
+What can be done: Run the vector sets and the reentrant hook scenarios on the first erigon 3.9 release before relying on erigon nodes for quotes. Validators can keep the client mix.
+
+This entry adds to F-163.
+
+Code: `src/libraries/FullMath.sol:24`, `src/libraries/FullMath.sol:48`, `src/libraries/FullMath.sol:62-73`, `src/PoolManager.sol:196-217`.
+
+Sources:
+
+- https://raw.githubusercontent.com/erigontech/erigon/main/execution/vm/instructions.go (opDiv with log2Exact (lines 78-103), opExp with expOdd (142-216), opMulmod with the cached reciprocal (374-388), opSload with the frame cache (859-880), CALLDATALOAD and PUSH fast paths)
+- https://raw.githubusercontent.com/erigontech/erigon/main/execution/vm/interpreter.go (mulmodModulus and mulmodReciprocal fields (105-108), frameSlots (124-171), context reset (219-260), cache switch per frame (577))
+- https://raw.githubusercontent.com/erigontech/erigon/main/go.mod (line 66 pins github.com/holiman/uint256 v1.3.3-0.20261109190209-808a9d02b85f)
+- https://proxy.golang.org/github.com/holiman/uint256/@v/v1.3.3-0.20261109190209-808a9d02b85f.zip (uint256 808a9d02: div.go umod, rem5by4, rem4by3, rem3by2; uint256.go MulModWithReciprocal (781-811) and MulMod (820-856))
+- https://raw.githubusercontent.com/erigontech/erigon/main/db/version/app.go (main is 3.9.0-dev)
+- local run: research/network-risk/cycles/035/ethereum-reference.work/out/u256-erigon-main.json (1,845,864 cycle 29 vectors, 0 mismatches)
+- local run: research/network-risk/cycles/035/ethereum-reference.work/out/erigon-fastpaths.json (224,164 shortcut vectors, 0 mismatches; plants in erigon-fastpaths-plant1.json and plant2.json caught)
+- local run: research/network-risk/cycles/035/ethereum-reference.work/out/erigon-fullmath-div.json (120,000 FullMath division vectors, 0 mismatches)
+
+## F-166. The public MegaETH compiler source computes BYTE, SAR, SIGNEXTEND and wide shifts against the specification, and mined blocks show the producer does not use those handlers
+
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: MegaETH.
+
+What differs on the network: MegaETH's sequencer runs a closed compiled executor (F-118). The only public compiler from megaeth-labs, evmone-compiler master (aot_instructions.hpp sha256 5812d1bcf6de21ac), ports evmone's handlers to clang unsigned _BitInt(256) and in doing so breaks five of them. BYTE at aot_instructions.hpp:276-285 shifts by 31 - n bits instead of 8 * (31 - n). SAR at :297-306 computes is_neg as x < 0 on an unsigned value, which is always false, so negative values are shifted logically. SIGNEXTEND at :207-219 builds the mask as 1u << (b - 1) with a 32 bit literal, which is undefined for an index of 4 or more, and the xor and subtract form keeps any high bits above the sign byte. SHL and SHR at :287-295 and EXP with base 2 in aot_intx.hpp shift a _BitInt by the raw count, which is undefined at 256 or more. The upstream evmone handlers in the same repository (lib/evmone/instructions.hpp:313-348) do these correctly on intx. DIV, SDIV, MOD, SMOD, ADDMOD, MULMOD and the comparisons are correct.
+
+How it meets the code: I copied the handler bodies by line range from the downloaded file into a harness with the same types and built it with clang 18.1.3 at -O0 and -O2. Against Python integers, on 73,456 vectors that include every edge of OPCODES.md and the PoolManager's operand shapes, both builds give 3,355 wrong BYTE results out of 5,841, 4,988 wrong SAR results out of 9,841, 3,433 wrong SIGNEXTEND results out of 7,841, 1,310 wrong SHL, 1,062 wrong SHR and 20 wrong EXP, and none for the other ten opcodes. A producer that ran these handlers would compute something else at these lines: the de Bruijn table lookups of BitMath.mostSignificantBit and leastSignificantBit (src/libraries/BitMath.sol:22, 45), which TickBitmap.nextInitializedTickWithinOneWord uses to pick the next tick; the word position of a negative tick (src/libraries/TickBitmap.sol:38); the sign mask of getSqrtPriceAtTick (src/libraries/TickMath.sol:63) and the signed shifts of getTickAtSqrtPrice (src/libraries/TickMath.sol:228, 233); amount0 and amount1 of every BalanceDelta (src/types/BalanceDelta.sol:24-27, 38-41, 63); and the tick read from slot0, where signextend(2) meets the fee bits above the tick (src/types/Slot0.sol:49). The result would be wrong ticks, wrong prices and wrong signed amounts on every swap with a negative tick or a negative amount, which includes every swap. The mined record rules this out for the producer as it runs today. The public validator reproduced the state root of 40,940 producer blocks in which SAR of a negative value ran 1,122,287 times, SIGNEXTEND from bytes 3 to 30 with the sign set 1,536,162 times, BYTE 1,362,441 times and SHL by 256 or more 206 times (cycle 33 census). 5,901 mined MegaETH swaps read this cycle satisfy the tick relation, whose computation runs the SAR and SIGNEXTEND sites above, and the multi-step ones replay to the unit. So the production executor either is not built from these handlers or does not compile the contracts involved, and nothing an ordinary account can send makes the producer switch to them.
+
+What is at risk: None today. If the producer were moved to a build of the public compiler for the PoolManager, every pool on MegaETH would compute wrong ticks and amounts and blocks would stop validating; the funds at risk would be all pool balances, and the trigger would be the operator's deployment, not an account.
+
+What it takes: The operator of MegaETH's sequencer deploys a compiler that carries the handlers of evmone-compiler master and compiles the PoolManager with it.
+
+What can be done: The deployer can ask MegaETH which compiler build the sequencer runs and whether it carries these handlers, and can keep a watch that compares producer blocks with the public validator, which would stop at the first wrong word.
+
+This entry adds to F-118.
+
+Second reviewer's corrections: The mechanism says 74,456 vectors. aot-handlers.json records 73,456 cases. The per-opcode mismatch counts match the file.
+
+Code: `src/libraries/BitMath.sol:22`, `src/libraries/BitMath.sol:45`, `src/libraries/TickBitmap.sol:38`, `src/libraries/TickMath.sol:63`, `src/libraries/TickMath.sol:228-233`, `src/types/BalanceDelta.sol:24-27`, `src/types/Slot0.sol:49`.
+
+Sources:
+
+- https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/master/lib/compiler/aot_instructions.hpp (Handlers byte (276-285), shl and shr (287-295), sar (297-306), signextend (207-219) on _BitInt)
+- https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/master/lib/compiler/aot_execution_state.hpp (uint256 is unsigned _BitInt(256) and int256 is signed _BitInt(256) (lines 17-21))
+- https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/master/lib/compiler/aot_intx.hpp (exp returns result << exponent for base 2; mulmod and addmod widen to 512 and 257 bits)
+- https://raw.githubusercontent.com/megaeth-labs/evmone-compiler/master/lib/evmone/instructions.hpp (Upstream evmone handlers byte, sar and signextend on intx limbs (lines 226-348))
+- https://www.megaeth.com/research (Sequencer nodes execute transactions; replica nodes apply state diffs without re-execution; full nodes re-execute)
+- file:research/network-risk/cycles/035/high-throughput.work/out/aot-handlers.json (Mismatch counts per opcode at -O0 and -O2 and examples)
+- file:research/network-risk/cycles/033/theme-closed-producer-operand-census.work/out/summary-megaeth.json (Class counts in 40,940 validated MegaETH blocks: 29:1 1,122,287, 11:2 1,536,162, 26:1 1,362,441, 27:1 206)
+- file:research/network-risk/cycles/035/high-throughput.work/out/swaps.log (5,901 MegaETH swaps pass the tick relation on 2026-11-27)
 
 ## F-023. Celo governance can move native CELO out of the PoolManager through the CELO token proxy and the transfer precompile
 

@@ -1,0 +1,139 @@
+{
+ "unit": "theme-reth-keccak-asm-image-lift",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L1",
+   "check": "Task 1 (L-1275): which keccak routine and which cache the official X Layer image links. Image fetched from Docker Hub as its own docs name it (okx/xlayer-toolkit rpc-setup presets name xlayer/xlayer-reth); the tag matching the endpoint build is v0.0.7.3-rc.1 (Cargo.toml of that tag pins okx/reth f60420a and version 0.0.7; tag v0.0.7.3 pins 81573d2c). Index digest sha256:ec01a5038062ec4a083b60174d73a27deba7d6546b7d183c95f52b1285d9eef4 equals the digest Docker Hub lists, single platform amd64, every layer digest checked. The image has no revision label (only org.opencontainers.image.version 24.04). Node binary /usr/local/bin/op-reth, sha256 7a9230ac67a539a14e34ea243f64f466c2b5cf0bbc8cf4bd37642f1393019c2e, stripped, read with readelf, objdump and strings only.",
+   "result": "The binary names commit f60420aaac6457295a38b66bd544bab28ab6ec5d, build time 2026-11-05T10:13:14Z and 'Build Features: asm_keccak,jemalloc,keccak_cache_global,min_trace_logs,otlp,otlp_logs', and embeds alloy-primitives 1.6.0, fixed-cache 0.1.10 and revm-interpreter 37.0.3. It links the generic x86-64 CRYPTOGAMS routine of keccak-asm (keccak1600-x86_64.pl, the lane complementing variant with six not instructions around each permutation): __KeccakF1600 0x6f67300, KeccakF1600 0x6f675e0, SHA3_absorb 0x6f67680, SHA3_squeeze 0x6f67760, iotas at 0x6f67840. That is the only copy of the round constants in .text (the three other copies are in .rodata for the pure Rust keccak crate), so no AVX2, AVX-512VL or ARMv8 routine is present. sha3-asm 0.1.6 build.rs selects keccak1600-avx512vl.pl only when the target has avx512vl and otherwise keccak1600-x86_64.pl. KECCAK256 is entry 0x20 of the four 256-entry instruction tables at 0x70cb168, 0x70cb968, 0x70cc168 and 0x70cc968; the handlers 0x3bde4a0 and 0x3bde660 return the empty hash constant for length 0 and otherwise call 0x3b6e6c0. That function is alloy-primitives keccak256 with the global cache: lengths 1 to 87 hash with rapidhash (0x3770440, seed 0x3841f612376719ec) into a static table at 0x71fe600 of 131,072 buckets of 128 bytes; a hit needs the bucket word equal to the tag with the lock bit clear, the stored length byte equal to the length, and bcmp of all input bytes equal to zero; other lengths go to 0x2147080 (absorb of whole 136 byte blocks, then pad 0x01 at the tail and 0x80 at byte 135, absorb, squeeze 32 bytes). The verifier of cycle 34 was right that asm-keccak and keccak-cache-global are on; the binary now shows it directly.",
+   "source": "https://hub.docker.com/v2/repositories/xlayer/xlayer-reth/tags; https://raw.githubusercontent.com/okx/xlayer-toolkit/main/rpc-setup/presets/network-presets.env; https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3-rc.1/Cargo.toml; https://raw.githubusercontent.com/okx/xlayer-reth/v0.0.7.3/Cargo.toml; https://raw.githubusercontent.com/okx/reth/f60420aaac6457295a38b66bd544bab28ab6ec5d/bin/reth/Cargo.toml; https://static.crates.io/crates/sha3-asm/sha3-asm-0.1.6.crate (build.rs lines 97-109); cycles/035/theme-reth-keccak-asm-image-lift.work/build/xl_keccak.s"
+  },
+  {
+   "chainIds": [
+    196
+   ],
+   "lens": "L1",
+   "check": "Task 2: the lifted X Layer path run in the x86 model (x86emu.py and x86emu2.py of cycle 32, extended in scripts/xlmodel.py with rol, bswap, cmpxchg, lock and rep prefixes and with the binary's RELATIVE relocations applied), seed 2026112735, compared with the pure Python Keccak-256 of tools/opdiff/evm.py that pyevm.py imports. Sets: every length 0 to 1,100 through the cache entry and the uncached routine, a second call for lengths 1 to 87, 135 to 137 and 271 to 273 through both entries and both handlers, source offsets 0 to 31 (plus multiples of 32) through the handler for 18 lengths from 0 to 1,023, 300 each of PoolId (160 bytes, src/types/PoolId.sol:14), position key (58 bytes at fmp+0x0c, src/libraries/Position.sol:55-60, run twice for the cache hit), CurrencyDelta (64 bytes at 0, src/libraries/CurrencyDelta.sol:12-14, twice), mapping slots with a small second word (pools, ticks, bitmap, positions, ERC-6909 outer and inner), then the cache.",
+   "result": "27681 cases, 0 wrong, 0 model errors. Cache: 21688 lookups; 3500 probes against entries planted in the probe's own bucket with the probe's own tag (one bit flipped anywhere, a bit flipped in the last 8 bytes, the first byte flipped, the key one byte shorter, one byte longer, the same key locked, the same key under another tag, a shorter key whose length byte differs), 0 returned the planted value; 875 of 875 positive controls (the exact key planted with a marker) returned the marker, so the hit path was exercised. The handler checks also confirmed the stack pointer, the memory borrow counter and gas of 6 per word. 828 of the 931 lifted instructions were reached; the rest are the out of gas, memory growth and lock contention branches. Every set and every mismatch record is in out/full_none.json.",
+   "source": "cycles/035/theme-reth-keccak-asm-image-lift.work/out/full_none.json; scripts/run_all.py; scripts/xlmodel.py"
+  },
+  {
+   "chainIds": [
+    196,
+    56
+   ],
+   "lens": "L1",
+   "check": "Task 4: faults planted in in-memory copies of the model text and data, quick set of 1,433 cases each, on X Layer and reth-bsc: iota (round 5 constant with bit 7 flipped), rot (first rol inside __KeccakF1600 off by one), pad (the 0x01 padding byte one byte early in the uncached routine), padc (the same in the cached routine), bcmp8 (cache key compare skips the last 8 bytes), lenchk (cache hit without the length byte compare).",
+   "result": "Every fault is caught. X Layer: iota 1431 of 1433 cases wrong, length 135 among them; rot 1431 of 1433 cases wrong, length 135 among them; pad 393 of 1433 cases wrong, length 135 among them; padc 1038 of 1433 cases wrong; bcmp8 34 of 1433 cases wrong, 17 planted false hits; lenchk 40 of 1433 cases wrong, 20 planted false hits. reth-bsc: iota 1431 of 1433 cases wrong, length 135 among them; rot 1431 of 1433 cases wrong, length 135 among them; pad 393 of 1433 cases wrong, length 135 among them; padc 1038 of 1433 cases wrong; bcmp8 34 of 1433 cases wrong, 17 planted false hits; lenchk 40 of 1433 cases wrong, 20 planted false hits.",
+   "source": "cycles/035/theme-reth-keccak-asm-image-lift.work/out/quick_*.json and out/bsc_quick_*.json"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L1",
+   "check": "Task 3 (L-1279) for BNB Chain: reth-bsc. Manifests: bnb-chain/reth-bsc v0.1.4 Cargo.toml line 19 takes reth from bnb-chain/reth tag v0.1.3 without default-features = false, and that bin/reth lists keccak-cache-global and asm-keccak in default (bin/reth/Cargo.toml lines 83-92); the reth-bsc Dockerfile builds --bin reth-bsc with RUSTFLAGS and FEATURES empty. Images ghcr.io/bnb-chain/reth-bsc:v0.1.4 (index sha256:9d6bfa7c5c885ea56ef0128487d6f5e6baf3b49691720683d0489c032ee0ba8f, amd64 manifest sha256:661a108d...575b, binary sha256 31c061b9ca5edbbf700688a66ea03a6cdb8b3d9ec8bb87614a995968f467b860) and v0.1.4-hotfix (index sha256:194813685da99d34cef273af4096b7117bfbe505b60259da65f01988171bd7f4, binary sha256 7ad18ecd762df5ae20e531f299acea6033adc751435364a9fc92778c5be33b96), all digests checked. The hotfix binary carries 0.1.4-hotfix and commit 23b510f8d06c, the build bsc-rpc.publicnode.com reports (reth-bsc/v0.1.4-hotfix-23b510f).",
+   "result": "Both binaries say 'Build Features: asm_keccak,jemalloc,keccak_cache_global,min_debug_logs,otlp,otlp_logs' and embed alloy-primitives 1.6.0 and fixed-cache 0.1.10. The CRYPTOGAMS block (__KeccakF1600 to the end of iotas) is byte for byte the X Layer block in both, so it is the generic x86-64 routine. The KECCAK256 handlers (entry 0x20 of 17 tables of 16 byte entries with static gas 30) call the same cached keccak256 shape. The v0.1.4 path was run in the model: 27681 cases, 0 wrong, 0 errors, 21688 cache lookups, 3500 planted probes with 0 false hits, 875 of 875 positive controls hit. The hotfix handler, cache function, uncached routine and hasher are instruction for instruction equal to v0.1.4 once addresses are removed (144, 146, 71 and 153 lines, no difference), so the result carries over to the build publicnode serves. bnb-chain/reth's own Dockerfile builds amd64 with -C target-cpu=x86-64-v3, which has no avx512vl, so the routine is also the generic one there. bsc-dataseed1 runs geth v1.8.2, which calls crypto.Keccak256 without a cache (an earlier cleared item).",
+   "source": "https://raw.githubusercontent.com/bnb-chain/reth-bsc/v0.1.4/Cargo.toml; https://raw.githubusercontent.com/bnb-chain/reth-bsc/v0.1.4/Dockerfile; https://raw.githubusercontent.com/bnb-chain/reth/v0.1.3/bin/reth/Cargo.toml; https://raw.githubusercontent.com/bnb-chain/reth/v0.1.4/Dockerfile; https://ghcr.io/v2/bnb-chain/reth-bsc/tags/list; cycles/035/theme-reth-keccak-asm-image-lift.work/out/bsc_full_none.json"
+  },
+  {
+   "chainIds": [
+    42220
+   ],
+   "lens": "L1",
+   "check": "Task 3 (L-1279) for Celo: does celo-reth take a reth binary crate with default features, and does the published image link keccak-asm or the keccak cache. celo-kona tag celo/reth-v1.0.10 workspace takes individual reth crates from paradigmxyz/reth 7680d6d8 and no reth binary crate (Cargo.toml lines 155-192); crates/celo-reth has default = [\"std\"] (line 146) and its Dockerfile builds -p celo-reth --bin celo-reth with no feature list. Image us-west1-docker.pkg.dev/devopsre/celo-blockchain-public/op-reth:celo-v1.0.10, the one Celo's docs and the release note name, index sha256:0ccbcdf8294dd0c2663f4c4dd5bf35e935e43b20bae8a1a90f73f4edfe38558a, binary /usr/local/bin/celo-reth sha256 ca81b8701ff8bb3ba31d3462ddd5123740e7da7051e0e2269753f68e208cbfac, version 2.2.0 commit 74cc8bbce763, the build forno.celo.org reports in 11 of 12 answers.",
+   "result": "The binary keeps its symbol table. 'Build Features:' is empty. The four revm_interpreter::instructions::system::keccak256 handlers (entry 0x20 of 20 tables) call alloy_primitives::utils::keccak256_impl (0x5073240) directly, which uses sha3::block_api::xor_block and keccak::backends::soft::keccak_p. There is no CRYPTOGAMS code (no round constant table in .text) and no static keccak cache; fixed-cache 0.1.8 is linked only for reth_execution_cache's account and bytecode caches. alloy-primitives 1.6.0 in the lockfile does not depend on fixed-cache. Celo runs the pure Rust routine, which the endpoint vectors cover. The other forno backend, Geth/v0.1.0-untagged-c7ed55b8, is go-ethereum family without an alloy cache.",
+   "source": "https://docs.celo.org/operate/operators/overview; https://github.com/celo-org/celo-kona/releases; https://raw.githubusercontent.com/celo-org/celo-kona/celo/reth-v1.0.10/Cargo.toml; https://raw.githubusercontent.com/celo-org/celo-kona/celo/reth-v1.0.10/crates/celo-reth/Cargo.toml; https://raw.githubusercontent.com/celo-org/celo-kona/celo/reth-v1.0.10/crates/celo-reth/Dockerfile; https://raw.githubusercontent.com/celo-org/celo-kona/celo/reth-v1.0.10/Cargo.lock"
+  },
+  {
+   "chainIds": [
+    196,
+    42220,
+    4326,
+    56
+   ],
+   "lens": "L1",
+   "check": "Task 4 endpoint check: 2,000 KECCAK256 vectors (seed 3535; every third length 0 to 1,100 plus the block boundaries, 256 unaligned cases, PoolId, position key at offset 12 mod 32, CurrencyDelta and mapping slot shapes, random 1 to 88 byte inputs) by eth_call with a state override contract that copies each input from calldata to memory and hashes it there, in 20 batches of 100 per endpoint, each batch bracketed by web3_clientVersion.",
+   "result": "rpc.xlayer.tech ['reth/v2.3.0-f60420a/x86_64-unknown-linux-gnu/xlayer/v0.0.7']; forno.celo.org ['Geth/v0.1.0-untagged-c7ed55b8-20260817/linux-amd64/go1.24.13', 'reth/v2.2.0-74cc8bb/x86_64-unknown-linux-gnu']; mainnet.megaeth.com/rpc ['mega-reth/v2.3.1-4499c42@mnet-ash-rpc-2']; bsc-rpc.publicnode.com ['reth-bsc/v0.1.4-hotfix-23b510f/linux']. Every endpoint returned 2000/2000/2000/2000 of 2,000 hashes equal to the Python Keccak-256, no error.",
+   "source": "eth_call to https://rpc.xlayer.tech, https://forno.celo.org, https://mainnet.megaeth.com/rpc, https://bsc-rpc.publicnode.com; cycles/035/theme-reth-keccak-asm-image-lift.work/out/send2000.json"
+  },
+  {
+   "chainIds": [
+    196,
+    42220,
+    4326,
+    56
+   ],
+   "lens": "L1",
+   "check": "Earlier clearances on these networks whose stated reason is that the assembly routine or the cache is off, and whether each still stands.",
+   "result": "(1) Cycle 34, X Layer: 'the image enables no Cargo feature ... KECCAK256 runs through the sha3 crate'. Withdrawn: the binary links keccak-asm and the cache; the live result stands and the lifted routine and cache now pass on their own. (2) An earlier cleared item for Celo and X Layer: 'Celo's production tag does not link the cache'. Stands, now on the binary: no cache and no assembly in celo-v1.0.10. (3) OPCODES.md line 239: cache 'off in World Chain and celo-reth, and unknown for ... the closed MegaETH node'. The Celo part stands; MegaETH stays unknown. (4) The cleared item for World Chain and Celo: 'Neither does' enable keccak-cache-global. The Celo part stands on the binary. (5) MegaETH: 'the public stateless validator does not compile the keccak cache'. Stands for the validator but says nothing of the RPC node. (6) OPCODES.md line 667: 'The published X Layer image is built without CPU-specific flags, so it does not run the AVX-512 keccak routine'. Stands: the image holds only the generic routine. (7) The reth-bsc bucket test assumed the cache is on, and it is.",
+   "source": "research/network-risk/state/cleared.json; research/network-risk/OPCODES.md lines 239, 667, 699"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42161,
+    4663,
+    99901,
+    137,
+    43114,
+    143,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Whether this theme applies to the networks outside X Layer, Celo, MegaETH and BNB Chain.",
+   "result": "It does not. The theme asks which keccak routine and cache the shipped X Layer, Celo, MegaETH and reth-bsc images contain. The other 17 networks have their keccak paths in other units (op-reth and Base images in cycle 32, Tempo and Arc in cycle 29, Monad, the go-ethereum family, Nitro, HyperEVM and Avalanche elsewhere). No vector here ran against them.",
+   "source": "research/network-risk/cycles/035/plan.json"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "question": "Which keccak routine and which cache does mega-reth v2.3.1 (mega-reth/v2.3.1-4499c42) link? Its source is not public. The only node package found, gs://megaeth-public-node-packages/<tag>/megaeth-rpc-<tag>.tar.gz in CryptoManufaktur-io/megaeth-docker init/fetch-snapshot.sh, needs a service account key, so it was not fetched.",
+   "why": "MegaETH has one sequencer. Only endpoint vectors cover it: 2,000 from this cycle and the earlier bucket test, all matching. A cache keyed by less than the full input on the sequencer would not show up on inputs nobody chose to collide.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    56
+   ],
+   "lens": "L1",
+   "question": "Does the arm64 image ghcr.io/bnb-chain/reth-bsc:v0.1.4-hotfix-arm64 (the ARMv8 CRYPTOGAMS routine keccak1600-armv8.pl) return Keccak-256 on the lengths and shapes of this theme? Only amd64 was lifted.",
+   "why": "A reth-bsc validator on arm64 would run a routine no model has read for this client. A disagreement with geth validators would halt consensus rather than move funds, so the hazard is operator level.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1275",
+   "outcome": "cleared",
+   "answer": "The official image xlayer/xlayer-reth:v0.0.7.3-rc.1 (commit f60420a, as the endpoint reports) links the generic x86-64 CRYPTOGAMS routine of keccak-asm and the alloy-primitives 1.6.0 global cache (fixed-cache 0.1.10, 131,072 buckets). sha3-asm 0.1.6 build.rs picks it because RUSTFLAGS are empty and the target has no avx512vl. Lifted from the binary and run in the model on 27681 cases: every length 0 to 1,100, 135 to 137, 271 to 273, offsets 0 to 31, the 160, 58 and 64 byte shapes of src/, plus 21688 cache lookups with 3500 planted same-bucket same-tag probes. No hash was wrong and no planted entry was returned. Six planted faults were all caught. 2,000 live vectors on rpc.xlayer.tech match."
+  },
+  {
+   "leadId": "L-1279",
+   "outcome": "cleared",
+   "answer": "Celo: celo-reth takes no reth binary crate. Its published image celo-v1.0.10 (commit 74cc8bb) has empty build features and hashes with the pure Rust sha3 and keccak crates, with no keccak cache. reth-bsc v0.1.4 takes reth from bnb-chain/reth v0.1.3 with default features, so it compiles asm-keccak and keccak-cache-global, and its v0.1.4 and v0.1.4-hotfix images say so. Their CRYPTOGAMS block is byte-identical to X Layer's generic routine, and the lifted path passes the same tests (27681 cases, 3500 planted probes, no false hit). mega-reth is closed and its package is gated, so it is unknown and kept as a lead. Of the earlier clearances that rested on the routine or cache being off, only cycle 34's X Layer reason was wrong; it is withdrawn and replaced by the binary result."
+  },
+  {
+   "leadId": "L-1270",
+   "outcome": "cleared",
+   "answer": "The okx/optimism submodule commit could not be read: github.com returned HTTP 403 for the tree page and the GitHub API is not available here. The question behind the lead is settled by the shipped binary. asm-keccak is already on through okx/reth's reth crate, the build feature string lists it, and the only keccak assembly in the image is the generic x86-64 routine tested here. Whatever the op-reth crates of the submodule enable, they cannot add another routine to this image."
+  }
+ ]
+}
