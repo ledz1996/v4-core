@@ -1,0 +1,22 @@
+{
+  "unit": "theme-first-inputs-and-stale-sync",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "What a stale sync would do if a network failed to clear it, and whether Monad v0.16.7 clears transient storage between transactions (Task 4 on Monad, Task 5).",
+      "agrees": true,
+      "note": "The code reads as stated. sync needs no unlock and writes CURRENCY_SLOT and RESERVES_OF_SLOT together (src/PoolManager.sol:279-288, src/libraries/CurrencyReserves.sol:27-32), and _settle credits balanceOf(this) minus the stored reserves and then resets the currency (src/PoolManager.sol:349-364), so a carried-over sync would hand the balance rise since that sync to the first settler. I fetched the Monad v0.16.7 sources myself. execute_transaction.cpp builds a new State over block_state_ for the first attempt and for the retry (lines 456 and 482 in the fetched copy, matching the cited 458 and 484 to within two lines). transient_storage_ lives in AccountState (account_state.hpp:70, 126-133, 151-154). BlockState::merge (block_state.cpp:194 onward) copies account_ and storage_ for each touched address and never reads transient_storage_. A new transaction therefore starts with empty transient storage on that path. The chain fact and the code both hold."
+    },
+    {
+      "check": "Transient reset on MegaETH and HyperEVM: mega-evm 1.7.4 pins revm =40.0.3, revm-context 18.0.3 clears transient storage at commit_tx, discard_tx and finalize, and a simulated four-transaction block shows the next transaction reads zero.",
+      "agrees": true,
+      "note": "Fetched mega-evm main Cargo.toml: version 1.7.4 at line 19 and revm =40.0.3 at line 141. Fetched revm-40.0.3.crate from crates.io: its Cargo.toml depends on revm-context 18.0.3 (lines 138-141). Fetched revm-context-18.0.3.crate: src/journal/inner.rs calls transient_storage.clear() at lines 154, 188 and 246. The saved live output for hl-purroof shows status 0x1 for each transaction and a zero word in the tx2 exttload return. The open link is the one the unit already names: the running MegaETH v2.3.1 producer, the official HyperEVM endpoint and Monad 0.16.7 do not serve eth_simulateV1, so the reset there rests on source reading alone. That is a correct statement of the gap, not a wrong clearance."
+    },
+    {
+      "check": "Task 1: a getAmount1Delta product of 2^256 or more is reachable at every tick spacing, but on a successful call a wide amount never settles.",
+      "agrees": true,
+      "note": "I recomputed the spacing 1 figures: maxLiquidityPerTick is (2^128-1)/1,774,545 = 2^107.241, and the widest one-word step at the top of the range is 2^160 times (1 - 1.0001^-128) = 2^153.70, so the product exceeds 2^256. The settlement argument holds under my reading. In the exact-input branch, if amountRemainingLessFee >= amountIn (src/libraries/SwapMath.sol:69) the full wide amountIn is consumed, so amountSpecified minus amountSpecifiedRemaining is at least 2^160 and toInt128 at src/libraries/Pool.sol:455 or :459 reverts (src/libraries/SafeCast.sol:40-43). If the wide amountIn loses the comparison, amountIn becomes amountRemainingLessFee and the whole amountRemaining is consumed (SwapMath.sol:77, :82), so a successful call needs amountSpecified below 2^127 in magnitude and the comparison has a margin of at least 2^33. The exact-output branch is symmetric at SwapMath.sol:91-96. The only way a wide product affects a successful call is a MULMOD that returns a grossly wrong remainder at FullMath.sol:48, which the subtraction at FullMath.sol:52-53 would turn into a near-zero quotient. The unit records that case as a lead for the unexercised closed producers rather than clearing it, which is correct; I would raise its priority only if a producer difference in MULMOD were shown, and none is."
+    }
+  ],
+  "leads": []
+}

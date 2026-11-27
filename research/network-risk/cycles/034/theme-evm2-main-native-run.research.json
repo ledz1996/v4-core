@@ -1,0 +1,127 @@
+{
+ "unit": "theme-evm2-main-native-run",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 1. Every file that differs between evm2 7c9f3b6d (Tempo v1.19.2 and tempo main) and e80df9c4 (reth main) in crates/evm2, macros, inspectors and jit. crawl.py mirrored e80df9c4 (176 files) in this session; the 7c9f3b6d tree is cycle 33's mirror, completed with evm/bal/account.rs, and 13 of its files were fetched again in this session and are byte equal to the mirror. Cargo.toml and Cargo.lock were fetched at both revisions.",
+   "result": "Thirteen files differ and one file is present in both. Interpreter: only interpreter/instructions/arithmetic.rs, lines 22 and 32: DIV changes from `if b.is_zero() { Word::ZERO } else { a.wrapping_div(*b) }` to `a.checked_div(*b).unwrap_or_default()`, MOD from `if b.is_zero() { Word::ZERO } else { a.wrapping_rem(*b) }` to `a.checked_rem(*b).unwrap_or_default()`. SDIV and SMOD (i256_div and i256_mod, arithmetic.rs:27 and :37, i256.rs byte equal), ADDMOD (a.add_mod, :42), MULMOD (a.mul_mod, :47) and EXP (a.wrapping_pow, :53) are the same text at both revisions. Instruction set, bytecode analysis, interpreter memory, stack, dispatch, evm/mod.rs, evm/tx.rs and evm/state are byte equal. Outside the interpreter: utils.rs:82-83 converts a word to an address with Address::from_word((*self).into()) instead of B256::from(self.to_be_bytes()), and drops the unused left_pad helper; version/gas_params.rs:258 charges EXP per byte with power.byte_len() instead of power.bit_len().div_ceil(8); precompiles/modexp.rs:171-177 rewrites the iteration count and the high part padding; bn254/arkworks.rs, bls12_381/arkworks.rs, crypto.rs (RIPEMD-160 left padding) and secp256k1/mod.rs are rewritten without a change of meaning as read; the inspectors crate changes only tracing output helpers. Cargo.toml and Cargo.lock are byte equal at both revisions and lock ruint 1.21.1 and alloy-primitives 1.7.3. The full diff is out/tree-7c9f3b6d-e80df9c4.diff in the work directory.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/e80df9c46a8240b056a076ab930b1c5ecf7f1e47/crates/evm2/src/interpreter/instructions/arithmetic.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Whether the new DIV and MOD, the new word to address conversion and the new EXP byte count compute the old words, read in the library sources the lock pins (ruint 1.21.1, alloy-primitives 1.7.3).",
+   "result": "Yes. ruint 1.21.1 src/div.rs:9-14 and :36-41 return None for a zero divisor and otherwise Some(self.div(rhs)) and Some(self.rem(rhs)); impl_bin_op (src/macros.rs:11-51, applied at div.rs:149-150) maps Div and Rem to wrapping_div and wrapping_rem, the routines the old code called, and Default is ZERO (src/lib.rs:371-375). The quotient and remainder for a nonzero divisor therefore run the same limb code at both revisions, and a zero divisor still gives 0. byte_len is defined as bit_len().div_ceil(8) (src/bits.rs:330-332), so EXP gas is unchanged. alloy-primitives 1.7.3 converts U256 into B256 with to_be_bytes (bits/fixed.rs:183-191, the U256 => B256 entry at :236) and Address::from_word keeps bytes 12..32 (bits/address.rs:134-136), the same address as before, so CALL, BALANCE and EXTCODE targets are unchanged. UnsafeMath.divRoundingUp (src/libraries/UnsafeMath.sol:14) and the divisions of FullMath (src/libraries/FullMath.sol:35, :62, :67, :73) get the same words.",
+   "source": "https://raw.githubusercontent.com/recmo/uint/v1.21.1/src/div.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 2 and Task 5 fallback. The native build of evm2 at both revisions was refused by this session's permission system at the first cargo step, so the changed DIV and MOD of both revisions were transcribed in scripts/revdiv.py (with DIVUP as UnsafeMath.divRoundingUp) and run on the DIV, MOD and DIVUP records of battery.py (seed 20261124), targeted.py (seed 681) and a constructed set (seed 34_2026_11_27) of zero divisors over every battery edge value, 20,000 divisors with a nonzero top limb and 20,000 limb-aligned divisors with dividends at q*b-1, q*b and q*b+1. Four faults were planted in a copy of the new form.",
+   "result": "Both revisions give the reference word of tools/opdiff/evm.py on all 6,744 battery, 12,000 targeted and 180,327 constructed cases, and the two revisions differ on none. Planted faults are caught: F1 (division by zero returns the dividend) 139 battery and 323 constructed mismatches; F2 (remainder with a signed truncating sign rule) 656, 884 and 31,011; F3 (quotient one too high at a divisor whose top limb is nonzero) 363, 1,332 and 31,116; F4 (dividend high limb dropped) 1,923, 4,389 and 162,240. The EXP byte count of both revisions agrees on 20,518 exponents and the modexp iteration count on 7,510 cases. Results in out/revdiv.json. The ruint 1.21.0 mul_mod fault shapes of targeted.py concern MULMOD, which is the same text at both revisions, so the transcription adds nothing for them; that comparison is carried by OPCODES.md (both revisions lock 1.21.1).",
+   "source": "research/network-risk/cycles/034/theme-evm2-main-native-run.work/out/revdiv.json"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "The PoolManager scripts of pmdiff.py (200, seed 7_2026_11_24) and pmdiff2.py (200, seed 11_2026_11_24) on the build of this checkout (research/network-risk/build/PoolManager.json, 24,009 bytes, sha256 a7aaa3ba6ae795c3...) run through pyevm.py, once as written and once per variant with DIV and MOD replaced by the transcription (scripts/pmrev.py). The divisor of every executed DIV and MOD was classified.",
+   "result": "Both revisions give return data equal to pyevm on all 356 scripts that finish under the 3,000,000 step cap; 44 scripts hit the cap in every variant alike. The scripts execute 831,958 DIV and 65,310 MOD and none has a zero divisor or a divisor with a nonzero top limb, so F1, F2 and F3 leave every script unchanged and only F4 changes 336 scripts. The zero and full-width divisor shapes are therefore covered by the vectors above, not by the scripts. Results in out/pmrev.json.",
+   "source": "research/network-risk/cycles/034/theme-evm2-main-native-run.work/out/pmrev.json"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Live read-only eth_call of a stub placed by state override that returns 96 DIV and MOD words (zero divisors over eight dividends, 40 divisors with a nonzero top limb, seed 4217_1), bracketed with web3_clientVersion, at block 26,507,759 on Ethereum and 51,097,555 on Tempo (scripts/livediv.py).",
+   "result": "reth/v2.11.0-b9abbcc (which locks evm2 66687c18) and tempo/v1.19.2-c0c9372 (evm2 7c9f3b6d) both return the reference word for all 96. The client version was the same before and after each call. No public endpoint runs e80df9c4 yet, so this checks the old form only. Results in out/livediv.json.",
+   "source": "https://ethereum-rpc.publicnode.com and https://rpc.mainnet.tempo.xyz (eth_call, web3_clientVersion, 2026-11-27T16:32Z)"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 3 by reading, since the harness could not be built: what an open unlock sees after a transaction dispatched from inside the running one ends normally, reverts or is discarded, in evm2 e80df9c4 (evm/mod.rs, evm/tx.rs and evm/state/mod.rs are byte equal to 7c9f3b6d).",
+   "result": "execute_tx (evm/mod.rs:1399-1420) saves only the frame pointer, the refund counter and the suspended frame count; the State is shared. A nested transaction reads the outer one's transient map, so it sees IS_UNLOCKED_SLOT (src/libraries/Lock.sol:8) set and can pass onlyWhenUnlocked. Every way it ends clears the whole transaction scratch: a handler error clears it in execute_tx (mod.rs:1415-1417), a finalisation error in finish_executed_tx (mod.rs:1041-1043), ExecutedTx::commit calls commit_transaction and then clear_transaction_state (tx.rs:231-237), discard and drop call clear_pending_state (tx.rs:223-228, :365-369), and an EVM-level revert returns Ok and takes the commit or discard path. clear_transaction_state (state/mod.rs:564-580) empties transient_storage, the journal, warm sets, logs and the account overlay. After the inner transaction the outer frame's TLOAD (state/mod.rs:841-843) returns 0 for the lock slot, NONZERO_DELTA_COUNT_SLOT (src/libraries/NonzeroDeltaCount.sol:9-10), every currency delta (src/libraries/CurrencyDelta.sol:18-23) and CURRENCY_SLOT (src/libraries/CurrencyReserves.sol:13) in all three outcomes. Calls inside the callback then revert ManagerLocked, and the check in unlock (src/PoolManager.sol:112) reads a count of 0 and accepts debts taken before the inner transaction; on commit the overlay that held the outer transaction's earlier transfers is written to the accepted state, on discard it is dropped, and in both cases the outer journal is gone, so a later revert of the outer frame cannot undo them. This is what a future caller of the path would do. Precompile providers receive &mut Evm (evm/precompile.rs:79-84), so a chain precompile is the place such a caller would appear.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/e80df9c46a8240b056a076ab930b1c5ecf7f1e47/crates/evm2/src/evm/mod.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "callers.py rerun today on tempo main (381 files, same crate list as cycle 33) with evm2 7c9f3b6d, and on reth main (392 files of the 22 crates whose Cargo.lock entries depend on evm2) with evm2 e80df9c4.",
+   "result": "No production caller starts a transaction while a user transaction runs. tempo main: 10 production lines, the same set as cycle 33's c0c9372 list apart from line numbers (validator.rs:605 validate_tx on a pool EVM; action_replay.rs:66 and block.rs:947, :973 Tempo's own validate_tx helpers; block.rs:589 and :862 system calls after and before the block's transactions; genesis.rs:76 and :104; handler/config.rs:483 take_transient_storage of STORAGE_CREDITS_ADDRESS after the message; handler/config.rs:550 execute_system_call that runs a system transaction as the transaction itself). reth main: 12 production lines, all top level on their own EVM: rpc-eth-api call.rs:405, :515, :642, :662, :695 and trace.rs:66 (eth_call, simulation and tracing), engine tree prewarm.rs:414 and txpool_prewarm/worker.rs:238 (transact_with_inspector with BalanceTracker, whose Inspector impl at reuse.rs:1018 starts no transaction), and evm execute.rs:69, :154 and :250 (the block executor's per-transaction transact). No precompile provider in either tree calls transact, call_tx, system_call or execute_system_call. Lists in out/callers_tempo_main.txt and out/callers_reth_main.txt.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/evm/src/handler/config.rs"
+  },
+  {
+   "chainIds": [
+    1,
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 4: which release first carries e80df9c4. reth main Cargo.toml and Cargo.lock, reth v2.11.0 Cargo.lock, tempo main Cargo.toml and Cargo.lock and the tempo/v1.19.2 lock were fetched; refs v2.11.1, v2.11.2, v2.12.0, v2.12.0-rc.0, v2.12.0-rc.1, v3.0.0, release/v2.12 (reth) and tempo/v1.19.3, tempo/v1.19.4, tempo/v1.20.0, tempo/v1.20.0-rc.0, tempo/v1.20.0-rc.1, tempo/v2.0.0 were probed. The github.com tags pages answered HTTP 403 to this client, and the refusal was not worked around.",
+   "result": "reth main pins evm2 e80df9c4 (Cargo.toml:452-454 through the alloy-rs URL, patched to DaniPopes/evm2 at :698-701) with ruint 1.21.1 and still reads version 2.11.0; v2.11.0 locks 66687c18, and no later tag among those probed exists. tempo main pins 7c9f3b6d (Cargo.toml:325), reads version 1.19.2 and its lock has moved since c0c9372 without touching evm2 or ruint; no Tempo tag after tempo/v1.19.2 exists among those probed. The first reth release after v2.11.0 is the first carrier for Ethereum's reth nodes, and Tempo's next release carries e80df9c4 only if its lock moves. Reruns for that day: fetch the tag's Cargo.lock and read the evm2 rev; rerun crawl.py at that rev and diff against e80df9c4; rerun revdiv.py and pmrev.py if arithmetic.rs or any instruction file changed; rerun callers.py on the tagged tree; rerun livediv.py and the battery.py, targeted.py, pmdiff.py and pmdiff2.py sets against the endpoint once web3_clientVersion shows the new build.",
+   "source": "https://raw.githubusercontent.com/paradigmxyz/reth/main/Cargo.lock"
+  },
+  {
+   "chainIds": [
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Whether the evm2 revision change and its nested dispatch path apply to the 19 networks that run neither reth nor Tempo's client.",
+   "result": "They do not apply today. Per OPCODES.md those networks run go-ethereum forks, Nitro, bor, avalanchego, Monad's client, mega-evm, the closed HyperEVM validator, op-reth, Base and other reth forks on stock revm. OPCODES.md records that the op-reth release candidate links evm2 without wiring it into the node. A reth-derived network inherits e80df9c4 only when it rebases on a reth release that carries it and wires evm2 in.",
+   "source": "research/network-risk/OPCODES.md:458"
+  }
+ ],
+ "leads": [],
+ "leadResults": [
+  {
+   "leadId": "L-1259",
+   "outcome": "cleared",
+   "answer": "Between 7c9f3b6d and e80df9c4 the only interpreter file that changes is arithmetic.rs (DIV and MOD now use ruint checked_div and checked_rem with unwrap_or_default). In ruint 1.21.1, locked by both revisions, these return None only for a zero divisor and otherwise call the same wrapping_div and wrapping_rem, so DIV and MOD give the old word. The transcription matches evm.py on 198,071 DIV, MOD and DIVUP vectors including zero and full-width divisors, the 356 PoolManager scripts that finish give pyevm's return data, and four planted faults are caught. The other changes (word to address conversion, EXP byte count, modexp count, precompile encodings) compute the same values as read. No release carries e80df9c4 yet; the native build was refused and is left as a lead."
+  },
+  {
+   "leadId": "L-1255",
+   "outcome": "cleared",
+   "answer": "callers.py rerun today on tempo main (evm2 7c9f3b6d) and reth main (evm2 e80df9c4) finds no production caller that starts a transaction while a user transaction runs; tempo main's production list equals cycle 33's apart from line numbers. Read in e80df9c4, every end of a nested transaction (commit, discard, drop, handler or finalisation error) runs clear_transaction_state, so an open unlock would read 0 for the lock slot, NonzeroDeltaCount, its deltas and the synced currency afterwards, and src/PoolManager.sol:112 would accept unpaid debts. The rerun is still needed on every release of either client."
+  }
+ ]
+}

@@ -1,0 +1,22 @@
+{
+  "unit": "theme-monad-gcc-inlined-storage-sites",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 3, the runtime routines the calls reach: tload 0x340570, tstore 0x340610, sload 0x450670 and sha3 0x343f90 read every input before they write the result, so the aliased result pointers at 10 sites are safe.",
+      "agrees": true,
+      "note": "Read in research/network-risk/cycles/027/theme-monad-package-read.work/dl/dis/monad-0.16.7.s lines 653495-653525: tload loads the key with vpermq ymm0,[rdx] at 0x340584 before the host call at 0x3405ca and stores the result to [rbx] (the saved rsi) at 0x3405de, last. tstore (lines 653530-653555) tests the static flag at [rdi+0x20] bit 0 at 0x340636, then reads key from [rsi] and value from [rdx]. sha3 (lines 657099-657144) reads size from [rcx] and offset from [rdx] into registers at 0x343fa4 to 0x343fe7, rejects either word with bits at or above 2^28, and checks the memory end against 0x800000 before hashing; a zero size takes the empty-hash branch without looking at the offset, as the EVM does. The aliasing of result and key at the SLOAD and TLOAD sites therefore cannot change the word Lock.isUnlocked (src/libraries/Lock.sol:23-27), CurrencyReserves.getSyncedCurrency (src/libraries/CurrencyReserves.sol:14-18) or CurrencyDelta.getDelta (src/libraries/CurrencyDelta.sol:18-23) return."
+    },
+    {
+      "check": "Task 2 (L-1256): the SSTORE, TLOAD, SLOAD and KECCAK256 arms of compile_basic_blocks<MonadTraits<10>> are four instructions each that call out-of-line call_runtime<Args...> instances, with runtime function, remaining base gas and spill_avx = true.",
+      "agrees": true,
+      "note": "Read the arms at 0x35e735, 0x35e751, 0x35e76d and 0x35ec6b in the same listing: each is lea rcx,<runtime fn>; mov edx,1; mov rsi,r12; mov rdi,rbx; call <instance>, with sstore<MonadTraits<10>> 0x451fd0 to 0x352400, tload 0x340570 and sload 0x450670 both to the shared instance 0x351f40 (signature Context*, uint256_t*, uint256_t const*), and sha3<MonadTraits<10>> 0x343f90 to 0x351e00. The instance 0x351f40 stores rsi (remaining base gas), dl (spill_avx) and rcx (function) into the RuntimeImpl on its stack frame. The member order matches RuntimeImpl in emitter.hpp lines 150-166 at v0.16.7, and call_runtime at lines 580-587 only constructs Runtime<Args...> and calls call(), which I fetched. Mainnet revision: monad_mainnet.cpp at v0.16.7 returns MONAD_TEN from timestamp 1788359400 (2026-09-02T14:30Z), and revision.h sets MONAD_TEN = 10, so the MonadTraits<10> instantiation is the one that runs now."
+    },
+    {
+      "check": "Task 6: no site of the 128 blocks differs, so no src/ line computes or decides anything else on Monad's native path at these sites; the lock, synced-currency and delta reads cannot let a call pass onlyWhenUnlocked while locked or leave unlock with an open debit.",
+      "agrees": true,
+      "note": "On 2026-11-27 https://rpc.monad.xyz answered web3_clientVersion Monad/0.16.7 at eth_blockNumber 0x7814970, and eth_getCode of 0x188d586ddcf52439676ca21a244753fa19f9ea8e returned 24,009 bytes, matching the build the unit analysed. In the source, onlyWhenUnlocked (src/PoolManager.sol:95-98) reverts only when tload(IS_UNLOCKED_SLOT) is zero, unlock (src/PoolManager.sol:104-114) checks NonzeroDeltaCount.read() before Lock.lock(), clear (src/PoolManager.sol:310-315) requires amount.toInt128() to equal the current delta, and collectProtocolFees (src/ProtocolFees.sol:44-56) is gated by msg.sender == protocolFeeController before the synced-currency check, so that read is reachable only by governance. The unit's claim is limited to the 92 storage, hashing and log sites; the conclusion that these sites return EVM-equal words holds under my reading of the emitter arms and routines. I did not rerun the unit's Python models (inl.py, blk.py), so the run counts rest on the unit's logs; the one gap the unit names, block 0xde6 run whole, is correctly left as a low lead because its two emitting sites match one by one and the routines it calls are the ones read above."
+    }
+  ],
+  "leads": []
+}
