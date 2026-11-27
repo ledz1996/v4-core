@@ -1,0 +1,38 @@
+{
+ "unit": "hyperevm",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "plausible",
+   "severity": "high",
+   "factCheck": "The exchange endpoint page fetched today has sha256 812ecf7e87ec0470, and authorizeAqav2Role at line 1384 takes type, token and role only, so no address and no code check is published. The aligned quote assets page has sha256 9fd997fe977532e3; line 15 says the treasury deployer designates a treasury address, both deployers stake 500k HYPE, activation is by validator vote, and the linked HyperEVM contract rebalances with the treasury address. nanoreth tag nb-20261125-2 src/node/primitives/transaction.rs lines 49-57 and 77-96 return the sender of a system transaction from the s value with no signature check, which backs the difference. The transfers page lines 13-25 and 77 say credits are system transactions sent as the token system address and that nothing checks supply. My own eth_getTransactionCount on https://rpc.hyperliquid.xyz/evm at head 0x31ee6af returns 0x1 and eth_getBalance returns 0x9d908ef23bc0864f, the values the finding reports. No source says HyperCore would accept the PoolManager as treasury address or would send a transaction in the treasury's name; that link stays unconfirmed, which is why the finding is plausible and not confirmed.",
+   "codeCheck": "sync stores balanceOfSelf at the time of the call (src/PoolManager.sol:279-288). _settle credits reservesNow minus reservesBefore only for the synced currency inside the same unlock (src/PoolManager.sol:349-365), so a balance lowered from outside any unlock is never debited from any delta, pool reserve or ERC-6909 total. take and burn paths then end in Currency.transfer, which reverts with ERC20TransferFailed when the token refuses a transfer above the balance (src/types/Currency.sol:55-86). The mechanism holds: the last holders in that currency could not withdraw.",
+   "corrections": "coreRefs cite src/types/Currency.sol:50-60; the ERC-20 transfer and its revert are at src/types/Currency.sol:55-86 (lines 50-53 are the native branch). The actor is right: operator, since the treasury deployer stake and a validator vote are needed and an ordinary account can supply neither.",
+   "sources": [
+    {"url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md", "supports": "Fetched 2026-11-27, sha256 812ecf7e87ec0470; authorizeAqav2Role has fields type, token, role (line 1384)."},
+    {"url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md", "supports": "Fetched 2026-11-27, sha256 9fd997fe977532e3; treasury deployer designates the treasury address, 500k HYPE stake, activation by validator vote, linked contract rebalances with the treasury (line 15)."},
+    {"url": "https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/primitives/transaction.rs", "supports": "System transaction sender taken from s with no signature check (lines 49-57, 77-96)."},
+    {"url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers.md", "supports": "Credits are system transactions calling transfer as the system address (lines 13-25); no supply checks (line 77)."},
+    {"url": "https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest", "supports": "Returned 0x1 at block 0x31ee6af on 2026-11-27; eth_getBalance returned 0x9d908ef23bc0864f."}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Standard battery, targeted set and pmdiff sets 1 and 2 rerun on the official node at head 52,351,476 (2026-11-27).",
+   "agrees": true,
+   "note": "The logs in hyperevm.work/out show 99985/99985 and 85544/85544 with 0 mismatches, 250/250 identical, and 299/300 with script 189 the only difference; OPCODES.md lines 64 and 158 record that script as a gas-limited full-range swap under the 30 million eth_call cap. The deployed code at the PoolManager address has 24,009 bytes and sha256 907b85e610ad5dab, matching networks.json. My own eth_call with a code override on the official node returned 1 for MULMOD(2^256-1, 2^256-1, 2^256-2), the Ethereum word."
+  },
+  {
+   "check": "Transient storage journal on frame revert, nested revert, STATICCALL and account isolation (9 vectors) on mainnet, the f0cad31 replica and testnet.",
+   "agrees": true,
+   "note": "tstore-rollback.json shows every case ok on all three endpoints. My own eth_call on https://rpc.hyperliquid.xyz/evm, with a DELEGATECALL into code that does TSTORE(0,7) and then REVERT, read 0 from TLOAD(0) afterwards, and 7 when the callee stops instead of reverting. CurrencyDelta, NonzeroDeltaCount and Lock therefore lose the writes of a reverted frame as on Ethereum."
+  },
+  {
+   "check": "Upcoming forks over the next six months: staged opcodes or precompiles on mainnet and testnet, the Hyperliquid announcements channel and the HyperEVM docs.",
+   "agrees": true,
+   "note": "My own eth_call of PUSH1 1 CLZ on the official node returned 'EVM error: NotActivated', so the Osaka opcode is not active. nanoreth master Cargo.lock fetched today has sha256 prefix e8cc9611370d and pins revm 43.0.3, revm-interpreter 43.0.2 and ruint 1.20.1, as the cleared interpreter item says. I did not refetch the Telegram channel, so the absence of an announced fork rests on the unit's reading."
+  }
+ ],
+ "leads": []
+}

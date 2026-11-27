@@ -1,0 +1,39 @@
+{
+  "unit": "op-stack-custom-gas",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "I sent 120 two-call batches (web3_clientVersion and eth_blockNumber) to https://celo-json-rpc.stakely.io on 2026-11-27: 95 came from reth/v2.2.0-7680d6d and 25 from reth/v2.2.0-74cc8bb, in two runs. A further 40 batches that bracketed an eth_call MULMOD vector (a = 2^256-1-12345, b = 2^256-1-6789, modulus 2^256-1) between two web3_clientVersion calls were all served by 06140ff with the same build at both ends, and all 40 returned 0x4fed79d, the specified word. Six batches to forno.celo.org and six to the stakely endpoint at the start of the session gave 74cc8bb. celo.api.onfinality.io/public refused 6 of 6 calls with error -32029 (rate limit), so I could not confirm that it reports 7680d6d. The Cargo.lock files at celo/reth-v1.0.0 and v1.0.1 pin reth rev 7680d6d8a931 (from paradigmxyz/reth), ruint 1.18.0 and revm-interpreter 35.0.1. v1.0.3 pins celo-org/reth 3cbf835, v1.0.4 pins 6a0e4cf with ruint 1.20.0, and v1.0.9 and v1.0.10 pin 74cc8bb with ruint 1.20.0, all with revm-interpreter 35.0.1. I diffed crates/celo-revm/src/handler.rs between v1.0.3 and v1.0.4. v1.0.4 adds cip64_check_max_fee_balance (balanceOf(caller) >= gas_limit * max_fee_per_gas), adds a pinned exception for Celo Mainnet block 75046581 tx e9e0248c, and removes the v1.0.3 path that sent a CIP-64 transaction with feeCurrency == Address::ZERO to native fee handling. Both rule changes the finding describes are in the client source. The GitHub tags pages could not be fetched from this session (the proxy refused github.com), so I did not reread the tag dates.",
+      "codeCheck": "No line in src/ reads tx.gasprice, block.basefee, tx.origin or the fee currency. A grep over src/ for gasprice, basefee, tx.origin, gasleft, block. and coinbase finds them only in src/test. The CIP-64 admission and pricing difference between builds therefore changes no PoolManager result. The cited math lines are FullMath.sol:24-25 (mulmod with not(0) and the prod1 borrow), TickMath.sol:61-63 (signextend and sar) and Pool.sol:498-509 (unchecked feeGrowthInside subtractions). They depend on revm-interpreter and ruint, which are the same across the builds except for the ruint 1.18.0 to 1.20.0 change. My pinned MULMOD vector and the cleared battery reruns give the specified words on those builds. Settlement (src/PoolManager.sol:279-365) has no client-dependent branch.",
+      "corrections": "The source line says v1.0.0 locks celo-org/reth 7680d6d. The lockfile pins rev 7680d6d of paradigmxyz/reth. The divergence sentence needs a fix on direction. 7680d6d and 3cbf835 are the looser builds: they accept every transaction the v1.0.4 rule accepts, and more. A follower on an old build therefore never rejects a block from a v1.0.4+ sequencer. A split happens only if an old-build sequencer includes a transaction that v1.0.4 rejects, and then the newer followers reject it, as op-geth did at block 75046581. The onfinality claim (4 of 4 calls answered by 7680d6d) could not be re-tested because of rate limiting. The actor (operator) and the severity (info) are right.",
+      "sources": [
+        {"url": "https://celo-json-rpc.stakely.io", "supports": "2026-11-27: 120 batches gave 95 from 7680d6d and 25 from 74cc8bb. 40 pinned MULMOD eth_call batches were served by 06140ff and all returned 0x4fed79d."},
+        {"url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.0/Cargo.lock", "supports": "Pins paradigmxyz/reth rev 7680d6d8a931c0af4f4eed26e971596970238b54, ruint 1.18.0 and revm-interpreter 35.0.1."},
+        {"url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.10/Cargo.lock", "supports": "Pins celo-org/reth 74cc8bb, ruint 1.20.0 and revm-interpreter 35.0.1."},
+        {"url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.4/crates/celo-revm/src/handler.rs", "supports": "Adds the CIP-64 max-fee balance rule and the block 75046581 exception. Against v1.0.3, it drops the native path for a zero-address feeCurrency."},
+        {"url": "https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.3/crates/celo-revm/src/handler.rs", "supports": "The v1.0.3 handler, used as the base of the diff. It sends a feeCurrency of Address::ZERO down the native path."},
+        {"url": "https://celo.api.onfinality.io/public", "supports": "Refused 6 of 6 calls with error -32029 on 2026-11-27. The build it runs is not confirmed."}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Whether the global keccak cache in front of KECCAK256 on X Layer (alloy-primitives 1.6.0 keccak_cache.rs with fixed-cache 0.1.10) can return a hash for an input other than the one asked.",
+      "agrees": true,
+      "note": "I read both crates from static.crates.io. The keccak_cache.rs lines 23-35 send empty inputs and inputs longer than 87 bytes (MAX_INPUT_LEN = 128-32-1-8) past the cache. Key::eq compares the full length-prefixed slice (lines 80-113). In fixed-cache lib.rs, get_inner locks the bucket only when the tag equals the computed tag, compares the stored key under the lock, and on a miss the caller computes the hash and inserts it. The tag is hash & !index_mask, so it never sets LOCKED_BIT or ALIVE_BIT, and an empty bucket holds a zero-length key that no cached input can equal. My own eth_call on rpc.xlayer.tech (f60420a) hashed 58, 64 and 87 zero bytes four times in one batch. The four answers were identical and byte-equal to Celo reth 74cc8bb, which has no cache. The 64-byte value 0xad3228b6...ba5fb5 is the known hash of 64 zero bytes."
+    },
+    {
+      "check": "The engine precompile cache of okx/reth f60420a and celo-org/reth 74cc8bb: whether a cached result can be returned for a call the precompile would answer differently, or whether a stateful precompile is cached.",
+      "agrees": true,
+      "note": "I read precompile_cache.rs at okx/reth f60420a. Lines 68-69 key entries by the full input bytes and filter them by spec. Lines 182-187 return a hit only when input.gas >= the cached gas_used. Lines 197-210 store only successful outputs that left the reservoir unchanged and used no state gas. The stateful exclusion of the Celo transfer precompile rests on the researcher's reading of alloy-evm and alloy-celo-evm, which I did not refetch. No PoolManager arithmetic in src/ calls a precompile."
+    },
+    {
+      "check": "Standard reruns on Celo and X Layer: battery.py (99,985 vectors), targeted.py, pmdiff.py, pmdiff2.py, swaps.py and replay.py.",
+      "agrees": true,
+      "note": "The output files exist in op-stack-custom-gas.work/out. battery.json lists 99,985 vectors run with mismatchCount 0 for chain 42220 (forno) and for 196. My own pinned MULMOD vector and the KECCAK256 lengths at 58, 64 and 87 bytes agree on 06140ff, 74cc8bb and f60420a. The backend rotation on stakely.io means one unpinned battery run covers only some builds. The pinned runs of earlier cycles and of this one cover the four builds."
+    }
+  ],
+  "leads": []
+}

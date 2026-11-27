@@ -1,0 +1,99 @@
+{
+ "unit": "theme-monad-mined-native-coverage",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "When the PoolManager runs as native code on a Monad validator, read in the v0.16.7 source and the release pages. VM::execute_raw (vm.cpp lines 141-189) runs native code when the varcode cache holds it. Without native code it schedules an asynchronous compile at once while the cache is cold, and otherwise once the interpreter gas spent on the code hash reaches max_code_size(offset, size) = offset + 32 x size (x86.hpp lines 53-64) with offset 10 x 1024 (x86/types.hpp lines 141-142). The cache counts as warm at three quarters of its 4 GiB weight (varcode_cache.hpp lines 29-33 and 61-64). The release page lists v0.16.5 on mainnet on 2026-10-22 and v0.16.7 on mainnet on 2026-11-26, and the v0.16.7 upgrade page calls it a rolling upgrade with dates sent through official channels. The first Monad blocks with a timestamp on or after 00:00 UTC of those dates are 115,463,613 and 125,426,597 (eth_getBlockByNumber binary search on rpc.monad.xyz). The PoolManager has code from block 29,255,895 (eth_getCode binary search on rpc-mainnet.monadinfra.com).",
+   "result": "For the 24,009 byte PoolManager the threshold is 10,240 + 32 x 24,009 = 778,528 gas. The median transaction in the sample spends 180,478 gas inside PoolManager frames, so a validator with a warm cache compiles it after about five PoolManager transactions, and one with a cold cache (every node after a restart until about 3 GiB of code is cached) compiles it at the first call. The network carries about 0.8 PoolManager transactions per second (108,489 transactions with PoolManager logs in blocks 125,426,597 to 125,760,000). Each validator therefore ran the PoolManager natively within seconds of starting the 0.16.7 package. The hour at which each validator restarted is not published, so the sample period starts at the release date. Only the gas threshold decides; no on-chain state or caller choice keeps the PoolManager in the interpreter.",
+   "source": "https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/vm.cpp lines 141-189; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/compiler/ir/x86.hpp lines 53-64; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/compiler/ir/x86/types.hpp lines 141-142; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/varcode_cache.hpp lines 29-33 and 61-64; https://raw.githubusercontent.com/category-labs/monad/v0.16.7/category/vm/compiler.cpp lines 106-140; https://docs.monad.xyz/developer-essentials/changelog/releases.md; https://docs.monad.xyz/node-ops/upgrade-instructions/v0.16.7.md; rpc.monad.xyz eth_getBlockByNumber (research/network-risk/cycles/030/theme-monad-mined-native-coverage.work/out/dateblocks.json); rpc-mainnet.monadinfra.com eth_getCode (research/network-risk/cycles/030/theme-monad-mined-native-coverage.work/out/monad-deploy.json)"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Replay of mined PoolManager transactions since v0.16.7 reached mainnet. 150,499 PoolManager logs from blocks 125,426,597 to 125,760,000 were read with eth_getLogs on rpc2.monad.xyz, which answers as erpc and does not name its Monad backend: 148,165 Swap, 2,169 ModifyLiquidity, 153 Transfer and 12 Initialize. 1,612 blocks were drawn with seed 300301: every Initialize and Transfer block, 600 random ModifyLiquidity blocks and one random Swap block in each of 900 equal strata of the range. Each block was traced whole with callTracer (with logs), prestateTracer and prestateTracer in diff mode on rpc.monad.xyz, rpc-mainnet.monadinfra.com and rpc1.monad.xyz, all Monad/0.16.7 before and after. Three blocks exceeded the response size limit and were traced transaction by transaction. Every transaction whose call tree reaches the PoolManager was kept: 3,042 transactions, 427 of them failed as a whole, 336 with at least one failed PoolManager frame, and 37,904 PoolManager frames. Each PoolManager frame ran in tools/opdiff/pyevm.py, patched only to keep log data, on the deployed code with the transaction's prestate. Every outgoing call was answered from the recorded call tree after its target, input and value were matched, and reverted subtrees were rolled back.",
+   "result": "3,039 transactions match in every PoolManager frame: success flag, return data and the number and order of outgoing calls. In the other 3 one frame failed in the mined run, twice out of gas (swaps in 0x58fc80e6... and 0x38863f21...) and once a settle that carried 1,540 MON and used 0 gas (0xc4b689b3...), which is a value transfer the sender could not cover. The gasless reference does not model either case. Every other frame of those transactions matches, and no compiled block is entered only by them. The replayed logs equal the logs consensus committed (eth_getLogs) in all 3,041 transactions inside the log range. The storage the replay wrote equals the diff-mode post state in all 3,042. For 300 blocks drawn with seed 30031, 2,168 prestate slots equal eth_getStorageAt at the parent block and 1,680 written slots equal eth_getStorageAt at the block, with no difference. Because every node rejects a block whose execution result differs from its own and tracing nodes run only the interpreter, each of these transactions is a native run whose result equals the source's semantics as pyevm computes them.",
+   "source": "rpc.monad.xyz, rpc-mainnet.monadinfra.com, rpc1.monad.xyz (debug_traceBlockByNumber, debug_traceTransaction, eth_getStorageAt; Monad/0.16.7) and rpc2.monad.xyz (eth_getLogs); research/network-risk/cycles/030/theme-monad-mined-native-coverage.work/out/replay-summary.json, replay-rows.jsonl, replay-mismatches.json, minedcheck.json, blocks/; scripts replay30.py, analyze30.py, minedcheck30.py"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Which of the 913 compiled IR blocks of the PoolManager (Monad v0.16.7 compiler, cycles/028 covtable-0.16.7.json) the mined transactions since v0.16.7 entered. A block counts as entered when the replay executed the program counter at which it starts (cycles/028 scripts/blocks.py). The deployed code differs from this checkout's build only in the 20 bytes of the immutable at pc 13,618 to 13,637, so the block offsets are the same.",
+   "result": "660 of 913 blocks were entered by mined transactions. Of the 253 left, 15 are the blocks cycle 28 showed unreachable, 40 end in a revert or a CustomRevert or panic helper, 70 are selector dispatch and ABI decoding of functions the sample never called, and 128 compute values. Per library (blocks whose source map names the file): FullMath 19 of 30 (not entered: 0x519c 0x51c7 0x51cf 0x51e4 0x5757 0x57ca 0x5860 0x588a 0x58d6 0x58db 0x593c); SqrtPriceMath 46 of 62 (not entered: 0x503a 0x505c 0x5061 0x518f 0x519c 0x51cf 0x51e4 0x5b22 0x5b2e 0x5bd5 0x5cf5 0x5d02 0x5d5d 0x5d6c 0x5d71 0x5d95); SwapMath 45 of 48 (not entered: 0x4cec 0x4f43 0x57ca); TickMath 86 of 93 (not entered: 0x449e 0x48e0 0x4f2a 0x4f30 0x4f43 0x522a 0x5238); TickBitmap 10 of 10; LiquidityMath 2 of 3 (not entered: 0x4592); Position 12 of 13 (not entered: 0x1a4a); Pool 120 of 149 (not entered: 0xed4 0xf0f 0x12b8 0x1d3d 0x1d68 0x1e22 0x1e4e 0x1e7a 0x21ba 0x21d0 0x27cf 0x27f0 0x27fb 0x2806 0x2826 0x28f2 0x2907 0x291b 0x3594 0x4f18 0x4f2a 0x4f30 0x4f43 0x522a 0x5238 0x55c2 0x569a 0x56a4 0x56cb); BitMath 2 of 2; UnsafeMath 3 of 6 (not entered: 0x28f2 0x2907 0x5d71). All 238 reachable blocks among the 253 were entered by native code in the clang-built harness of cycle 28, where interpreter, native code and reference agreed. No sampled transaction entered a hook callback. The full list with source lines, functions and jumpmap entries is research/network-risk/cycles/030/theme-monad-mined-native-coverage.work/out/notentered-classified.json.",
+   "source": "research/network-risk/cycles/030/theme-monad-mined-native-coverage.work/out/replay-hits.json and notentered-classified.json (scripts/classify30.py); research/network-risk/cycles/028/theme-monad-native-unentered-blocks.work/out/covtable-0.16.7.json and summary.json; research/network-risk/opcodes/jumpmap.json"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Lead L-1172 on Monad's two engines. The cycle 28 harness was rebuilt from scratch in this work directory with scripts/build.sh, which is cycles/028/.../scripts/build.sh unchanged. The three scripts of cycles/028/hyperevm.work/scripts/borrow.py make each subtraction of getFeeGrowthInside (src/libraries/Pool.sol:499-500, 502-503, 505-508) wrap, then poke and remove the position through Position.update (src/libraries/Position.sol:91-96). They ran with the PoolManager bytecode deployed on Monad (sha256 a7aaa3ba...) in pyevm and in the interpreter and native engines of v0.16.5 and v0.16.7.",
+   "result": "The rebuilt binaries have the sha256 that cycle 28 recorded (hxf 0.16.7 c1896430..., 0.16.5 99227fd7...), so the build is reproducible. All three scripts succeed with 33, 32 and 22 recorded calls. Interpreter and native output equal the reference bytes at both tags, and both engines report the same gas left. The native code here comes from a clang build of the emitter; the gcc build that validators run was not executed.",
+   "source": "research/network-risk/cycles/030/theme-monad-mined-native-coverage.work/out/hxborrow/hxborrow.json and out-b*-*.txt; research/network-risk/cycles/030/theme-monad-mined-native-coverage.work/scripts/hxborrow30.py; src/libraries/Pool.sol:499-508; src/libraries/Position.sol:91-96"
+  },
+  {
+   "chainIds": [
+    4326
+   ],
+   "lens": "L1",
+   "check": "Lead L-1192 on MegaETH from block 7,009,653 to 29,942,333. scripts/fgi30.py extends cycle 29's fgi_census.py. It reads every ModifyLiquidity log with a topic filter in 100,000-block chunks, keeps those whose pool has no other PoolManager log in the block (checked by a second getLogs per candidate), and reads storage at the parent block and at the block. It compares the position's liquidity and both feeGrowthInside last words, word 0 and both feeGrowthOutside words of both ticks with Pool.updateTick, Pool.getFeeGrowthInside, Position.update, LiquidityMath.addDelta and clearTick computed with v4math.sub and v4math.mul_div. It also records which subtraction of getFeeGrowthInside borrowed and whether feeGrowthInside minus feeGrowthInsideLast wrapped (Position.sol:91-96). Endpoints: mainnet.megaeth.com (mega-reth/v2.3.1-4499c42) and rpc-megaeth-mainnet.globalstake.io (mega-reth/v2.2.1-7d0dbf3), the same before and after.",
+   "result": "The whole range was read without a getLogs error: 957 ModifyLiquidity logs and 844 single candidates. 745 were checked and 99 skipped because the pool had another log in the block. Every checked position and tick word equals the reference. No subtraction of getFeeGrowthInside borrowed in this range. Position.update wrapped 6 times, first at block 23,998,903 (tx 0x5cfffaff...), always on a position with zero liquidity, so no fees followed. Cycle 29's census of blocks 29,942,333 to 32,942,333 found 6 above-range and 46 in-range borrows and no below-range borrow. MegaETH's producer has therefore not been seen executing the below-range borrow (Pool.sol:499-500) in a single-candidate frame up to block 32,942,333. The interpreter and the reference agree on it (cycle 29 borrow scripts). Frames with several logs of one pool in a block were not checked.",
+   "source": "https://mainnet.megaeth.com/rpc and https://rpc-megaeth-mainnet.globalstake.io (eth_getLogs, eth_getStorageAt); research/network-risk/cycles/030/theme-monad-mined-native-coverage.work/out/fgi-megaeth.json; src/libraries/Pool.sol:499-508; src/libraries/Position.sol:91-96"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Lead L-1192 on Monad. A full read of the ModifyLiquidity logs since deployment (about 9,650 requests at the 10,000-block limit of rpc2.monad.xyz, with over a million logs by block 54 million) did not fit this cycle and was stopped. The same census therefore ran on windows. A chronological scan from block 29,255,895 found 16 ModifyLiquidity logs before block 34,255,895 and 600 single candidates in blocks 36,237,092 to 37,702,531. Thirty windows of 20,000 blocks were spread evenly over the history, 40 candidates each with seed 30031. All candidates since v0.16.7 (blocks 125,426,597 to 125,760,000) were included, 400 of them drawn with seed 30031. Storage was read on rpc2.monad.xyz and rpc-mainnet.monadinfra.com (Monad/0.16.7).",
+   "result": "1,385 positions were checked (124 chronological, 896 in windows, 365 since v0.16.7), and every position and tick word equals the reference. The first borrows seen are above range at block 37,699,999 (tx 0xe08244a9...), in range at block 37,700,046 (tx 0xfbd79e9e...) and below range at block 43,733,516 (tx 0xa670c355..., in a window; blocks 37,702,532 to 43,731,507 were not searched). Position.update first wrapped on a position holding liquidity at block 37,701,515 (tx 0x9f00f266...). Since v0.16.7 the checked frames contain 44 below-range, 16 above-range and 106 in-range borrows, all written as the source gives. The validators' native code has therefore executed all three wrapped subtractions under consensus since the 0.16.7 rollout and written the reference words.",
+   "source": "https://rpc2.monad.xyz and https://rpc-mainnet.monadinfra.com (eth_getLogs, eth_getStorageAt); research/network-risk/cycles/030/theme-monad-mined-native-coverage.work/out/fgi-monad.json, fgi-monad-chrono2.json, fgi-monad-since167.json, fgi-monad-windows*.json"
+  },
+  {
+   "chainIds": [
+    143,
+    4326
+   ],
+   "lens": "L1",
+   "check": "Task 5: every mined word in this unit that differs from the reference.",
+   "result": "None. 3,042 Monad transactions, 37,904 PoolManager frames, 3,041 log sets, 3,848 mined storage slots and 2,130 census positions on Monad and MegaETH show no value the producers wrote or emitted that differs from the source's arithmetic. The only differences are the three frames that ran out of gas or could not move value, where the reference has no gas model. An ordinary account therefore has no mined producer difference to use in these paths.",
+   "source": "research/network-risk/cycles/030/theme-monad-mined-native-coverage.work/out/replay-mismatches.json, minedcheck.json, fgi-*.json"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "priority": "low",
+   "question": "Finish the Monad census of getFeeGrowthInside and Position.update over blocks 37,702,532 to 125,426,596 outside the 30 sampled windows (about 9,650 getLogs requests at rpc2.monad.xyz's 10,000-block limit, with millions of ModifyLiquidity logs), streaming candidates so memory stays bounded, and include the frames that share a block with another log of the pool by reading pre-transaction state from prestateTracer.",
+   "why": "The first below-range borrow seen is at block 43,733,516 in a window. The chronological first occurrence and the multi-log frames remain unread, though every frame read so far, 365 since v0.16.7 among them, equals the reference."
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1187",
+   "outcome": "cleared",
+   "answer": "v0.16.7 reached Monad mainnet on 2026-11-26 (first block that day 125,426,597) as a rolling upgrade with unpublished per-validator times. The v0.16.7 compile rule makes the PoolManager native within seconds of each restart: the threshold is 778,528 gas, and with a cold cache it compiles at the first call. 3,042 mined PoolManager transactions from 1,612 sampled blocks were replayed frame by frame in pyevm. They reproduce trace return data, the committed logs and the mined storage, apart from three frames that ran out of gas or could not move value. They enter 660 of the 913 compiled blocks."
+  },
+  {
+   "leadId": "L-1192",
+   "outcome": "cleared",
+   "answer": "MegaETH 7,009,653 to 29,942,333: 745 positions equal the reference, with no getFeeGrowthInside borrow and 6 Position.update wraps on empty positions; the below-range borrow is still unseen up to block 32,942,333. Monad: 1,385 positions in a chronological scan, 30 windows and the post-0.16.7 range equal the reference. First borrows seen: above range at 37,699,999, in range at 37,700,046, below range at 43,733,516 (sampled), and a Position.update wrap with liquidity at 37,701,515. Since v0.16.7 there were 44 below-range, 16 above-range and 106 in-range borrows, all equal to the reference."
+  },
+  {
+   "leadId": "L-1172",
+   "outcome": "cleared",
+   "answer": "The rebuilt clang harness (binaries bit-identical to cycle 28's) runs the three borrow scripts with Monad's deployed bytecode. Interpreter and native engines of v0.16.5 and v0.16.7 both return the reference bytes with equal gas. Together with cycle 29's eth_call results on mainnet.megaeth.com and rpc.monad.xyz, and the mined borrows above, the lead is closed. The gcc build was not executed."
+  }
+ ]
+}

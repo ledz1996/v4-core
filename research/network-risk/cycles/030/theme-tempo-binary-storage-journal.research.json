@@ -1,0 +1,130 @@
+{
+ "unit": "theme-tempo-binary-storage-journal",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 1: is there a Tempo release newer than v1.19.1 (checked 2026-11-27 04:33 UTC), and which build answers the public endpoint.",
+   "result": "No. download.tempo.xyz/binaries/ lists v1.14.0 to v1.19.1 and nothing later. The GitHub releases and tags feeds were refused by the session proxy with HTTP 403, and the main branch Cargo.toml still reads version 1.19.0. rpc.mainnet.tempo.xyz answered tempo/v1.19.1-a9d6748/x86_64-unknown-linux-gnu at 04:33 UTC and before and after every batch of live calls (04:50 to 04:52 UTC). Tempo's T14 page says mainnet activation is 8 December 2026 15:00 UTC (timestamp 1796742000) and names tempo/v1.19.0 as the required release, so v1.19.1 (commit a9d67483, evm2 35aa3280) is the build that will run T14 unless another replaces it. The binaries read here are the cycle 28 downloads, whose hashes cycle 28 checked against the published sha256 files, so every lift of cycles 28 and 29 still locates its code.",
+   "source": "https://download.tempo.xyz/binaries/ ; https://tempo.com/developers/docs/protocol/upgrades/t14 ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/web/binaries.html"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 2, location (L-1188): the SLOAD, SSTORE, TLOAD and TSTORE handlers in the three dispatch tables of each v1.19.1 binary (read from the RELATIVE relocations that cycle 28 extracted) and the host routines they reach.",
+   "result": "aarch64: families A and C are thin wrappers (the SLOAD ones charge the 100 gas warm read first) that branch to the family B bodies, SLOAD 0x3b58948 (4,272 bytes) and SSTORE 0x3b563d4 (6,592 bytes, Tempo's own SSTORE with TIP-1060 storage credits inlined); TLOAD 0x3b61814 calls the host routine 0x1d97448 and TSTORE 0x3b61870 fails a static frame with status 39 and calls State::tstore at 0x1d975ac. x86_64: SLOAD 0x42a3ba0, SSTORE 0x42a0d20 (8,442 bytes), TLOAD 0x42adba0 calling 0x1e8c2b0, TSTORE 0x42adc10 calling 0x1e8c450. State::rollback was found by following the CALL handler's call graph: aarch64 0x1d98170 (1,176 bytes), x86_64 0x1e8d350 (1,675 bytes, jump table at 0x65fe30). In both, State keeps the journal Vec at +0x20 (capacity), +0x28 (pointer), +0x30 (length) with 0x78 byte entries, the logs Vec at +0x40 and +0x48, the account map at +0x1d8 and the transient map at +0x200, a hashbrown table of 88 byte buckets (20 byte address, 32 byte big-endian slot, value). Entry tags are 0 to 2 AccountChange, 3 StorageChange (key +0x08, previous +0x28, address +0x48), 4 TransientStorageChange (Option tag +0x08, previous +0x10, key +0x30, address +0x50) and 5 StorageWarmed (key +0x08, address +0x28). The writers in the SSTORE and TSTORE code and the reader in rollback use the same offsets in both binaries.",
+   "source": "research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/results/handlers.json ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/build/a64_rollback.s ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/build/x64_0x1e8d350.s"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Tasks 2 and 3, aarch64 run: the shipped State::tstore 0x1d975ac with its entry probe 0x1d97914 and 52 byte key hash 0x1dc85d4, State::tload 0x1d97448, State::rollback 0x1d98170 with the transient insert 0x1d98608 and remove 0x1d9883c, and the two SSTORE segments 0x3b571a4-0x3b57200 (StorageWarmed push) and 0x3b57200-0x3b572b8 (compare, write and StorageChange push), run from their disassembly in the cycle 28 a64emu model (extended with rev, rev64, ext and cmlt) on a real hashbrown transient table built in model memory. The account map 0x1d89598 and the slot map 0x1d915f4 are hashbrown lookups and were modelled as Python dicts that return slot records with the binary's layout (original +0, current +0x20, is_warm +0x40); Vec grow and rehash were never reached. Sequences: write slot0, liquidity and a tick word, read back, revert a frame that wrote two of them, read again; write two CurrencyDelta slots, the unlock flag and NonzeroDeltaCount, revert a frame that changed one delta and the count, read all; a revert nested in a reverted frame; a returning frame inside a reverted one; same-value writes; x to 0 to y inside a reverted frame; 0 to x to 0; and 2,000 random sequences of depth up to 4 over 5 storage and 6 transient PoolManager slots (seed 2026113001), each compared with the same sequence run as bytecode in tools/opdiff/pyevm.py with nested DELEGATECALL frames that return or revert their reads.",
+   "result": "2007 cases, 0 mismatches, 0 model errors, 6546446 modelled instructions; with every transient key forced into one probe chain by a constant hash (seed 2026113002) 2007 cases, 0 mismatches. Entries are undone newest first, a transient entry puts back the previous nonzero value (Some) or removes the slot (None), an inner revert pops its own entries so the outer revert does not see them again, and a write of the value already present adds no entry (journal length unchanged, checked directly). Coverage: tstore_host 185 of 218, rollback 136 of 294, tr_insert 112 of 141, tr_remove 98 of 120, tload_host 77 of 89, entry 70 of 88, sstore_segments 69 of 69. The planted faults are all caught: entries undone oldest first 157 of 507; checkpoint index plus one 174 of 507; checkpoint index minus one 248 of 507; transient entry restored to zero 94 of 507; StorageChange arm skipped 268 of 507; TransientStorageChange arm skipped 256 of 507; SSTORE writes without a StorageChange entry 370 of 507; SSTORE journals the new value as the previous one 268 of 507. Skipping the StorageWarmed arm changes no value (0 of 507), as expected, since warmth only changes gas.",
+   "source": "research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/scripts/journal_a64.py ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/results/journal_a64_none_real.json ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/results/journal_a64_none_const.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Tasks 2 and 3, x86_64 run (the build behind rpc.mainnet.tempo.xyz): State::tstore 0x1e8c450 with entry probe 0x1e8c860 and hash 0x1ec9530, State::tload 0x1e8c2b0, State::rollback 0x1e8d350 with transient insert 0x1e8d9e0 and remove 0x1e8dcc0, and the SSTORE segments 0x42a1f54-0x42a1fea and 0x42a1fea-0x42a2148, in the cycle 28 x86emu2 model with the cycle 29 extensions plus bswap, ror, pshuflw, shufpd and register jumps and calls. The key comparison goes through bcmp at the GLOB_DAT slot 0x6c84590, modelled. Same sequences, dicts and pyevm.py reference as the aarch64 run (seeds 2026113011 and 2026113012).",
+   "result": "2007 cases, 0 mismatches, 0 model errors, 8053998 modelled instructions; with the constant hash 2007 cases, 0 mismatches. Coverage: tstore_host 203 of 235, rollback 159 of 350, tr_insert 136 of 170, tr_remove 108 of 131, tload_host 91 of 104, entry 87 of 117, sstore_segments 87 of 87. Planted faults: entries undone oldest first 149 of 507; checkpoint index plus one 186 of 507; checkpoint index minus one 260 of 507; transient entry restored to zero 95 of 507; StorageChange arm skipped 261 of 507; TransientStorageChange arm skipped 259 of 507; SSTORE writes without a StorageChange entry 261 of 507; SSTORE journals the new value as the previous one 263 of 507; skipping StorageWarmed changes no value (0 of 507).",
+   "source": "research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/scripts/journal_x64.py ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/results/journal_x64_none_real.json ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/results/journal_x64_none_const.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Source behind the lifted routines at the pinned revisions: evm2 State::tstore, rollback and take_transient_storage, StorageSlotHandle::set and write, into_slot_inner with the skip-cold-load path, the host sload and sstore, and the call and create message paths that take checkpoints; Tempo's SSTORE override.",
+   "result": "Fetched files equal the copies cycle 19 read. tstore skips equal writes, journals Some(previous) for an occupied slot and None for a vacant one, and keeps only nonzero values (state/mod.rs:837-870); rollback truncates logs and pops entries until the journal is back at the checkpoint (state/mod.rs:882-924); set records StorageChange only when the value changes (storage.rs:346-358). execute_call_message takes the checkpoint before the value transfer and finish_call_message_run rolls back on any non-success stop (evm/mod.rs:1715-1815), and execute_message rolls back on a host error (evm/mod.rs:2096-2113). Tempo replaces SSTORE (instructions.rs:88-139): it decides skip_cold_load against the 2,000 gas additional cold cost after the 100 gas static charge, where evm2's stock SSTORE compares with the 2,100 total, and from T7 it runs TIP-1060 storage-credit accounting that reads and writes only the slot StorageCredits::slot(owner) of 0x1060000000000000000000000000000000000000 and a transient word of that address, both through the journaled host calls, and charges STORAGE_CREDIT_VALUE, 250,000 minus 5,000 = 245,000 gas, for a 0 to nonzero write without a credit (accounting.rs:110-205, hardfork/src/constants.rs:25-31). These change gas only: no PoolManager slot value, transient value or rollback depends on them. A call that runs short of gas fails exactly as on Ethereum, with its frame rolled back.",
+   "source": "https://raw.githubusercontent.com/DaniPopes/evm2/35aa32800b147b00e616d4e1869a3835aa86701f/crates/evm2/src/evm/state/mod.rs ; https://raw.githubusercontent.com/DaniPopes/evm2/35aa32800b147b00e616d4e1869a3835aa86701f/crates/evm2/src/evm/state/storage.rs ; https://raw.githubusercontent.com/DaniPopes/evm2/35aa32800b147b00e616d4e1869a3835aa86701f/crates/evm2/src/evm/mod.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/a9d67483a4c21c39cd84d019a45c877ba792c8e2/crates/evm/src/instructions.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/a9d67483a4c21c39cd84d019a45c877ba792c8e2/crates/precompiles/src/storage_credits/accounting.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/a9d67483a4c21c39cd84d019a45c877ba792c8e2/crates/hardfork/src/constants.rs"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Task 4 (L-1194): every call site in both binaries that reaches State::take_transient_storage, and whether one can run while a user transaction's frames are on the stack, including between the calls of a type 0x76 batch.",
+   "result": "Source: the one production call is settle_storage_credit_refunds (handler/config.rs:444-481), called from settle_transaction (config.rs:251-256), which handler.rs calls only after execute_batch has returned (handler.rs:1704-1729) or, for an unaffordable key authorization, before any call ran (handler.rs:1612). Binaries: the function is inlined at aarch64 0x4315c24 and x86_64 0x4b621e0. Each first tests the spec (byte +0x605 at least 11, T7) and that the result's stop code is a success, then walks the transient table (State+0x200) and removes only buckets whose address equals 0x1060000000000000000000000000000000000000: the lifted compare is first 8 bytes against 0x6010, next 8 against 0, last 4 against 0. Each binary has six callers (aarch64 0x430f454, 0x4318dc4, 0x431a804, 0x4322d70, 0x4323828, 0x43243e8; x86_64 0x4b5995b, 0x4b66807, 0x4b68c3f, 0x4b730e3, 0x4b73ed3, 0x4b74e51). A reachability walk over each aarch64 caller's control flow (scripts/reach_a64.py) shows that from the instruction after the call no path makes any further call or comes back to the call: it is the last call its caller makes, so no frame of the transaction runs after it, and it cannot sit inside the loop of a 0x76 batch. The PoolManager's lock flag, NonzeroDeltaCount and CurrencyDelta words are keyed by the PoolManager's address (src/libraries/CurrencyDelta.sol:10-41, src/PoolManager.sol:104-114), so even a call in the middle of a transaction could not remove them. The x86_64 caller bodies were located but not read branch by branch.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/a9d67483a4c21c39cd84d019a45c877ba792c8e2/crates/evm/src/handler/config.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/a9d67483a4c21c39cd84d019a45c877ba792c8e2/crates/evm/src/handler.rs ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/build/k6010_0x4315c24.s ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/build/x6010_0x4b621e0.s ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/results/take_callers_reach_a64.txt"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 5: read-only eth_call on rpc.mainnet.tempo.xyz at block 51019345 (0xa6a80095279cf042a5c13cfa595c236dc8aadb69dbb1098d33f5b1b7d2489a98), at the deployed PoolManager 0x33620f62c5b9b2086dd6b62f4a297a9f30347029 with its real code (24009 bytes, sha256 f017c3da36573b60...) and state, a driver and two helpers placed by state override, and ERC-6909 balances given to the driver by a stateDiff on balanceOf (slot 4). One unlock initializes a pool of two currencies that exist nowhere, adds liquidity, swaps, lets a helper swap again and revert (variant nested: the helper's frame holds a further helper that swaps and reverts), reads all delta slots, NonzeroDeltaCount, slot0, the fee growth words and liquidity before and after, and settles by burn of the reference amounts. Variant kept lets the helper return, so its debt stays. The same calls ran in pyevm.py over the code from eth_getCode and the 15 PoolManager slots the node's prestateTracer reported. Repeated with a block time override of 1796745600, after the T14 timestamp.",
+   "result": "settled: node and reference both succeed with identical return bytes; the reverted helper swap left slot0, liquidity, the fee growth words, the helper's delta slots and the count exactly as after the first swap, the driver's deltas were -30553010879137170 and -28557003898097267, and the final reads are zero. nested: identical success. kept: both revert with CurrencyNotSettled (0x5212cba1), identical bytes. The T14 override run gave the same three results. clientVersion was tempo/v1.19.1-a9d6748/x86_64-unknown-linux-gnu before and after both batches. The src/ checks that depend on this (src/PoolManager.sol:112, src/PoolManager.sol:368-378, src/libraries/CurrencyDelta.sol:28-41, src/libraries/Pool.sol:439-442) decided the same on Tempo as in the reference.",
+   "source": "research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/results/live_swap_revert.json ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/results/live_swap_revert_t14.json ; research/network-risk/cycles/030/theme-tempo-binary-storage-journal.work/scripts/live_swap_revert.py"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "What the results mean for the src/ lines that rest on storage and transient storage on Tempo.",
+   "result": "Every delta is a transient word read and written by applyDelta (src/libraries/CurrencyDelta.sol:28-41), NonzeroDeltaCount is a transient counter (src/libraries/NonzeroDeltaCount.sol) that unlock checks (src/PoolManager.sol:112), and pool state lives in storage (src/libraries/Pool.sol:83-91, :439-442). A rollback that kept a reverted frame's write, restored a transient word to zero, undid one entry too few or too many, or skipped an entry kind would let a frame that reverted leave a credit or erase a debt and then close the unlock. The shipped code of both architectures restores every value on every sequence, every such fault planted in it is caught by the same sequences, and the live node returns the reference bytes. No path to take or lock funds follows from these routines.",
+   "source": "src/libraries/CurrencyDelta.sol:28 ; src/PoolManager.sol:112 ; src/PoolManager.sol:368"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "The other 20 networks, for this unit's question (storage, transient storage and journal rollback in the shipped Tempo binaries).",
+   "result": "Not applicable. None of them runs the Tempo binary or Tempo's SSTORE override and storage-credit accounting. Ethereum's reth nodes use evm2 at another revision (OPCODES.md table of Check 4), whose journal code was not lifted here; Ethereum also has other clients, so a fault there would split consensus rather than be mined unnoticed. The other 19 run go-ethereum forks, revm or their own clients, covered by earlier cycles' mined rollback evidence (OPCODES.md cycle 17 rows).",
+   "source": "research/network-risk/OPCODES.md:115 ; research/network-risk/OPCODES.md:126 ; research/network-risk/OPCODES.md:323"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "question": "Still unlifted in both v1.19.1 binaries: the CALL family handlers and execute_call_message with its checkpoint, LOG, the precompile dispatch, the SLOAD account-load path through the database, and the TIP-1060 accounting inside SSTORE. If a release after v1.19.1 appears before 8 December 2026 15:00 UTC, rerun journal_a64.py and journal_x64.py after relocating the routines.",
+   "why": "The journal tests started at a given checkpoint; the code that takes the checkpoint for a CALL and decides success was read in source only.",
+   "priority": "medium"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1188",
+   "outcome": "cleared",
+   "answer": "SLOAD, SSTORE, TLOAD and TSTORE handlers, State::tstore, State::tload, State::rollback and the transient insert and remove were located in both binaries and the journal writers and rollback were run in the a64emu and x86emu2 models (account and slot maps modelled as dicts): 2,007 cases per architecture with the real hash and 2,007 with a constant hash, no mismatch with pyevm.py, and eight value faults caught on both. Live x86_64 eth_call with a reverted inner swap equals the reference."
+  },
+  {
+   "leadId": "L-1194",
+   "outcome": "cleared",
+   "answer": "take_transient_storage is inlined once per binary (aarch64 0x4315c24, x86_64 0x4b621e0) in settle_storage_credit_refunds, runs only on a successful result under T7, removes only slots of 0x1060000000000000000000000000000000000000, and has six callers per binary; in the aarch64 callers it follows the execution call and leads only to the return paths. It cannot touch the PoolManager's transient words."
+  }
+ ]
+}

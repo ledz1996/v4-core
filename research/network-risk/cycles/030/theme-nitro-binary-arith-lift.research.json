@@ -1,0 +1,106 @@
+{
+ "unit": "theme-nitro-binary-arith-lift",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "Symbol comparison of the Nitro v3.13.0-rc.9 release binaries of commit b72783f (amd64 sha256 a142fcbe..., arm64 ba1fec28..., equal to cycle 23's nitro-binaries.sha256, taken again from Docker Hub layers 35a7cb1a and f4d1a9c1 of offchainlabs/nitro-node) against go-ethereum v1.17.10 core/vm (proxy.golang.org module zip, sha256 6e7ac323...), the *_arbitrum.go files of OffchainLabs/go-ethereum master, and holiman/uint256 v1.3.2 (proxy.golang.org zip, sha256 b3998d66...). pclntab lists 540 core/vm and 129 uint256 functions in each binary, with the same names in both.",
+   "result": "uint256: the binary has no function that v1.3.2 lacks; the 27 source-only names are small helpers the compiler inlined (lsh64, rsh128, umulHop, umulStep, reciprocal2by1, udivrem2by1, subMulTo, addTo and others) or constructors the node never calls. core/vm: the binary-only names are (*Contract).Jumpdest (an accessor that returns the jumpDests interface at Contract+0x30), (*EVM).ChainRules (returns a pointer to evm+0x100), (*p256Verify).SetArbosVersion (stores one word), DefaultTxProcessor.IsCalldataPricingIncrease7976And7981Enabled, newArbitrumAmsterdamInstructionSet, and the closures of makeDup and makePush, which v1.17.10 replaced by opDup1..16 and opPush3..32. v1.17.10 also has execUntraced and execTraced (the generated interpreter) and layeredJumpDests, which the binary does not contain; the binary's (*EVM).Run (5,568 bytes) dispatches every handler by an indirect call through the operation table and contains no adc, sbb or div instruction. Package variables cannot be listed from the binaries, which carry no symbol table or DWARF; the data addresses that the arithmetic and jump handlers read are listed in the next entry. None of these names touches arithmetic, shifts, comparisons or jump analysis.",
+   "source": "research/network-risk/cycles/030/theme-nitro-binary-arith-lift.work/out/sym/symcmp-amd64.json, out/sym/symcmp-arm64.json, out/sym/amd64.txt, out/sym/arm64.txt; https://proxy.golang.org/github.com/ethereum/go-ethereum/@v/v1.17.10.zip; https://proxy.golang.org/github.com/holiman/uint256/@v/v1.3.2.zip; https://raw.githubusercontent.com/OffchainLabs/go-ethereum/master/core/vm/contract_arbitrum.go"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "Every call target and every data reference of opMulmod, opAddmod, opMul, opDiv, opSdiv, opMod, opSmod, opExp, opSHL, opSHR, opSAR, opByte, opSignExtend, opLt, opGt, opSlt, opSgt, opEq, opIszero, opAdd, opSub, opJump, opJumpi, validJumpdest, isCode, codeBitmapInternal, mapJumpDests.Load/Store and the uint256 functions they reach, in both binaries (objdump and llvm-objdump 18 text, resolved against pclntab).",
+   "result": "Each arithmetic handler calls exactly one uint256 method (MulMod, AddMod, Mul, Div, SDiv, Mod, SMod, Exp, Lsh, Rsh, SRsh, Byte, ExtendSign, Slt, Sgt) plus runtime.morestack_noctxt and runtime.panicBounds; opLt, opGt, opEq, opIszero, opAdd and opSub are inline. MulMod reaches umul, Reciprocal, reduce4, udivrem and Mod; AddMod reaches Mod and udivrem; Div, Mod and SMod reach udivrem, udivremBy1 and udivremKnuth (on arm64 also math/bits.Div64); Exp reaches Mul and squared; SRsh reaches Rsh. The only data they read are a 32 byte zero constant (AddMod, amd64 0x3f093e8), the constant one (Exp, amd64 0x3f06d20) and the runtime error value passed to gopanic in Reciprocal. opJump and opJumpi read the abort flag at evm+0x170 and two error values. No handler or helper reads or writes a map, a sync.Pool, a table indexed by operands or any other writable global, so commit b72783f keeps no memo or cache in front of the arithmetic. The only cache on the jump path is the jumpDests map keyed by code hash (isCode, map Load/Store), which an earlier cycle tested on chain (OPCODES.md, Arbitrum family row: one address given code with and without a JUMPDEST at the same offset jumps, fails and jumps again). Each handler entry appears once as a funcval in read-only data (amd64 opMulmod at 0x6ba9028, arm64 at 0x6346d78), so the jump table calls the handler itself with no wrapper. A PrecompileCache type exists (precompile_cache.go of the fork, also in v1.17.10); the PoolManager calls no precompile.",
+   "source": "research/network-risk/cycles/030/theme-nitro-binary-arith-lift.work/out/calls-amd64.json, out/calls-amd64-u256.json, out/calls-arm64.json, out/calls-amd64-run.json, scripts/calls.py, scripts/funcval.py"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "The shipped amd64 handlers run in the cycle 27/28 x86-64 model and the shipped arm64 handlers in the cycle 28 AArch64 model, with a Go register ABI shim and the core/vm stack object laid out as both builds read it (scope+0x8 Stack, Stack+0x8 count, Stack+0x10 arena, arena data/capacity/top at +0x0/+0x8/+0x18), guard words below and above the operands. Vector sets per architecture: battery 110,729, targeted 123,692, c27 48,367, v4shapes 84,000, random 2,100,000, direct 400,000; random seed 30_1185_02 with at least 100,000 cases per opcode (EXP exponents of up to 16 bits, one in 50 a full 256 bit exponent), v4shapes seed 30_1185_01 (mulDiv numerators of five to eight limbs, denominators 2^96, 2^128, liquidity values, prices), direct calls of uint256 Lt, Gt, Slt, Sgt seed 30_1185_03.",
+   "result": "amd64 2,866,788 cases and arm64 2,866,788 cases, 0 mismatches and 0 model errors in total. Every word equals the Python integer result, the stack count and top move by the arity of the opcode, and no guard word changes. Instruction coverage of the uint256 functions (arm64 sample run): uint256.(*Int).Mul 43/44, uint256.(*Int).Div 63/80, uint256.(*Int).SDiv 134/145, uint256.(*Int).Mod 73/84, uint256.(*Int).SMod 92/101, uint256.(*Int).Exp 149/166, uint256.(*Int).squared 36/36, uint256.(*Int).ExtendSign 44/44, uint256.(*Int).Slt 45/48, uint256.(*Int).Sgt 46/48, uint256.(*Int).Lt 0/13, uint256.(*Int).Gt 0/14, uint256.(*Int).Byte 23/24, uint256.(*Int).AddMod 183/190, uint256.(*Int).MulMod 101/108, uint256.Reciprocal 489/505, uint256.(*Int).reduce4 195/210, uint256.udivrem 168/204, uint256.udivremBy1 56/72, uint256.udivremKnuth 131/152, uint256.umul 109/109, uint256.(*Int).Lsh 74/74, uint256.(*Int).Rsh 72/72, uint256.(*Int).SRsh 95/114, uint256.(*Int).MulModWithReciprocal 0/104. The not-reached instructions are the stack growth and panic paths. MulModWithReciprocal is in the binaries but no handler calls it. The first amd64 pass stopped on 691 SIGNEXTEND cases at movsx rbx,bl in ExtendSign (0xc61dbe), an instruction the x86-64 model lacked; movsx and bts were added to the model (scripts/models.py) and all amd64 sets were run again from the start. No function had to be skipped for a call into the Go runtime: memmove is modelled in Python, and morestack and the panic entries stop the model and were never reached.",
+   "source": "research/network-risk/cycles/030/theme-nitro-binary-arith-lift.work/out/summary.json, out/runs/, out/coverage-amd64.json, out/coverage-arm64.json, scripts/drive.py, scripts/models.py, scripts/goshim.py"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "codeBitmapInternal and (*Contract).validJumpdest of both binaries in the models: the PoolManager runtime (24,009 bytes), the runtime cut inside its last 20 PUSH instructions, 1,056 short programs that end inside PUSH1 to PUSH32, and 300 random programs (seed 30_1185_04); every offset, three offsets past the end and words of 2^63, 2^64, 2^64+0x5b, 2^255 and 2^256-1.",
+   "result": "1399 programs and 109,789 destinations per architecture; no bitmap byte and no validJumpdest answer differs from the reference. On the PoolManager the model accepts exactly the 610 JUMPDEST bytes outside push data and rejects the 29 inside push data; all 418 distinct push-constant targets of JUMP and JUMPI (the 387 JUMPIs give the jumpmap's 774 sides) are valid. The isCode map path (jumpDests Load and Store, makeslice) was not run because it calls into the Go runtime; with analysis set, isCode reads the bitmap byte at udest>>3 and tests bit udest&7, as source line contract.go:85 of the fork describes.",
+   "source": "research/network-risk/cycles/030/theme-nitro-binary-arith-lift.work/out/jd/amd64-none.json, out/jd/arm64-none.json, scripts/jd.py"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "Planted faults in in-memory patched copies of the disassembly text (the binaries are not modified): a carry flip in umul (adc to add, adcs to adds), a wrong limb index in Rsh, an off-by-one bound in Rsh (64 to 65), a changed PUSH1 bound in codeBitmapInternal, and one flipped bitmap bit at a PoolManager jump target.",
+   "result": "Every fault is caught. amd64 carry: 65 of 400 cases differ; amd64 limb: 86 of 800 cases differ; amd64 shift: 2 of 800 cases differ; arm64 carry: 65 of 400 cases differ; arm64 limb: 79 of 800 cases differ; arm64 shift: 2 of 800 cases differ. amd64 opcode: bitmap programs differing 1, PoolManager jump targets judged invalid [18656]; amd64 bit: bitmap programs differing 0, PoolManager jump targets judged invalid [14953]; arm64 opcode: bitmap programs differing 1, PoolManager jump targets judged invalid [18656]; arm64 bit: bitmap programs differing 0, PoolManager jump targets judged invalid [14953].",
+   "source": "research/network-risk/cycles/030/theme-nitro-binary-arith-lift.work/out/faults/, out/jd/*-opcode.json, out/jd/*-bit.json, scripts/faults.py"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "2,000 of the model vectors (seed 30_1185_05, 400 each from random, v4shapes, targeted, c27, battery) sent by eth_call to the tools/opdiff battery dispatcher placed by state override, twice per chain, bracketed by web3_clientVersion.",
+   "result": "chain 42161: 2 passes of 2,000 vectors, 0 mismatches, 0 errors, client versions nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3; chain 4663: 2 passes of 2,000 vectors, 0 mismatches, 0 errors, client versions nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-amd64/go1.27.3; nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3. Arbitrum One answered from linux-arm64 builds and Robinhood Chain from both linux-amd64 and linux-arm64 builds of nitro/v3.13.0-rc.9+b72783f, so the running build agrees with both models on these vectors.",
+   "source": "research/network-risk/cycles/030/theme-nitro-binary-arith-lift.work/out/chain/chain.json, scripts/chain.py; https://arb1.arbitrum.io/rpc; https://rpc.mainnet.chain.robinhood.com"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "check": "Which src/ lines depend on these routines: FullMath.mulDiv reads MULMOD(a, b, not(0)) and MULMOD(a, b, denominator) (src/libraries/FullMath.sol:24, :48) and DIV (:35); TickBitmap.compress reads SIGNEXTEND, SDIV, SMOD and SLT (src/libraries/TickBitmap.sol:19-26) and flipTick SDIV and SAR (:64, :67); TickMath shifts (src/libraries/TickMath.sol:63, :111, :142-145); SqrtPriceMath MULMOD and DIV (src/libraries/SqrtPriceMath.sol:62, :252); UnsafeMath DIV and MOD (src/libraries/UnsafeMath.sol:14, :26).",
+   "result": "No routine on these lines gives a different word in either binary, so no ordinary account can steer pool math, tick bitmap words or jump targets through a Nitro arithmetic or jump analysis difference at commit b72783f. Token and hook hazards were out of scope and none was met.",
+   "source": "src/libraries/FullMath.sol:24"
+  }
+ ],
+ "leads": [
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "question": "Do the call family handlers (opCall, opStaticCall, opDelegateCall), the return data copy and the ArbOS hooks in the state transition (StartTxHook, GasChargingHook, EndTxHook of the TxProcessor) of Nitro b72783f behave as the public fork describes for calls into and out of the PoolManager?",
+   "why": "They decide what the PoolManager's token transfers, balanceOf reads and hook calls return, and they remain unread in the binaries.",
+   "priority": "low"
+  },
+  {
+   "chainIds": [
+    42161,
+    4663
+   ],
+   "lens": "L1",
+   "question": "Does the isCode map path of Nitro b72783f (jumpDests Load/Store with makeslice and the code hash compare) store the bitmap under the hash of the code it was computed from, read from the binary rather than from chain behaviour?",
+   "why": "The model ran the analysis branch of isCode only, because the map path calls into the Go runtime; an earlier cycle tested this path on chain.",
+   "priority": "low"
+  }
+ ],
+ "leadResults": [
+  {
+   "leadId": "L-1185",
+   "outcome": "cleared",
+   "answer": "Answered from the release binaries of commit b72783f without the source. The core/vm and uint256 functions in pclntab match go-ethereum v1.17.10 and uint256 v1.3.2 by name except for Arbitrum accessors and the older makeDup and makePush closures. The arithmetic, shift, comparison and jump handlers call only stock uint256 methods and read no writable global, so there is no memo or cache in front of them. Run in x86-64 and AArch64 models, they gave the reference word on 2,866,788 and 2,866,788 cases with no mismatch; jump analysis matched on every program, planted faults were caught, and 2,000 vectors sent twice to Arbitrum One and Robinhood Chain matched."
+  }
+ ]
+}

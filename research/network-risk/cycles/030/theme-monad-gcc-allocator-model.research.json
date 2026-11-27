@@ -1,0 +1,120 @@
+{
+ "unit": "theme-monad-gcc-allocator-model",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Which PoolManager shift, SIGNEXTEND and BYTE sites reach the non-literal arms of Monad's emitter. research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/scripts/varsites.py walks the runtime of research/network-risk/build/PoolManager.json (24,009 bytes) and removes the 1,205 literal sites of cycle 28 (sitearms.json); src lines come from the cycle 12 source map of the same build.",
+   "result": "Totals: SHR 99, SHL 46, SAR 19, SIGNEXTEND 114, BYTE 3. Sites with both operands non-literal: SHR 20, SHL 2, SAR 0, SIGNEXTEND 0, and one BYTE at pc 24006, which is inside the metadata trailer and is never executed. So signextend_by_non_literal and BYTE with a run-time index are not reached by PoolManager code, and the arms that matter are SHR and SHL with a run-time count: r := shr(f, r) in the 13 assembly blocks of getTickAtSqrtPrice (src/libraries/TickMath.sol:141-213, f = shr(128, r) in {0, 1}), shr(r, x) in mostSignificantBit (src/libraries/BitMath.sol:15-19, counts 0 to 248), the shift in leastSignificantBit (src/libraries/BitMath.sol:34), Slot0.setTick (src/types/Slot0.sol:73) and two compiler-generated sites at pc 18088 and 18651. Output: research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/out/varsites.json.",
+   "source": "src/libraries/TickMath.sol:141"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 3 with Task 1 (L-1186, L-1190): shift_general_reg_by_non_literal<SHL, SHR, SAR> of monad 0.16.7 (gcc 15.2.0) at 0x38e8c0, 0x38c8d0 and 0x389c90 run from the package text in the cycle 27 x86 model together with the real register bookkeeping of the same build: alloc_or_release_general_reg<> 0x36b020, Emitter::alloc_general_reg 0x36ae40 (which emits the spill stores), Stack::alloc_general_reg 0x3ad770, Stack::insert_general_reg 0x3ad250, StackElem::insert_general_reg 0x3aac30 (free-register heap pop), Stack::spill_general_reg() 0x3ac870 and (StackElem*) 0x3ac7f0, StackElem::free_general_reg 0x3ab0c0, find_available_stack_offset 0x3ac500, insert_stack_offset 0x3aa9c0 with the set erase, ~StackElem 0x3ab4b0, free_stack_offset, free_avx_reg, Stack::release_general_reg 0x3adc00, is_general_reg_on_stack, test_high_bits192 and mov_stack_elem_low64_to_gpq. The Stack object and RcObject<StackElem> blocks are laid out as these functions read and initialise them (layout in research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/scripts/allocdrv.py). Only asmjit _emitI (recorded), RoData add8/add32, operator new/delete, memcpy, memset and the libstdc++ red-black tree routines are stubs.",
+   "result": "3000 random Stack states (seed 3030), 320 of them through a spill to a fresh stack offset, 360000 emitted-sequence runs on counts 0, 1, 2, 7, 8, 63, 64, 65, 127, 128, 129, 191, 192, 193, 254, 255, 256, 257, 511, 2^32, 2^64 - 1, 2^64, 2^64 + 1, 2^128, 2^192, 2^255, 2^256 - 1 and random counts, with negative values for SAR. 0 result mismatches against pyevm.py, 0 clobbers (every element still on the EVM stack holds its own word in every location the Stack records for it after the sequence, so no destination register or spill slot overlaps a live operand), 0 bookkeeping inconsistencies, rbx, rbp and rsp restored, rcx restored whenever its row is live. A second run with the limbs of each register row permuted, as earlier blocks leave them (the clang listing shows row 0 as r15, r12, r13, r14 at pc 0x53a0), gave 2000 cases and 120000 runs with no difference and the register table restored in every case. Instruction coverage: 0x38e8c0 373 of 464, 0x38c8d0 372 of 463, 0x389c90 395 of 493, spill_general_reg(StackElem*) 36 of 41. Output: research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/out/run/shiftvar.json and shiftvar-perm.json.",
+   "source": "src/libraries/TickMath.sol:143"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 3 for the AVX and stack-offset value paths: whole Emitter::shl() 0x391590 with shl<> 0x38f190, Emitter::shr() 0x38d1a0 and Emitter::sar() 0x38a5d0, in which gcc inlined shift_avx_reg_by_non_literal (there is no separate symbol for it in the package), run on a virtual EVM stack (positive_elems_ at Stack+0x158, negative at +0x140, top_index +0x8) with Stack::pop 0x3abb50 and Stack::push 0x3abc30, the AVX allocator (0x36aa80, 0x3ad620, 0x3ad070, 0x3aaa40), the AVX spill path (0x3ac590, 0x3ac620), destructive_mov_stack_elem_to_bounded_rax (0x389330, 0x3a7790), mov_stack_offset_to_general_reg 0x36c860 and discharge_deferred_comparison lifted as well. States include the value in a general register, an AVX register or only a stack offset, the count in any location, the count or value duplicated deeper on the stack, full AVX and general register files.",
+   "result": "5989 cases (seed 3031): value in AVX 3385, general register 1822, stack offset 782; no spill 3425, one spill 1588, two or more 976. 598900 emitted-sequence runs, 0 result mismatches, 0 clobbers of live elements, 0 bookkeeping inconsistencies. With permuted register rows: 1994 cases, 99700 runs, no difference. 11 plus 6 states stopped at the emitter's own MONAD_ASSERT (virtual_stack.cpp:526, no available stack offset) because the random state offered fewer free offsets than the spills it forced; the real Stack builds that set from the block's stack deltas, so this is a limit of the generated states. Coverage: shr() 482 of 1183, shl<> 415 of 1020, sar() 576 of 1803, destructive_mov_stack_elem_to_bounded_rax 0x3a7790 372 of 511. The AVX arm bounds the count to 256 in rax, splits it into a dword permutation (count >> 5) and a bit shift (count & 31), and for SHR masks lanes with vpcmpgtd against 7; a count of 256 permutes index 8 to 15, which vpermd reduces mod 8, and the mask clears every lane, so the result is 0. Output: research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/out/run/shiftfull.json and shiftfull-perm.json.",
+   "source": "src/libraries/BitMath.sol:16"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 1: Emitter::write_to_final_stack_offsets 0x3816e0, the block-exit routine that writes every element to the stack offset of each EVM index it occupies and resolves chains and cycles where one element sits in another's final offset, run in the model with Stack::get 0x3ab8f0, move_avx_reg 0x3ada90, remove_stack_offset 0x3aded0, mov_literal_to_ymm 0x381340, mov_words_to_ymm 0x398c80 and the AVX allocator and spill path lifted. Random block-exit states: 1 to 34 indices from min_delta down to -4, elements shared by several indices, held in general registers, AVX registers, stack offsets inside other elements' final range, and literals, with and without a free AVX register.",
+   "result": "3000 cases (seed 3033), 60000 runs of the emitted code; after every run the 32 bytes at rbp + 32*i equal the word of the element at index i for every i from min_delta to top_index. 0 failures. Cases with one, two and three or more elements sitting in another element's final offset: 557, 451, 1145; with the AVX file full so the routine spills first: 862. Coverage of 0x3816e0: 675 of 919. mov_words_to_ymm<Mem> 0x398b40 was not reached. Output: research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/out/run/wfso.json.",
+   "source": "src/libraries/Pool.sol:344"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 1: alloc_or_release_general_reg<> 0x36b020 and alloc_or_release_general_reg<RcPtr> 0x39a300 run alone on random Stack states against the rule of emitter.cpp:1204-1216 at v0.16.7 (a live element keeps its register and a new one is allocated when a register is free or the element lives only in a general register; otherwise its register is released to a fresh element), with spill stores checked limb by limb against the spilled row and its recorded offset. Also Emitter::block_prologue 0x392cd0 for blocks that are not jump destinations, over min_delta from -1030 to 1025 and max_delta up to min_delta + 1026, both did_* flags.",
+   "result": "alloc_or_release: 4000 cases (seed 3034) covering all 16 combinations of instance, liveness, free register and register-only element, 0 departures from the rule and 0 bookkeeping inconsistencies. block_prologue: 4580 cases, every one emits jmp to the error label exactly when max_delta - min_delta > 1024 and otherwise cmp [rsp+0x30], -min_delta with jb and cmp [rsp+0x30], 1024 - max_delta with ja as the flags require, and returns accordingly. Output: research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/out/run/aorel.json and prologue.json.",
+   "source": "src/PoolManager.sol:187"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 3: RoData's deduplication map. RoData::add32 0x375c50 with the unordered_map emplace 0x39d250 and node insert and rehash 0x39d080 run from the package text; _Prime_rehash_policy::_M_need_rehash is a stub that asks for growth to a fixed prime list. Words: the 199 literal words of the PoolManager sites, the AVX shift permutation constants, and words built to share the map's hash (the xor of the four limbs): limb permutations, pairs xored by one mask in two limbs, and words with the same low half. Also read the equality code of the 4, 8 and 96 byte maps.",
+   "result": "1018 add32 calls, 678 distinct words, 106 groups of distinct words with one hash, 7 rehashes. No two different words share a label, every repeat returns its first label, and the data vector holds each word at its label. The key comparison is the whole key in every map: one 32-byte vpxor and vptest for add32 (0x39d306-0x39d30f), a 64-bit compare for add<8> (0x3a3d6e), a 32-bit compare for add4 (0x3a440e), three 32-byte compares for add96 (0x3738a4-0x3738d3). A planted fault that compares only the low 16 bytes gives 286 wrong labels. Output: research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/out/run/rodata.json and rodata-eq-low-half.json.",
+   "source": "src/libraries/BitMath.sol:22"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 2: for all 22 non-literal SHL and SHR sites, does the gcc emitter produce the stream of the clang harness listing (cycles/027/theme-monad-engine-agreement.work/out/pm-asm-0.16.7.txt) under some Stack state, up to a consistent renaming of registers other than rax, rcx, rbx, rbp and rsp, of stack slots and of read-only data labels? research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/scripts/cmpclang.py ran shiftfull's gcc model on a grid of 1,120 operand-location states and 3,000 random states (seed 4030).",
+   "result": "22 of 22 sites matched: the 6 distinct clang streams (the 13 TickMath sites share one, the 5 mostSignificantBit sites another) each equal a gcc stream, including Slot0.setTick at pc 4451 where the value is loaded from a stack offset, the destination is the rcx row, limb 0 is computed in rax and the vacated-limb fill comes from read-only data because no register is free. 528 distinct gcc streams were produced. Read-only data contents are compared by the sequence runs, not here. Since the streams agree up to renaming and the gcc streams compute the specified words in the runs above, no block of these sites needed a separate two-stream run. The comparison was not done for blocks other than these sites, because the clang harness was not rebuilt to log virtual stacks at block entry. Output: research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/out/cmpclang.json.",
+   "source": "src/types/Slot0.sol:73"
+  },
+  {
+   "chainIds": [
+    143
+   ],
+   "lens": "L1",
+   "check": "Task 4: planted faults in the package text (one-instruction edits applied in the model only) and in the RoData stub, to show the checks can fail.",
+   "result": "All 20 are caught. Register bookkeeping and shift arms (shiftvar 600 cases, shiftfull 900 cases each): rax and rcx swapped in the save of rcx (542 wrong results and 1,554 clobbered words in shiftfull), wrong limb in the SHL cmov chain (3,404), destination copy reading its own row (204), spill store not emitted (150 clobbers), spill slot scaled by 16 instead of 32 (150), spill limb stride 9 instead of 8 (36), spill offset off by one (the emitter's own assertion at virtual_stack.cpp:161 fires in 160 states; when the shifted offset happens to be free the element records and uses it consistently and no word changes), two constants on one read-only label (12,068), AVX spill store not emitted (13,258 clobbers), SHR AVX lane bound 6 instead of 7 (1,836). write_to_final_stack_offsets: each of its 9 store emissions removed in turn gives 45 to 1,995 wrong final offsets in 2,000 runs. RoData compare of the low half only: 286 wrong labels. Logs: research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/out/run/faults.log and faults-wfso.log.",
+   "source": "research/network-risk/cycles/030/theme-monad-gcc-allocator-model.work/scripts/faults.json"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    4326,
+    4217,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "Whether the gcc-built Monad emitter and its register allocator run on any of the other 20 networks.",
+   "result": "No. The emitter is part of Monad's client and runs only on chain 143; the other networks run the interpreters covered by Check 4 of OPCODES.md and their own units (cycle 29 theme-monad-gcc-register-spill reached the same answer). The answer for each of these 20 chain ids is no on that evidence.",
+   "source": "research/network-risk/cycles/029/theme-monad-gcc-register-spill.research.json"
+  }
+ ],
+ "leads": [],
+ "leadResults": [
+  {
+   "leadId": "L-1190",
+   "outcome": "cleared",
+   "answer": "The gcc 15.2.0 register bookkeeping was run from the package text in the x86 model on a Stack laid out as the gcc code reads it: alloc_general_reg 0x36ae40, alloc_or_release_general_reg 0x36b020 and 0x39a300, alloc_avx_reg 0x36aa80 with Stack::alloc_avx_reg, both spill paths, Stack::pop and push, write_to_final_stack_offsets 0x3816e0 and block_prologue 0x392cd0. Over 12983 shift cases, 3000 block-exit cases, 4000 allocator cases and 4580 prologue cases (about 1.24 million sequence runs) no result differs from pyevm.py, no destination register or spill slot overwrites a live operand, the Stack bookkeeping stays consistent, and every one of 20 planted faults is caught. For the 22 non-literal shift sites the gcc stream equals the clang listing up to renaming. Stack states were generated, not logged from the clang harness, and whole blocks such as FullMath.mulDiv and Pool.swap were not driven end to end; the new lead names that step."
+  },
+  {
+   "leadId": "L-1186",
+   "outcome": "cleared",
+   "answer": "shift_general_reg_by_non_literal at 0x38e8c0, 0x38c8d0 and 0x389c90 and the inlined shift_avx_reg_by_non_literal in shl(), shr() and sar() give the specified word for counts 0, 1, 63, 64, 65, 127, 128, 191, 192, 255, 256, above 2^64 and random, and for negative values under SAR, in every operand location, with 0 mismatches. RoData's maps compare whole keys and never give two different words one label, including words built to share the hash. signextend_by_non_literal is not reached by any PoolManager code site. The two BYTE sites with a run-time index (src/libraries/BitMath.sol:22 and :45) read a literal value, which is the arm cycle 29 cleared; the only BYTE with two non-literal operands is in the metadata trailer and never runs. Neither arm was run."
+  }
+ ]
+}

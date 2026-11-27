@@ -1,0 +1,22 @@
+{
+ "unit": "theme-tempo-binary-storage-journal",
+ "verdicts": [],
+ "clearedSpotChecks": [
+  {
+   "check": "Task 4 (L-1194): every call site in both binaries that reaches State::take_transient_storage, and whether one can run while a user transaction's frames are on the stack, including between the calls of a type 0x76 batch.",
+   "agrees": true,
+   "note": "I fetched tempo a9d67483 crates/evm/src/handler/config.rs and handler.rs. settle_storage_credit_refunds (config.rs:444-481) returns early unless the spec is T7 or later and the result is a success, then calls take_transient_storage only for STORAGE_CREDITS_ADDRESS (config.rs:454). Its only caller is settle_transaction (config.rs:251-256), and handler.rs calls settle_transaction after execute_batch has returned (handler.rs:1704-1729) or on the unaffordable key authorization path before any call (handler.rs:1600-1612). evm2 35aa3280 state/mod.rs:874-880 shows take_transient_storage extracts only keys whose address equals the argument. The PoolManager writes its lock flag, NonzeroDeltaCount and deltas in its own context (src/PoolManager.sol:104-114, src/libraries/CurrencyDelta.sol:28-41), so these keys carry the PoolManager address and cannot be removed. I did not re-read the binary call graph walk; the source alone supports the item. The x86_64 caller bodies were not read branch by branch, as the item itself says."
+  },
+  {
+   "check": "Task 5: read-only eth_call on rpc.mainnet.tempo.xyz with the deployed PoolManager, a swap in a helper frame that reverts (variants settled, nested, kept).",
+   "agrees": true,
+   "note": "I read live_swap_revert.py (only web3_clientVersion, eth_getBlockByNumber, eth_getCode, debug_traceCall prestateTracer and eth_call) and re-ran it into my scratchpad at block 51021871 (0x67e6aa001f1cd71f80b836a153f8082ce02362e45c6fe94ae765d2be8bcd15d7). PoolManager code was 24,009 bytes with sha256 prefix f017c3da36573b60, equal to networks.json. settled and nested: node and reference both succeed with equal bytes; kept: both revert with data 0x5212cba1 (CurrencyNotSettled), which is the check at src/PoolManager.sol:112. Driver deltas were -30553010879137170 and -28557003898097267, as in the research file. clientVersion was tempo/v1.19.1-a9d6748/x86_64-unknown-linux-gnu before and after. I did not repeat the T14 time override run."
+  },
+  {
+   "check": "Source behind the lifted routines: evm2 State::tstore, rollback and take_transient_storage, StorageSlotHandle::set, call message checkpoints; Tempo's SSTORE override.",
+   "agrees": true,
+   "note": "I fetched evm2 35aa3280 crates/evm2/src/evm/state/mod.rs and read lines 830-924. tstore returns without a journal entry on an equal write, journals Some(previous) for an occupied slot and removes it on a zero write, and journals None for a vacant slot and skips a zero write. rollback truncates logs and pops entries newest first until the checkpoint length; a TransientStorageChange with a nonzero Some(previous) reinserts it and otherwise removes the key, StorageChange resets the current value. This is EIP-1153 revert semantics. I also fetched hardfork/src/constants.rs: STORAGE_CREDIT_VALUE is SSTORE_CREATE_COST 250,000 minus SSTORE_SET_COST 5,000, so the TIP-1060 part changes gas only, as stated. download.tempo.xyz/binaries/ still lists v1.19.1 as the newest release when I checked. I did not read storage.rs, evm/mod.rs or instructions.rs line by line."
+  }
+ ],
+ "leads": []
+}

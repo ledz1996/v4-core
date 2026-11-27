@@ -1,6 +1,6 @@
 # All findings
 
-163 findings on record after cycle 29, in-scope ones first.
+163 findings on record after cycle 30, in-scope ones first.
 
 ## F-012. Rebasing stETH held by the PoolManager gains and loses balance outside pool accounting
 
@@ -2970,27 +2970,26 @@ Sources:
 
 High severity, plausible. Effect: freeze. Who can trigger it: sequencer, validator or bridge committee. Networks: HyperEVM.
 
-What differs on the network: HyperCore places system transactions in HyperEVM blocks without a signature and states their sender itself. The public replay client takes that sender from the s value of the transaction with no check. Under AQAv2 a token's linked contract and a treasury address designated by a staked deployer rebalance supply between them. On Ethereum a balance leaves an address only through a transaction that address signed or a call made by its own code.
+What differs on the network: HyperCore places system transactions in HyperEVM blocks without a signature and states their sender itself, and the replay client takes that sender from the s value with no check. Under AQAv2 a token's linked contract and a treasury address designated by the treasury deployer rebalance supply. On Ethereum a balance leaves an address only through a transaction it signed or a call made by its own code.
 
-How it meets the code: If HyperCore recorded the PoolManager as the treasury address of an aligned quote asset, a system transaction with the PoolManager as sender could call transfer on that token and lower the PoolManager's balance outside any unlock. sync and settle compare balances only inside one transaction (src/PoolManager.sol:279-288 and 349-365), so pool state, ERC-6909 balances and protocol fee counters would still count the moved tokens as owed, and the last takes in that token would revert in Currency.transfer (src/types/Currency.sol:55-86). This cycle found nothing that closes or opens the path. The aligned quote assets page (sha256 9fd997fe...) and the exchange endpoint page (sha256 812ecf7e...) fetched today are byte identical to the cycle 22 and 24 copies: authorizeAqav2Role takes only token and role, and no page says whether an address with code may be named. The transfers page states that a HyperCore to HyperEVM credit is a system transaction that calls transfer on the linked contract as the token's system address (0x20 followed by the token index, or 0x2222...2222), which is a fixed address and not one a deployer names. The PoolManager nonce is 1 on the official endpoint, on rpc.hypurrscan.io and on both nanoreth replicas at block 52,312,226, so no system transaction has used it as sender, and its native balance equals the cycle 23 value to the wei.
+How it meets the code: If HyperCore named the PoolManager as the treasury address of an aligned quote asset, a system transaction with the PoolManager as sender could move that token out of the PoolManager outside any unlock. sync stores the balance at the time of the call and _settle credits only the increase within one transaction (src/PoolManager.sol:279-288 and 349-365), so pool state and ERC-6909 claims would still count the moved tokens as owed, and the last takes in that token would fail in the transfer of src/types/Currency.sol. This cycle added evidence that the path has not been used and found nothing that settles who can name the address. In 18,502 more blocks (52,332,899 to 52,351,400) all 9,135 gas price 0 transactions came from the 54 known system senders, none named the PoolManager, and the PoolManager nonce is still 1 on four endpoints. The exchange endpoint page is byte identical to the cycle 26 copy, and authorizeAqav2Role still takes token and role only.
 
 What is at risk: All pools and ERC-6909 claims in a token for which HyperCore named the PoolManager as the rebalancing address. Nothing is exposed today.
 
-What it takes: Two staked deployers of 500,000 HYPE each and a validator vote must name the PoolManager as treasury address. An ordinary account cannot do either.
+What it takes: The treasury deployer of an aligned quote asset (two staked deployers of 500,000 HYPE) must designate the PoolManager, and activation needs a validator vote. An ordinary account can do neither.
 
-What can be done: Watch the PoolManager nonce, which rises with any system transaction sent in its name. Ask the Hyperliquid team whether the node refuses an address with code as AQAv2 treasury.
+What can be done: Watch the PoolManager nonce, which rises with any system transaction sent in its name. Ask Hyperliquid whether the node refuses an address with EVM code as AQAv2 treasury.
 
-Second reviewer's corrections: actor: operator stands, because the published text puts AQAv2 activation behind a validator vote; if the treasury address can be changed after activation without a vote, the least privileged party would be the treasury deployer, which is issuer. The finding's statement that the rebalance is a system transaction sent from the treasury address that calls transfer is inferred: no fetched page says it, so the mechanism is unconfirmed at that link. The cited file out/sync-precompiles-official.txt begins with a web3_clientVersion of reth/v0.1.0-b92ad36, which is the hyperlend replica and not the official endpoint; this does not affect this finding.
+Second reviewer's corrections: coreRefs cite src/types/Currency.sol:50-60; the ERC-20 transfer and its revert are at src/types/Currency.sol:55-86 (lines 50-53 are the native branch). The actor is right: operator, since the treasury deployer stake and a validator vote are needed and an ordinary account can supply neither.
 
 Code: `src/PoolManager.sol:279-288`, `src/PoolManager.sol:349-365`, `src/types/Currency.sol:55-86`.
 
 Sources:
 
-- https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md (Fetched 2026-11-26, sha256 9fd997fe977532e3..., identical to the cycle 22 copy: treasury deployer designates the treasury address; activation by validator vote.)
-- https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md (Fetched 2026-11-26, sha256 812ecf7e87ec0470...: authorizeAqav2Role takes token and role only (lines 1370-1384).)
-- https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/hypercore-less-than-greater-than-hyperevm-transfers.md (Credits are system transactions that call transfer on the linked contract as the token's system address (lines 11-25); no checks on system address supply (line 77).)
-- https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest = 0x1 at head 0x31e38a2, 2026-11-26 (No system transaction has been sent in the PoolManager's name; the same 0x1 on rpc.purroofgroup.com, rpc.hyperlend.finance and rpc.hypurrscan.io (out/clientversions-start.txt).)
-- https://raw.githubusercontent.com/hl-archive-node/nanoreth/nb-20261125-2/src/node/primitives/transaction.rs (System transaction sender decoded from s without a signature check (read in cycle 22, lines 52-97 and 182-184).)
+- https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint.md (Fetched 2026-11-27, sha256 812ecf7e87ec0470, unchanged: authorizeAqav2Role takes type, token and role only (lines 1370-1386).)
+- https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/aligned-quote-assets.md (Fetched 2026-11-27, sha256 9fd997fe977532e3, unchanged: the treasury deployer designates a treasury address; activation by validator vote.)
+- https://rpc.purroofgroup.com eth_getBlockByNumber 52,332,899 to 52,351,400 (research/network-risk/cycles/030/hyperevm.work/out/zerogas-purroof.json) (9,135 gas price 0 transactions, all from 54 system senders, none to the PoolManager.)
+- https://rpc.hyperliquid.xyz/evm eth_getTransactionCount 0x12D4Fd9C5DeDd00ab8a0bCe2CF0167bbf94b6B1F latest = 0x1 at 0x31ed1f4 (research/network-risk/cycles/030/hyperevm.work/out/clientversions-start.txt) (No system transaction has been sent in the PoolManager's name; same on rpc.purroofgroup.com, rpc.hyperlend.finance/archive and rpc.hypurrscan.io.)
 
 ## F-046. X Layer voids blacklisted L1 deposits at the execution layer, so forced inclusion is no guaranteed exit from the PoolManager
 
@@ -4068,33 +4067,33 @@ Sources:
 - https://raw.githubusercontent.com/0xPolygon/bor/develop/core/vm/mulmod_memo.go (memo logic at lines 55-66)
 - https://raw.githubusercontent.com/holiman/uint256/v1.3.2/uint256.go (MulModWithReciprocal and MulMod differ only in where the reciprocal comes from)
 
-## F-160. Celo public endpoints answer from three superseded celo-reth releases, two of them older than a consensus fix
+## F-160. Celo public endpoints answer most reads from superseded celo-reth releases, one of them older than a consensus fix
 
-Info severity, plausible. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Celo.
+Info severity, confirmed. Effect: degrade. Who can trigger it: sequencer, validator or bridge committee. Networks: Celo.
 
-What differs on the network: On Ethereum a provider endpoint normally names one current client. On Celo the stakely.io endpoint rotates four reth builds, three of them older releases: 7680d6d (celo/reth-v1.0.0 or v1.0.1), 3cbf835 (v1.0.3) and 06140ff (v1.0.6 to v1.0.8). Release v1.0.4 changed a consensus rule for CIP-64 transactions with a zero-address feeCurrency, so the two oldest builds would accept a block that current nodes reject.
+What differs on the network: On Celo the stakely.io endpoint answers from four reth builds and onfinality from one, and the most frequent of them is the oldest public release. In 500 batches stakely.io answered 286 from 7680d6d (celo/reth-v1.0.0 or v1.0.1), 173 from 74cc8bb (v1.0.9 or v1.0.10) and 41 from 06140ff (v1.0.6 to v1.0.8). 3cbf835 (v1.0.3) answered none of the version-only batches but 307 of the eth_call batches of the pinned vector run, so it is still in the rotation. 7680d6d predates the v1.0.4 change that makes a zero-address feeCurrency an unregistered currency and adds the CIP-64 rule balanceOf(caller) >= gasLimit * maxFeePerGas.
 
-How it meets the code: A wallet, router or quoter that reads the PoolManager through such an endpoint gets an eth_call answer from whichever build serves that request. All four reth builds lock revm-interpreter 35.0.1 and either ruint 1.18.0 or 1.20.0, and each returned the specified word on every vector it was pinned to (7680d6d 214437 of 215637 vectors pinned, 0 mismatches; 3cbf835 4200 of 30108 large-index and edge vectors pinned before the run was stopped, 0 mismatches; 06140ff 3600 of 30108 large-index and edge vectors pinned before the run was stopped, 0 mismatches), so the PoolManager math (FullMath.mulDiv at src/libraries/FullMath.sol:24, TickMath at src/libraries/TickMath.sol:61-63, TickBitmap.compress at src/libraries/TickBitmap.sol:20-26) is computed the same on all of them. The builds differ in CIP-64 handling (zero-address feeCurrency before v1.0.4, fee-currency pricing of eth_call and eth_estimateGas before v1.0.5), which only changes simulated fees and acceptance of malformed CIP-64 transactions. Blocks come from the Celo sequencer, which runs a current build, so an old follower can only diverge if the sequencer itself includes such a transaction.
+How it meets the code: A wallet, router or quoter that reads the PoolManager through these endpoints gets an eth_call answer from whichever build serves the batch. Each batch is served whole by one backend (0 mixed batches of 500), and the backend changes in runs of 11 to 66 batches. All four builds lock revm-interpreter 35.0.1 and ruint 1.18.0 or 1.20.0. Pinned this way every build returned the specified word on every vector it was pinned to: 7680d6d on 214,437 of 215,637 vectors in cycle 28, 3cbf835 on 4,200 in cycle 28, 74cc8bb on all sets, and 06140ff this cycle, which returned the specified word on 20400 of 215637 vectors pinned before the run was stopped (34 of 360 batches, 0 mismatches; while it ran, the eth_call batches were answered 2654 times by 74cc8bb, 1830 by 7680d6d, 307 by 3cbf835 and 34 by 06140ff). The three getFeeGrowthInside borrow scripts (src/libraries/Pool.sol:498-509) gave the reference record on 7680d6d and 74cc8bb, and the 23 multi-transaction scenarios gave the reference outputs on 7680d6d (22 of 23 scenarios identical (90608 bytes compared), not identical: E1; E1 differs only in where revert data is reported) and on 74cc8bb. The builds differ in CIP-64 admission and pricing of simulated fees, which no PoolManager line reads. Blocks come from the Celo sequencer. 7680d6d and 3cbf835 are the looser builds: they accept every transaction the v1.0.4 rule accepts, and more, so a follower on one of them never rejects a block from a sequencer on v1.0.4 or later. A split needs a sequencer on an old build that includes a transaction the v1.0.4 rule rejects; the newer followers would then reject that block, as op-geth did at block 75,046,581.
 
-What is at risk: No PoolManager funds move and no withdrawal is blocked. A user relying on an old build may see a CIP-64 simulation priced differently from the chain, or a zero-address feeCurrency transaction accepted locally and then rejected.
+What is at risk: No PoolManager funds move and no withdrawal is blocked. A user relying on 7680d6d may see a CIP-64 simulation priced differently from the chain, or a zero-address feeCurrency transaction accepted by that node and then rejected.
 
-What it takes: The user's wallet or router uses stakely.io or another provider that still runs a pre v1.0.9 celo-reth build. Producing a divergent block needs the sequencer. The verifier saw only 74cc8bb and 7680d6d in 107 calls, so the rotation of 3cbf835 and 06140ff is unconfirmed. Release v1.0.4 also added the CIP-64 rule balanceOf(caller) >= gasLimit * maxFeePerGas.
+What it takes: The user reads or simulates through stakely.io or onfinality. A divergent block needs a sequencer that runs one of the old builds.
 
-What can be done: Integrators should read the PoolManager through an endpoint that reports reth/v2.2.0-74cc8bb or later and check web3_clientVersion; Celo can ask providers to retire builds older than v1.0.4.
+What can be done: Integrators should check web3_clientVersion and read the PoolManager through an endpoint that reports reth/v2.2.0-74cc8bb or later; Celo can ask providers to retire builds older than v1.0.4.
 
 This entry adds to F-116.
 
-Second reviewer's corrections: The rotation of 3cbf835 and 06140ff is unconfirmed: in 107 calls I saw only 74cc8bb and 7680d6d. The 7680d6d build alone supports the claim that a pre v1.0.4 build answers public reads. The v1.0.4 delta also has a fee-currency balance rule (#298) that the finding does not list. The actor value operator is right, because a divergent block needs the sequencer.
+Second reviewer's corrections: The source line says v1.0.0 locks celo-org/reth 7680d6d. The lockfile pins rev 7680d6d of paradigmxyz/reth. The divergence sentence needs a fix on direction. 7680d6d and 3cbf835 are the looser builds: they accept every transaction the v1.0.4 rule accepts, and more. A follower on an old build therefore never rejects a block from a v1.0.4+ sequencer. A split happens only if an old-build sequencer includes a transaction that v1.0.4 rejects, and then the newer followers reject it, as op-geth did at block 75046581. The onfinality claim (4 of 4 calls answered by 7680d6d) could not be re-tested because of rate limiting. The actor (operator) and the severity (info) are right.
 
-Code: `src/libraries/FullMath.sol:24`, `src/libraries/TickMath.sol:61-63`, `src/libraries/TickBitmap.sol:20-26`.
+Code: `src/libraries/FullMath.sol:24`, `src/libraries/TickMath.sol:61-63`, `src/libraries/Pool.sol:498-509`.
 
 Sources:
 
-- https://celo-json-rpc.stakely.io (web3_clientVersion rotates reth/v2.2.0-74cc8bb, 7680d6d, 3cbf835 and 06140ff (queried 2026-11-26, out/celo-*-stakely-*.json stats))
-- https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.3/Cargo.lock (v1.0.3 locks celo-org/reth 3cbf835, revm-interpreter 35.0.1 and ruint 1.18.0)
-- https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.0/Cargo.lock (v1.0.0 locks reth 7680d6d and ruint 1.18.0)
-- https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.6/Cargo.lock (v1.0.6 locks reth 06140ff and ruint 1.20.0)
-- https://github.com/celo-org/celo-kona/tags?after=celo%2Freth-v1.0.5 (v1.0.4 makes a zero-address feeCurrency an unregistered currency and calls it consensus-affecting but fork-free)
+- https://celo-json-rpc.stakely.io (500 batches of three web3_clientVersion calls on 2026-11-27: 286 batches 7680d6d, 173 74cc8bb, 41 06140ff, 0 mixed (out/rotation-stakely.json, out/rotation-stakely-2.json))
+- https://celo.api.onfinality.io/public (web3_clientVersion answered reth/v2.2.0-7680d6d to 4 of 4 calls on 2026-11-27)
+- https://raw.githubusercontent.com/celo-org/celo-kona/refs/tags/celo/reth-v1.0.0/Cargo.lock (v1.0.0 pins revision 7680d6d of paradigmxyz/reth and ruint 1.18.0 (read in cycle 28))
+- https://github.com/celo-org/celo-kona/tags (newest tag is still celo/reth-v1.0.10 of 20 November 2026; there is no v1.0.2 tag)
+- https://github.com/celo-org/celo-kona/tags?after=celo%2Freth-v1.0.5 (v1.0.4 makes a zero-address feeCurrency an unregistered currency (read in cycle 28))
 
 ## F-163. The main branch of holiman/uint256 replaces division and remainder on the path every go-ethereum family network takes, and no client pins it yet
 
