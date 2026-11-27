@@ -2,6 +2,8 @@
 AArch64 model and compare with Python integers. The disassembly text is interpreted; no code from the
 binary runs on the CPU.
 
+cycle 36 copy: adds "stride" (table entry size) and "void" (handlers return nothing, halts are tail calls to
+externs) to the config.
 usage: python3 -I arith.py <config.json> <out.json> <set> [fault] [shard nshards]
 config: {"bin", "arch": "x86"|"a64", "asm", "table", "rel", "stack_ptr", "stack_len", "gas", "host_params",
          "exp_byte_off", "got": {"hex": "memcpy|memset|memmove|panic"}, "externs": {...}, "faults": {...}}
@@ -23,7 +25,8 @@ OPS = {'ADD': 1, 'MUL': 2, 'SUB': 3, 'DIV': 4, 'SDIV': 5, 'MOD': 6, 'SMOD': 7, '
        'AND': 0x16, 'OR': 0x17, 'XOR': 0x18, 'NOT': 0x19, 'BYTE': 0x1a, 'SHL': 0x1b, 'SHR': 0x1c, 'SAR': 0x1d}
 ARITY = {'ISZERO': 1, 'NOT': 1, 'ADDMOD': 3, 'MULMOD': 3}
 T = int(CFG['table'], 16)
-HANDLER = {op: rel[T + 8 * code] for op, code in OPS.items()}
+STRIDE = int(CFG.get('stride', 8))
+HANDLER = {op: rel[T + STRIDE * code] for op, code in OPS.items()}
 X86 = CFG['arch'] == 'x86'
 STACK, CTX, HOST, PARAMS, SP = 0x70000000, 0x71000000, 0x72000000, 0x73000000, 0x7ff000000000
 GUARD = int('a5' * 32, 16)
@@ -143,7 +146,7 @@ def run(op, a, b, c):
     wr(CTX + int(CFG['spec_off'], 16), 1, int(CFG['spec_val'], 16))
     wr(HOST + OFF_H, 8, PARAMS); wr(PARAMS + OFF_E, 8, 50)
     r = cpu.call(HANDLER[op], [CTX, HOST])
-    if r & 0xff: raise Stop('status %#x' % (r & 0xff))
+    if not CFG.get('void') and r & 0xff: raise Stop('status %#x' % (r & 0xff))
     visited.update(cpu.visited)
     newlen = rd(CTX + OFF_L, 8)
     if newlen != len(stack) - k + 1: raise Stop('stack length %d' % newlen)

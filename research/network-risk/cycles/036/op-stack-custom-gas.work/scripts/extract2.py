@@ -5,7 +5,7 @@ import bisect, json, re, subprocess, sys
 binf, fdes, arch, out_s, out_j = sys.argv[1:6]
 starts = [int(x, 16) for x in sys.argv[6:] if not x.startswith('stop=')]
 STOP = set(int(x[5:], 16) for x in sys.argv[6:] if x.startswith('stop='))
-f = sorted(tuple(int(x, 16) for x in l.strip().split('...')) for l in open(fdes))
+f = sorted(tuple(int(x, 16) for x in re.split(r'\.\.+', l.strip())) for l in open(fdes) if '..' in l)
 s = [a for a, b in f]
 if arch == 'x86':
     CALL = re.compile(r'^ *([0-9a-f]+):\s+(call|jmp|j[a-z]+)\s+(?:0x)?([0-9a-f]+)\b')

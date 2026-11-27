@@ -1,0 +1,120 @@
+{
+ "unit": "theme-tempo-v1192-storage-lift",
+ "profiles": [],
+ "findings": [],
+ "cleared": [
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 1 location (L-1295): the SSTORE, SLOAD, TLOAD and TSTORE host routines and State::rollback in the published tempo v1.19.2 x86_64 binary (sha256 27a42f86b4f3c1d3c5e8623d597c80ea6299920ec9c70f3a303b4083bc023ddd, equal to the published .sha256), found from the cycle 35 dispatch tables and walked in parallel with v1.19.1 through every callee (scripts/relocate.py, nothing executed).",
+   "result": "SSTORE is at 0x42b3290 (was 0x42a0d20), SLOAD at 0x42b6110, State::rollback at 0x1e90db0, the TSTORE host routine at 0x1e8feb0 and the TLOAD host routine at 0x1e8fd10. The closure holds 125 functions and 17,736 instructions, and every instruction pair is equal once absolute addresses are masked. The one difference is at 0x42b4778, where the T7 gate in front of the TIP-1060 accounting reads the spec byte at context offset 0x611 instead of 0x605 and still compares it with 11. That is the change cycle 35 called the SSTORE gas check. It moves one field read and changes no gas rule, matching the 12 byte shift that cycle 35 saw in the CALL path. The rollback jump table moved from 0x65fe30 to 0x662dec, and its four journal arms point to the relocated arms. The Tempo source at c0c9372, the commit that rpc.mainnet.tempo.xyz reports, has the same SSTORE order: static check, EIP-2200 sentry, the 100 gas static charge, skip_cold_load against ColdStorageAdditionalCost, host sstore, then sstore_storage_credits from T7, then dynamic gas and refund.",
+   "source": "research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/reloc_storage.json ; https://raw.githubusercontent.com/tempoxyz/tempo/c0c9372/crates/evm/src/instructions.rs ; https://download.tempo.xyz/binaries/v1.19.2/"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 1 run on x86_64 v1.19.2: the SSTORE StorageWarmed push segment 0x42b44c4-0x42b455a, the write and StorageChange push segment 0x42b455a-0x42b46b8, State::rollback 0x1e90db0 with its log truncation and drop loop, and the transient routines, run from the v1.19.2 disassembly in the cycle 28 x86-64 model (cycle 30 journal model ported by scripts/port_journal.py, extended by scripts/storage_v1192.py). The slot shapes are slot0, liquidity, the lower and upper tick words, a tick bitmap word, a position's liquidity, protocolFeesAccrued[currency] and an ERC-6909 balance (src/PoolManager.sol:93, src/ProtocolFees.sol:21, src/ERC6909.sol:17, src/libraries/Pool.sol:83-91). Seeds 2026112736 (real hash) and 2026112737 (constant hash).",
+   "result": "3,006 cases with the real hash and 1,006 with every transient key in one probe chain: 19,085 SSTOREs (3,894 zero to non-zero, 1,780 non-zero to zero, 4,206 non-zero to another value, 7,540 no change, 1,665 restore to original), 37,595 SLOADs, 7,017 reverted and 4,588 successful frames at depths 1 to 3, and 6,551 logs. After every step the reads, the final storage and transient storage and the surviving log count equal tools/opdiff/pyevm.py. The original word of each slot record still equals the value at transaction start. An SSTORE adds a StorageWarmed entry only on first touch and a StorageChange entry only when the new value differs from the present one. A rollback leaves the log Vec at the frame's checkpoint and calls the drop routine once for each later log. There are no mismatches and no model errors. All 87 instructions of the two SSTORE segments ran. The write cannot fail inside these segments: they have no exit other than the end of the segment and the Vec growth branch, which the model never needed.",
+   "source": "research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/storage_none_real.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/storage_none_const.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/scripts/storage_v1192.py"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 5: planted faults in the in-memory copy of the v1.19.2 x86_64 code, with 306 cases each (seed 2026112738). The faults are: a credit-like change of the stored word (0x42b4617), the write landing on the original word (0x42b4604), a skipped StorageChange entry (0x42b461c), a StorageChange entry on a no-change write (0x42b45fe), the new value recorded as the previous one (0x42b467e/0x42b4686), a revert that restores the committed value (0x1e911f8/0x1e911fd), a log kept after its frame reverts (0x1e912f3) and a drop loop one log short (0x1e912fa). The cycle 30 faults were also run on the ported x86_64 and aarch64 models.",
+   "result": "All eight new faults are caught: 165, 202, 127, 0, 130, 29, 122 and 0 value mismatches and 0, 244, 244, 216, 0, 0, 122 and 32 failed journal or log checks. The no-change entry fault and the short drop loop are seen only by the journal and log checks. Of the cycle 30 faults, checkpoint plus and minus one, transient removal, the skipped storage arm, the skipped transient arm, the skipped StorageChange and previous-equals-new are caught on both architectures. The skipped warm arm is not caught on either, as in cycle 30, because it changes only the warm flag, which sets gas and no value.",
+   "source": "research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/storage_fault_credit_on_word.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/storage_fault_log_kept.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/journal_x64_v1192_skip_warm.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/journal_a64_v1192_skip_warm.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Task 1, the TIP-1060 credit path: whether it can change the PoolManager's stored word, skip its journal entry or make a write fail that Ethereum would accept with the same gas. Read in the v1.19.2 x86_64 disassembly from 0x42b46b8 to the handler exit, and in accounting.rs at c0c9372.",
+   "result": "The credit code starts after the write and its StorageChange entry are done (0x42b46b8). It works on stack copies of the present and new words (rsp+0x80 to 0xbf). It tests T7 (spec byte at least 11), then whether the write crosses zero, then that the destination is not 0x1060000000000000000000000000000000000000 (the constant 0x6010 at 0x42b4809). It charges the warm read and, when the credit slot is cold, 2,000 more. It reads and writes only the slot uint256(bytes32(PoolManager)) of 0x1060000000000000000000000000000000000000 and its transient word, through the journaled host routines. The PoolManager's slot pointer is dead by then (r12 is reused as the stop code). The figures for a PoolManager write are 100 gas plus 2,000 when cold on every zero crossing. A clear adds 1 credit to the PoolManager and costs 2,900 more when the credit slot is still clean in the transaction (SstoreResetWithoutColdLoadCost). A creation in the PoolManager's default Refund mode is charged 245,000 (0x3bd08 at 0x42b4dd8 and 0x42b50f8) and records one pending refund for the end of the transaction. A failure inside the credit code returns OutOfGas (stop code 0x20 at 0x42b4844) or a fatal error for an invalid credit state. The first halts the frame, and the frame's checkpoint is rolled back as for any out-of-gas stop. The credit balance is a saturating u64 and the transient state is written only by the precompile, so the fatal path cannot be reached from a PoolManager call. On Ethereum the same write costs at most 22,100 gas. A call with gas sized for Ethereum can therefore run out of gas on Tempo for a zero to non-zero write, which is the gas difference earlier cycles recorded, and the write is then undone. No path changes the word, skips its entry or keeps a write whose frame failed.",
+   "source": "https://raw.githubusercontent.com/tempoxyz/tempo/c0c9372/crates/precompiles/src/storage_credits/accounting.rs ; https://raw.githubusercontent.com/tempoxyz/tempo/c0c9372/crates/precompiles/src/storage_credits/mod.rs ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/build/x64v2_42b3290.s"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L2",
+   "check": "Live, through the deployed PoolManager 0x33620f62c5b9b2086dd6b62f4a297a9f30347029 on rpc.mainnet.tempo.xyz, each batch bracketed by web3_clientVersion (tempo/v1.19.2-c0c9372 before and after). The cycle 31 runs were repeated: the credit shapes (first slot0 write, ticks -600 and 600 initialised, cleared and initialised again, a position going to zero and back, with and without a helper that adds and removes liquidity and reverts) by eth_call at block 51122866 and by eth_simulateV1 at T14 rules (time 0x6b182980, block 51122869); the swap in a reverted frame and the nested revert at T14 (block 51122872); and take in a reverted frame, a kept debt, a nested revert and a take and settle round trip (block 51122875).",
+   "result": "Every variant equals pyevm.py at current and at T14 rules: credit shapes cycle and helper, swap settled, kept (CurrencyNotSettled in both) and nested, and take revert, kept, nested and roundtrip. Under the T14 rules the simulated block timestamps are 0x6b182980, so the fork rules applied. The PoolManager holds 20 storage credits (balanceOf on 0x1060000000000000000000000000000000000000 at block 0x30c1353, and eth_getStorageAt of slot uint256(bytes32(PoolManager)) gives 0x14). A transfer call to the precompile from the PoolManager reverts with UnknownSelector. Credits used as a pool currency are already cleared as L-264.",
+   "source": "research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/live_credit_shapes_v1192.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/live_credit_shapes_v1192_t14.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/live_swap_revert_v1192_t14.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/live_take_revert_v1192.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/credits_precompile_probe.txt"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 3: LOG0 to LOG4 on v1.19.2. The handlers of all three dispatch families and their callees were relocated against v1.19.1. The log truncation in State::rollback was run in the model (above). The logs that eth_simulateV1 returns at T14 rules for an unlock that initializes, adds liquidity, swaps, lets a helper swap and revert (once nested), and burns ERC-6909 claims were decoded (block 51124114, tempo/v1.19.2-c0c9372 before and after).",
+   "result": "The 15 LOG handler entries and their closure, 62 functions and 2,631 instructions, are equal to v1.19.1. The only change is the frame guard byte at context offset 0x610 instead of 0x604 in 0x4af59e0, the field cycle 35 found in the CALL path. On the live chain, the settled and nested runs each return five logs from the PoolManager: Initialize, ModifyLiquidity, one Swap, and two ERC-6909 Transfer burns. No Swap comes from the reverted helper frames. The topics are the pool id and the driver for ModifyLiquidity and Swap (src/PoolManager.sol emit sites), and from = driver, to = 0, id = currency for Transfer. The data words are tickLower -600, tickUpper 600, liquidityDelta 1e18, the swap amounts -1e15 and 996006981039903, sqrtPrice 79149250711305166342700278159, liquidity 1e18, tick -20 and fee 3000. The Transfer amounts equal the settled deltas 30553010879137170 and 28557003898097267, and the reference computes the same deltas. The kept variant reverts and returns no logs. The LOG handler bodies themselves were compared with v1.19.1 and checked live, not run in the model.",
+   "source": "research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/reloc_log.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/live_swap_revert_logs_t14.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/live_logs_decoded.json"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "Task 4 (L-1288): whether the aarch64 v1.19.2 archive is published and whether its storage handler trees equal aarch64 v1.19.1. The listing https://download.tempo.xyz/binaries/v1.19.2/ was read at 2026-11-27T20:23:58Z. The archive was fetched into dl/ and its sha256 checked (59a59eca51e9223cc73b39080a1999ae20731e79960d78836e2742c2088d2b03, OK; binary 97ef539afde11b30f9dee7816c1df04a56ea189e76ab6c923e4e89f51cfc089f). Trees were walked with scripts/relocate_a64.py and the cycle 30 aarch64 journal model was ported (scripts/port_journal_a64.py).",
+   "result": "The listing has aarch64 Linux, aarch64 macOS and x86_64 Linux archives with .asc, .sha256 and .spdx.json files. SSTORE is at 0x3b0a918 (6,592 bytes, was 0x3b563d4), SLOAD at 0x3b0cdb0, State::rollback at 0x1db1c30, the TSTORE host routine at 0x1db106c and the TLOAD host routine at 0x1db0f08. Every routine has the same length. The walk covers 385 functions and 47,277 instructions. Each difference is a page offset after adrp whose target is a relocated pointer or a panic location record with a shifted source line, except the T7 gate in SSTORE (0x3b0b838), which reads the spec byte at 0x611 instead of 0x605, the same change as on x86_64. In the ported model, 1,007 cases with the real hash (seed 2026112739) and 1,007 with a constant hash (seed 2026112740) give no mismatch with pyevm.py. All 69 instructions of the SSTORE segments ran, and 7 of the 8 cycle 30 faults are caught, as on x86_64.",
+   "source": "https://download.tempo.xyz/binaries/v1.19.2/ ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/reloc_a64_storage.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/journal_a64_v1192_none_real.json ; research/network-risk/cycles/036/theme-tempo-v1192-storage-lift.work/results/aarch64_check.txt"
+  },
+  {
+   "chainIds": [
+    4217
+   ],
+   "lens": "L1",
+   "check": "What these results mean for src/: the code that writes slot0, liquidity, ticks, the bitmap, positions, protocolFeesAccrued and ERC-6909 balances (src/libraries/Pool.sol, src/libraries/Position.sol, src/libraries/TickBitmap.sol, src/ProtocolFees.sol, src/ERC6909.sol), and the unlock callback by which any account can choose revert depths (src/PoolManager.sol:104-114).",
+   "result": "None of the runs changes what a src/ line stores or reads back after a revert, and none lets an ordinary account gain or lock other users' funds. The only Tempo-specific effect on these writes is gas: up to 245,000 extra for a zero to non-zero write in the PoolManager's Refund mode, refunded at the end of the transaction from the PoolManager's credits while it has any. A call short of gas fails and is undone.",
+   "source": "src/PoolManager.sol:104 ; src/libraries/Pool.sol:83"
+  },
+  {
+   "chainIds": [
+    1,
+    10,
+    8453,
+    130,
+    7777777,
+    480,
+    57073,
+    1868,
+    42220,
+    196,
+    42161,
+    4663,
+    99901,
+    137,
+    56,
+    43114,
+    143,
+    4326,
+    5042,
+    999
+   ],
+   "lens": "L1",
+   "check": "The other 20 networks, for this unit's question (Tempo's v1.19.2 storage write, TIP-1060 credit accounting, database read and LOG in its shipped binaries).",
+   "result": "Not applicable. None of them runs the Tempo binary, its evm2 revision or TIP-1060 accounting. Their storage, revert and log semantics were covered by earlier cycles (OPCODES.md checks 1 to 4 and the cycle 30 to 35 journal rows).",
+   "source": "research/network-risk/OPCODES.md"
+  }
+ ],
+ "leads": [],
+ "leadResults": [
+  {
+   "leadId": "L-1295",
+   "outcome": "cleared",
+   "answer": "In v1.19.2 x86_64 the SSTORE handler and its closure equal v1.19.1 except the T7 gate's spec byte offset (0x605 to 0x611); the gas check itself did not change. The write and journal segments, rollback with logs and the transient routines ran from the v1.19.2 code on the PoolManager's slot shapes. In 4,012 cases with reverts at depth 1 to 3, the reads, original words, stored words, journal entries and logs equal pyevm.py, and eight planted faults were caught. The TIP-1060 credit region was read in the binary and the source. It runs after the write on copies and touches only the 0x1060 address, and a failure there is a frame halt that is rolled back. Live runs at current and T14 rules equal the reference. The credit region's run from the binary and the SLOAD database path remain as new leads."
+  },
+  {
+   "leadId": "L-1288",
+   "outcome": "cleared",
+   "answer": "The aarch64 v1.19.2 archive is published (listing read 2026-11-27T20:23:58Z, sha256 OK). Its storage handler trees equal aarch64 v1.19.1 apart from relocated data addresses and the same T7 spec byte offset change. The ported aarch64 journal model ran 2,014 cases with no mismatch."
+  }
+ ]
+}

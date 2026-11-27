@@ -1,0 +1,29 @@
+{
+ "unit": "theme-erigon-main-frame-cache",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "confirmed",
+   "severity": "info",
+   "factCheck": "Fetched erigon main and v3.8.2 execution/state/read_paths.go: ReadStamp is {len(ibs.journal.entries), ibs.journal.epoch}, off only under dbg.TraceTransactionIO (main :1573-1587, v3.8.2 :1804-1818; the v3.8.2 comment adds that unjournalled changes move the epoch). main journal.go: Reset bumps epoch, push only appends, revert truncates to the snapshot and bumps epoch. main interpreter.go: frameSlots has two entries keyed by stack word, lookupSlot hits only when the stamp equals the stored stamp, put clears ok[] on a stamp change, putCallContext clears ok[] before a context is reused, and the run loop sets slots.on from ReadStamp. instructions.go opSload serves a hit from the cache and otherwise reads GetState and stores the post-read stamp. intra_block_state.go SetState pushes storageChange unless the value is unchanged with a known source; transient_storage.go Set journals a change. grep of execution/vm/interpreter.go for frameSlots: 4 or more hits in v3.8.0, v3.8.1, v3.8.2, release/3.8 and main; 0 in v3.7.0 and v3.7.1. So the correction to the earlier F-165 (only main) holds. web3_clientVersion queried: ethereum-mainnet.gateway.tatum.io returns erigon/3.8.2-8a3f3b2c and refuses eth_call on its free plan (error -16401, reproduced), eth.blocktailor.com returns erigon/3.7.1, ethereum-rpc.publicnode.com returns reth/v2.11.0. The pmshapes-none.json output exists with seed 3620261128 and fault None. I did not rerun the model.",
+   "codeCheck": "src/PoolManager.sol:153-154 reads slot0 through checkPoolInitialized (src/libraries/Pool.sol:585-586), :156 calls beforeModifyLiquidity, then pool.modifyLiquidity reads slot0 again at Pool.sol:207. swap reads slot0 at PoolManager.sol:196, calls beforeSwap at :202 and reads again in _swap and Pool.swap (Pool.sol:283). TickBitmap.flipTick does sload then sstore at TickBitmap.sol:73. These are the outer-read, hook-reentry, outer-read shapes the finding names. Since any nested SSTORE that changes a value pushes a journal entry, and any revert bumps the epoch, the outer frame's stamp no longer matches and the outer re-read goes to GetState. A same-value write pushes no entry but leaves the value unchanged, so a cache hit returns the right word. No path in src/ depends on a stale read here.",
+   "corrections": "",
+   "sources": [
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/main/execution/state/read_paths.go", "supports": "ReadStamp definition at :1573-1587"},
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.2/execution/state/read_paths.go", "supports": "ReadStamp at :1804-1818 in the release"},
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/main/execution/state/journal.go", "supports": "Reset and revert bump epoch; push appends"},
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/main/execution/vm/interpreter.go", "supports": "frameSlots, lookupSlot, put, putCallContext"},
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/main/execution/vm/instructions.go", "supports": "opSload cache use at :859-880"},
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/v3.8.0/execution/vm/interpreter.go", "supports": "frameSlots present in v3.8.0 (also v3.8.1, release/3.8; absent in v3.7.0 and v3.7.1 by the same fetch)"},
+    {"url": "https://raw.githubusercontent.com/erigontech/erigon/main/execution/state/intra_block_state.go", "supports": "SetState journals unless the value is unchanged; SetStorage is debug-only"},
+    {"url": "https://ethereum-mainnet.gateway.tatum.io", "supports": "web3_clientVersion erigon/3.8.2-8a3f3b2c; eth_call refused for free plan"}
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {"check": "Task 1: where the stamp is defined and every place that changes it, at erigon main and v3.8.2.", "agrees": true, "note": "Read ReadStamp, journal push/revert/Reset, SetState and transientStorage.Set myself. Value-changing storage and transient writes journal, reverts truncate and bump epoch. SetStorage writes without a journal entry but is documented as debug-only and is used for overrides before any frame exists, so no frame cache can hold a stamp across it."},
+  {"check": "Task 2: the cache model argument that the epoch is not needed inside a transaction because a revert can only return the journal to a length a live frame recorded with the same prefix.", "agrees": true, "note": "The argument follows from journal.revert truncating to a snapshot taken at or after the outer read, and the real code bumps the epoch anyway. putCallContext clears ok[] so a reused context cannot serve another address's slot. I did not rerun the Python model."},
+  {"check": "None of the other 20 networks runs erigon-derived node software carrying the cache.", "agrees": true, "note": "I did not refetch every endpoint. The chain 1 client strings reproduce exactly, and the per-frame cache appears only from erigon v3.8.0, after Polygon and BNB forks diverged per the cited sunset notices. Residual risk is a private validator on another chain running a fork, which an ordinary account cannot exploit."}
+ ],
+ "leads": []
+}

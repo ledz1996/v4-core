@@ -68,11 +68,16 @@ class CPU2(CPU):
             slot = int(m.group(1), 16)
             if slot in self.got:
                 return self.got[slot]
+            t = self.read(slot, 8)
+            if t in self.p.ins:
+                return ('to', t)
             raise Stop('indirect through %x' % slot)
         return None
 
     def i_call(self, o, pc, n):
         f = self._indirect(o[0])
+        if isinstance(f, tuple):
+            self.r['rsp'] -= 8; self.write(self.r['rsp'], 8, n); return f[1]
         if f is not None:
             f(self); return n
         t = int(o[0], 16)
@@ -82,6 +87,8 @@ class CPU2(CPU):
 
     def i_jmp(self, o, pc, n):
         f = self._indirect(o[0])
+        if isinstance(f, tuple):
+            return f[1]
         if f is not None:
             f(self)
             a = self.read(self.r['rsp'], 8); self.r['rsp'] += 8; return a
@@ -162,6 +169,12 @@ class CPU2(CPU):
             self._xput(d, v)
         else:
             self.put(d, v)
+    def i_pinsrw(self, o, pc, n):
+        # cycle 36: insert the low 16 bits of a general register or memory word at word lane imm & 7, other lanes kept
+        d = self.opnd(o[0]); s = self.opnd(o[1]); k = int(o[2], 0) & 7
+        v = (self.read(s[1], 2) if s[0] == 'm' else self.get(s)) & 0xffff
+        a = self._xget(d) & ~(0xffff << (16 * k)) & M128
+        self._xput(d, a | (v << (16 * k)))
     def i_movsd(self, o, pc, n):
         d = self.opnd(o[0]); src = self.opnd(o[1])
         if src[0] == 'm' and d[0] == 'r':

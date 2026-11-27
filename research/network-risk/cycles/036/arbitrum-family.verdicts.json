@@ -1,0 +1,57 @@
+{
+  "unit": "arbitrum-family",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "web3_clientVersion queried on 2026-11-27: rpc.elysium.kinetiq.xyz answers nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12, arbitrum-one-rpc.publicnode.com answers nitro/vlocal+5f02f3f-20261014T220458Z-modified/linux-amd64/go1.25.12, arb1.arbitrum.io/rpc and rpc.mainnet.chain.robinhood.com answer nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3. arbOSVersion() at 0x64 returns 0x74 on all four. go.dev/doc/devel/release lists go1.25.13 released 2026-08-13 and go1.25.14 after it. Fetched prove.go at the go1.25.12 tag: it defines addLocalFacts at line 2017 and has no topoSortValuesInBlock. At go1.25.13 prove.go calls ft.topoSortValuesInBlock at line 1412 and ft.constantFoldArguments then ft.addValueFact at lines 1419-1420; go1.27.3 has the same walk at line 1705. mergelocals.go at go1.25.13 line 518 checks v.AddrSinkArg(idx) with a comment naming issue 80127, which go1.25.12 lacks. Issue 80517 (prove bug causes invalid indirect call, amd64 reproducer faulting at 0xdeadbeef) and issue 80618 (1.25 backport, CherryPickApproved, CLs 807221 and 807222, closed by commit f59f3cc) read as the finding says. Issue 80127 is a riscv64 struct copy miscompile, as the finding says. I ran 200 of my own vectors (SHL, SHR, SAR with counts 63 to 257, 2^32, 2^64, 2^64+1 and 2^256-1; MULMOD and ADDMOD with divisors of one to four limbs) by eth_call with a code override on Elysium, PublicNode and arb1: 0 mismatches and 0 errors on each. No primary source shows an EVM result that depends on the go1.25.12 compiler fault. I did not open the GitHub milestone search URL; the backport set it supports is confirmed by issue 80618 and the tag sources.",
+      "codeCheck": "The cited sites consume the opcode words the finding names. FullMath.mulDiv uses mulmod(a, b, not(0)) and div and mulmod by the denominator (src/libraries/FullMath.sol:24-48). TickMath.getTickAtSqrtPrice uses shr(127, mul(r, r)), shr(128, r) and shl(63, f) (src/libraries/TickMath.sol:140-145 and onward). BitMath.mostSignificantBit builds its result from lt and shr (src/libraries/BitMath.sol:14-20). A wrong word from any of these would change ticks and amounts in every pool on the affected producer. No wrong word was observed, so the path stays hypothetical.",
+      "corrections": "",
+      "sources": [
+        {"url": "https://rpc.elysium.kinetiq.xyz", "supports": "web3_clientVersion nitro/vlocal+unknown-unknown/linux-amd64/go1.25.12; arbOSVersion 0x74; 200 shift and modular vectors with 0 mismatches"},
+        {"url": "https://arbitrum-one-rpc.publicnode.com", "supports": "web3_clientVersion nitro/vlocal+5f02f3f-20261014T220458Z-modified/linux-amd64/go1.25.12; 200 vectors with 0 mismatches"},
+        {"url": "https://arb1.arbitrum.io/rpc", "supports": "web3_clientVersion nitro/v3.13.0-rc.9+b72783f-20261116T155937Z/linux-arm64/go1.27.3; 200 vectors with 0 mismatches"},
+        {"url": "https://go.dev/doc/devel/release", "supports": "go1.25.13 released 2026-08-13, go1.25.14 listed after it"},
+        {"url": "https://raw.githubusercontent.com/golang/go/go1.25.12/src/cmd/compile/internal/ssa/prove.go", "supports": "addLocalFacts at line 2017, no topological walk"},
+        {"url": "https://raw.githubusercontent.com/golang/go/go1.25.13/src/cmd/compile/internal/ssa/prove.go", "supports": "topoSortValuesInBlock, constantFoldArguments and addValueFact at lines 1412-1420"},
+        {"url": "https://raw.githubusercontent.com/golang/go/go1.27.3/src/cmd/compile/internal/ssa/prove.go", "supports": "topoSortValuesInBlock at line 1705"},
+        {"url": "https://raw.githubusercontent.com/golang/go/go1.25.13/src/cmd/compile/internal/liveness/mergelocals.go", "supports": "AddrSinkArg check at line 518 citing issue 80127"},
+        {"url": "https://github.com/golang/go/issues/80517", "supports": "prove bug causes invalid indirect call on amd64"},
+        {"url": "https://github.com/golang/go/issues/80618", "supports": "1.25 backport by CLs 807221 and 807222, merged as f59f3cc"},
+        {"url": "https://github.com/golang/go/issues/80127", "supports": "riscv64 struct copy miscompile fixed by the mergelocals change"}
+      ]
+    },
+    {
+      "findingIndex": 1,
+      "verdict": "confirmed",
+      "severity": "info",
+      "factCheck": "The Kinetiq page trading-on-hypercore-from-elysium (last updated 2 November 2026) says the keeper lane and the ElysiumCoreWriter predeploy ship in an ArbOS upgrade about four weeks after mainnet, that a dapp contract binds its HyperCore account and emits intents through the predeploy, and that with a prefunded HYPE gas escrow each outcome is delivered back to the originating contract. The hypercore-market-data page says the read precompile ships in the same upgrade and that Elysium launched on stock ArbOS without it. getScheduledUpgrade() (selector 0x81ef944c) at 0x6b returns 64 zero bytes on Elysium at block 0xb3eb86, and on Arbitrum One and Robinhood Chain as well. No address or ABI for the predeploy is published on either page, so the residual check cannot be done yet.",
+      "codeCheck": "The PoolManager makes outside calls only in Currency.transfer (native call with empty calldata at src/types/Currency.sol:48, ERC20 transfer selector 0xa9059cbb at src/types/Currency.sol:57-73), the balanceOf read in sync (src/PoolManager.sol:279-288) and hook calls (src/libraries/Hooks.sol:131-134). None can encode a bind or intent call unless the predeploy answers one of those selectors, so the PoolManager cannot become an originating contract and cannot receive callbacks of that kind. take and the other value-moving entry points carry onlyWhenUnlocked (src/PoolManager.sol:291 onward), so an inbound callback outside an unlock reverts.",
+      "corrections": "",
+      "sources": [
+        {"url": "https://elysium.kinetiq.xyz/docs/trading-on-hypercore-from-elysium", "supports": "ElysiumCoreWriter predeploy, intents, gas escrow and callbacks to the originating contract, shipping in an upgrade about four weeks after mainnet"},
+        {"url": "https://elysium.kinetiq.xyz/docs/hypercore-market-data", "supports": "read precompile ships in the same upgrade; launch on stock ArbOS"},
+        {"url": "https://rpc.elysium.kinetiq.xyz", "supports": "getScheduledUpgrade() at 0x6b returns zeros at block 0xb3eb86"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "stalesync.py: a bare sync of a token in one transaction, exttload of CURRENCY_SLOT and RESERVES_OF_SLOT in the next, then unlock and settle, with a same-transaction control.",
+      "agrees": true,
+      "note": "I ran my own eth_simulateV1 block on all four endpoints. A contract that TSTOREs 1 in one call reads 0 from TLOAD in the next call of the same simulated block. On arb1 and PublicNode, sync(USDC) on the PoolManager followed by exttload(CURRENCY_SLOT, src/libraries/CurrencyReserves.sol:13) in the next call returns zero. A same-call TSTORE then TLOAD returns 1 on all four, so transient storage works within a transaction and is cleared between transactions. This tests the node's simulation path, which shares the state transition code with block production; the sequencer itself was not observed."
+    },
+    {
+      "check": "30,222 vectors for the sites a wrong proof or a merged stack slot would break on amd64, run on both go1.25.12 builds and both go1.27.3 builds.",
+      "agrees": true,
+      "note": "Independent set of 200 vectors per endpoint (shift counts at 63 to 257, 2^32, 2^64, 2^64+1, 2^256-1; MULMOD and ADDMOD with one to four limb divisors) against Python reference: 0 mismatches on Elysium, PublicNode and arb1. These are the words FullMath, TickMath and BitMath consume."
+    },
+    {
+      "check": "Upgrades in the next six months: arbOSVersion(), getScheduledUpgrade() and eth_config next on all three chains.",
+      "agrees": true,
+      "note": "arbOSVersion() returns 0x74 and getScheduledUpgrade() returns zeros on Arbitrum One, Robinhood Chain and Elysium today. I did not re-read eth_config or the DAO table."
+    }
+  ],
+  "leads": []
+}

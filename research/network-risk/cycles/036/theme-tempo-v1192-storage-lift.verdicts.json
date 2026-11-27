@@ -1,0 +1,22 @@
+{
+  "unit": "theme-tempo-v1192-storage-lift",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 1, the TIP-1060 credit path: whether it can change the PoolManager's stored word, skip its journal entry or make a write fail that Ethereum would accept with the same gas (v1.19.2 x86_64 disassembly from 0x42b46b8 and accounting.rs at c0c9372).",
+      "agrees": true,
+      "note": "I fetched https://raw.githubusercontent.com/tempoxyz/tempo/c0c9372/crates/precompiles/src/storage_credits/accounting.rs (HTTP 200, 315 lines). Its doc comment says sstore_storage_credits runs after a single SSTORE has been journaled. It returns early unless the write crosses zero and when the owner is the credit address. Every backend sload, sstore and tload or tstore it makes names STORAGE_CREDITS_ADDRESS with key StorageCredits::slot(owner), which mod.rs at the same commit defines as account.into_word(). Its failures are HostError::Halt(OutOfGas) or a Fatal error for an undecodable credit word. Refund mode charges STORAGE_CREDIT_VALUE, and 0x3bd08 at 0x42b4dd8 and 0x42b50f8 in build/x64v2_42b3290.s equals 245,000. The 0x6010 constant is at 0x42b4809 in the same listing. Credit transient state lives under the 0x1060 address, so it cannot collide with the PoolManager's own transient slots (src/libraries/Lock.sol:13, src/libraries/NonzeroDeltaCount.sol:22, src/libraries/CurrencyDelta.sol:39, src/libraries/CurrencyReserves.sol:29-30). set_mode and set_budget in mod.rs act only on msg_sender. The PoolManager calls an external address with fixed selectors only, so an outside caller cannot set its mode. src/ has no try/catch and no gas-limited inner call, so an out-of-gas halt inside the credit code reverts the whole call and cannot be turned into a partial write. I did not rerun the binary itself; the claim that the slot pointer is dead in r12 rests on the work file listing."
+    },
+    {
+      "check": "Live, through the deployed PoolManager 0x33620f62c5b9b2086dd6b62f4a297a9f30347029 on rpc.mainnet.tempo.xyz: credit shapes, swap and take in reverted and nested frames at current and T14 rules, and the PoolManager's credit balance and precompile probe.",
+      "agrees": true,
+      "note": "I ran the queries myself on https://rpc.mainnet.tempo.xyz. web3_clientVersion returned tempo/v1.19.2-c0c9372/x86_64-unknown-linux-gnu at block 0x30c2639. eth_getStorageAt on 0x1060000000000000000000000000000000000000, slot 0x00..33620f62c5b9b2086dd6b62f4a297a9f30347029, returned 0x14. eth_call balanceOf(PoolManager) on the precompile returned 0x14. eth_getCode of the precompile is 0xef. An eth_call of transfer(0xdead, 1) from the PoolManager reverted with data 0xaa4bc69a followed by the selector a9059cbb, which matches the UnknownSelector result in results/credits_precompile_probe.txt. results/storage_none_real.json records 3,006 cases, 0 mismatches, 0 errors and 0 check failures. I did not repeat the eth_simulateV1 T14 runs."
+    },
+    {
+      "check": "What these results mean for src/: the code that writes slot0, liquidity, ticks, the bitmap, positions, protocolFeesAccrued and ERC-6909 balances, and the unlock callback by which any account can choose revert depths (src/PoolManager.sol:104-114).",
+      "agrees": true,
+      "note": "The cited storage lines exist and match their description: Pool.State at src/libraries/Pool.sol:83-91, protocolFeesAccrued at src/ProtocolFees.sol:21, balanceOf at src/ERC6909.sol:17 and _pools at src/PoolManager.sol:93. unlock at src/PoolManager.sol:104-114 reverts with CurrencyNotSettled unless NonzeroDeltaCount is zero, so a frame that runs out of gas in the credit code takes every write of that unlock with it. The credit source runs only after the write and changes no word of the PoolManager. Its only effect on src/ is a higher gas cost for zero to non-zero writes, and the caller pays that cost. The refund at the end of the transaction uses the PoolManager's credit balance, which is protocol bookkeeping and not user funds. No path lets an ordinary account take or lock other users' balances."
+    }
+  ],
+  "leads": []
+}
