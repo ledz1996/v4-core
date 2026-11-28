@@ -121,8 +121,8 @@
    "actor": "unprivileged",
    "severity": "low",
    "difference": "Arc's native USDC can be minted to any address by Circle Gateway's GatewayMinter. gatewayMint accepts an attestation from any caller when its destinationCaller field is zero, and credits the recipient's native balance, which the PoolManager also sees through the 0x3600 face, without calling the recipient.",
-   "mechanism": "A user requests a Gateway transfer to Arc and names the PoolManager as destinationRecipient with destinationCaller zero, and Circle returns the attestation and signature. Before the user's own mint lands, another account obtains the attestation bytes and calls unlock (src/PoolManager.sol:104-114). In the callback it calls sync on the 0x3600 face (src/PoolManager.sol:279-288), which stores balanceOf(PoolManager) as the reserves. It then calls GatewayMinter.gatewayMint with the attestation. The destination caller check passes because the field is zero (Mints.sol lines 295-297), the recipient denylist check passes for the PoolManager (line 292), and _mint calls the mint authority's mint(recipient, value) (lines 333-349), which raises the PoolManager's native balance by value times 10^12 wei and its face balance by value. The callback then calls settle; _settle reads the face balance and credits the rise to the caller (src/PoolManager.sol:349-365), which takes it out with take (src/PoolManager.sol:291-297) and closes the lock with a zero delta. The user's own later gatewayMint reverts because the transfer spec hash is used.",
-   "impact": "The value of the one mispointed Gateway transfer goes to whoever executes it first. Funds already held by the PoolManager for pools and claims are not touched, because the caller is credited only with the rise it caused. No Gateway mint to the PoolManager was found in the newest 200,000 blocks.",
+   "mechanism": "A user requests a Gateway transfer to Arc and names the PoolManager as destinationRecipient with destinationCaller zero, and Circle returns the attestation and signature. Before the user's own mint lands, another account obtains the attestation bytes and calls unlock (src/PoolManager.sol:104-114). In the callback it calls sync on the 0x3600 face (src/PoolManager.sol:279-288), which stores balanceOf(PoolManager) as the reserves. It then calls GatewayMinter.gatewayMint with the attestation. The destination caller check passes because the field is zero (Mints.sol lines 295-297), the recipient denylist check passes for the PoolManager (line 292), and _mint calls mint(recipient, value) on the 0x3600 face itself, because Arc registers no separate mint authority for it (lines 347-349), which raises the PoolManager's native balance by value times 10^12 wei and its face balance by value. The callback then calls settle; _settle reads the face balance and credits the rise to the caller (src/PoolManager.sol:349-365), which takes it out with take (src/PoolManager.sol:291-297) and closes the lock with a zero delta. The user's own later gatewayMint reverts because the transfer spec hash is used.",
+   "impact": "The value of the one mispointed Gateway transfer goes to whoever executes it first. Funds already held by the PoolManager for pools and claims are not touched, because the caller is credited only with the rise it caused. No Gateway mint to the PoolManager was found in the newest 200,000 blocks. The loss falls on the sender who named the PoolManager as recipient; liquidity providers, swappers and claim holders who did nothing unusual are not affected.",
    "preconditions": "A Gateway transfer to Arc with destinationRecipient equal to the PoolManager and destinationCaller zero, which is a user or integrator error, and the attacker must see the attestation before it is used. The attestation is returned to the requester by Circle's API and appears in the requester's own mint transaction. Whether Circle's GET /v1/transfer/{id} serves it to third parties, and whether Arc's mempool is visible to ordinary accounts, was not confirmed. The deployed implementation at 0x30b6d05c... was not compared with the master source.",
    "mitigations": "Integrations that bridge into a PoolManager through Gateway should set destinationCaller to their own contract and call the PoolManager inside their own sync and settle. Front ends should refuse the PoolManager as a Gateway recipient. Nothing in the PoolManager can change this, because sync is open by design.",
    "coreRefs": [
@@ -216,15 +216,6 @@
   }
  ],
  "leads": [
-  {
-   "chainIds": [
-    5042
-   ],
-   "lens": "L3",
-   "question": "Does Circle's Gateway API (GET /v1/transfer/{id} or a public explorer) serve attestations and signatures to accounts other than the requester, and does Arc gossip pending transactions to ordinary peers?",
-   "why": "Either one decides whether an ordinary account can obtain a Gateway attestation to the PoolManager before it is used, which sets the reach of the F-137 Gateway path.",
-   "priority": "low"
-  },
   {
    "chainIds": [
     4217

@@ -5291,6 +5291,83 @@
    ]
   },
   {
+   "title": "Circle Gateway on Arc lets any account execute a mint attested to the PoolManager inside its own sync and settle and book it as its payment",
+   "chainIds": [
+    5042
+   ],
+   "lens": "L3",
+   "assumptions": [
+    "A2"
+   ],
+   "effect": "siphon",
+   "difference": "Arc's native USDC can be minted to any address by Circle Gateway's GatewayMinter. gatewayMint accepts an attestation from any caller when its destinationCaller field is zero, and credits the recipient's native balance, which the PoolManager also sees through the 0x3600 face, without calling the recipient.",
+   "mechanism": "A user requests a Gateway transfer to Arc and names the PoolManager as destinationRecipient with destinationCaller zero, and Circle returns the attestation and signature. Before the user's own mint lands, another account obtains the attestation bytes and calls unlock (src/PoolManager.sol:104-114). In the callback it calls sync on the 0x3600 face (src/PoolManager.sol:279-288), which stores balanceOf(PoolManager) as the reserves. It then calls GatewayMinter.gatewayMint with the attestation. The destination caller check passes because the field is zero (Mints.sol lines 295-297), the recipient denylist check passes for the PoolManager (line 292), and _mint calls mint(recipient, value) on the 0x3600 face itself, because Arc registers no separate mint authority for it (lines 347-349), which raises the PoolManager's native balance by value times 10^12 wei and its face balance by value. The callback then calls settle; _settle reads the face balance and credits the rise to the caller (src/PoolManager.sol:349-365), which takes it out with take (src/PoolManager.sol:291-297) and closes the lock with a zero delta. The user's own later gatewayMint reverts because the transfer spec hash is used.",
+   "impact": "The value of the one mispointed Gateway transfer goes to whoever executes it first. Funds already held by the PoolManager for pools and claims are not touched, because the caller is credited only with the rise it caused. No Gateway mint to the PoolManager was found in the newest 200,000 blocks. The loss falls on the sender who named the PoolManager as recipient; liquidity providers, swappers and claim holders who did nothing unusual are not affected.",
+   "preconditions": "A Gateway transfer to Arc with destinationRecipient equal to the PoolManager and destinationCaller zero, which is a user or integrator error, and the attacker must see the attestation before it is used. The attestation is returned to the requester by Circle's API and appears in the requester's own mint transaction. Whether Circle's GET /v1/transfer/{id} serves it to third parties, and whether Arc's mempool is visible to ordinary accounts, was not confirmed. The deployed implementation at 0x30b6d05c... was not compared with the master source.",
+   "mitigations": "Integrations that bridge into a PoolManager through Gateway should set destinationCaller to their own contract and call the PoolManager inside their own sync and settle. Front ends should refuse the PoolManager as a Gateway recipient. Nothing in the PoolManager can change this, because sync is open by design.",
+   "coreRefs": [
+    "src/PoolManager.sol:279-288",
+    "src/PoolManager.sol:349-365",
+    "src/PoolManager.sol:291-297",
+    "src/PoolManager.sol:104-114"
+   ],
+   "sources": [
+    {
+     "url": "https://raw.githubusercontent.com/circlefin/evm-gateway-contracts/master/src/modules/minter/Mints.sol",
+     "supports": "gatewayMint checks destinationCaller only when nonzero (lines 295-297) and mints to the attested recipient through IMintableToken.mint (lines 333-349)"
+    },
+    {
+     "url": "https://developers.circle.com/gateway/references/technical-guide",
+     "supports": "destinationCaller zero means any caller may use the attestation; attestations expire after 10 minutes"
+    },
+    {
+     "url": "https://rpc.mainnet.arc.io",
+     "supports": "GatewayMinter proxy code at 0x2222222d..., implementation slot, 62 mint events in 200,000 blocks with none to the PoolManager, and receipt 0x22282f10... showing the face mint and the native Transfer from the system address"
+    }
+   ],
+   "evidence": "primary",
+   "actor": "unprivileged",
+   "severity": "low",
+   "proposedSeverity": "low",
+   "status": "plausible",
+   "verification": {
+    "cycle": 39,
+    "factCheck": "Mints.sol on circlefin/evm-gateway-contracts master was fetched and read. gatewayMint (lines 161-191) is external with only whenNotPaused and notDenylisted(msg.sender). _validateAttestationTransferSpec checks the recipient denylist at line 292 and rejects the caller only when destinationCaller is nonzero and differs from msg.sender (line 296). _mint marks the spec hash used (line 336) and calls IMintableToken(minter).mint(recipient, value) (line 349) with no call into the recipient. The technical guide says destinationCaller is 'The address of the caller who may use the attestation (0 for any caller)', that attestations expire after 10 minutes, that an unused attestation returns the balance, and that destinationCaller 'can help prevent third-party mint front-running'. On rpc.mainnet.arc.io at block 0x1ffb46a: eth_getCode of 0x2222222d... is a 1967 proxy, its implementation slot holds 0x30b6d05cb9b89e73732dbf7d47c028a67346eb3b (11,619 bytes of code containing selector 0x9fb01cc5 gatewayMint(bytes,bytes)); eth_call gives isTokenSupported(0x3600...) = 1, tokenMintAuthority(0x3600...) = 0, paused() = 0, isDenylisted(PoolManager) = 0, domain() = 26. Receipt 0x22282f10... shows a Mint log on 0x3600 with the minter as caller, a 0x3600 Transfer from zero of 32,999.9965 in six decimals and a native Transfer from 0xff...fe of the same amount in eighteen decimals. A scan of the newest 200,000 blocks found 61 AttestationUsed events, 58 of them sent by an account other than the recipient (for example 0x69cea874... from 0xd05b856a... to recipient 0x70d5d723...), so third-party submission of attestations is normal practice on Arc, and none named the PoolManager. The PoolManager's native balance is 2,443,346.38 USDC. The link that stays unconfirmed is how an unrelated account obtains an attestation to the PoolManager before its own use: rpc.mainnet.arc.io answers txpool_status and eth_newPendingTransactionFilter with method not supported and eth_getBlockByNumber('pending') with requested data not available, so a public pending pool was not shown, and no Circle source was found that serves attestations to accounts other than the requester.",
+    "codeCheck": "unlock (src/PoolManager.sol:104-114) runs the caller's callback and requires NonzeroDeltaCount zero at the end. sync (src/PoolManager.sol:279-288) on a nonzero currency stores balanceOfSelf as reserves with no lock check. _settle (src/PoolManager.sol:349-365) with a synced currency reverts on msg.value, reads balanceOfSelf, credits reservesNow minus reservesBefore to msg.sender's delta and resets the synced currency. take (src/PoolManager.sol:291-297) debits that delta and transfers. A mint between sync and settle inside the caller's own callback is therefore credited in full to that caller, which can take it and close with a zero count. Balances already held for pools and claims are not reachable this way, because only the rise after the caller's own sync is credited. If nobody executes the mint inside a lock, the minted amount becomes surplus that no later settle credits, because every sync re-reads the current balance; the misaddressed sender loses it either way.",
+    "corrections": "On Arc tokenMintAuthority(0x3600...) is zero, so _mint calls mint on the 0x3600 face itself (Mints.sol line 347-349), not on a separate mint authority. The PoolManager holds 2,443,346 USDC natively today, not 2,430,783. The victim is the sender who named the PoolManager as recipient, which is a user error, so the hazard does not reach LPs, swappers or claim holders who did nothing unusual.",
+    "sources": [
+     {
+      "url": "https://raw.githubusercontent.com/circlefin/evm-gateway-contracts/master/src/modules/minter/Mints.sol",
+      "supports": "gatewayMint open to any non-denylisted caller (161-191); destinationCaller enforced only when nonzero (296); mint to recipient with no callback (336-349)"
+     },
+     {
+      "url": "https://raw.githubusercontent.com/circlefin/evm-gateway-contracts/master/src/GatewayMinter.sol",
+      "supports": "GatewayMinter is GatewayCommon plus Mints with no extra caller restriction"
+     },
+     {
+      "url": "https://developers.circle.com/gateway/references/technical-guide",
+      "supports": "destinationCaller 0 means any caller; attestations expire after 10 minutes; destinationCaller is the documented guard against third-party mint front-running"
+     },
+     {
+      "url": "https://rpc.mainnet.arc.io",
+      "supports": "proxy and implementation slot, token supported, no mint authority, not paused, PoolManager not denylisted, 61 mints in 200,000 blocks with 58 relayed by a third party and none to the PoolManager, PoolManager balance 2,443,346 USDC, no pending-pool RPC methods"
+     }
+    ]
+   },
+   "lastVerifiedCycle": 39,
+   "extends": "F-137",
+   "id": "F-167",
+   "firstCycle": 39,
+   "history": [
+    {
+     "cycle": 39,
+     "unit": "stablecoin-l1",
+     "status": "plausible",
+     "severity": "low"
+    }
+   ]
+  },
+  {
    "title": "Source disagrees with two interface comments and two test conditions, and none of the four changes who can move funds",
    "chainIds": [
     1,
@@ -10666,7 +10743,7 @@
    ],
    "effect": "freeze",
    "difference": "Ethereum prices a storage write the same for every slot, and a standard OP Stack portal sells up to 20,000,000 gas to one deposit. MegaETH charges storage gas for a first write to a slot in proportion to the size of the SALT bucket that holds the slot, lets anyone grow a bucket by writing other entries into it, and runs a portal that rejects a deposit with more than 1,000,000 gas.",
-   "mechanism": "1. The only way to act on MegaETH without the sequencer is depositTransaction on the L1 portal. In simulation at L1 block 26,479,461 the portal accepts a gas limit of 1,000,000 and reverts with 'L2 message gas must not exceed 1 million' for 1,000,001 and above. The OP Mainnet and Base portals accept 5,000,000. 2. A user deposit pays the same storage gas as any user transaction: 20,000 times (multiplier minus 1) for a zero to nonzero SSTORE, with multiplier equal to the capacity of the slot's bucket divided by 256, read from the parent block. Only system originated transactions are exempt. 3. A bucket doubles whenever its used count exceeds 80 percent of its capacity. The bucket of an entry is a hash with public fixed seeds over address and slot, modulo 16,711,680, so an account that wants entries in one bucket tries about 16.7 million slot numbers of its own contract per entry off chain. A transaction may add 1,000 new entries, and each is priced at the multiplier of the parent block. Seven transactions in seven blocks with 1,000 entries each take a bucket from multiplier 1 to 8, 16, 16, 32, 32, 32 and 64 and cost 22.6, 163, 323, 323, 643, 643 and 643 million gas, 2.76 billion in total, which is 0.0028 ETH at the base fee of 1,000,000 wei. 6,554 entries are the minimum. 4. At multiplier 64 one first write to a slot in that bucket costs 1,260,000 storage gas, which is more than a deposit can carry. Two such writes at multiplier 32 cost 1,240,000 on top of a removal that uses 183,000 to 314,000 gas. 5. Every liquidity change runs Position.update, which stores the current fee growth inside the range in two slots without any condition (src/libraries/Position.sol:99-100). A position whose two ticks it initialized itself starts with zero in both, because getFeeGrowthInside returns the global value minus the value just copied into the lower tick (src/libraries/Pool.sol:488-511, 533-539). Once swaps have paid fees in the range, the next update of that position is a zero to nonzero write to one or two slots whose numbers follow from the pool id, the owner, the ticks and the salt, all public in the ModifyLiquidity log (src/PoolManager.sol:175). 6. At block 32,659,841 the PoolManager has 137 positions with liquidity. 36 need such a write for their next update and 29 of them need two. 7. An account that has grown the buckets of those slots has made the removal of that position cost more than 1,000,000 gas for good, since nothing I found shrinks a bucket without the operator. Through the sequencer the same removal costs about 0.0000013 ETH more and still works. Through the portal it cannot be sent. No bucket above minimum size was observed on mainnet, and I could not read bucket capacities over the public endpoint, so steps 3 and 4 rest on the specification and the client and SALT sources and were not replayed on chain.",
+   "mechanism": "1. The only way to act on MegaETH without the sequencer is depositTransaction on the L1 portal. In simulation at L1 block 26,479,461 the portal accepts a gas limit of 1,000,000 and reverts with 'L2 message gas must not exceed 1 million' for 1,000,001 and above. The OP Mainnet and Base portals accept 5,000,000. 2. A user deposit pays the same storage gas as any user transaction: 20,000 times (multiplier minus 1) for a zero to nonzero SSTORE, with multiplier equal to the capacity of the slot's bucket divided by 256, read from the parent block. Only system originated transactions are exempt. 3. A bucket doubles whenever its used count exceeds 80 percent of its capacity. The bucket of an entry is a hash with public fixed seeds over address and slot, modulo 16,711,680, so an account that wants entries in one bucket tries about 16.7 million slot numbers of its own contract per entry off chain. A transaction may add 1,000 new entries, and each is priced at the multiplier of the parent block. Seven transactions in seven blocks with 1,000 entries each take a bucket from multiplier 1 to 8, 16, 16, 32, 32, 32 and 64 and cost 22.6, 163, 323, 323, 643, 643 and 643 million gas, 2.76 billion in total, which is 0.0028 ETH at the base fee of 1,000,000 wei. 6,554 entries are the minimum. 4. At multiplier 64 one first write to a slot in that bucket costs 1,260,000 storage gas, which is more than a deposit can carry. Two such writes at multiplier 32 cost 1,240,000 on top of a removal that uses 183,000 to 314,000 gas. 5. Every liquidity change runs Position.update, which stores the current fee growth inside the range in two slots without any condition (src/libraries/Position.sol:99-100). A position whose two ticks it initialized itself starts with zero in both, because getFeeGrowthInside returns the global value minus the value just copied into the lower tick (src/libraries/Pool.sol:488-511, 533-539). Once swaps have paid fees in the range, the next update of that position is a zero to nonzero write to one or two slots whose numbers follow from the pool id, the owner, the ticks and the salt, all public in the ModifyLiquidity log (src/PoolManager.sol:175). 6. At block 32,659,841 the PoolManager has 137 positions with liquidity. 36 need such a write for their next update and 29 of them need two. 7. An account that has grown the buckets of those slots has made the removal of that position cost more than 1,000,000 gas for good, since nothing I found shrinks a bucket without the operator. Through the sequencer the same removal costs about 0.0000013 ETH more and still works. Through the portal it cannot be sent. No bucket above minimum size was observed on mainnet, and I could not read bucket capacities over the public endpoint, so steps 3 and 4 rest on the specification and the client and SALT sources and were not replayed on chain. Cycle 39 recounted the exposed positions at block 33,040,742: of 138 positions with liquidity, 38 in 17 of 102 pools must write at least one new fee growth slot on their next update, and 30 of them two. Position.update stores both fee growth values on every liquidity change, so that write cannot be avoided; the first token balance of a recipient and a first ERC-6909 balance can.",
    "impact": "A liquidity provider whose position was prepared this way can leave only through the sequencer. If the sequencer refuses the provider's transactions or is down, the L1 route that F-017 relies on does not exist for that position, and the position stays in the pool and open to swaps for as long as that lasts. Preparing one slot of each of the 36 positions that are exposed today costs about 0.1 ETH. The MegaETH PoolManager holds about 17,000 dollars. Swaps and removals that write no zero slot are not affected.",
    "preconditions": "The position must store a zero fee growth for a currency in which fees have accrued since. Any account can do the preparation: it spends about 0.003 ETH per slot at any time before the provider tries to leave. The freeze itself then needs the sequencer to keep the provider's transactions out, which is why the actor is recorded as operator. The other way to keep them out is a pool that stays full of earlier transactions as described in F-062, whose ordering assumption is not confirmed.",
    "mitigations": "A provider can touch a position once through the sequencer after fees have accrued in both currencies, for example by collecting fees, so that both slots hold nonzero values and later updates pay no storage gas for them. A provider can take proceeds as native ETH or to an address that already holds the token, since a first token balance is also a zero to nonzero write. The operator can raise the portal cap, charge user deposits at multiplier 1 as it does for system transactions, or shrink grown buckets.",
@@ -10796,12 +10873,18 @@
      }
     ]
    },
-   "lastVerifiedCycle": 7,
+   "lastVerifiedCycle": 39,
    "id": "F-105",
    "firstCycle": 7,
    "history": [
     {
      "cycle": 7,
+     "unit": "high-throughput",
+     "status": "confirmed",
+     "severity": "medium"
+    },
+    {
+     "cycle": 39,
      "unit": "high-throughput",
      "status": "confirmed",
      "severity": "medium"

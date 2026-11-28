@@ -1,0 +1,22 @@
+{
+  "unit": "theme-never-run-sites-shared-balance",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Fee growth update in the swap loop (src/libraries/Pool.sol:400-407) uses UnsafeMath.simpleMulDiv without overflow check; can feeAmount * 2^128 wrap in a swap that completes?",
+      "agrees": true,
+      "note": "UnsafeMath.simpleMulDiv is div(mul(a, b), denominator) with no overflow check (src/libraries/UnsafeMath.sol:24-27). In an exact-input swap each step adds amountIn + feeAmount to amountSpecifiedRemaining (Pool.sol:379), and the settled input params.amountSpecified - amountSpecifiedRemaining goes through SafeCast.toInt128(int256), which reverts when int128(x) != x (src/libraries/SafeCast.sol:40-43), at Pool.sol:455 or :459. Each step's amountIn + feeAmount is at most the remaining amount (SwapMath.sol:69-74 caps it at ceil(amountIn * 1e6 / (1e6 - fee)) <= |amountRemaining|, and :82 makes it equal in the exhaust branch), so in a completing swap every feeAmount is below 2^127. In an exact-output swap amountCalculated -= (amountIn + feeAmount).toInt256() runs in checked context (Pool.sol:375) and amountCalculated.toInt128() at :455 or :459 bounds the sum by 2^127. Protocol fee only lowers feeAmount (Pool.sol:395). A wrapped product in a swap that later reverts at the cast is rolled back with it. Donate casts amount0 and amount1 with toInt128(uint256), which reverts at 2^127 or more (SafeCast.sol:56-58), before the simpleMulDiv calls (Pool.sol:471-478). The product is therefore below 2^255 in every completing call. I agree with the clearance."
+    },
+    {
+      "check": "Site A, the exact-input fee mulDiv (src/libraries/SwapMath.sol:64-65, PoolManager pcs 22445 and 22513), never run with a product of 2^256 or more by the MegaETH and HyperEVM producers inside the PoolManager. Entry condition, cost, whether the call completes, and every place the word goes.",
+      "agrees": true,
+      "note": "amountRemainingLessFee is used only at SwapMath.sol:69 (comparison), :77 (amountIn in the exhaust branch) and :79 (input of getNextSqrtPriceFromInput); the target branch takes amountIn from getAmount0Delta or getAmount1Delta (:66-68) and the fee from mulDivRoundingUp (:72-74). The wide product needs |amountRemaining| >= about 2^236. A wrong word below amountIn makes :82 set feeAmount = |amountRemaining| - amountIn, so amountIn + feeAmount equals the whole remainder, amountSpecifiedRemaining becomes 0 (Pool.sol:379) and the settled input of at least 2^236 fails toInt128 at Pool.sol:455 or :459 (SafeCast.sol:40-43). A wrong word that is still >= amountIn changes nothing. If the correct word is below amountIn (exhaust), amountIn exceeds about 2^235 and the step's amountIn + feeAmount, which the target branch also adds at :379, exceeds 2^127, so the swap reverts at the same cast whichever branch the wrong word picks. The only other consumer of the step is the fee growth update and the amountOut at :84-86, both discarded on revert. Every outcome is unchanged or a revert. I re-read the deployed MegaETH PoolManager with eth_getCode at 0xacb7e78fa05d562e0a5d3089ec896d57d057d38e on https://mainnet.megaeth.com/rpc: 24009 bytes, sha256 prefix 3b2a403251a0d27f, matching the hash the unit cites. I agree with the clearance."
+    },
+    {
+      "check": "Site D, the copies for an amount above uint160 (src/libraries/SqrtPriceMath.sol:97, pcs 22721 and 22763, and :105, pc 20958), never run by either closed producer.",
+      "agrees": true,
+      "note": "The mulDiv and mulDivRoundingUp paths run only when amount > type(uint160).max (SqrtPriceMath.sol:95-97 and :103-105). getNextSqrtPriceFromAmount1RoundingDown is reached from getNextSqrtPriceFromInput in the exhaust branch (SwapMath.sol:77-80), where amountIn = amountRemainingLessFee > 2^160 and :82 makes the step consume the whole remainder, and from getNextSqrtPriceFromOutput in the capped exact-output branch (SwapMath.sol:96-98), where amountOut = amountRemaining > 2^160. In both cases amountSpecifiedRemaining becomes 0 (Pool.sol:373 or :379) and params.amountSpecified - 0, above 2^160 in size, fails toInt128 at Pool.sol:455 or :459. The price word cannot change those amounts, and a search of src/ finds no other production caller (the only callers are SwapMath.sol:78 and :98 through SqrtPriceMath.sol:148 and :176; the rest are in src/test/SqrtPriceMathEchidnaTest.sol). Every wrong word at these sites ends in a revert. I agree with the clearance."
+    }
+  ],
+  "leads": []
+}

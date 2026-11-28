@@ -1,0 +1,22 @@
+{
+  "unit": "theme-transient-across-transactions-and-workers",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 5 for the closed or unsimulated producers (Monad, MegaETH, HyperEVM, Arc): the only transient words a successful transaction can leave set are the synced currency and reserves, and a leaked sync would make a later native settle revert or credit the next settler.",
+      "agrees": true,
+      "note": "Read src/PoolManager.sol:104-114: unlock reverts with CurrencyNotSettled unless NonzeroDeltaCount.read() is zero (line 112) and then calls Lock.lock() (line 113), so the lock word and the delta count end at zero in any successful unlock. Per-currency delta words are kept consistent with the count by _accountDelta (src/PoolManager.sol:370-376, increment on 0 to nonzero, decrement on nonzero to 0), so a zero count means every delta word written in the transaction is zero again. sync (src/PoolManager.sol:279-288) needs no unlock and writes CURRENCY_SLOT and RESERVES_OF_SLOT (src/libraries/CurrencyReserves.sol:27-31), so it is the one pair that can outlive a successful transaction. _settle (src/PoolManager.sol:349-364) reverts on msg.value with a synced ERC-20 (line 356) and otherwise credits balanceOfSelf minus the stale reserves to the settler, then resets the currency (lines 357-361). Every router path syncs before it settles, which overwrites a stale pair. The code claim and the actor reasoning hold. If the clear between transactions failed, the stale pair would reach whoever settles next without a sync, so the hazard depends on the producer, which the next two checks cover for Monad and Polygon."
+    },
+    {
+      "check": "Task 2 (L-1358) on Polygon bor: transient storage is not a key kind of the V2 MVStore, is reset per incarnation and per transaction, and is not settled into the final StateDB.",
+      "agrees": true,
+      "note": "Fetched bor v2.11.2 core/state/parallel_statedb.go. transientStorage is a plain field (line 115). Reset clears it with the other per-incarnation buffers (line 272) and Prepare replaces it with newTransientStorage() (line 1279). GetTransientState and SetTransientState touch only that map and append a jkTransient journal entry (lines 1139-1150). FlushToMVStore writes WriteInc only for NoncePath, NewStateKey storage, CodePath, CreatePath and SuicidePath plus flushBalanceDeltas (lines 495-520). SettleTo in core/state/parallel_statedb_settle.go:16-33 settles nonces, storage, code, balance ops and logs, the account set and fee data, and nothing transient. opTload in core/vm/eips.go:217-226 calls evm.StateDB.GetTransientState directly with no cache. No worker can read another transaction's transient word."
+    },
+    {
+      "check": "Monad: the clear of transient storage between transactions rests on source (cycle 34: a new State per transaction, BlockState::merge does not copy transient storage).",
+      "agrees": true,
+      "note": "Fetched category-labs/monad main. AccountState holds transient_storage_ as a separate StorageMap (category/execution/ethereum/state3/account_state.hpp:70, getters and setters at 126-155), and State::get_transient_storage and set_transient_storage read and write only the per-transaction State (state3/state.cpp:296-298, 379-382). BlockState::merge (state2/block_state.cpp:184-240) copies account_, code and storage_ of each account into the block deltas and never reads transient_storage_, so a later transaction's fresh State starts with empty transient storage. The .transient() call in state.cpp:466 is the immer mutable-map builder used by zero_storage, not EVM transient storage. This was read on the main branch, not on the exact build reported by the RPC (Monad/0.16.7); that link is unconfirmed."
+    }
+  ],
+  "leads": []
+}
