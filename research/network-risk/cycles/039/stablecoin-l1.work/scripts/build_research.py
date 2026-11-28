@@ -1,0 +1,116 @@
+import json, os
+W = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(os.path.dirname(W), "stablecoin-l1.research.json")
+WR = "research/network-risk/cycles/039/stablecoin-l1.work/"
+
+def res(f, cid):
+    p = os.path.join(W, f)
+    if not os.path.exists(p): return None
+    d = json.load(open(p))["results"]
+    r = d.get(str(cid)) if isinstance(d, dict) else [x for x in d if x.get("chainId") == cid]
+    if isinstance(r, list): r = r[0] if r else None
+    return r
+
+t14pm = res("t14-pmdiff.json", 4217); t14pm2 = res("t14-pmdiff2.json", 4217); t14tg = res("t14-targeted.json", 4217)
+def pmtxt(r, n):
+    if not r: return "not completed"
+    diff = r.get("different", [])
+    return f"{r.get('identical')} of {n} identical, differing scripts {diff}"
+t14_line = ("Under T14 rules (eth_simulateV1 at block time 1796745600, one hour after activation, wrapper "
+            "cycles/018/stablecoin-l1.work/t14run.py) on tempo/v1.19.2-c0c9372: battery 99,985 vectors with no mismatch, "
+            f"targeted {'85,544 vectors with ' + str(t14tg.get('mismatchCount', 'unknown')) + ' mismatches' if t14tg else 'not completed'}, "
+            f"pmdiff {pmtxt(t14pm, 250)}, pmdiff2 {pmtxt(t14pm2, 300)}.")
+
+TEMPO = "https://rpc.mainnet.tempo.xyz"; ARC = "https://rpc.mainnet.arc.io"
+EVM2_MAIN = "https://raw.githubusercontent.com/DaniPopes/evm2/main/crates/evm2/src/interpreter/instructions/arithmetic.rs"
+RUINT = "https://static.crates.io/crates/ruint/ruint-1.21.1.crate"
+GP = "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/hardfork/src/gas_params.rs"
+HF = "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/hardfork/src/lib.rs"
+HC = "https://raw.githubusercontent.com/tempoxyz/tempo/main/crates/evm/src/handler/config.rs"
+LOCK192 = "https://raw.githubusercontent.com/tempoxyz/tempo/tempo%2Fv1.19.2/Cargo.lock"
+UPG = "https://tempo.com/developers/docs/guide/node/network-upgrades.md"
+MINTS = "https://raw.githubusercontent.com/circlefin/evm-gateway-contracts/master/src/modules/minter/Mints.sol"
+GWDOC = "https://developers.circle.com/gateway/references/technical-guide"
+REVMCL = "https://raw.githubusercontent.com/bluealloy/revm/main/crates/interpreter/CHANGELOG.md"
+REVM351 = "https://static.crates.io/crates/revm-interpreter/revm-interpreter-35.0.1.crate"
+
+profiles = [
+ {"chainId": 4217, "lens": "L1",
+  "summary": "The endpoint still answers tempo/v1.19.2-c0c9372, whose tag pins evm2 7c9f3b6 and ruint 1.21.1. evm2 main has moved DIV and MOD to checked_div and checked_rem, which call the same ruint division as before; Tempo does not ship it yet. All reruns give the cycle 37 results, and so do the battery, the targeted set and both script sets under T14 rules.",
+  "deltas": [
+   {"delta": "evm2 main crates/evm2/src/interpreter/instructions/arithmetic.rs differs from rev 7c9f3b6 in two lines: DIV writes a.checked_div(b).unwrap_or_default() and MOD writes a.checked_rem(b).unwrap_or_default(), in place of an explicit zero test followed by wrapping_div and wrapping_rem. In ruint 1.21.1 checked_div returns None for a zero divisor and otherwise self.div(rhs), and Div is wrapping_div through impl_bin_op (src/div.rs lines 9-14, 36-41, 128-150), so both forms take the same path. The other twelve evm2 files read in cycle 33 (bytecode analysis, bitwise, control, i256, memory, host, system, storage, version) are byte equal at main and at 7c9f3b6.", "source": EVM2_MAIN, "relevance": "low"},
+   {"delta": "The tempo/v1.19.2 Cargo.lock pins evm2 rev 7c9f3b6deb23005fc84596ba1b13a6492d942014 and ruint 1.21.1, the same as Tempo main (Cargo.lock sha256 7f758b5a..., unchanged from cycle 37). No ruint release follows 1.21.1 on crates.io (1.21.0 still yanked). Raw fetches of tempo tags v1.19.3, v1.19.3-rc1, v1.19.4, v1.20.0 and v1.20.0-rc1 return 404.", "source": LOCK192, "relevance": "none"},
+   {"delta": "Reruns on tempo/v1.19.2-c0c9372 on 2026-11-28 written to " + WR + ": battery 99,985 and targeted 85,544 vectors with no mismatch, pmdiff 240 of 250 with the same ten gas scripts as cycles 35 and 37 (9, 14, 29, 67, 79, 81, 86, 147, 175, 233), pmdiff2 294 of 300 with the same six (71, 82, 189, 196, 210, 295), 1,040 mined swaps with 1,040 exact ticks and 331 pairs that all match a single step (329 exact input, 2 exact output). " + t14_line, "source": TEMPO, "relevance": "none"},
+  ]},
+ {"chainId": 4217, "lens": "L2",
+  "summary": "EIP-8037's reservoir is off on every Tempo hardfork: the execution config asks for the version without it, and the gas schedule removes the feature. The reservoir branch of the SSTORE handler that L-1351 names cannot run on mainnet.",
+  "deltas": [
+   {"delta": "tempo_execution_config builds the version with gas_params::version(spec_id, tempo_spec, false) (crates/evm/src/handler/config.rs line 158). configure_version removes EvmFeatures::EIP8037 when that flag is false and debug-asserts that it is never true together with T7 or later (crates/hardfork/src/gas_params.rs lines 48-75). Every TempoHardfork maps to SpecId::OSAKA (crates/hardfork/src/lib.rs lines 500-504), whose evm2 base version carries no EIP8037 feature. The only code that turns the flag on in the cycle 37 copy of crates/evm/src/block.rs is a test (line 1460).", "source": GP, "relevance": "none"}
+  ]},
+ {"chainId": 4217, "lens": "L3", "summary": "Nothing new. The block gas limit is 500,000,000 and the base fee 600,000,000 wei at block 51,174,879.", "deltas": []},
+ {"chainId": 4217, "lens": "L6",
+  "summary": "The network upgrades page is byte equal to the cycle 35 and 37 copies: T14 activates on 8 December 2026 at 15:00 UTC (1796742000) with v1.19.0 or later, and T15 has no release and no timestamp. latest equals finalized (51,174,879) today.",
+  "deltas": []},
+ {"chainId": 5042, "lens": "L1",
+  "summary": "The official endpoint answers v0.8.6-rc1 37812c61 and drpc answers v0.8.6 8e8edb7a, as in cycle 37; Arc main is unchanged and no tag after v0.8.6 exists. All reruns match. One revm-interpreter fix released after the 35.0.1 that Arc pins was read and cannot change a result on stock memory.",
+  "deltas": [
+   {"delta": "Reruns on rpc.mainnet.arc.io on 2026-11-28 written to " + WR + ": battery 99,985 and targeted 85,544 vectors with no mismatch, pmdiff 250 of 250, pmdiff2 300 of 300, 6,219 mined swaps with 6,218 exact ticks and one on the lower boundary, 6,115 pairs (6,034 exact input single step, 16 to the target price, 65 multi-step), and the 25 newest multi-step swaps replayed to the unit.", "source": ARC, "relevance": "none"},
+   {"delta": "revm-interpreter 43.0.0 (2026-08-20) fixed resize_memory_cold, which ignored the bool that MemoryTr::resize returns (PR 3864). Arc pins revm-interpreter 35.0.1, which has the old code (src/interpreter/shared_memory.rs lines 588-604), but its SharedMemory implements MemoryTr::resize as a Vec resize that always returns true (lines 122-125), so the ignored result is never false on the memory the node uses. Other fixes after 35.0.1 concern EIP-8037, a const-eval panic in pop_address and an unsafe marker; none touches arithmetic or jumps.", "source": REVMCL, "relevance": "none"},
+   {"delta": "circlefin/arc-node main CHANGELOG.md, Cargo.lock (revm 38.0.0, revm-interpreter 35.0.1, ruint 1.20.0) and crates/execution-config/src/hardforks.rs are byte equal to the cycle 37 copies; raw fetches at v0.8.7, v0.8.7-rc1, v0.9.0 and v0.9.0-rc1 return 404.", "source": "https://raw.githubusercontent.com/circlefin/arc-node/main/Cargo.lock", "relevance": "none"}
+  ]},
+ {"chainId": 5042, "lens": "L2",
+  "summary": "30 mined Arc blocks whose timestamp is above the parent's and whose summed gas limits fit the block were re-run on drpc (v0.8.6 8e8edb7a) with no time shift and no gas cap. Status, gas used and every log equal the official receipts for all 172 transactions, 65 of them PoolManager ones.",
+  "deltas": [
+   {"delta": "arc-replay-drpc.json: eth_simulateV1 with validation on, at the parent block, with the block's own time, gas limit, fee recipient, base fee and prevRandao; 30 of 30 blocks simulated, 0 differences in status, gasUsed or logs.", "source": "https://arc.drpc.org", "relevance": "none"}
+  ]},
+ {"chainId": 5042, "lens": "L3",
+  "summary": "Circle Gateway's minter at 0x2222222d7164433c4C09B0b0D809a9b52C04C205 is live on Arc and mints native USDC to the attested recipient with no call into it, for any caller when the destination caller field is zero. That adds one relay to the F-137 class. The PoolManager holds about 2,430,783 USDC natively.",
+  "deltas": [
+   {"delta": "eth_getCode of 0x2222222d... returns a 163 byte proxy whose implementation slot holds 0x30b6d05cb9b89e73732dbf7d47c028a67346eb3b. Between blocks 33,326,178 and 33,526,178 it emitted 62 mint events, none naming the PoolManager; no Transfer from zero to the PoolManager was emitted by the 0x3600 face in that range. The receipt of mint 0x22282f10... shows a Mint event on 0x3600 with the minter as caller, a Transfer from zero on 0x3600 in six decimals, and a native Transfer log from 0xff...fe in eighteen decimals.", "source": ARC, "relevance": "low"}
+  ]},
+ {"chainId": 5042, "lens": "L6", "summary": "No Arc hardfork is scheduled; the hardfork list on main still ends at Zero8 and no tag after v0.8.6 exists.", "deltas": []},
+]
+
+findings = [
+ {"ref": "F-137",
+  "title": "Circle Gateway on Arc lets any account execute a mint attested to the PoolManager inside its own sync and settle and book it as its payment",
+  "chainIds": [5042], "lens": "L3", "assumptions": ["A2"], "effect": "siphon", "actor": "unprivileged", "severity": "low",
+  "difference": "Arc's native USDC can be minted to any address by Circle Gateway's GatewayMinter. gatewayMint accepts an attestation from any caller when its destinationCaller field is zero, and credits the recipient's native balance, which the PoolManager also sees through the 0x3600 face, without calling the recipient.",
+  "mechanism": "A user requests a Gateway transfer to Arc and names the PoolManager as destinationRecipient with destinationCaller zero, and Circle returns the attestation and signature. Before the user's own mint lands, another account obtains the attestation bytes and calls unlock (src/PoolManager.sol:104-114). In the callback it calls sync on the 0x3600 face (src/PoolManager.sol:279-288), which stores balanceOf(PoolManager) as the reserves. It then calls GatewayMinter.gatewayMint with the attestation. The destination caller check passes because the field is zero (Mints.sol lines 295-297), the recipient denylist check passes for the PoolManager (line 292), and _mint calls the mint authority's mint(recipient, value) (lines 333-349), which raises the PoolManager's native balance by value times 10^12 wei and its face balance by value. The callback then calls settle; _settle reads the face balance and credits the rise to the caller (src/PoolManager.sol:349-365), which takes it out with take (src/PoolManager.sol:291-297) and closes the lock with a zero delta. The user's own later gatewayMint reverts because the transfer spec hash is used.",
+  "impact": "The value of the one mispointed Gateway transfer goes to whoever executes it first. Funds already held by the PoolManager for pools and claims are not touched, because the caller is credited only with the rise it caused. No Gateway mint to the PoolManager was found in the newest 200,000 blocks.",
+  "preconditions": "A Gateway transfer to Arc with destinationRecipient equal to the PoolManager and destinationCaller zero, which is a user or integrator error, and the attacker must see the attestation before it is used. The attestation is returned to the requester by Circle's API and appears in the requester's own mint transaction. Whether Circle's GET /v1/transfer/{id} serves it to third parties, and whether Arc's mempool is visible to ordinary accounts, was not confirmed. The deployed implementation at 0x30b6d05c... was not compared with the master source.",
+  "mitigations": "Integrations that bridge into a PoolManager through Gateway should set destinationCaller to their own contract and call the PoolManager inside their own sync and settle. Front ends should refuse the PoolManager as a Gateway recipient. Nothing in the PoolManager can change this, because sync is open by design.",
+  "coreRefs": ["src/PoolManager.sol:279-288", "src/PoolManager.sol:349-365", "src/PoolManager.sol:291-297", "src/PoolManager.sol:104-114"],
+  "sources": [
+   {"url": MINTS, "supports": "gatewayMint checks destinationCaller only when nonzero (lines 295-297) and mints to the attested recipient through IMintableToken.mint (lines 333-349)"},
+   {"url": GWDOC, "supports": "destinationCaller zero means any caller may use the attestation; attestations expire after 10 minutes"},
+   {"url": ARC, "supports": "GatewayMinter proxy code at 0x2222222d..., implementation slot, 62 mint events in 200,000 blocks with none to the PoolManager, and receipt 0x22282f10... showing the face mint and the native Transfer from the system address"}],
+  "evidence": "primary"}
+]
+
+cleared = [
+ {"chainIds": [4217], "lens": "L1", "check": "Whether the DIV and MOD change on evm2 main (checked_div and checked_rem with unwrap_or_default) computes anything different from the 7c9f3b6 handlers that Tempo ships, once a release picks it up.", "result": "Same results. checked_div and checked_rem return None for a zero divisor, which unwrap_or_default turns into zero, and otherwise call self.div and self.rem, which are wrapping_div and wrapping_rem through impl_bin_op (ruint 1.21.1 src/div.rs lines 9-14, 36-41, 128-150). UnsafeMath.divRoundingUp, TickMath's div(not(0), price) and the FullMath divisions therefore see the same words.", "source": RUINT},
+ {"chainIds": [4217], "lens": "L1", "check": "Opcode battery, targeted set and both PoolManager script sets on tempo/v1.19.2 with a block time one hour after T14 activation.", "result": t14_line + " Gas-bound script ids are those at current rules.", "source": TEMPO},
+ {"chainIds": [4217, 5042], "lens": "L1", "check": "Full rerun of battery.py, targeted.py, pmdiff.py, pmdiff2.py, swaps.py and replay.py on the live builds (tempo/v1.19.2-c0c9372, Arc v0.8.6-rc1 37812c61).", "result": "No result differs from the specification or from Ethereum. Tempo's ten and six differing scripts are the gas-bound heavy swaps recorded since cycle 35. Mined swaps: Tempo 1,040 of 1,040 exact ticks and 331 of 331 pairs exact; Arc 6,219 ticks exact or on the lower boundary and 25 of 25 multi-step replays to the unit.", "source": WR + "battery.log"},
+ {"chainIds": [4217], "lens": "L2", "check": "Whether EIP-8037's state gas reservoir (the SSTORE branch at 0x42b4f49 to 0x42b4f8d of the v1.19.2 binary) is active under any Tempo hardfork, as L-1351 asks.", "result": "It is not. tempo_execution_config passes false for the EIP-8037 flag (crates/evm/src/handler/config.rs line 158), configure_version removes the feature in that case and debug-asserts it is never combined with T7 or later (crates/hardfork/src/gas_params.rs lines 48-75), and every Tempo hardfork maps to SpecId::OSAKA (crates/hardfork/src/lib.rs lines 500-504). T14 is in the shipped code and does not change this; T15 has no code on main that enables it.", "source": GP},
+ {"chainIds": [5042], "lens": "L1", "check": "revm-interpreter fixes released after 35.0.1 (pinned by Arc) that touch memory, arithmetic or jumps.", "result": "The only relevant one, PR 3864 in 43.0.0, makes resize_memory_cold honour MemoryTr::resize's result. On 35.0.1 SharedMemory::resize always returns true (src/interpreter/shared_memory.rs lines 122-125), so the unchecked call cannot leave memory short, and MSTORE, MCOPY, KECCAK256 and the call return copies in src/ see the specified memory.", "source": REVM351},
+ {"chainIds": [5042], "lens": "L2", "check": "Mined block replay on drpc (v0.8.6 8e8edb7a) with no time shift and no gas cap (L-1324).", "result": "30 sampled blocks with two or more PoolManager transactions, 172 transactions, 65 of them PoolManager ones: status, gasUsed and every log equal the official receipts.", "source": "https://arc.drpc.org"},
+ {"chainIds": [4217, 5042], "lens": "L6", "check": "Upcoming forks in the next six months and what an ordinary account can do the day after.", "result": "Tempo T14 (8 December 2026) is in the running v1.19.2 code; the opcode and script reruns at T14 time match, and its account, access key, validator and zone portal changes were recorded in earlier cycles (F-154, F-051). T15 has no release, no timestamp and no EIP-8037 switch; its zone deposit forwarding stays as F-135. Arc schedules no hardfork after Zero8. Nothing new reaches funds already in the PoolManager.", "source": UPG},
+]
+
+leads = [
+ {"chainIds": [5042], "lens": "L3", "question": "Does Circle's Gateway API (GET /v1/transfer/{id} or a public explorer) serve attestations and signatures to accounts other than the requester, and does Arc gossip pending transactions to ordinary peers?", "why": "Either one decides whether an ordinary account can obtain a Gateway attestation to the PoolManager before it is used, which sets the reach of the F-137 Gateway path.", "priority": "low"},
+ {"chainIds": [4217], "lens": "L1", "question": "When a Tempo release adopts evm2 main, rerun the DIV, MOD, DIVUP and MULDIV512 subsets and confirm the lockfile still pins ruint 1.21.1 or later fixed.", "why": "The new DIV and MOD handlers are equivalent as read; a release is the moment to check the build.", "priority": "low"},
+]
+
+lead_results = [
+ {"leadId": "L-1318", "outcome": "inconclusive", "answer": "The SLOAD miss path of the v1.19.2 binary (0x42b6110 into 0x42b5470 and 0x42a97c0) was not lifted this cycle. The live complement was repeated: the 1,040 newest mined Tempo swaps, whose pool words are read from the database on a cold miss, satisfy the tick relation and all 331 pairs match a single step, and the pmdiff sets at current and T14 rules match Ethereum. The binary run stays open."},
+ {"leadId": "L-1351", "outcome": "inconclusive", "answer": "The EIP-8037 half is closed: the reservoir branch cannot run on Tempo, because tempo_execution_config passes false (crates/evm/src/handler/config.rs line 158), configure_version removes the feature and forbids it with T7 or later (crates/hardfork/src/gas_params.rs lines 48-75), and every hardfork maps to SpecId::OSAKA. The bodies of 0x4b83c80 and 0x4b62170 were not run from the binary."},
+ {"leadId": "L-1324", "outcome": "cleared", "answer": "30 Arc blocks with a timestamp above the parent's and no gas cap were replayed on drpc (v0.8.6 8e8edb7a) by eth_simulateV1 with validation; status, gas used and all logs of the 172 transactions (65 PoolManager ones) equal the official receipts."},
+ {"leadId": "L-1327", "outcome": "finding", "answer": "Yes. Mints.sol lines 295-297 accept any caller when destinationCaller is zero, and lines 333-349 mint to the attested recipient without calling it; a live Arc mint shows the face Mint and the native Transfer from the system address. The finding extends F-137 to Circle Gateway on Arc. No Gateway mint to the PoolManager occurs in the newest 200,000 blocks."},
+]
+
+doc = {"unit": "stablecoin-l1", "_lenses": ["L1", "L2", "L3", "L6"], "profiles": profiles, "findings": findings,
+       "cleared": cleared, "leads": leads, "leadResults": lead_results}
+json.dump(doc, open(OUT, "w"), indent=1)
+print(OUT)

@@ -1,0 +1,108 @@
+"""Writes ../../theme-ethereum-binaries-storage-journal.research.json from the outputs in ../out."""
+import glob, json, os
+W = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+O = os.path.join(W, 'out')
+REL = 'research/network-risk/cycles/039/theme-ethereum-binaries-storage-journal.work/'
+ALL = [1, 10, 8453, 130, 7777777, 480, 57073, 1868, 42220, 196, 42161, 4663, 99901, 137, 56, 43114, 143, 4326, 4217, 5042, 999]
+OTHER = [c for c in ALL if c != 1]
+
+
+def j(p):
+    try: return json.load(open(os.path.join(O, p)))
+    except Exception: return None
+
+
+# geth main run
+gm = [j('geth-main-%d.json' % i) for i in range(4)]
+gm = [x for x in gm if x]
+gt = {k: sum(x[k] for x in gm) for k in ('sequences', 'steps', 'reads', 'writes', 'origChecks', 'reverts', 'commits')}
+gmis = sum(len(x['mismatches']) for x in gm); gerr = sum(len(x['errors']) for x in gm)
+gfns = sorted(set().union(*[set(x['functionsRun']) for x in gm])) if gm else []
+gmaps = [f for f in gfns if 'runtime/maps' in f or f.startswith('runtime.map')]
+gfaults = {}
+for f in ('ts-revert-zero', 'st-revert-committed', 'ts-skip-journal', 'snap-index-plus1'):
+    x = j('geth-fault-%s.json' % f)
+    gfaults[f] = (x['faultHits'] if x and 'faultHits' in x else None, len(x['mismatches']) if x else None)
+em = j('erigon-main.json'); ep = j('erigon-pm.json')
+ef = {f: j('erigon-fault-%s.json' % f) for f in ('stamp-frozen-len', 'reuse-keeps-entry', 'put-no-reset')}
+epf = {f: j('erigon-pm-fault-%s.json' % f) for f in ('stamp-frozen-len', 'reuse-keeps-entry', 'put-no-reset')}
+lg = j('live-geth.json'); lr = j('live-reth.json'); rs = j('rpcshapes.json')
+
+
+def live_line(x):
+    if not x: return 'not run'
+    r = x['results'][0]
+    return '%s answered %s before and %s after; %d sequences ran, %d words compared, %d mismatches, %d errors' % (
+        r['rpc'], r['clientVersionBefore'], r['clientVersionAfter'], r['ran'], r['wordsCompared'], r['mismatchCount'], len(r['errors']))
+
+
+def efault(f):
+    x = ef[f]; y = epf[f]
+    s = 'not run' if not x else 'sequences with a stale read %s, random trees with a stale read %d of %d, fault hits %d' % (
+        sorted(k for k, v in x['sequences'].items() if v['stale'] or v['gasStale']), x['random']['treesWithStale'], x['random']['trees'], x['faultHits'])
+    if y and y.get('pm'): s += '; PoolManager shapes: %d of %d scenarios differ from the uncached run' % (y['pm']['mismatch'], y['pm']['scenarios'])
+    return s
+
+
+rsl = 'not run'
+if rs:
+    rsl = 'PoolManager code sha256 %s, %d scenarios per endpoint (seed 36_2026_11_27+1). ' % (rs['pmCodeSha256'], rs['n']) + '; '.join(
+        '%s answered %s before and %s after (%s to %s UTC): %d agree with the reference, %d differ, %d unanswered' % (u, r['clientBefore'], r['clientAfter'], r['startedUtc'], r['endedUtc'], r['agree'], r['differ'], r['noAnswer'])
+        for u, r in rs['endpoints'].items())
+
+cleared = []
+cleared.append({'chainIds': [1], 'lens': 'L2',
+  'check': 'Task 1 (L-1346), geth: the transient storage read and write with the journal entry, the persistent storage read and write with the original-value bookkeeping, the snapshot and the revert, run from the released geth v1.17.10 linux/amd64 binary (cycle 38 download, tarball MD5 checked there; read as data only, its objdump text interpreted in the x86-64 model). Entry points core/vm.opTstore 0x9e7960, opTload 0x9e7780, opSstore 0x9f8540, opSload 0x9f8360 through the real vm.StateDB itab of *state.StateDB found by value scan at 0x3f25020, (*StateDB).GetStateAndCommittedState, Snapshot and RevertToSnapshot; the StateDB, its maps, journal and transient map were built by state.NewWithReader from the binary. The Go swiss map runtime ran from the binary on real tables in model memory (%s). Only the allocator, runtime.rand (per-map seed), time.Now/Since and the database below the state (Database.Type, Reader.Account at itab slot 0, Reader.Storage at itab slot 4, call sites 0x9c2bdb and 0x9bbdb6) were stubbed.' % ', '.join(gmaps[:12]),
+  'result': '%d sequences (seed 39_1346_01, fixed sequences first, about a third with 9 to 47 filler keys so the maps grow into tables) over the PoolManager slot shapes: the lock, the delta count, deltas, the synced currency and reserves, slot0, liquidity, a tick, a position, ERC-6909 balances, a token balance slot of the PoolManager; with slots written back to their original value, written twice in a frame, first read after an inner revert, commits inside reverts, reverts at depth 1 to 4, and the settle shape (sync, an inner frame that moves the token balance and credits the delta, count and currency reset, then reverts or returns). %d reads, %d original-value checks, %d writes, %d reverts and %d commits compared with tools/opdiff/pyevm.py after every frame return, and the journal length after every revert compared with the length at the snapshot: %d mismatches, %d model errors. %d functions of the binary ran (out/geth-main-*.json lists them). The journal stores pointers, so reverts run the autogenerated (*transientStorageChange).revert 0x9de1e0, which inlines journal.go:588 and transientStorage.Set, and (*storageChange).revert 0x9dd540, which calls storageChange.revert 0x9b6a20.' % (gt.get('sequences', 0), gt.get('reads', 0), gt.get('origChecks', 0), gt.get('writes', 0), gt.get('reverts', 0), gt.get('commits', 0), gmis, gerr, len(gfns)),
+  'source': REL + 'scripts/gethj.py'})
+cleared.append({'chainIds': [1], 'lens': 'L2',
+  'check': 'Task 4, geth: four faults planted in the in-memory text of the geth v1.17.10 binary model: a revert that restores zero (pxor at 0x9de39d and 0x9de3a5 in (*transientStorageChange).revert), a revert that restores the committed value (0x9b6a88 in storageChange.revert passes origvalue), a skipped journal entry (the journal.append call at 0x9c21e0 in SetTransientState removed), a snapshot index off by one (journalIndex = len(entries)+1 at 0x9c42b4 in Snapshot).',
+  'result': 'Every fault was caught (fault hits, mismatches in the first 60 sequences): %s.' % ', '.join('%s %s' % (k, v) for k, v in gfaults.items()),
+  'source': REL + 'scripts/faults_geth.py'})
+if em:
+    cleared.append({'chainIds': [1], 'lens': 'L2',
+      'check': 'Task 2 (L-1347): erigon v3.8.2 linux/amd64 per-frame SLOAD cache run from the release binary: execution/vm.opSload 0x1df2f00, (*CallContext).lookupSlot 0x1dfa680, memoStorageKey 0x1dfa9a0, (*frameSlots).put 0x1dfa820, (*IntraBlockState).ReadStamp 0x1757b40 (stamp = journal entries length at journal+0x10 and epoch at journal+0x20, journal at ibs+0x110), (*EVM).getCallContext 0x1dfab80 and putCallContext 0x1dfade0 (spare frame at evm+0x1d0, depth at evm+0x130, the clearing of slots.ok, slots.key and memoGen on reuse). The SSTORE gas phase was driven in the order operations_acl.go:60-100 calls lookupSlot, ReadStamp and put. Stubbed: key interning (internStorageKey), the state read below the cache (IntraBlockState.GetState returns the stored word), sync.Pool, the allocator; the journal length and epoch were written from the cycle 36 journal model, and slots.on, misses and cacheGen as run() sets them (interpreter.go:515-516, :587).',
+      'result': 'Cycle 36 sequences (a) to (h), c2, c3 and t: no stale read, and hit counts equal the cycle 36 Python model on every sequence (%s). %d random frame trees (seed 36_2026_11_27): %d reads, %d hits, %d stale reads, %d trees whose hit count differs from the model. PoolManager reentry shapes of pmshapes.py on this checkout\'s build (research/network-risk/build/PoolManager.json, seed 36_2026_11_27+1; hooks that swap on the same pool from beforeSwap and beforeModifyLiquidity, donate from a hook, nested writes that revert, writes through DELEGATECALL, frame reuse): %s. A run on the deployed bytecode gave 120 scenarios, 24,073 reads, 1,173 cache hits, no stale read and no difference.' % (
+          {k: v['hits'] for k, v in em['sequences'].items()}, em['random']['trees'], em['random']['reads'], em['random']['hits'], em['random']['stale'], em['random']['hitsDifferFromModel'],
+          ('%d scenarios, %d reads, %d hits, %d stale reads, %d differ from the uncached reference run in return data, reads, writes or final storage' % (ep['pm']['scenarios'], ep['pm']['sloads'], ep['pm']['hits'], ep['pm']['stale'], ep['pm']['mismatch'])) if ep and ep.get('pm') else 'not finished'),
+      'source': REL + 'scripts/erigonc.py'})
+cleared.append({'chainIds': [1], 'lens': 'L2',
+  'check': 'Task 4, erigon: three faults planted in the erigon v3.8.2 binary model: the stamp does not move on a nested write (journal length read as zero at 0x1dfa6ac, 0x1df30da and 0x1757b55), a cache entry kept across frame reuse (the slots.ok clear at 0x1dfae77 in putCallContext removed), frameSlots.put not clearing entries when the stamp changed (0x1dfa856).',
+  'result': 'stamp-frozen-len: %s. reuse-keeps-entry: %s. put-no-reset: %s.' % (efault('stamp-frozen-len'), efault('reuse-keeps-entry'), efault('put-no-reset')),
+  'source': REL + 'scripts/erigonc.py'})
+cleared.append({'chainIds': [1], 'lens': 'L1',
+  'check': 'Erigon v3.8.2 key and address intern caches in front of the storage read (execution/vm/evm.go:113-225 at tag v3.8.2, fetched from raw.githubusercontent.com): storageKeyCache indexed by the XOR of the four limbs, addressCache by limbs 0, 1 and the low half of limb 2.',
+  'result': 'A storage key hit needs the whole stored word to equal the stack word (c.words[i] == *word). An address hit compares limbs 0 and 1 and the low 32 bits of limb 2, the 20 bytes Bytes20 reads, and the stored word is kept with the upper bits cleared, so two words with the same low 20 bytes share the address they both name and no two addresses share an entry. Both caches are per EVM and never return a handle for another key.',
+  'source': 'https://raw.githubusercontent.com/erigontech/erigon/v3.8.2/execution/vm/evm.go'})
+cleared.append({'chainIds': [1], 'lens': 'L1',
+  'check': 'Which interpreter the reth v2.11.0 release binary executes blocks with (task 1).',
+  'result': 'evm2. The release Cargo.lock (cycle 38 download) has no package whose name starts with revm and has evm2, evm2-jit and evm2-inspectors at git rev 66687c18b34d3bdbb899f5eb7605070615c03475 of DaniPopes/evm2. The binary reth-v2.11.0-x86_64-unknown-linux-gnu (tarball sha256 3b4dc68d56c0690801b91f5c5aabc6014b40ac4da2ed6d8ee6209a170f6a8e11) holds no string with /revm in it and carries the evm2 crate paths .../evm2-c00e9c4c9ea851d3/66687c1/crates/evm and crates/jit. The journal of evm2 was not lifted from this binary this cycle (see leads).',
+  'source': 'research/network-risk/cycles/038/theme-ethereum-client-binaries-lift.work/dl/src/reth/Cargo.lock'})
+cleared.append({'chainIds': [1], 'lens': 'L2',
+  'check': 'Live nested-frame probe: the seqs.py sequences without filler compiled to frame codes entered by DELEGATECALL on one storage, sent by eth_call with code and stateDiff overrides, bracketed by web3_clientVersion, compared with pyevm.py on every read word, every success flag and every word returned from reverted frames.',
+  'result': 'geth: %s. reth: %s. No public endpoint naming erigon 3.8.2 serves eth_call: ethereum-mainnet.gateway.tatum.io answers erigon/3.8.2-8a3f3b2c and refuses eth_call for free plans (cycle 38 record); none of 18 other public endpoints tried on 2026-11-28 named erigon. One of those URLs (an eth-mainnet.nodereal.io path) carries a key in its path; it was asked web3_clientVersion once, answered Geth/v1.16.8, and was not used again.' % (live_line(lg), live_line(lr)),
+  'source': REL + 'out/live-geth.json'})
+cleared.append({'chainIds': [1], 'lens': 'L2',
+  'check': 'PoolManager reentry shapes of cycle 36 (pmshapes.py scenarios, this checkout\'s build) sent by eth_call with state overrides to the geth v1.17.10 and reth v2.11.0 endpoints (cycle 36 rpcshapes.py, unchanged).',
+  'result': rsl,
+  'source': REL + 'out/rpcshapes.json'})
+cleared.append({'chainIds': OTHER, 'lens': 'L2',
+  'check': 'Whether the storage, transient storage, journal and erigon read cache of the Ethereum release binaries apply to the other 20 networks.',
+  'result': 'They do not. The other networks run other builds: op-reth, Base, World Chain, Zora, Celo, X Layer and Arc reth-derived images, Nitro, bor, bsc, avalanchego, Monad, MegaETH, Tempo, HyperEVM and Elysium, whose journals earlier cycles ran or read (OPCODES.md, cycles 32 to 38). None of them runs geth v1.17.10, erigon v3.8.2 or reth v2.11.0 as released.',
+  'source': 'research/network-risk/state/networks.json'})
+
+leads = [
+  {'chainIds': [1], 'lens': 'L2', 'question': 'Lift the journal, transient storage and storage handlers of evm2 at rev 66687c1 from the reth v2.11.0 release binary (stripped, no symbols; start from the instruction table and pair functions with the Tempo binaries whose evm2 journal ran in cycles 29 to 38) and run the seqs.py sequences on it.', 'why': 'The reth binary executes Ethereum blocks with evm2, not revm; its journal has only been tested live (no mismatch this cycle) and in Tempo builds of other evm2 revisions.', 'priority': 'high'},
+  {'chainIds': [1], 'lens': 'L2', 'question': 'Run erigon v3.8.2 (*IntraBlockState).SetState, GetState through readState, the journal push and revert, and transient storage from the binary with unique.Make interning modelled, on the seqs.py sequences.', 'why': 'This cycle ran erigon\'s cache from the binary with the journal stamp from a model; erigon\'s own journal and versioned read path have not run from machine code.', 'priority': 'medium'},
+  {'chainIds': [1], 'lens': 'L1', 'question': 'Run erigon v3.8.2\'s generated loop (*EVM).run (vm_run_gen.go) whole on at least 300,000 arithmetic and comparison cases (L-1348, not done this cycle).', 'why': 'Its inlined ADD, SUB, LT, GT, EQ, AND, ISZERO, PUSH, DUP and SWAP are other machine code than the handlers that ran, and the comparisons decide the tick and price checks of Pool.swap.', 'priority': 'medium'},
+  {'chainIds': [1], 'lens': 'L2', 'question': 'Find a public endpoint that names erigon 3.8.x and serves eth_call, or a Nethermind or Besu endpoint, and run liveprobe.py and rpcshapes.py there.', 'why': 'The cache ran from the binary here but never on a live erigon node; Nethermind and Besu releases are unread.', 'priority': 'low'},
+]
+leadResults = [
+  {'leadId': 'L-1346', 'outcome': 'inconclusive', 'answer': 'geth v1.17.10: done from the binary with real swiss maps, no mismatch, four faults caught. reth v2.11.0 uses evm2 (no revm in the lockfile or binary); its journal was tested live only, with no mismatch. erigon v3.8.2 journal not lifted.'},
+  {'leadId': 'L-1347', 'outcome': 'cleared', 'answer': 'erigon v3.8.2 opSload, lookupSlot, frameSlots.put, ReadStamp and the frame reuse code ran from the binary on the cycle 36 sequences, random trees and PoolManager reentry shapes with no stale read and hit counts equal to the model; three planted faults were caught.'},
+  {'leadId': 'L-1348', 'outcome': 'inconclusive', 'answer': 'Not run this cycle.'},
+]
+res = {'unit': 'theme-ethereum-binaries-storage-journal', 'profiles': [], 'findings': [], 'cleared': cleared, 'leads': leads, 'leadResults': leadResults}
+out = os.path.join(os.path.dirname(W), 'theme-ethereum-binaries-storage-journal.research.json')
+json.dump(res, open(out, 'w'), indent=1)
+print(out, len(cleared), 'cleared', gt, gmis, gerr)

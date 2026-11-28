@@ -1,0 +1,45 @@
+{
+  "unit": "stablecoin-l1",
+  "verdicts": [
+    {
+      "findingIndex": 0,
+      "verdict": "plausible",
+      "severity": "low",
+      "factCheck": "Mints.sol on circlefin/evm-gateway-contracts master was fetched and read. gatewayMint (lines 161-191) is external with only whenNotPaused and notDenylisted(msg.sender). _validateAttestationTransferSpec checks the recipient denylist at line 292 and rejects the caller only when destinationCaller is nonzero and differs from msg.sender (line 296). _mint marks the spec hash used (line 336) and calls IMintableToken(minter).mint(recipient, value) (line 349) with no call into the recipient. The technical guide says destinationCaller is 'The address of the caller who may use the attestation (0 for any caller)', that attestations expire after 10 minutes, that an unused attestation returns the balance, and that destinationCaller 'can help prevent third-party mint front-running'. On rpc.mainnet.arc.io at block 0x1ffb46a: eth_getCode of 0x2222222d... is a 1967 proxy, its implementation slot holds 0x30b6d05cb9b89e73732dbf7d47c028a67346eb3b (11,619 bytes of code containing selector 0x9fb01cc5 gatewayMint(bytes,bytes)); eth_call gives isTokenSupported(0x3600...) = 1, tokenMintAuthority(0x3600...) = 0, paused() = 0, isDenylisted(PoolManager) = 0, domain() = 26. Receipt 0x22282f10... shows a Mint log on 0x3600 with the minter as caller, a 0x3600 Transfer from zero of 32,999.9965 in six decimals and a native Transfer from 0xff...fe of the same amount in eighteen decimals. A scan of the newest 200,000 blocks found 61 AttestationUsed events, 58 of them sent by an account other than the recipient (for example 0x69cea874... from 0xd05b856a... to recipient 0x70d5d723...), so third-party submission of attestations is normal practice on Arc, and none named the PoolManager. The PoolManager's native balance is 2,443,346.38 USDC. The link that stays unconfirmed is how an unrelated account obtains an attestation to the PoolManager before its own use: rpc.mainnet.arc.io answers txpool_status and eth_newPendingTransactionFilter with method not supported and eth_getBlockByNumber('pending') with requested data not available, so a public pending pool was not shown, and no Circle source was found that serves attestations to accounts other than the requester.",
+      "codeCheck": "unlock (src/PoolManager.sol:104-114) runs the caller's callback and requires NonzeroDeltaCount zero at the end. sync (src/PoolManager.sol:279-288) on a nonzero currency stores balanceOfSelf as reserves with no lock check. _settle (src/PoolManager.sol:349-365) with a synced currency reverts on msg.value, reads balanceOfSelf, credits reservesNow minus reservesBefore to msg.sender's delta and resets the synced currency. take (src/PoolManager.sol:291-297) debits that delta and transfers. A mint between sync and settle inside the caller's own callback is therefore credited in full to that caller, which can take it and close with a zero count. Balances already held for pools and claims are not reachable this way, because only the rise after the caller's own sync is credited. If nobody executes the mint inside a lock, the minted amount becomes surplus that no later settle credits, because every sync re-reads the current balance; the misaddressed sender loses it either way.",
+      "corrections": "On Arc tokenMintAuthority(0x3600...) is zero, so _mint calls mint on the 0x3600 face itself (Mints.sol line 347-349), not on a separate mint authority. The PoolManager holds 2,443,346 USDC natively today, not 2,430,783. The victim is the sender who named the PoolManager as recipient, which is a user error, so the hazard does not reach LPs, swappers or claim holders who did nothing unusual.",
+      "sources": [
+        {"url": "https://raw.githubusercontent.com/circlefin/evm-gateway-contracts/master/src/modules/minter/Mints.sol", "supports": "gatewayMint open to any non-denylisted caller (161-191); destinationCaller enforced only when nonzero (296); mint to recipient with no callback (336-349)"},
+        {"url": "https://raw.githubusercontent.com/circlefin/evm-gateway-contracts/master/src/GatewayMinter.sol", "supports": "GatewayMinter is GatewayCommon plus Mints with no extra caller restriction"},
+        {"url": "https://developers.circle.com/gateway/references/technical-guide", "supports": "destinationCaller 0 means any caller; attestations expire after 10 minutes; destinationCaller is the documented guard against third-party mint front-running"},
+        {"url": "https://rpc.mainnet.arc.io", "supports": "proxy and implementation slot, token supported, no mint authority, not paused, PoolManager not denylisted, 61 mints in 200,000 blocks with 58 relayed by a third party and none to the PoolManager, PoolManager balance 2,443,346 USDC, no pending-pool RPC methods"}
+      ]
+    }
+  ],
+  "clearedSpotChecks": [
+    {
+      "check": "Whether the DIV and MOD change on evm2 main (checked_div and checked_rem with unwrap_or_default) computes anything different from the 7c9f3b6 handlers that Tempo ships, once a release picks it up.",
+      "agrees": true,
+      "note": "A diff of arithmetic.rs at evm2 rev 7c9f3b6 and main shows exactly lines 22 and 32 changed. In the ruint-1.21.1 crate, checked_div and checked_rem return None on a zero divisor and otherwise call self.div and self.rem (src/div.rs 9-14, 36-41); no inherent div or rem method exists on Uint, so these resolve to the Div and Rem impls from impl_bin_op, which call wrapping_div and wrapping_rem (src/div.rs 128-150, src/macros.rs 31-41). Both forms give zero on a zero divisor and the same quotient and remainder otherwise."
+    },
+    {
+      "check": "revm-interpreter fixes released after 35.0.1 (pinned by Arc) that touch memory, arithmetic or jumps.",
+      "agrees": true,
+      "note": "arc-node main Cargo.lock pins revm-interpreter 35.0.1 and ruint 1.20.0. In the 35.0.1 crate resize_memory_cold ignores the result of memory.resize (src/interpreter/shared_memory.rs 588-604), but SharedMemory's MemoryTr::resize calls the inherent resize, which resizes the backing Vec with zeros, and returns true unconditionally (lines 122-125 and 288-292). The ignored value can never be false on this memory type, so memory length always matches the charged words."
+    },
+    {
+      "check": "Full rerun of battery.py, targeted.py, pmdiff.py, pmdiff2.py, swaps.py and replay.py on the live builds (tempo/v1.19.2-c0c9372, Arc v0.8.6-rc1 37812c61).",
+      "agrees": true,
+      "note": "battery.log in the work directory shows 99,985 of 99,985 vectors with 0 mismatches on both chains, covering DIV, SDIV, MOD, SMOD, ADDMOD, MULMOD, MULDIV512, SIGNEXTEND, BYTE, SHL, SHR, SAR, EXP, JUMPI, KECCAK, MCOPY, CALLDATALOAD and DIVUP. pmdiff.json lists Tempo differences at exactly 9, 14, 29, 67, 79, 81, 86, 147, 175, 233 and none on Arc. Earlier cleared entries recorded pmdiff_explain.py runs showing these are calls cut by gas, 8 of 10 identical at 20 times the gas and 67 and 86 bounded by Tempo's 50,000,000 call gas cap. A gas-cut call reverts the whole simulated call and does not change a computed value, so the clearance holds. The Tempo EIP-8037 clearance was also checked: crates/hardfork/src/gas_params.rs on main and on tag tempo/v1.19.2 are equal, configure_version removes EvmFeatures::EIP8037 when the flag is false, and crates/evm/src/handler/config.rs line 158 passes false."
+    }
+  ],
+  "leads": [
+    {
+      "chainIds": [5042],
+      "lens": "L3",
+      "question": "Do the third-party submitters of Arc Gateway mints (for example 0xd05b856a..., 0x96f6727c..., 0xa984c4ca...) obtain attestations from a Circle forwarding service or from a shared endpoint any account can query, and is a pending-transaction feed available from any Arc RPC other than rpc.mainnet.arc.io?",
+      "why": "58 of 61 recent Gateway mints were sent by an account other than the recipient; if attestations are retrievable by anyone, the F-137 Gateway path needs no mempool access and its unconfirmed link closes.",
+      "priority": "low"
+    }
+  ]
+}
