@@ -1,0 +1,22 @@
+{
+  "unit": "established-l1",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "L4: every PoolManager call shape sent with from set to the PoolManager to 28 Polygon, 48 BNB Chain and 34 Avalanche special addresses; no address both accepts a non-zero transfer under src/types/Currency.sol:64-74 and holds value for pools.",
+      "agrees": true,
+      "note": "I reran the Polygon part at block 0x5d8a2f2 (98,083,570) on https://polygon-bor-rpc.publicnode.com. 0x1010.transfer(PoolManager, 1) from the PoolManager returns a 32 byte word 0, so the rule at src/types/Currency.sol:64-74 (eq(mload(0),1) with returndatasize > 31, or empty data) fails and take reverts. transfer of 0 to 0xdead returns 1; transfer of 0 to the PoolManager itself reverts with empty data, which the summary's 'accepts transfer of 0' does not mention but which moves nothing. 0x1010.balanceOf(PoolManager) returns 0x29434478dc07370df725f, equal to eth_getBalance of the PoolManager, so its balanceOf is not fixed within a transaction; that is the known F-008 path, and settle there credits only a forced native transfer by the caller himself because msg.value is refused when a currency is synced (src/PoolManager.sol:356) and settle and settleFor (src/PoolManager.sol:300-305) are the only payable entry points. The identity precompile 0x04 echoes the 68 byte calldata, whose first word is not 1, so a take of it reverts; as a hook its address sets only AFTER_SWAP_RETURNS_DELTA_FLAG (1<<2, src/libraries/Hooks.sol:45) without AFTER_SWAP_FLAG (1<<6, line 39), which src/libraries/Hooks.sol:112 rejects. Native take debits the caller before the transfer (src/PoolManager.sol:291-297). One-line hook note: on Polygon the P256 precompile 0x100 sets only AFTER_REMOVE_LIQUIDITY_FLAG (1<<8, Hooks.sol:36) and is a valid hook address; it returns no selector, so callHook reverts with InvalidHookResponse (src/libraries/Hooks.sol:151-153) and a pool using it would accept liquidity and refuse removal. That needs LPs to choose a pool whose hook is a precompile and is the generic hook freeze already recorded (pool-creator)."
+    },
+    {
+      "check": "Avalanche: libevm a335c2ecf4df offers no hook that changes an opcode handler or jump destination analysis, and its interpreter files equal go-ethereum v1.13.14.",
+      "agrees": true,
+      "note": "Fetched https://raw.githubusercontent.com/ava-labs/libevm/a335c2ecf4df/core/vm/hooks.libevm.go: vm.Hooks holds OverrideNewEVMArgs, OverrideEVMResetArgs and Preprocessor.PreprocessingGasCharge (lines 59-71). Correction to the wording: OverrideNewEVMArgs can replace the StateDB, ChainConfig and vm.Config, and vm.Config carries ExtraEips, which interpreter.go applies to a copy of the jump table (interpreter.go lines 31 and 85-89 at d398bc4dbe41). That selects registered EIP handlers only and cannot install an arbitrary one, and the StateDB replacement is the path behind the known bit 248 slot partition finding, so the conclusion for arithmetic and JUMPI holds. A second correction: https://raw.githubusercontent.com/ava-labs/avalanchego/v1.15.3/go.mod line 30 pins libevm v1.13.15-0.20261028200218-d398bc4dbe41, not a335c2ecf4df. I fetched hooks.libevm.go, instructions.go, jump_table.go and analysis.go at both commits and each pair has the same sha256 (5fa47958ea45, 9e260cbdb4db, e35b3d226e3f, 9000c4a30db3 prefixes), so the result does not change."
+    },
+    {
+      "check": "Upcoming forks: Jenner at 1,796,697,000, Salvador at block 98,688,600, Hampi and Igloo unscheduled; nothing in src/libraries computes differently the day after.",
+      "agrees": true,
+      "note": "https://raw.githubusercontent.com/bnb-chain/bsc/develop/params/config.go line 256 sets mainnet JennerTime 1796697000 (2026-12-08 02:30 UTC). https://raw.githubusercontent.com/0xPolygon/bor/develop/params/config.go lines 476-478 give HampiBlock nil and SalvadorBlock 98,688,600, and the Salvador block override places a Sweeper runtime (sweep() sends the native balance to a fixed RECOVERY address) at five addresses e4C4C39C..., 53925878..., c91ee057..., 3f701922... and 5227f603.... None is the PoolManager 0x6736...5cd6. eth_getCode at latest returns empty code for all five and balanceOf(PoolManager) returns empty data, so no pool can hold a claim in them today and a currency with no code cannot be credited by settle. The Sweeper code refuses every selector other than sweep and its getter, so it cannot act as a hook or pay a take. No interpreter or arithmetic change appears in these blocks."
+    }
+  ],
+  "leads": []
+}

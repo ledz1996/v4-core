@@ -1,0 +1,28 @@
+"""Cycle 38, theme-frame-checkpoint-and-commit-lift: the eight reth-derived binaries already on disk (read only)."""
+C = '/home/user/v4-core/research/network-risk/cycles/'
+BINS = {
+    'opreth2100': dict(bin=C + '032/theme-opstack-reth-binary-lift.work/dl/opreth/x/amd64/usr/local/bin/op-reth',
+                       fde=C + '032/theme-opstack-reth-binary-lift.work/build/opreth-amd64.fde',
+                       ooc_checkpoint=0x4579590, ooc_commit=None, reverts=[0x44daef0, 0x2d07000], discard=0x2d06750),
+    'opreth281': dict(bin=C + '033/theme-persistent-storage-binary-lift.work/dl/opreth281/x/amd64/usr/local/bin/op-reth',
+                      fde=C + '033/theme-persistent-storage-binary-lift.work/build/opreth281/opreth281-amd64.fde',
+                      ooc_checkpoint=0x470de30, ooc_commit=None, reverts=[0x2eae2c0, 0x4666bc0], discard=0x2eada10),
+    'base156': dict(bin=C + '032/theme-opstack-reth-binary-lift.work/dl/base/x/amd64/app/base',
+                    fde=C + '032/theme-opstack-reth-binary-lift.work/build/base-amd64.fde',
+                    ooc_checkpoint=0x4dcf7d0, ooc_commit=None, reverts=[0x35be370], discard=None),
+    'wc282': dict(bin=C + '035/op-stack-eth.work/dl/wc282/x/usr/local/bin/world-chain',
+                  fde=C + '035/theme-reth-journal-binary-lift.work/build/wc-amd64.fde',
+                  ooc_checkpoint=0x4759ad0, ooc_commit=None, reverts=[0x2dafb40], discard=None),
+    'conduit251': dict(bin=C + '035/op-stack-eth.work/dl/conduit251/x/app/conduit-op-reth',
+                       fde=C + '035/op-stack-eth.work/build/c251.fde',
+                       ooc_checkpoint=0x3c1e230, ooc_commit=None, reverts=[0x3b71260], discard=None),
+    'celo1010': dict(bin=C + '035/theme-reth-keccak-asm-image-lift.work/dl/celo-v1.0.10/x/usr/local/bin/celo-reth',
+                     fde=C + '036/theme-reth-images-handler-lift.work/build/celo.fde',
+                     ooc_checkpoint=0x1f36450, ooc_commit=0x1f37e30, reverts=[0x1d61dd0, 0x3067500], discard=None),
+    'xlayer0073': dict(bin=C + '035/theme-reth-keccak-asm-image-lift.work/dl/xlayer-rc1/x/usr/local/bin/op-reth',
+                       fde=C + '036/theme-reth-images-handler-lift.work/build/xlayer.fde',
+                       ooc_checkpoint=0x3cca520, ooc_commit=0x3ccac20, reverts=[0x3ca62f0, 0x509ef80], discard=None),
+    'arc086': dict(bin=C + '035/stablecoin-l1.work/dl/images/img-0.8.6/usr/local/bin/arc-node-execution',
+                   fde=C + '036/theme-reth-images-handler-lift.work/build/arc086.fde',
+                   ooc_checkpoint=0x2b9c3f0, ooc_commit=0x2b9d360, reverts=[0x19ffce0], discard=None),
+}

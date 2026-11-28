@@ -1,0 +1,22 @@
+{
+  "unit": "theme-arc-subcall-rollback",
+  "verdicts": [],
+  "clearedSpotChecks": [
+    {
+      "check": "Task 1: the subcall life cycle as written in arc-node crates/evm/src/evm.rs at v0.8.6, checkpoint taken and committed at once in init_subcall, later reverted through revert_subcall_checkpoint",
+      "agrees": true,
+      "note": "I fetched https://raw.githubusercontent.com/circlefin/arc-node/v0.8.6/crates/evm/src/evm.rs (9,571 lines, sha256 1ce0d1e6a2088df2...c66bb45, the hash the unit cites). Lines 1052-1053 call checkpoint() then checkpoint_commit(); lines 1185-1197 spend all gas and call revert_subcall_checkpoint when the child succeeded and completion runs out of gas; the completion failure arm does the same; lines 1249-1258 take a dummy checkpoint and call checkpoint_revert(saved). In revm-context 16.0.1 (pinned in the v0.8.6 Cargo.lock at line 12759 with checksum c5f68d92...4041237d) inner.rs 577-613 shows checkpoint records log, journal and selfdestruct lengths and raises depth, checkpoint_commit only lowers depth, and checkpoint_revert truncates logs and the selfdestruct list and undoes every journal entry after journal_i, newest first. The saved index stays valid after the commit, so the revert covers the child's storage, transient, balance and log changes. I found no exit where a succeeded child is kept while the precompile reports failure."
+    },
+    {
+      "check": "Task 4 (L-1339): Multicall3From and Memo deployed code and the sender check that refuses any sender other than the helper or tx.origin",
+      "agrees": true,
+      "note": "evm.rs v0.8.6 frame_init 667-705 refuses a caller outside the subcall registry's allowed set before anything else, and lines 959-968 refuse a child caller that is neither the calling contract nor tx.origin. eth_getCode on rpc.mainnet.arc.io returned 3,180 bytes for 0x522fAf9A...47D0 and 1,228 bytes for 0x5294E992...e505. A linear opcode scan of Multicall3From that skips push data found only CALLVALUE at pc 5 and one CALL at pc 1628, with no ORIGIN, DELEGATECALL, CALLCODE, STATICCALL or SELFDESTRUCT. A contract that a victim calls therefore reaches CallFrom only through a helper that passes that contract as sender, and the precompile refuses it, so an ordinary attacker cannot run PoolManager.unlock or ERC-6909 transfers as a victim."
+    },
+    {
+      "check": "What the PoolManager needs from the rollback: take debits the delta and then transfers, unlock sets the lock, runs the callback, checks the nonzero delta count and clears the lock",
+      "agrees": true,
+      "note": "src/PoolManager.sol:104-114 sets the lock, calls unlockCallback, reverts with CurrencyNotSettled when NonzeroDeltaCount is not zero and then locks. All of these words are transient storage, and token and native moves are storage or balance changes, which revm journals as TransientStorageChange, StorageChanged and BalanceTransfer entries undone by checkpoint_revert. A revert to the saved checkpoint therefore removes the payout together with its debit and the lock, and a commit keeps them together. I did not rerun the live window scans or the model; I rely on their recorded outputs for the empirical part."
+    }
+  ],
+  "leads": []
+}

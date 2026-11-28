@@ -1,0 +1,49 @@
+{
+ "unit": "arbitrum-family",
+ "verdicts": [
+  {
+   "findingIndex": 0,
+   "verdict": "plausible",
+   "severity": "info",
+   "factCheck": "The three cited Elysium pages were fetched on 2026-11-28. The market data page says the read precompile ships in an ArbOS upgrade about four weeks after mainnet, that Elysium launches on stock ArbOS without it, and that the data is attested by the sequencer. The trading page says the ElysiumCoreWriter predeploy ships in the same upgrade and that, with a prefunded escrow, each action's outcome is delivered back to the originating contract. The contract addresses page (updated 9 November 2026) lists neither address. On https://rpc.elysium.kinetiq.xyz (chain id 0x1863d, nitro/vlocal go1.25.12, block 0xb5b537) getScheduledUpgrade() (0x81ef944c) on ArbOwnerPublic 0x6b returned two zero words, and ArbSys arbOSVersion() returned 0x74, which is ArbOS 61. No primary source gives the precompile's address, selectors or return layout, so whether it answers a balanceOf(address) call with 32 bytes that change between sync and settle is not confirmed.",
+   "codeCheck": "src/types/Currency.sol:64-74 accepts a transfer call that returns exactly 1 in the first word or returns no data, so a codeless or empty-returning address passes take. src/types/Currency.sol:89-93 reads balanceOf through a high-level call, which reverts when the target returns fewer than 32 bytes, so an empty-returning precompile cannot be synced or settled. src/PoolManager.sol:279-288 stores the balance at sync and src/PoolManager.sol:349-364 credits reservesNow minus reservesBefore at settle, with the msg.value guard at line 356. A precompile currency whose balanceOf rises between the two calls would credit the caller in that currency only. The credit can be spent only in pools that list that currency (swaps against the paired currency), so LPs who did not choose such a pool are unaffected. The callback path adds nothing: a callback carries msg.sender equal to the predeploy, which holds no privilege in the PoolManager, and the PoolManager calls out only to currencies, hooks and the native take recipient (src/types/Currency.sol:39-87, src/PoolManager.sol:279-297).",
+   "corrections": "The finding is conditional on an unpublished interface. The one unconfirmed link is that the read precompile answers the balanceOf(address) shape with 32 bytes that can move inside one transaction; the docs say every read is stamped with a HyperCore block and commits to the bytes served, which suggests the value is fixed within a transaction. The actor is acceptable: the victims must be LPs of a pool that lists a chain-made address as a currency, which is a pool choice and not an ordinary pool.",
+   "sources": [
+    {
+     "url": "https://elysium.kinetiq.xyz/docs/hypercore-market-data",
+     "supports": "read precompile ships about four weeks after mainnet in an ArbOS upgrade; data attested by the sequencer; responses stamped with HyperCore block"
+    },
+    {
+     "url": "https://elysium.kinetiq.xyz/docs/trading-on-hypercore-from-elysium",
+     "supports": "ElysiumCoreWriter predeploy in the same upgrade; outcome callbacks to the originating contract"
+    },
+    {
+     "url": "https://elysium.kinetiq.xyz/docs/contract-addresses",
+     "supports": "neither address is listed as of 9 November 2026"
+    },
+    {
+     "url": "https://rpc.elysium.kinetiq.xyz",
+     "supports": "eth_call 0x6b getScheduledUpgrade() returned zeros; 0x64 arbOSVersion() returned 0x74 (ArbOS 61) on 2026-11-28"
+    }
+   ]
+  }
+ ],
+ "clearedSpotChecks": [
+  {
+   "check": "Settlement arithmetic against value that arrives outside msg.value (ArbOS deposits, retryable value, fee distribution to the PoolManager address).",
+   "agrees": true,
+   "note": "Read src/PoolManager.sol:279-288 and 349-364. With no synced currency, settle credits msg.value of the settling call only; with a synced token, msg.value must be zero (line 356) and the credit is the token balance difference since sync. Native value that reaches the PoolManager by ArbOS deposit, retryable or fee distribution changes address(this).balance only, which no settlement line reads for native. Nothing in this item is wrongly cleared."
+  },
+  {
+   "check": "The 337 precompile and system addresses of cycle 20 (0x1 to 0x11f, 0x800 to 0x81f, 0xa4b000 to 0xa4b00f, 0xfffe, 0xffff), called from each PoolManager address with eth_getCode and eth_call in the empty, balanceOf(PoolManager) and transfer(0x11..11, 1) shapes.",
+   "agrees": true,
+   "note": "precscan-final.json lists 1011 rows and an empty differentFromCycle20. I reran the empty, balanceOf(PoolManager) and transfer(0x11..11, 1) shapes from 0xE2e105d3 on Elysium for 0x64, 0x6e, 0x1 and 0xff: 0x64 and 0x6e revert, 0x1 returns empty for all three, 0xff returns 'debug precompiles are disabled', equal to the stored rows. An empty-returning address such as 0x1 passes the transfer check (src/types/Currency.sol:64-74) but cannot be synced or settled because the balanceOf decode at src/types/Currency.sol:92 reverts on empty data, so no credit in it can be created."
+  },
+  {
+   "check": "Cycle 38 rerun of battery.py, targeted.py, pmdiff.py (250), pmdiff2.py (300), swaps.py, replay.py and callsem.py for the three chain ids, web3_clientVersion recorded before each script.",
+   "agrees": true,
+   "note": "pmdiff2.json shows Elysium different [189] with one native payout and Arbitrum One and Robinhood Chain identical 300/300. OPCODES.md:64 records that the Elysium and HyperEVM single difference is a swap with an open price limit that runs out of gas at the endpoint's gas cap and that it becomes identical or still ends at that swap with the largest granted gas. A gas cap on eth_call is a property of the RPC endpoint and does not change what a mined transaction computes. I did not rerun script 189 myself."
+  }
+ ],
+ "leads": []
+}
